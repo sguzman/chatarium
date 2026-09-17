@@ -154,8 +154,9 @@ impl CaptureRun {
         let paths = CaptureRunPaths::new(base_dir.join(&run_id));
         fs::create_dir(&paths.root)
             .map_err(|error| format!("create run directory {}: {error}", paths.root.display()))?;
-        fs::create_dir(&paths.bodies)
-            .map_err(|error| format!("create body directory {}: {error}", paths.bodies.display()))?;
+        fs::create_dir(&paths.bodies).map_err(|error| {
+            format!("create body directory {}: {error}", paths.bodies.display())
+        })?;
         fs::create_dir(&paths.frontend).map_err(|error| {
             format!(
                 "create frontend directory {}: {error}",
@@ -345,10 +346,7 @@ impl CaptureRun {
             return Err("outcome_ambiguous requires positive mutation-start evidence".to_owned());
         }
 
-        self.append_event(
-            "run_finished",
-            serde_json::json!({ "state": state }),
-        )?;
+        self.append_event("run_finished", serde_json::json!({ "state": state }))?;
         self.manifest.state = state;
         self.manifest.finished_unix_ms = Some(unix_ms()?);
         self.persist_manifest()
@@ -361,10 +359,7 @@ impl CaptureRun {
 
 fn make_run_id(started_unix_ms: u128) -> String {
     let counter = RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "run-{started_unix_ms}-{}-{counter}",
-        std::process::id()
-    )
+    format!("run-{started_unix_ms}-{}-{counter}", std::process::id())
 }
 
 fn unix_ms() -> Result<u128, String> {
@@ -394,7 +389,8 @@ fn persist_manifest(path: &Path, manifest: &CaptureRunManifest) -> Result<(), St
 }
 
 fn read_manifest(path: &Path) -> Result<CaptureRunManifest, String> {
-    let bytes = fs::read(path).map_err(|error| format!("read manifest {}: {error}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("read manifest {}: {error}", path.display()))?;
     let manifest: CaptureRunManifest = serde_json::from_slice(&bytes)
         .map_err(|error| format!("parse manifest {}: {error}", path.display()))?;
     if manifest.schema != RUN_SCHEMA || manifest.version != RUN_SCHEMA_VERSION {
@@ -427,14 +423,16 @@ fn recover_and_read_events(path: &Path) -> Result<Vec<CaptureEvent>, String> {
                 .map_err(|error| format!("truncate torn event tail {}: {error}", path.display()))?;
             file.seek(SeekFrom::Start(tail_start as u64))
                 .map_err(|error| format!("seek event journal {}: {error}", path.display()))?;
-            file.sync_data()
-                .map_err(|error| format!("sync recovered event journal {}: {error}", path.display()))?;
+            file.sync_data().map_err(|error| {
+                format!("sync recovered event journal {}: {error}", path.display())
+            })?;
         }
     }
     drop(file);
 
     let reader = BufReader::new(
-        File::open(path).map_err(|error| format!("reopen event journal {}: {error}", path.display()))?,
+        File::open(path)
+            .map_err(|error| format!("reopen event journal {}: {error}", path.display()))?,
     );
     let mut events = Vec::new();
     for (index, line) in reader.lines().enumerate() {
@@ -538,7 +536,10 @@ mod tests {
             .expect("write torn tail");
         let reopened = CaptureRun::open(&root).expect("recover torn tail");
         assert_eq!(reopened.events().len(), 1);
-        assert_eq!(fs::metadata(&events_path).expect("metadata").len(), original_len);
+        assert_eq!(
+            fs::metadata(&events_path).expect("metadata").len(),
+            original_len
+        );
         drop(reopened);
 
         OpenOptions::new()
@@ -547,7 +548,9 @@ mod tests {
             .expect("append")
             .write_all(b"not-json\n")
             .expect("write corrupt line");
-        let error = CaptureRun::open(&root).err().expect("complete corruption fails");
+        let error = CaptureRun::open(&root)
+            .err()
+            .expect("complete corruption fails");
         assert!(error.contains("parse complete event line"));
         let _ = fs::remove_dir_all(base);
     }
@@ -561,10 +564,7 @@ mod tests {
         run.finish(CaptureRunState::Completed).expect("finish");
         run.finish(CaptureRunState::Completed)
             .expect("same state is idempotent");
-        assert!(
-            run.finish(CaptureRunState::CompletedWithWarnings)
-                .is_err()
-        );
+        assert!(run.finish(CaptureRunState::CompletedWithWarnings).is_err());
         let _ = fs::remove_dir_all(base);
     }
 }
