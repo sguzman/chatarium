@@ -21,16 +21,17 @@ The output is pretty-printed JSON and its SHA-256 fingerprint is printed to stdo
 
 ### `snapshot-har`
 
-Creates:
+Creates evidence in the same shape used by `protocol/SNAPSHOT_FORMAT.md`:
 
 ```text
 <snapshot-dir>/
-└── captures/
-    ├── <capture-id>.har
+├── evidence/
+│   └── <capture-id>.har.json
+└── derived/
     └── <capture-id>.meta.json
 ```
 
-The metadata records the sanitized capture fingerprint, sizes, recorder version, source filename, and capture timestamp. Capture IDs are intentionally path-safe.
+The derived metadata records the sanitized capture fingerprint, sanitized size, recorder version, capture timestamp, and the fact that raw evidence is retained outside Git. It intentionally does **not** copy the raw HAR filename or raw byte size into the public snapshot metadata.
 
 Example:
 
