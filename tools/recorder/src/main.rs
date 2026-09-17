@@ -1,6 +1,6 @@
 //! Offline protocol-capture ingestion and sanitization tool.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
@@ -54,7 +54,8 @@ fn print_usage() {
 }
 
 fn sanitize_har_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
-    let mut value: Value = serde_json::from_slice(input).map_err(|error| format!("parse HAR JSON: {error}"))?;
+    let mut value: Value =
+        serde_json::from_slice(input).map_err(|error| format!("parse HAR JSON: {error}"))?;
     sanitize_value(&mut value);
     serde_json::to_vec_pretty(&value).map_err(|error| format!("serialize sanitized HAR: {error}"))
 }
@@ -105,7 +106,10 @@ fn sanitize_name_value_array(value: &mut Value, redact_all: bool) {
         let Some(object) = item.as_object_mut() else {
             continue;
         };
-        let name = object.get("name").and_then(Value::as_str).unwrap_or_default();
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if redact_all || sensitive_name(name) {
             if object.contains_key("value") {
                 object.insert("value".to_owned(), Value::String(REDACTED.to_owned()));
@@ -193,26 +197,29 @@ fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(
     let source = fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
     let sanitized = sanitize_har_bytes(&source)?;
 
-    let captures_dir = snapshot_dir.join("captures");
-    fs::create_dir_all(&captures_dir)
-        .map_err(|error| format!("create {}: {error}", captures_dir.display()))?;
+    let evidence_dir = snapshot_dir.join("evidence");
+    let derived_dir = snapshot_dir.join("derived");
+    fs::create_dir_all(&evidence_dir)
+        .map_err(|error| format!("create {}: {error}", evidence_dir.display()))?;
+    fs::create_dir_all(&derived_dir)
+        .map_err(|error| format!("create {}: {error}", derived_dir.display()))?;
 
-    let capture_path = captures_dir.join(format!("{capture_id}.har"));
+    let relative_capture_path = format!("evidence/{capture_id}.har.json");
+    let capture_path = evidence_dir.join(format!("{capture_id}.har.json"));
     fs::write(&capture_path, &sanitized)
         .map_err(|error| format!("write {}: {error}", capture_path.display()))?;
 
-    let metadata_path = captures_dir.join(format!("{capture_id}.meta.json"));
+    let metadata_path = derived_dir.join(format!("{capture_id}.meta.json"));
     let metadata = json!({
         "format": "chatarium-har-capture",
         "version": 1,
         "capture_id": capture_id,
-        "source_file": input.file_name().and_then(|name| name.to_str()).unwrap_or("<unknown>"),
-        "sanitized_file": capture_path.file_name().and_then(|name| name.to_str()).unwrap_or("<unknown>"),
+        "sanitized_file": relative_capture_path,
         "sanitized_sha256": sha256_hex(&sanitized),
-        "source_bytes": source.len(),
         "sanitized_bytes": sanitized.len(),
         "created_unix_ms": unix_ms()?,
         "recorder_version": env!("CARGO_PKG_VERSION"),
+        "raw_retained_outside_git": true,
         "warning": "Sanitization is defense-in-depth, not proof that arbitrary private conversation content is safe to publish. Use controlled captures."
     });
     let metadata_bytes = serde_json::to_vec_pretty(&metadata)
@@ -228,7 +235,8 @@ fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(
 
 fn inspect_har(input: &Path) -> Result<(), String> {
     let bytes = fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|error| format!("parse HAR JSON: {error}"))?;
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|error| format!("parse HAR JSON: {error}"))?;
     let entries = value
         .pointer("/log/entries")
         .and_then(Value::as_array)
@@ -236,10 +244,22 @@ fn inspect_har(input: &Path) -> Result<(), String> {
 
     println!("entries: {}", entries.len());
     for (index, entry) in entries.iter().enumerate() {
-        let method = entry.pointer("/request/method").and_then(Value::as_str).unwrap_or("?");
-        let raw_url = entry.pointer("/request/url").and_then(Value::as_str).unwrap_or("?");
-        let status = entry.pointer("/response/status").and_then(Value::as_i64).unwrap_or_default();
-        let mime = entry.pointer("/response/content/mimeType").and_then(Value::as_str).unwrap_or("?");
+        let method = entry
+            .pointer("/request/method")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let raw_url = entry
+            .pointer("/request/url")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let status = entry
+            .pointer("/response/status")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let mime = entry
+            .pointer("/response/content/mimeType")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
         let endpoint = Url::parse(raw_url)
             .ok()
             .map(|url| format!("{}{}", url.host_str().unwrap_or("?"), url.path()))
@@ -252,9 +272,9 @@ fn inspect_har(input: &Path) -> Result<(), String> {
 fn validate_capture_id(capture_id: &str) -> Result<(), String> {
     if capture_id.is_empty()
         || capture_id.contains("..")
-        || !capture_id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        || !capture_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
     {
         return Err("capture-id must contain only ASCII letters, digits, '.', '-', '_' and may not contain '..'".to_owned());
     }
