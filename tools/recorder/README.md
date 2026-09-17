@@ -12,7 +12,11 @@ chatarium-recorder inventory-har <input.har> <output.json>
 chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>
 chatarium-recorder inspect-har <input.har>
 chatarium-recorder fingerprint <file>
+
+chatarium-inventory-diff <before.requests.json> <after.requests.json> <output.diff.json>
 ```
+
+The package keeps `chatarium-recorder` as its default Cargo run target, so existing `cargo run -p chatarium-recorder -- ...` commands remain unambiguous even though the companion diff binary also exists.
 
 ### `sanitize-har`
 
@@ -70,6 +74,30 @@ Sanitizes the HAR in memory and prints the same normalized structural endpoint v
 
 This is useful for quickly identifying which requests belong to a controlled experiment before deeper documentation.
 
+### `chatarium-inventory-diff`
+
+Compares two generated request inventories structurally. Endpoint identity is the tuple `(method, host, normalized path)`. For each endpoint, the diff compares the multiset of observed structural variants, including status, MIME types, body presence, resource type, query-key names, and request/response-header names.
+
+That means all of these become explicit maintenance signals:
+
+- a new or removed endpoint;
+- the same endpoint returning a new status/MIME shape;
+- request/header/query shape changes;
+- repeated occurrence-count changes for an otherwise identical shape.
+
+The report deliberately contains no request/header/query values because it consumes the already value-free inventory layer.
+
+Run it through Cargo as:
+
+```powershell
+cargo run -p chatarium-recorder --bin chatarium-inventory-diff -- `
+  .\protocol\snapshots\2026-09-17.001\derived\C03-send-text.requests.json `
+  .\protocol\snapshots\2026-09-24.001\derived\C03-send-text.requests.json `
+  .\protocol\diffs\2026-09-17.001--2026-09-24.001.C03.json
+```
+
+The command prints a compact summary (`added`, `removed`, `changed`, `unchanged`) and writes the full machine-readable report. A structural diff is a signal to inspect the corresponding sanitized HAR evidence; it is not by itself proof of a semantic protocol change.
+
 ## Sanitization is not a publication oracle
 
 The sanitizer is defense-in-depth. It cannot prove that arbitrary conversation bodies are non-sensitive, because protocol payloads legitimately contain user-authored and assistant-authored text. The canonical workflow is therefore:
@@ -79,6 +107,7 @@ The sanitizer is defense-in-depth. It cannot prove that arbitrary conversation b
 3. run `snapshot-har`;
 4. inspect the sanitized capture manually;
 5. inspect the derived request inventory for unexpected identifiers or structure;
-6. only then commit the snapshot to `protocol/snapshots/...`.
+6. diff against the previous equivalent capture when one exists;
+7. only then commit the snapshot to `protocol/snapshots/...`.
 
 Never use a personal conversation as a public fixture just because automated redaction passed.
