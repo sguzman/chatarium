@@ -10,7 +10,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const JOURNAL_VERSION: u64 = 1;
+const JOURNAL_WRITE_VERSION: u64 = 2;
 
 /// One durable local event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,19 +19,31 @@ pub struct EventEnvelope {
     pub sequence: u64,
     /// Local observation time in Unix milliseconds.
     pub at_unix_ms: u64,
+    /// Optional conversation/scope identifier.
+    pub scope: Option<String>,
     /// Semantic event kind.
     pub kind: EventKind,
-    /// Exact textual payload when applicable.
+    /// Exact textual or JSON payload when applicable.
     pub payload: String,
 }
 
 /// Append/read contract required by the application core.
 pub trait EventStore {
-    /// Store one event and return its durable sequence.
+    /// Store one scoped event and return its durable sequence.
     ///
     /// Persistent implementations must not return success until the record has crossed their
     /// durability boundary.
-    fn append(&mut self, kind: EventKind, payload: String) -> io::Result<u64>;
+    fn append_scoped(
+        &mut self,
+        scope: Option<String>,
+        kind: EventKind,
+        payload: String,
+    ) -> io::Result<u64>;
+
+    /// Store one unscoped event and return its durable sequence.
+    fn append(&mut self, kind: EventKind, payload: String) -> io::Result<u64> {
+        self.append_scoped(None, kind, payload)
+    }
 
     /// Return events in durable sequence order.
     fn events(&self) -> &[EventEnvelope];
@@ -44,11 +56,17 @@ pub struct MemoryEventStore {
 }
 
 impl EventStore for MemoryEventStore {
-    fn append(&mut self, kind: EventKind, payload: String) -> io::Result<u64> {
+    fn append_scoped(
+        &mut self,
+        scope: Option<String>,
+        kind: EventKind,
+        payload: String,
+    ) -> io::Result<u64> {
         let sequence = next_sequence(&self.events)?;
         self.events.push(EventEnvelope {
             sequence,
             at_unix_ms: unix_ms()?,
+            scope,
             kind,
             payload,
         });
@@ -66,6 +84,9 @@ impl EventStore for MemoryEventStore {
 /// and calls [`File::sync_data`] before updating the in-memory projection. On open, an
 /// unterminated final fragment is treated as a torn last write and truncated. Malformed complete
 /// records remain hard errors.
+///
+/// Journal v2 adds the optional `scope` field. V1 records remain readable and are projected as
+/// unscoped events.
 #[derive(Debug)]
 pub struct JsonlEventStore {
     path: PathBuf,
@@ -135,11 +156,17 @@ impl JsonlEventStore {
 }
 
 impl EventStore for JsonlEventStore {
-    fn append(&mut self, kind: EventKind, payload: String) -> io::Result<u64> {
+    fn append_scoped(
+        &mut self,
+        scope: Option<String>,
+        kind: EventKind,
+        payload: String,
+    ) -> io::Result<u64> {
         let sequence = next_sequence(&self.events)?;
         let event = EventEnvelope {
             sequence,
             at_unix_ms: unix_ms()?,
+            scope,
             kind,
             payload,
         };
@@ -176,9 +203,10 @@ fn unix_ms() -> io::Result<u64> {
 
 fn encode_event(event: &EventEnvelope) -> io::Result<String> {
     serde_json::to_string(&json!({
-        "v": JOURNAL_VERSION,
+        "v": JOURNAL_WRITE_VERSION,
         "sequence": event.sequence,
         "at_unix_ms": event.at_unix_ms,
+        "scope": event.scope,
         "kind": event.kind.stable_name(),
         "payload": event.payload,
     }))
@@ -191,7 +219,7 @@ fn decode_event(line: &str) -> Result<EventEnvelope, String> {
         .get("v")
         .and_then(Value::as_u64)
         .ok_or_else(|| "missing integer field 'v'".to_owned())?;
-    if version != JOURNAL_VERSION {
+    if !matches!(version, 1 | JOURNAL_WRITE_VERSION) {
         return Err(format!("unsupported journal version {version}"));
     }
 
@@ -203,6 +231,15 @@ fn decode_event(line: &str) -> Result<EventEnvelope, String> {
         .get("at_unix_ms")
         .and_then(Value::as_u64)
         .ok_or_else(|| "missing integer field 'at_unix_ms'".to_owned())?;
+    let scope = if version >= 2 {
+        match value.get("scope") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(scope)) => Some(scope.clone()),
+            Some(_) => return Err("field 'scope' must be string or null".to_owned()),
+        }
+    } else {
+        None
+    };
     let kind_name = value
         .get("kind")
         .and_then(Value::as_str)
@@ -218,6 +255,7 @@ fn decode_event(line: &str) -> Result<EventEnvelope, String> {
     Ok(EventEnvelope {
         sequence,
         at_unix_ms,
+        scope,
         kind,
         payload,
     })
@@ -261,12 +299,16 @@ mod tests {
     }
 
     #[test]
-    fn jsonl_store_round_trips_events() {
+    fn jsonl_store_round_trips_scoped_events() {
         let path = temp_path("round-trip");
         {
             let mut store = JsonlEventStore::open(&path).expect("open");
             store
-                .append(EventKind::DraftChanged, "draft text".to_owned())
+                .append_scoped(
+                    Some("conversation:test".to_owned()),
+                    EventKind::DraftChanged,
+                    "draft text".to_owned(),
+                )
                 .expect("draft append");
             store
                 .append(EventKind::UserMessageCommitted, "exact send".to_owned())
@@ -276,11 +318,33 @@ mod tests {
         let reopened = JsonlEventStore::open(&path).expect("reopen");
         assert_eq!(reopened.events().len(), 2);
         assert_eq!(reopened.events()[0].kind, EventKind::DraftChanged);
+        assert_eq!(
+            reopened.events()[0].scope.as_deref(),
+            Some("conversation:test")
+        );
         assert_eq!(reopened.events()[0].payload, "draft text");
         assert_eq!(reopened.events()[1].kind, EventKind::UserMessageCommitted);
+        assert_eq!(reopened.events()[1].scope, None);
         assert_eq!(reopened.events()[1].payload, "exact send");
         assert_eq!(reopened.events()[0].sequence, 1);
         assert_eq!(reopened.events()[1].sequence, 2);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn v1_records_remain_readable_as_unscoped() {
+        let path = temp_path("v1");
+        fs::write(
+            &path,
+            b"{\"v\":1,\"sequence\":1,\"at_unix_ms\":1,\"kind\":\"draft_changed\",\"payload\":\"legacy\"}\n",
+        )
+        .expect("write v1");
+
+        let reopened = JsonlEventStore::open(&path).expect("open v1");
+        assert_eq!(reopened.events().len(), 1);
+        assert_eq!(reopened.events()[0].scope, None);
+        assert_eq!(reopened.events()[0].payload, "legacy");
 
         let _ = fs::remove_file(path);
     }
@@ -299,7 +363,7 @@ mod tests {
                 .append(true)
                 .open(&path)
                 .expect("open raw");
-            file.write_all(br#"{"v":1,"sequence":2"#)
+            file.write_all(br#"{"v":2,"sequence":2"#)
                 .expect("partial write");
             file.sync_data().expect("sync partial");
         }
@@ -323,7 +387,7 @@ mod tests {
     #[test]
     fn malformed_complete_record_is_not_silently_discarded() {
         let path = temp_path("malformed");
-        fs::write(&path, b"{\"v\":1,\"broken\":true}\n").expect("write malformed");
+        fs::write(&path, b"{\"v\":2,\"broken\":true}\n").expect("write malformed");
         let error = JsonlEventStore::open(&path).expect_err("must reject malformed complete line");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_file(path);
