@@ -1,0 +1,25 @@
+schema = "chatarium-experiment"
+version = 1
+id = "C00-idle-load"
+description = "Load the official ChatGPT web client and observe a settled idle surface without mutating a conversation."
+start_url = "https://chatgpt.com/"
+timeout_seconds = 60
+mutation = false
+
+[action]
+type = "none"
+
+[success]
+type = "page_ready"
+
+[settle]
+quiet_network_ms = 1500
+quiet_dom_ms = 750
+minimum_observation_ms = 3000
+
+[capture]
+network = true
+websocket = true
+response_bodies = true
+frontend_assets = true
+page_observations = true
