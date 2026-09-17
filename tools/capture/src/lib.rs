@@ -207,7 +207,10 @@ pub fn find_edge_executable() -> Option<PathBuf> {
 }
 
 fn normalized_for_compare(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let text = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     PathBuf::from(text.trim_end_matches('\\'))
 }
 
