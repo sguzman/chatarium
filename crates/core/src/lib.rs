@@ -120,6 +120,8 @@ pub enum EventKind {
     AssistantDeltaObserved,
     /// A complete assistant DOM/text snapshot was observed without implying generation completed.
     AssistantSnapshotObserved,
+    /// A transient assistant-side UI/status placeholder was observed.
+    AssistantStatusObserved,
     /// A user message was observed in a remote/rendered transcript.
     TranscriptUserMessageObserved,
     /// A visible client-side/site error was observed.
@@ -151,6 +153,7 @@ impl EventKind {
             Self::AssistantStreamStarted => "assistant_stream_started",
             Self::AssistantDeltaObserved => "assistant_delta_observed",
             Self::AssistantSnapshotObserved => "assistant_snapshot_observed",
+            Self::AssistantStatusObserved => "assistant_status_observed",
             Self::TranscriptUserMessageObserved => "transcript_user_message_observed",
             Self::ClientErrorObserved => "client_error_observed",
             Self::AssistantCompletionObserved => "assistant_completion_observed",
@@ -174,6 +177,7 @@ impl EventKind {
             "assistant_stream_started" => Some(Self::AssistantStreamStarted),
             "assistant_delta_observed" => Some(Self::AssistantDeltaObserved),
             "assistant_snapshot_observed" => Some(Self::AssistantSnapshotObserved),
+            "assistant_status_observed" => Some(Self::AssistantStatusObserved),
             "transcript_user_message_observed" => Some(Self::TranscriptUserMessageObserved),
             "client_error_observed" => Some(Self::ClientErrorObserved),
             "assistant_completion_observed" => Some(Self::AssistantCompletionObserved),
@@ -242,6 +246,7 @@ mod tests {
             EventKind::AssistantStreamStarted,
             EventKind::AssistantDeltaObserved,
             EventKind::AssistantSnapshotObserved,
+            EventKind::AssistantStatusObserved,
             EventKind::TranscriptUserMessageObserved,
             EventKind::ClientErrorObserved,
             EventKind::AssistantCompletionObserved,
