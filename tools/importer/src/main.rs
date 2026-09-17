@@ -202,7 +202,7 @@ fn build_plan(
     if let Some(draft) = export.get("draftWal").filter(|value| !value.is_null()) {
         if let Some(event) = draft_event(draft, sha256, "draft-wal")? {
             if let Some(text) = payload_text(&event.payload) {
-                draft_pairs.insert((event.scope.clone(), text.to_owned()));
+                draft_pairs.insert((event.scope.clone(), text));
             }
             body.push(event);
         }
@@ -210,8 +210,7 @@ fn build_plan(
     if let Some(drafts) = export.get("drafts").and_then(Value::as_array) {
         for (index, draft) in drafts.iter().enumerate() {
             if let Some(event) = draft_event(draft, sha256, &format!("draft-store:{index}"))? {
-                let pair = payload_text(&event.payload)
-                    .map(|text| (event.scope.clone(), text.to_owned()));
+                let pair = payload_text(&event.payload).map(|text| (event.scope.clone(), text));
                 if pair.as_ref().is_some_and(|pair| draft_pairs.contains(pair)) {
                     continue;
                 }
@@ -277,7 +276,7 @@ fn build_plan(
             export.get("href").and_then(Value::as_str),
             json!({
                 "recorder_version": export.get("recorderVersion").cloned().unwrap_or(Value::Null),
-                "archive": archive_relative,
+                "archive": archive_relative.clone(),
                 "source_counts": source_counts,
             }),
         )?,
@@ -309,11 +308,18 @@ fn build_plan(
     Ok(plan)
 }
 
-fn draft_event(draft: &Value, sha256: &str, key_prefix: &str) -> Result<Option<PlannedEvent>, String> {
+fn draft_event(
+    draft: &Value,
+    sha256: &str,
+    key_prefix: &str,
+) -> Result<Option<PlannedEvent>, String> {
     let Some(text) = draft.get("text").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let scope = draft.get("conversation").and_then(Value::as_str).map(ToOwned::to_owned);
+    let scope = draft
+        .get("conversation")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let scope_key = scope.as_deref().unwrap_or("unscoped");
     let event_key = format!("{key_prefix}:{scope_key}");
     Ok(Some(PlannedEvent {
@@ -335,7 +341,11 @@ fn draft_event(draft: &Value, sha256: &str, key_prefix: &str) -> Result<Option<P
     }))
 }
 
-fn send_intent_events(intent: &Value, index: usize, sha256: &str) -> Result<Vec<PlannedEvent>, String> {
+fn send_intent_events(
+    intent: &Value,
+    index: usize,
+    sha256: &str,
+) -> Result<Vec<PlannedEvent>, String> {
     let Some(text) = intent.get("text").and_then(Value::as_str) else {
         return Ok(Vec::new());
     };
@@ -350,9 +360,12 @@ fn send_intent_events(intent: &Value, index: usize, sha256: &str) -> Result<Vec<
         .map(ToOwned::to_owned);
     let at = intent.get("at").and_then(Value::as_str);
     let href = intent.get("href").and_then(Value::as_str);
-    let state = intent.get("state").and_then(Value::as_str).unwrap_or("unknown");
+    let state = intent
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let details = json!({
-        "send_id": id,
+        "send_id": id.clone(),
         "state": state,
         "reason": intent.get("reason").cloned().unwrap_or(Value::Null),
         "origin_conversation": intent.get("conversation").cloned().unwrap_or(Value::Null),
@@ -468,7 +481,10 @@ fn transcript_event(
     }))
 }
 
-fn assistant_wal_event(assistant: &Value, sha256: &str) -> Result<Option<PlannedEvent>, String> {
+fn assistant_wal_event(
+    assistant: &Value,
+    sha256: &str,
+) -> Result<Option<PlannedEvent>, String> {
     let Some(text) = assistant.get("text").and_then(Value::as_str) else {
         return Ok(None);
     };
@@ -563,9 +579,12 @@ fn import_payload(
     .map_err(|error| format!("serialize imported event payload: {error}"))
 }
 
-fn payload_text(payload: &str) -> Option<&str> {
+fn payload_text(payload: &str) -> Option<String> {
     let value: Value = serde_json::from_str(payload).ok()?;
-    value.get("text").and_then(Value::as_str)
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 fn assistant_fingerprint(value: &Value) -> String {
@@ -573,7 +592,10 @@ fn assistant_fingerprint(value: &Value) -> String {
         .get("observedId")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let text = value.get("text").and_then(Value::as_str).unwrap_or_default();
+    let text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     format!("{observed_id}:{}", sha256_hex(text.as_bytes()))
 }
 
@@ -604,7 +626,6 @@ fn default_data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chatarium_store::EventStore;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -703,13 +724,10 @@ mod tests {
         assert_eq!(second.skipped_events, second.planned_events);
 
         let store = JsonlEventStore::open(dir.join("journal.jsonl")).expect("reopen journal");
-        assert!(
-            store
-                .events()
-                .iter()
-                .any(|event| event.kind == EventKind::UserMessageCommitted
-                    && event.scope.as_deref() == Some("conversation:test-conversation"))
-        );
+        assert!(store.events().iter().any(|event| {
+            event.kind == EventKind::UserMessageCommitted
+                && event.scope.as_deref() == Some("conversation:test-conversation")
+        }));
         assert!(
             store
                 .events()
