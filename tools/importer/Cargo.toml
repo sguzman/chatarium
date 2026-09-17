@@ -1,0 +1,17 @@
+[package]
+name = "chatarium-importer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+chatarium-core = { path = "../../crates/core" }
+chatarium-store = { path = "../../crates/store" }
+serde_json = "1"
+sha2 = "0.10"
+
+[lints]
+workspace = true
