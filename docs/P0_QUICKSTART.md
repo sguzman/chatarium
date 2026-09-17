@@ -2,7 +2,7 @@
 
 This is the shortest path from an unreliable `chatgpt.com` tab to having a local recovery record **today**.
 
-The browser flight recorder is temporary infrastructure while Chatarium's native client and direct protocol adapter are built. It does not make ChatGPT's network reliable. It makes a large class of frontend/network failures less destructive by preserving local evidence before the page can lose it.
+The browser flight recorder is temporary infrastructure while Chatarium's native client and direct protocol adapter are being built. It does not make ChatGPT's network reliable. It makes a large class of frontend/network failures less destructive by preserving local evidence before the page can lose it.
 
 ## 1. Install the flight recorder
 
@@ -16,7 +16,7 @@ With Tampermonkey installed in Edge/Chrome:
 2. Replace the generated template with the complete contents of the raw userscript above.
 3. Save it.
 4. Reload `https://chatgpt.com/`.
-5. Confirm a small **Chatarium** panel appears in the lower-right corner.
+5. Confirm a small **Chatarium** panel appears in the lower-right corner and reports `v0.3.0` or newer.
 
 If the panel does not appear, do not assume protection is active. Check Tampermonkey first.
 
@@ -62,7 +62,31 @@ The latest record retains the exact outgoing text. **Copy last send** is the eme
 
 An unresolved send is not automatically a failed send. It means Chatarium has local evidence that you attempted the turn but does not yet have enough evidence to classify the remote outcome.
 
-## 4. Export before doing anything destructive
+## 4. Verify assistant recovery
+
+Let the deterministic response render. The panel should report that an assistant snapshot has been saved.
+
+Click **Copy assistant** and paste into a local editor. It should contain the rendered assistant text. You can inspect the synchronous emergency slot directly:
+
+```js
+ChatariumFlightRecorder.readAssistantWal()
+```
+
+The assistant WAL is separate from both the draft WAL and send-intent journal. If the page later clears/re-renders the composer or displays a transient timeout, already-rendered assistant text remains recoverable from its own slot.
+
+The emergency assistant slot keeps up to the newest 500,000 characters. The IndexedDB transcript archive remains the longer-term observed-message store.
+
+## 5. Observe site failures instead of losing them
+
+If ChatGPT displays a visible `role="alert"` or toast error, the recorder preserves the newest observed error separately:
+
+```js
+ChatariumFlightRecorder.readErrorWal()
+```
+
+The panel also shows the latest observed site error. This is evidence about what the frontend displayed, not a claim about whether the remote mutation succeeded or failed.
+
+## 6. Export before doing anything destructive
 
 At any time press:
 
@@ -70,7 +94,7 @@ At any time press:
 
 or click **Export** in the Chatarium panel.
 
-This downloads a local JSON record containing the current draft WAL, bounded send-intent journal, event history, archived draft records, and observed transcript messages.
+This downloads a local JSON record containing the current draft WAL, bounded send-intent journal, latest assistant snapshot, latest visible-error record, event history, archived draft records, and observed transcript messages.
 
 The export contains conversation text. Treat it as private data.
 
@@ -80,7 +104,9 @@ The export contains conversation text. Treat it as private data.
 - per-conversation draft write-ahead records;
 - outgoing send intent in a separate synchronous journal that an empty post-send composer cannot erase;
 - new-chat sends across the `/` → `/c/<id>` route transition;
-- rendered user/assistant transcript snapshots;
+- latest rendered assistant text in a separate synchronous emergency slot;
+- longer-lived rendered user/assistant transcript snapshots in IndexedDB;
+- visible alert/toast text such as delivery-timeout errors;
 - browser online/offline and navigation events;
 - explicit unresolved-send state instead of pretending an ambiguous timeout is success or failure.
 
@@ -138,6 +164,6 @@ cargo run -p chatarium-recorder -- snapshot-har `
   C03-send-text
 ```
 
-`inspect-har` prints a query-free request inventory. `snapshot-har` creates sanitized evidence plus derived metadata. The sanitized result still requires human inspection before it is committed; sanitization is defense-in-depth, not a proof that arbitrary conversation content is publishable.
+`inspect-har` prints a normalized value-free request view. `snapshot-har` creates sanitized evidence, structural request inventory, and derived metadata. The sanitized result still requires human inspection before it is committed; sanitization is defense-in-depth, not proof that arbitrary conversation content is publishable.
 
 For the full experiment matrix, see [`../protocol/CAPTURE_PLAYBOOK.md`](../protocol/CAPTURE_PLAYBOOK.md).
