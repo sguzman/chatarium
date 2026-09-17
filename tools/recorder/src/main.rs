@@ -288,7 +288,10 @@ fn name_list(value: Option<&Value>) -> Vec<String> {
 
 fn endpoint_shape(raw_url: &str) -> (String, String) {
     let Ok(url) = Url::parse(raw_url) else {
-        return ("?".to_owned(), normalize_path(raw_url.split('?').next().unwrap_or(raw_url)));
+        return (
+            "?".to_owned(),
+            normalize_path(raw_url.split('?').next().unwrap_or(raw_url)),
+        );
     };
     (
         url.host_str().unwrap_or("?").to_owned(),
@@ -324,10 +327,9 @@ fn looks_like_instance_id(segment: &str) -> bool {
     let bytes = segment.as_bytes();
     let uuid_shape = bytes.len() == 36
         && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
-        && segment
-            .chars()
-            .enumerate()
-            .all(|(index, character)| [8, 13, 18, 23].contains(&index) || character.is_ascii_hexdigit());
+        && segment.chars().enumerate().all(|(index, character)| {
+            [8, 13, 18, 23].contains(&index) || character.is_ascii_hexdigit()
+        });
     if uuid_shape {
         return true;
     }
@@ -413,9 +415,15 @@ fn inspect_har(input: &Path) -> Result<(), String> {
 
     println!("entries: {}", entries.len());
     for entry in entries {
-        let index = entry.get("index").and_then(Value::as_u64).unwrap_or_default();
+        let index = entry
+            .get("index")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
         let method = entry.get("method").and_then(Value::as_str).unwrap_or("?");
-        let status = entry.get("status").and_then(Value::as_i64).unwrap_or_default();
+        let status = entry
+            .get("status")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
         let host = entry.get("host").and_then(Value::as_str).unwrap_or("?");
         let path = entry.get("path").and_then(Value::as_str).unwrap_or("?");
         let mime = entry
@@ -530,11 +538,19 @@ mod tests {
     #[test]
     fn path_normalizer_preserves_endpoint_names() {
         assert_eq!(
-            normalize_path("/backend-api/conversation/01234567-89ab-cdef-0123-456789abcdef/messages"),
+            normalize_path(
+                "/backend-api/conversation/01234567-89ab-cdef-0123-456789abcdef/messages"
+            ),
             "/backend-api/conversation/<id>/messages"
         );
-        assert_eq!(normalize_path("/backend-api/conversation_limit_info"), "/backend-api/conversation_limit_info");
-        assert_eq!(normalize_path("/api/account/123456789012"), "/api/account/<id>");
+        assert_eq!(
+            normalize_path("/backend-api/conversation_limit_info"),
+            "/backend-api/conversation_limit_info"
+        );
+        assert_eq!(
+            normalize_path("/api/account/123456789012"),
+            "/api/account/<id>"
+        );
     }
 
     #[test]
