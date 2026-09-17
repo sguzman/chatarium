@@ -418,7 +418,12 @@ fn default_journal_path() -> PathBuf {
 fn event_text(payload: &str) -> String {
     serde_json::from_str::<Value>(payload)
         .ok()
-        .and_then(|value| value.get("text").and_then(Value::as_str).map(ToOwned::to_owned))
+        .and_then(|value| {
+            value
+                .get("text")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
         .unwrap_or_else(|| payload.to_owned())
 }
 
