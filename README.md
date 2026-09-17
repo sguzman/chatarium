@@ -21,6 +21,7 @@ The protocol corpus is evidence about ChatGPT as observed. The Rust implementati
 - **Secrets are not fixtures.** Session cookies, authorization material, anti-CSRF tokens, and equivalent credentials must be removed from committed evidence.
 - **The UI thread does not perform heavy work.** Network, persistence, parsing, capture processing, and reconciliation stay outside rendering.
 - **Chatarium does not require a second OpenAI API subscription as its architectural premise.** Its target is the consumer ChatGPT service already used through the official web client.
+- **Human QA is automation-first.** If Chatarium can create directories, drive a synthetic experiment, collect evidence, hash, sanitize, import, diff, or validate a result itself, the program does that work rather than delegating it to the operator.
 
 ## Repository map
 
@@ -33,22 +34,26 @@ chatarium/
 │   ├── protocol/              # Typed interpretation of observed protocol
 │   └── store/                 # Durable local state
 ├── tools/
+│   ├── capture/               # One-command Edge/CDP experiment harness
 │   ├── importer/              # Flight-recorder export -> native journal bridge
-│   └── recorder/              # Capture, sanitize, inspect, and diff tooling
+│   └── recorder/              # Capture sanitization, inspection, and diff tooling
 ├── protocol/                  # Empirical protocol corpus
+│   ├── experiments/           # Machine-executable canonical observations
 │   ├── snapshots/             # Timestamped observations
 │   ├── flows/                 # User action -> observed network behavior
 │   ├── endpoints/             # Cross-snapshot endpoint documentation
 │   ├── schemas/               # Derived schemas
 │   └── fixtures/              # Sanitized executable evidence
-└── docs/                      # Architecture, reliability, development and QA policy
+└── docs/                      # Architecture, reliability, capture and QA policy
 ```
 
 ## Status
 
-Chatarium is in **P0 durability / P1 observation** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; and the protocol recorder is ready for the first controlled ChatGPT web captures.
+Chatarium is in **P0 durability / P0.5 protocol-baseline** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; the recorder can sanitize/inventory/diff controlled captures; and the one-command capture harness is now scaffolded around a dedicated Edge profile plus versioned C00/C03 experiments.
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), and [`protocol/README.md`](protocol/README.md).
+Live CDP capture is intentionally still disabled until its transport, incremental journal, sanitization boundary, and ambiguous-outcome semantics are implemented and reviewed. The current `chatarium-capture doctor` command is read-only; `init` and `run` fail explicitly without touching browser or remote state.
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CAPTURE_HARNESS.md`](docs/CAPTURE_HARNESS.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), and [`protocol/README.md`](protocol/README.md).
 
 ## Non-goals
 
