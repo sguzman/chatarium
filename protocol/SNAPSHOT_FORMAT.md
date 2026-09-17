@@ -23,6 +23,19 @@ Recommended additions:
 └── derived/
 ```
 
+For HAR-backed captures produced by `chatarium-recorder snapshot-har`, the mechanically generated portion currently looks like:
+
+```text
+<revision>/
+├── evidence/
+│   └── <capture-id>.har.json
+└── derived/
+    ├── <capture-id>.meta.json
+    └── <capture-id>.requests.json
+```
+
+`evidence/*.har.json` is the sanitized source evidence. `derived/*.requests.json` is a value-free structural comparison surface generated from that sanitized evidence. Derived output must never silently replace the evidence it came from.
+
 ## `manifest.toml`
 
 Example:
@@ -48,6 +61,7 @@ asset_manifest_sha256 = "<optional>"
 format = "har"
 raw_retained_outside_git = true
 sanitized_fixture = "evidence/send-text.har.json"
+request_inventory = "derived/send-text.requests.json"
 
 [scope]
 actions = ["new-chat", "send-text", "stream-complete"]
@@ -102,6 +116,14 @@ Record what classes of data were removed and how. Example:
 ```
 
 The point is to preserve structural usefulness without creating a credential archive.
+
+## Derived request inventories
+
+`derived/<capture-id>.requests.json` is generated from the sanitized HAR and intentionally omits request/header/query values. It records structural fields such as method, host, normalized path, status, MIME types, header names, query names, resource type, and whether a request body exists.
+
+Obvious UUIDs and long identifier-like URL path segments are normalized to `<id>` in this derived layer. That normalization is an interpretation for comparison purposes; the corresponding sanitized HAR remains the evidence for the exact observed path.
+
+A diff in derived inventory is a signal to inspect the underlying evidence, not proof by itself that endpoint semantics changed.
 
 ## Evidence files
 
