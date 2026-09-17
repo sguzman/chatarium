@@ -1,8 +1,10 @@
+//! Import browser flight-recorder evidence into Chatarium's durable native journal.
+
 use chatarium_core::EventKind;
 use chatarium_store::{EventStore, JsonlEventStore};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -26,14 +28,17 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
-        [command, export] if command == "flight-recorder" => {
-            import_file(Path::new(export), &default_data_dir())
-        }
         [command, export, data_dir] if command == "flight-recorder" => {
             import_file(Path::new(export), Path::new(data_dir))
         }
+        [command, _export] if command == "flight-recorder" => Err(
+            "refusing to import without an explicit data directory; usage: chatarium-importer flight-recorder <export.json> <data-dir>"
+                .to_owned(),
+        ),
         _ => {
-            eprintln!("Usage:\n  chatarium-importer flight-recorder <export.json> [data-dir]");
+            eprintln!(
+                "Usage:\n  chatarium-importer flight-recorder <export.json> <data-dir>"
+            );
             Err("invalid arguments".to_owned())
         }
     }
@@ -68,6 +73,12 @@ struct PlannedEvent {
     kind: EventKind,
     event_key: String,
     payload: String,
+}
+
+#[derive(Debug, Clone)]
+struct SelectedMessage {
+    source_index: usize,
+    value: Value,
 }
 
 fn import_bytes(bytes: &[u8], data_dir: &Path) -> Result<ImportSummary, String> {
@@ -198,6 +209,8 @@ fn build_plan(
         .to_string_lossy()
         .replace('\\', "/");
 
+    let canonical_scopes = canonical_scope_by_observed_id(export);
+
     let mut draft_pairs = HashSet::new();
     if let Some(draft) = export.get("draftWal").filter(|value| !value.is_null()) {
         if let Some(event) = draft_event(draft, sha256, "draft-wal")? {
@@ -224,25 +237,34 @@ fn build_plan(
 
     if let Some(intents) = export.get("sendIntents").and_then(Value::as_array) {
         for (index, intent) in intents.iter().enumerate() {
-            body.extend(send_intent_events(intent, index, sha256)?);
+            body.extend(send_intent_events(
+                intent,
+                index,
+                sha256,
+                &canonical_scopes,
+            )?);
         }
     }
 
+    let selected_messages = selected_transcript_messages(export);
     let mut assistant_message_fingerprints = HashSet::new();
-    if let Some(messages) = export.get("messages").and_then(Value::as_array) {
-        for (index, message) in messages.iter().enumerate() {
-            if let Some(event) = transcript_event(message, index, sha256)? {
-                if event.kind == EventKind::AssistantSnapshotObserved {
-                    assistant_message_fingerprints.insert(assistant_fingerprint(message));
-                }
-                body.push(event);
+    for selected in selected_messages {
+        if let Some(event) = transcript_event(
+            &selected.value,
+            selected.source_index,
+            sha256,
+            &canonical_scopes,
+        )? {
+            if event.kind == EventKind::AssistantSnapshotObserved {
+                assistant_message_fingerprints.insert(assistant_fingerprint(&selected.value));
             }
+            body.push(event);
         }
     }
 
     if let Some(assistant) = export.get("assistantWal").filter(|value| !value.is_null()) {
         if !assistant_message_fingerprints.contains(&assistant_fingerprint(assistant)) {
-            if let Some(event) = assistant_wal_event(assistant, sha256)? {
+            if let Some(event) = assistant_wal_event(assistant, sha256, &canonical_scopes)? {
                 body.push(event);
             }
         }
@@ -308,6 +330,109 @@ fn build_plan(
     Ok(plan)
 }
 
+fn canonical_scope_by_observed_id(export: &Value) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    let Some(messages) = export.get("messages").and_then(Value::as_array) else {
+        return result;
+    };
+
+    for message in messages {
+        let Some(observed_id) = message.get("observedId").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(scope) = message.get("conversation").and_then(Value::as_str) else {
+            continue;
+        };
+        if observed_id.starts_with("request-placeholder-") {
+            continue;
+        }
+
+        match result.get(observed_id) {
+            Some(existing) if scope_rank(existing) >= scope_rank(scope) => {}
+            _ => {
+                result.insert(observed_id.to_owned(), scope.to_owned());
+            }
+        }
+    }
+
+    result
+}
+
+fn selected_transcript_messages(export: &Value) -> Vec<SelectedMessage> {
+    let Some(messages) = export.get("messages").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut selected: HashMap<String, SelectedMessage> = HashMap::new();
+    for (index, message) in messages.iter().enumerate() {
+        let Some(role) = message.get("role").and_then(Value::as_str) else {
+            continue;
+        };
+        if role != "user" && role != "assistant" {
+            continue;
+        }
+        let text = message
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let observed_id = message
+            .get("observedId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let key = message.get("key").and_then(Value::as_str).unwrap_or_default();
+        let identity = if observed_id.is_empty() { key } else { observed_id };
+        let fingerprint = format!("{role}:{identity}:{}", sha256_hex(text.as_bytes()));
+        let scope = message
+            .get("conversation")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let candidate = SelectedMessage {
+            source_index: index,
+            value: message.clone(),
+        };
+
+        match selected.get(&fingerprint) {
+            Some(existing) => {
+                let existing_scope = existing
+                    .value
+                    .get("conversation")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if scope_rank(scope) > scope_rank(existing_scope) {
+                    selected.insert(fingerprint, candidate);
+                }
+            }
+            None => {
+                selected.insert(fingerprint, candidate);
+            }
+        }
+    }
+
+    let mut values = selected.into_values().collect::<Vec<_>>();
+    values.sort_by_key(|message| message.source_index);
+    values
+}
+
+fn scope_rank(scope: &str) -> u8 {
+    if scope.starts_with("conversation:WEB:") {
+        1
+    } else if scope.starts_with("conversation:") {
+        2
+    } else {
+        0
+    }
+}
+
+fn canonical_scope_for(
+    observed_id: Option<&str>,
+    fallback: Option<&str>,
+    canonical_scopes: &HashMap<String, String>,
+) -> Option<String> {
+    observed_id
+        .and_then(|id| canonical_scopes.get(id).cloned())
+        .or_else(|| fallback.map(ToOwned::to_owned))
+}
+
 fn draft_event(
     draft: &Value,
     sha256: &str,
@@ -345,6 +470,7 @@ fn send_intent_events(
     intent: &Value,
     index: usize,
     sha256: &str,
+    canonical_scopes: &HashMap<String, String>,
 ) -> Result<Vec<PlannedEvent>, String> {
     let Some(text) = intent.get("text").and_then(Value::as_str) else {
         return Ok(Vec::new());
@@ -353,11 +479,12 @@ fn send_intent_events(
         .get("id")
         .and_then(Value::as_str)
         .map_or_else(|| format!("index-{index}"), ToOwned::to_owned);
-    let scope = intent
+    let observed_id = intent.get("observedMessageId").and_then(Value::as_str);
+    let fallback_scope = intent
         .get("confirmedConversation")
         .or_else(|| intent.get("conversation"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+        .and_then(Value::as_str);
+    let scope = canonical_scope_for(observed_id, fallback_scope, canonical_scopes);
     let at = intent.get("at").and_then(Value::as_str);
     let href = intent.get("href").and_then(Value::as_str);
     let state = intent
@@ -370,6 +497,7 @@ fn send_intent_events(
         "reason": intent.get("reason").cloned().unwrap_or(Value::Null),
         "origin_conversation": intent.get("conversation").cloned().unwrap_or(Value::Null),
         "confirmed_conversation": intent.get("confirmedConversation").cloned().unwrap_or(Value::Null),
+        "canonical_conversation": scope.clone(),
         "confirmed_at": intent.get("confirmedAt").cloned().unwrap_or(Value::Null),
         "observed_message_id": intent.get("observedMessageId").cloned().unwrap_or(Value::Null),
     });
@@ -410,17 +538,14 @@ fn send_intent_events(
     if state == "confirmed" {
         let acceptance_key = format!("send:{id}:acceptance");
         events.push(PlannedEvent {
-            scope,
+            scope: scope.clone(),
             kind: EventKind::RemoteAcceptanceObserved,
             event_key: acceptance_key.clone(),
             payload: import_payload(
                 sha256,
                 &acceptance_key,
                 Some(text),
-                intent
-                    .get("confirmedConversation")
-                    .or_else(|| intent.get("conversation"))
-                    .and_then(Value::as_str),
+                scope.as_deref(),
                 intent
                     .get("confirmedAt")
                     .or_else(|| intent.get("at"))
@@ -438,6 +563,7 @@ fn transcript_event(
     message: &Value,
     index: usize,
     sha256: &str,
+    canonical_scopes: &HashMap<String, String>,
 ) -> Result<Option<PlannedEvent>, String> {
     let Some(text) = message.get("text").and_then(Value::as_str) else {
         return Ok(None);
@@ -445,20 +571,27 @@ fn transcript_event(
     let Some(role) = message.get("role").and_then(Value::as_str) else {
         return Ok(None);
     };
+    let observed_id = message.get("observedId").and_then(Value::as_str);
+    let is_placeholder = role == "assistant"
+        && observed_id.is_some_and(|id| id.starts_with("request-placeholder-"));
     let kind = match role {
         "user" => EventKind::TranscriptUserMessageObserved,
+        "assistant" if is_placeholder => EventKind::AssistantStatusObserved,
         "assistant" => EventKind::AssistantSnapshotObserved,
         _ => return Ok(None),
     };
-    let source_key = message
-        .get("key")
-        .and_then(Value::as_str)
-        .map_or_else(|| format!("index-{index}"), ToOwned::to_owned);
-    let event_key = format!("message:{role}:{source_key}");
-    let scope = message
-        .get("conversation")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let source_key = observed_id
+        .map(ToOwned::to_owned)
+        .or_else(|| message.get("key").and_then(Value::as_str).map(ToOwned::to_owned))
+        .unwrap_or_else(|| format!("index-{index}"));
+    let event_key = format!(
+        "message:{}:{}:{}",
+        role,
+        source_key,
+        sha256_hex(text.as_bytes())
+    );
+    let fallback_scope = message.get("conversation").and_then(Value::as_str);
+    let scope = canonical_scope_for(observed_id, fallback_scope, canonical_scopes);
 
     Ok(Some(PlannedEvent {
         scope: scope.clone(),
@@ -473,33 +606,41 @@ fn transcript_event(
             message.get("href").and_then(Value::as_str),
             json!({
                 "role": role,
-                "observed_id": message.get("observedId").cloned().unwrap_or(Value::Null),
+                "observed_id": observed_id,
                 "content_hash": message.get("contentHash").cloned().unwrap_or(Value::Null),
                 "index": message.get("index").cloned().unwrap_or(Value::Null),
+                "source_conversation": fallback_scope,
+                "transient_placeholder": is_placeholder,
             }),
         )?,
     }))
 }
 
-fn assistant_wal_event(assistant: &Value, sha256: &str) -> Result<Option<PlannedEvent>, String> {
+fn assistant_wal_event(
+    assistant: &Value,
+    sha256: &str,
+    canonical_scopes: &HashMap<String, String>,
+) -> Result<Option<PlannedEvent>, String> {
     let Some(text) = assistant.get("text").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let scope = assistant
-        .get("conversation")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
     let observed_id = assistant.get("observedId").and_then(Value::as_str);
+    let fallback_scope = assistant.get("conversation").and_then(Value::as_str);
+    let scope = canonical_scope_for(observed_id, fallback_scope, canonical_scopes);
+    let is_placeholder = observed_id.is_some_and(|id| id.starts_with("request-placeholder-"));
     let event_key = format!(
-        "assistant-wal:{}:{}",
+        "assistant-wal:{}:{}:{}",
         scope.as_deref().unwrap_or("unscoped"),
-        observed_id
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| sha256_hex(text.as_bytes()))
+        observed_id.unwrap_or("no-id"),
+        sha256_hex(text.as_bytes())
     );
     Ok(Some(PlannedEvent {
         scope: scope.clone(),
-        kind: EventKind::AssistantSnapshotObserved,
+        kind: if is_placeholder {
+            EventKind::AssistantStatusObserved
+        } else {
+            EventKind::AssistantSnapshotObserved
+        },
         event_key: event_key.clone(),
         payload: import_payload(
             sha256,
@@ -513,6 +654,7 @@ fn assistant_wal_event(assistant: &Value, sha256: &str) -> Result<Option<Planned
                 "original_chars": assistant.get("originalChars").cloned().unwrap_or(Value::Null),
                 "truncated_prefix": assistant.get("truncatedPrefix").cloned().unwrap_or(Value::Null),
                 "source": "assistant-wal",
+                "transient_placeholder": is_placeholder,
             }),
         )?,
     }))
@@ -605,18 +747,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn default_data_dir() -> PathBuf {
-    if let Some(override_dir) = env::var_os("CHATARIUM_DATA_DIR") {
-        return PathBuf::from(override_dir);
-    }
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data).join("Chatarium");
-    }
-    env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".chatarium")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,11 +769,11 @@ mod tests {
             "version": 3,
             "recorderVersion": "0.3.0",
             "exportedAt": "2026-09-17T18:00:00.000Z",
-            "href": "https://chatgpt.com/c/test-conversation",
+            "href": "https://chatgpt.com/c/final-conversation",
             "draftWal": {
                 "at": "2026-09-17T17:59:00.000Z",
-                "href": "https://chatgpt.com/c/test-conversation",
-                "conversation": "conversation:test-conversation",
+                "href": "https://chatgpt.com/c/final-conversation",
+                "conversation": "conversation:final-conversation",
                 "kind": "draft",
                 "text": "unsent draft"
             },
@@ -652,7 +782,7 @@ mod tests {
                 "at": "2026-09-17T17:58:00.000Z",
                 "href": "https://chatgpt.com/",
                 "conversation": "route:/",
-                "confirmedConversation": "conversation:test-conversation",
+                "confirmedConversation": "conversation:WEB:temporary",
                 "reason": "composer-enter",
                 "text": "hello",
                 "state": "confirmed",
@@ -661,27 +791,21 @@ mod tests {
             }],
             "assistantWal": {
                 "at": "2026-09-17T17:58:02.000Z",
-                "href": "https://chatgpt.com/c/test-conversation",
-                "conversation": "conversation:test-conversation",
+                "href": "https://chatgpt.com/c/final-conversation",
+                "conversation": "conversation:final-conversation",
                 "observedId": "assistant-message-1",
                 "text": "world",
                 "originalChars": 5,
                 "truncatedPrefix": false
             },
-            "lastVisibleError": {
-                "at": "2026-09-17T17:58:03.000Z",
-                "href": "https://chatgpt.com/c/test-conversation",
-                "conversation": "conversation:test-conversation",
-                "text": "Message delivery timed out",
-                "truncated": false
-            },
+            "lastVisibleError": null,
             "events": [],
             "drafts": [],
             "messages": [
                 {
-                    "key": "conversation:test-conversation:id:user-message-1",
-                    "conversation": "conversation:test-conversation",
-                    "href": "https://chatgpt.com/c/test-conversation",
+                    "key": "conversation:WEB:temporary:id:user-message-1",
+                    "conversation": "conversation:WEB:temporary",
+                    "href": "https://chatgpt.com/c/WEB:temporary",
                     "observedAt": "2026-09-17T17:58:01.000Z",
                     "observedId": "user-message-1",
                     "role": "user",
@@ -690,9 +814,31 @@ mod tests {
                     "text": "hello"
                 },
                 {
-                    "key": "conversation:test-conversation:id:assistant-message-1",
-                    "conversation": "conversation:test-conversation",
-                    "href": "https://chatgpt.com/c/test-conversation",
+                    "key": "conversation:WEB:temporary:id:request-placeholder-request-WEB:temporary-0",
+                    "conversation": "conversation:WEB:temporary",
+                    "href": "https://chatgpt.com/c/WEB:temporary",
+                    "observedAt": "2026-09-17T17:58:01.100Z",
+                    "observedId": "request-placeholder-request-WEB:temporary-0",
+                    "role": "assistant",
+                    "index": 1,
+                    "contentHash": "p",
+                    "text": "Thinking"
+                },
+                {
+                    "key": "conversation:final-conversation:id:user-message-1",
+                    "conversation": "conversation:final-conversation",
+                    "href": "https://chatgpt.com/c/final-conversation",
+                    "observedAt": "2026-09-17T17:58:01.500Z",
+                    "observedId": "user-message-1",
+                    "role": "user",
+                    "index": 0,
+                    "contentHash": "a",
+                    "text": "hello"
+                },
+                {
+                    "key": "conversation:final-conversation:id:assistant-message-1",
+                    "conversation": "conversation:final-conversation",
+                    "href": "https://chatgpt.com/c/final-conversation",
                     "observedAt": "2026-09-17T17:58:02.000Z",
                     "observedId": "assistant-message-1",
                     "role": "assistant",
@@ -720,13 +866,15 @@ mod tests {
         let store = JsonlEventStore::open(dir.join("journal.jsonl")).expect("reopen journal");
         assert!(store.events().iter().any(|event| {
             event.kind == EventKind::UserMessageCommitted
-                && event.scope.as_deref() == Some("conversation:test-conversation")
+                && event.scope.as_deref() == Some("conversation:final-conversation")
         }));
-        assert!(
+        assert_eq!(
             store
                 .events()
                 .iter()
-                .any(|event| event.kind == EventKind::ClientErrorObserved)
+                .filter(|event| event.kind == EventKind::TranscriptUserMessageObserved)
+                .count(),
+            1
         );
         assert_eq!(
             store
@@ -736,8 +884,26 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            store
+                .events()
+                .iter()
+                .filter(|event| event.kind == EventKind::AssistantStatusObserved)
+                .count(),
+            1
+        );
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn transient_web_scope_is_replaced_by_canonical_scope() {
+        let export: Value = serde_json::from_slice(&sample_export()).expect("parse sample");
+        let scopes = canonical_scope_by_observed_id(&export);
+        assert_eq!(
+            scopes.get("user-message-1").map(String::as_str),
+            Some("conversation:final-conversation")
+        );
     }
 
     #[test]
