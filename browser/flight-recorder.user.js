@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.3.0
+// @version      0.4.0
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -11,7 +11,11 @@
 (() => {
   'use strict';
 
-  const VERSION = '0.3.0';
+  // ChatGPT loads same-origin helper/sentinel frames. They are evidence sources for the site, not
+  // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
+  if (window.top !== window.self) return;
+
+  const VERSION = '0.4.0';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -22,6 +26,7 @@
   const MAX_SEND_INTENTS = 50;
   const MAX_ASSISTANT_WAL_CHARS = 500_000;
   const MAX_ERROR_WAL_CHARS = 5_000;
+  const COMPOSER_POLL_MS = 250;
   const EXPORT_HOTKEY = { ctrlKey: true, shiftKey: true, altKey: true, code: 'KeyE' };
 
   let dbPromise;
@@ -31,6 +36,7 @@
   let statusRefreshTimer = 0;
   let panelHost = null;
   let panelRoot = null;
+  let lastPolledComposerFingerprint = null;
   const observedErrors = new Set();
 
   const now = () => new Date().toISOString();
@@ -134,6 +140,14 @@
       document.querySelector('textarea[placeholder]') ??
       document.querySelector('[contenteditable="true"][data-virtualkeyboard]') ??
       document.querySelector('main [contenteditable="true"]');
+  }
+
+  function composerFromEventTarget(target) {
+    if (!(target instanceof Element)) return composer();
+    const candidate = target.closest(
+      '#prompt-textarea, textarea[placeholder], [contenteditable="true"][data-virtualkeyboard], main [contenteditable="true"]',
+    );
+    return candidate ?? composer();
   }
 
   function composerText(node = composer()) {
@@ -254,16 +268,21 @@
     }
   }
 
-  function snapshotDraft(reason = 'mutation') {
-    const node = composer();
+  function snapshotDraftFromNode(node, reason = 'mutation') {
     if (!node) return null;
     const text = composerText(node);
     const record = writeDraftWal('draft', text);
     const draft = { ...record, reason };
+    lastPolledComposerFingerprint = `${record.conversation}\u0000${text}`;
     void tx('drafts', 'readwrite', (store) => store.put(draft)).catch((error) => {
       console.error('[chatarium] draft archive write failed', error);
     });
+    scheduleStatusRefresh();
     return draft;
+  }
+
+  function snapshotDraft(reason = 'mutation') {
+    return snapshotDraftFromNode(composer(), reason);
   }
 
   function snapshotSendIntent(reason) {
@@ -304,9 +323,23 @@
     return likelyDuplicate ? previous : intent;
   }
 
-  function scheduleDraft(reason) {
+  function scheduleDraft(reason, node = null) {
     clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => snapshotDraft(reason), 120);
+    draftTimer = setTimeout(() => {
+      if (node?.isConnected) snapshotDraftFromNode(node, reason);
+      else snapshotDraft(reason);
+    }, 120);
+  }
+
+  function monitorComposer() {
+    setInterval(() => {
+      const node = composer();
+      if (!node) return;
+      const text = composerText(node);
+      const fingerprint = `${conversationKey()}\u0000${text}`;
+      if (fingerprint === lastPolledComposerFingerprint) return;
+      snapshotDraftFromNode(node, 'poll');
+    }, COMPOSER_POLL_MS);
   }
 
   function messageText(node) {
@@ -398,6 +431,7 @@
 
       const envelope = node.closest('[data-message-id]');
       const observedId = envelope?.getAttribute('data-message-id') ?? node.getAttribute('data-message-id');
+      const transientStatus = role === 'assistant' && String(observedId ?? '').startsWith('request-placeholder-');
       const key = observedId
         ? `${conversationKey()}:id:${observedId}`
         : `${conversationKey()}:${role}:${index}`;
@@ -410,6 +444,7 @@
         role,
         index,
         contentHash: fallbackHash(text),
+        transientStatus,
         text,
       };
 
@@ -418,7 +453,7 @@
       });
 
       if (role === 'user') confirmObservedUserMessage(text, observedId ?? null);
-      if (role === 'assistant') latestAssistant = record;
+      if (role === 'assistant' && !transientStatus) latestAssistant = record;
     });
 
     if (latestAssistant) writeAssistantWal(latestAssistant);
@@ -442,19 +477,30 @@
   function installEventCapture() {
     document.addEventListener('input', (event) => {
       const activeComposer = composer();
-      if (activeComposer && (event.target === activeComposer || activeComposer.contains?.(event.target))) {
-        scheduleDraft('input');
+      const eventComposer = composerFromEventTarget(event.target);
+      if (
+        eventComposer &&
+        activeComposer &&
+        (eventComposer === activeComposer || activeComposer.contains?.(event.target))
+      ) {
+        scheduleDraft('input', eventComposer);
       }
     }, true);
 
     document.addEventListener('pointerdown', (event) => {
-      if (looksLikeSendButton(event.target)) snapshotSendIntent('send-button-pointerdown');
+      if (looksLikeSendButton(event.target)) {
+        snapshotDraft('before-send-button');
+        snapshotSendIntent('send-button-pointerdown');
+      }
     }, true);
 
     document.addEventListener('submit', (event) => {
       const activeComposer = composer();
       const form = event.target instanceof HTMLFormElement ? event.target : null;
-      if (activeComposer && form?.contains(activeComposer)) snapshotSendIntent('form-submit');
+      if (activeComposer && form?.contains(activeComposer)) {
+        snapshotDraft('before-form-submit');
+        snapshotSendIntent('form-submit');
+      }
     }, true);
 
     document.addEventListener('keydown', (event) => {
@@ -472,6 +518,7 @@
       const activeComposer = composer();
       if (!activeComposer || !(event.target === activeComposer || activeComposer.contains?.(event.target))) return;
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        snapshotDraftFromNode(activeComposer, 'before-composer-enter');
         snapshotSendIntent('composer-enter');
       }
     }, true);
@@ -490,6 +537,8 @@
       const previous = lastHref;
       lastHref = location.href;
       appendEvent('navigation', { from: previous, to: lastHref });
+      lastPolledComposerFingerprint = null;
+      scheduleDraft('navigation');
       scheduleTranscript();
       scheduleStatusRefresh();
     }, 500);
@@ -497,6 +546,7 @@
 
   function monitorConnectivity() {
     addEventListener('offline', () => {
+      snapshotDraft('browser-offline');
       appendEvent('browser-offline');
       scheduleStatusRefresh();
     });
@@ -521,6 +571,9 @@
   }
 
   async function exportAll() {
+    // The synchronous localStorage WAL is refreshed immediately before export. This deliberately
+    // does not trust that React/DOM input events fired correctly.
+    snapshotDraft('export');
     captureTranscript();
     const [events, drafts, messages] = await Promise.all([
       readStore('events'),
@@ -726,13 +779,18 @@
   installMutationCapture();
   monitorNavigation();
   monitorConnectivity();
+  monitorComposer();
   void openDb().then(() => appendEvent('recorder-started', { version: VERSION })).catch(console.error);
 
   addEventListener('DOMContentLoaded', () => {
+    snapshotDraft('dom-content-loaded');
     scheduleTranscript();
     ensurePanel();
   }, { once: true });
 
-  if (document.readyState !== 'loading') ensurePanel();
+  if (document.readyState !== 'loading') {
+    snapshotDraft('late-install');
+    ensurePanel();
+  }
   console.info('[chatarium] flight recorder active; Ctrl+Shift+Alt+E exports local evidence');
 })();
