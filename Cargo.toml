@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/protocol",
     "crates/store",
+    "tools/importer",
     "tools/recorder",
 ]
 
