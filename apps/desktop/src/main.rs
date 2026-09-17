@@ -1,6 +1,7 @@
 use chatarium_core::{EventKind, TurnEvidence};
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -244,8 +245,12 @@ impl eframe::App for ChatariumApp {
                     {
                         found = true;
                         ui.group(|ui| {
-                            ui.strong(format!("You · local event #{}", event.sequence));
-                            ui.label(&event.payload);
+                            let scope = event.scope.as_deref().unwrap_or("native/unscoped");
+                            ui.strong(format!(
+                                "You · local event #{} · {scope}",
+                                event.sequence
+                            ));
+                            ui.label(event_text(&event.payload));
                         });
                         ui.add_space(4.0);
                     }
@@ -299,8 +304,9 @@ impl eframe::App for ChatariumApp {
                     .show(ui, |ui| {
                         for event in self.events.iter().rev().take(100).rev() {
                             ui.horizontal_wrapped(|ui| {
+                                let scope = event.scope.as_deref().unwrap_or("-");
                                 ui.monospace(format!(
-                                    "#{:05} {:>13} {}",
+                                    "#{:05} {:>13} {:>28} [{scope}]",
                                     event.sequence,
                                     event.at_unix_ms,
                                     event.kind.stable_name()
@@ -380,16 +386,16 @@ fn projected_working_draft(events: &[EventEnvelope]) -> String {
     let latest_draft = events
         .iter()
         .rev()
-        .find(|event| event.kind == EventKind::DraftChanged);
+        .find(|event| event.scope.is_none() && event.kind == EventKind::DraftChanged);
     let latest_commit_sequence = events
         .iter()
         .rev()
-        .find(|event| event.kind == EventKind::UserMessageCommitted)
+        .find(|event| event.scope.is_none() && event.kind == EventKind::UserMessageCommitted)
         .map(|event| event.sequence)
         .unwrap_or_default();
 
     match latest_draft {
-        Some(event) if event.sequence > latest_commit_sequence => event.payload.clone(),
+        Some(event) if event.sequence > latest_commit_sequence => event_text(&event.payload),
         _ => String::new(),
     }
 }
@@ -409,10 +415,18 @@ fn default_journal_path() -> PathBuf {
         .join("journal.jsonl")
 }
 
+fn event_text(payload: &str) -> String {
+    serde_json::from_str::<Value>(payload)
+        .ok()
+        .and_then(|value| value.get("text").and_then(Value::as_str).map(ToOwned::to_owned))
+        .unwrap_or_else(|| payload.to_owned())
+}
+
 fn payload_preview(payload: &str) -> String {
     const LIMIT: usize = 100;
-    let mut preview = payload.chars().take(LIMIT).collect::<String>();
-    if payload.chars().count() > LIMIT {
+    let text = event_text(payload);
+    let mut preview = text.chars().take(LIMIT).collect::<String>();
+    if text.chars().count() > LIMIT {
         preview.push('…');
     }
     preview.replace('\n', " ↵ ")
