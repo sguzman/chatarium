@@ -128,9 +128,48 @@ pub enum EventKind {
     ReconciliationObserved,
 }
 
+impl EventKind {
+    /// Stable lowercase name used by durable journal formats.
+    #[must_use]
+    pub const fn stable_name(self) -> &'static str {
+        match self {
+            Self::DraftChanged => "draft_changed",
+            Self::UserMessageCommitted => "user_message_committed",
+            Self::DispatchAttempted => "dispatch_attempted",
+            Self::RemoteAcceptanceObserved => "remote_acceptance_observed",
+            Self::RemoteFailureObserved => "remote_failure_observed",
+            Self::AssistantStreamStarted => "assistant_stream_started",
+            Self::AssistantDeltaObserved => "assistant_delta_observed",
+            Self::AssistantCompletionObserved => "assistant_completion_observed",
+            Self::TransportInterrupted => "transport_interrupted",
+            Self::ReconciliationAttempted => "reconciliation_attempted",
+            Self::ReconciliationObserved => "reconciliation_observed",
+        }
+    }
+
+    /// Parse a stable persisted event name.
+    #[must_use]
+    pub fn from_stable_name(value: &str) -> Option<Self> {
+        match value {
+            "draft_changed" => Some(Self::DraftChanged),
+            "user_message_committed" => Some(Self::UserMessageCommitted),
+            "dispatch_attempted" => Some(Self::DispatchAttempted),
+            "remote_acceptance_observed" => Some(Self::RemoteAcceptanceObserved),
+            "remote_failure_observed" => Some(Self::RemoteFailureObserved),
+            "assistant_stream_started" => Some(Self::AssistantStreamStarted),
+            "assistant_delta_observed" => Some(Self::AssistantDeltaObserved),
+            "assistant_completion_observed" => Some(Self::AssistantCompletionObserved),
+            "transport_interrupted" => Some(Self::TransportInterrupted),
+            "reconciliation_attempted" => Some(Self::ReconciliationAttempted),
+            "reconciliation_observed" => Some(Self::ReconciliationObserved),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AssistantEvidence, LocalEvidence, RemoteEvidence, TurnEvidence};
+    use super::{AssistantEvidence, EventKind, LocalEvidence, RemoteEvidence, TurnEvidence};
 
     #[test]
     fn dispatch_cannot_outrun_local_durability() {
@@ -170,5 +209,27 @@ mod tests {
         turn.observe_remote_failure();
         turn.mark_transport_ambiguous();
         assert_eq!(turn.remote, RemoteEvidence::FailedObserved);
+    }
+
+    #[test]
+    fn stable_event_names_round_trip() {
+        let kinds = [
+            EventKind::DraftChanged,
+            EventKind::UserMessageCommitted,
+            EventKind::DispatchAttempted,
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::RemoteFailureObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::AssistantDeltaObserved,
+            EventKind::AssistantCompletionObserved,
+            EventKind::TransportInterrupted,
+            EventKind::ReconciliationAttempted,
+            EventKind::ReconciliationObserved,
+        ];
+
+        for kind in kinds {
+            assert_eq!(EventKind::from_stable_name(kind.stable_name()), Some(kind));
+        }
+        assert_eq!(EventKind::from_stable_name("future_event"), None);
     }
 }
