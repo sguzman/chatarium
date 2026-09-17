@@ -1,0 +1,20 @@
+target/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.log
+.env
+.env.*
+!.env.example
+
+# Captures may contain credentials/private content before sanitization.
+captures/raw/
+protocol/private/
+
+# Local runtime state.
+.chatarium/
+*.sqlite
+*.sqlite3
+*.db
