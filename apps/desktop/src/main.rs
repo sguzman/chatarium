@@ -7,14 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 enum PersistCommand {
-    SaveDraft {
-        revision: u64,
-        text: String,
-    },
-    CommitMessage {
-        request_id: u64,
-        text: String,
-    },
+    SaveDraft { revision: u64, text: String },
+    CommitMessage { request_id: u64, text: String },
     Shutdown,
 }
 
@@ -168,8 +162,7 @@ impl ChatariumApp {
                 PersistNotice::DraftSaved { revision, event } => {
                     self.saved_revision = self.saved_revision.max(revision);
                     self.events.push(event);
-                    if self.saved_revision == self.draft_revision
-                        && self.commit_in_flight.is_none()
+                    if self.saved_revision == self.draft_revision && self.commit_in_flight.is_none()
                     {
                         self.status = "draft durable".to_owned();
                     }
@@ -180,7 +173,8 @@ impl ChatariumApp {
                     if self.commit_in_flight == Some(request_id) {
                         self.commit_in_flight = None;
                         self.evidence.commit_local_message();
-                        self.status = format!("user message durably committed as event #{sequence}");
+                        self.status =
+                            format!("user message durably committed as event #{sequence}");
                         self.draft.clear();
                         self.queue_draft_snapshot();
                     }
@@ -363,10 +357,8 @@ fn persistence_worker(
                 match store.append(EventKind::UserMessageCommitted, text) {
                     Ok(_) => {
                         if let Some(event) = store.events().last().cloned() {
-                            let _ = notices.send(PersistNotice::MessageCommitted {
-                                request_id,
-                                event,
-                            });
+                            let _ =
+                                notices.send(PersistNotice::MessageCommitted { request_id, event });
                         }
                     }
                     Err(error) => {
