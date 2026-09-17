@@ -12,6 +12,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Browser recorder syntax
+        run: node --check browser/flight-recorder.user.js
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check
