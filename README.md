@@ -27,25 +27,28 @@ The protocol corpus is evidence about ChatGPT as observed. The Rust implementati
 ```text
 chatarium/
 ├── apps/desktop/              # Native egui client
+├── browser/                   # Emergency browser-side durability layer
 ├── crates/
 │   ├── core/                  # Domain model and state machines
 │   ├── protocol/              # Typed interpretation of observed protocol
 │   └── store/                 # Durable local state
-├── tools/recorder/            # Capture, sanitize, inspect, and diff tooling
+├── tools/
+│   ├── importer/              # Flight-recorder export -> native journal bridge
+│   └── recorder/              # Capture, sanitize, inspect, and diff tooling
 ├── protocol/                  # Empirical protocol corpus
 │   ├── snapshots/             # Timestamped observations
 │   ├── flows/                 # User action -> observed network behavior
 │   ├── endpoints/             # Cross-snapshot endpoint documentation
 │   ├── schemas/               # Derived schemas
 │   └── fixtures/              # Sanitized executable evidence
-└── docs/                      # Architecture, reliability, development policy
+└── docs/                      # Architecture, reliability, development and QA policy
 ```
 
 ## Status
 
-Chatarium is in **bootstrap / P0 reliability** phase. The first objective is not visual polish. It is to make message loss impossible or, where the remote service itself is ambiguous, diagnosable and recoverable.
+Chatarium is in **P0 durability / P1 observation** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; and the protocol recorder is ready for the first controlled ChatGPT web captures.
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and [`protocol/README.md`](protocol/README.md).
+See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), and [`protocol/README.md`](protocol/README.md).
 
 ## Non-goals
 
