@@ -51,8 +51,9 @@ fn doctor() -> Result<(), String> {
     println!("Chatarium capture doctor");
     println!("harness version: {}", env!("CARGO_PKG_VERSION"));
 
-    let profile = capture_profile_path()
-        .ok_or_else(|| "LOCALAPPDATA is unavailable; cannot derive capture profile path".to_owned())?;
+    let profile = capture_profile_path().ok_or_else(|| {
+        "LOCALAPPDATA is unavailable; cannot derive capture profile path".to_owned()
+    })?;
     println!("capture profile: {}", profile.display());
     println!(
         "capture profile safety: {}",
@@ -64,7 +65,9 @@ fn doctor() -> Result<(), String> {
     );
 
     if !is_safe_capture_profile(&profile) {
-        return Err("derived capture profile violates the default-profile safety invariant".to_owned());
+        return Err(
+            "derived capture profile violates the default-profile safety invariant".to_owned(),
+        );
     }
 
     match find_edge_executable() {
