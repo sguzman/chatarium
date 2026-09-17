@@ -9,6 +9,7 @@ Chatarium is a reliability project first and a UI project second.
 - A protocol change should normally add or reference an observation before adapting implementation code.
 - Preserve raw evidence outside Git when it contains secrets or private content; commit only sanitized fixtures and metadata.
 - Never commit cookies, bearer tokens, CSRF material, session identifiers that grant access, private conversation bodies, or other reusable credentials.
+- Exact canonical experiment text and action definitions are evidence-bearing inputs. Do not silently rewrite, normalize, improve, or substitute them.
 
 ## Reliability invariants
 
@@ -24,6 +25,15 @@ Chatarium is a reliability project first and a UI project second.
 - Domain state belongs in `crates/core`; observed ChatGPT shapes belong in `crates/protocol`; persistence belongs in `crates/store`; presentation belongs in `apps/desktop`.
 - Do not make the desktop app the source of truth for protocol knowledge.
 - Prefer explicit state machines and typed uncertainty over booleans such as `sent = true`.
+
+## Human QA budget
+
+- Human QA is a scarce fallback for observations the program cannot reasonably obtain itself, not a substitute for automation.
+- If code can create a temporary directory, launch a controlled process, insert synthetic text, collect logs, hash, sanitize, import, diff, validate, or clean up test state, implement that automation instead of writing a checklist for the operator.
+- Prefer one command and one returned artifact over multi-command operator choreography.
+- Never ask the operator to copy cookies, authorization values, CSRF/session tokens, browser profile databases, or other reusable credentials.
+- A human handoff must state exactly what will be installed, launched, touched, persisted, and returned before the operator acts.
+- Repeated QA for a previously observed failure shape should normally become an automated regression test.
 
 ## Scope boundaries
 
