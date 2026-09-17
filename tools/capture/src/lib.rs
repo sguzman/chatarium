@@ -1,5 +1,8 @@
 //! Core logic for Chatarium's one-command browser capture harness.
 
+/// Durable private capture-run state and append-only event journal.
+pub mod run;
+
 use serde::Deserialize;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -22,7 +25,7 @@ pub struct Experiment {
     pub start_url: String,
     /// Maximum experiment time in seconds.
     pub timeout_seconds: u64,
-    /// Whether the experiment mutates remote conversation state.
+    /// Whether the experiment definition may mutate remote state.
     pub mutation: bool,
     /// Action specification.
     pub action: Action,
