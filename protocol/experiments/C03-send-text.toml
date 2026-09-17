@@ -1,0 +1,30 @@
+schema = "chatarium-experiment"
+version = 1
+id = "C03-send-text"
+description = "Create one deterministic synthetic text turn through the official ChatGPT page interaction path."
+start_url = "https://chatgpt.com/"
+timeout_seconds = 90
+mutation = true
+
+[action]
+type = "send_text"
+text = "respond with exactly CHATARIUM_PROTOCOL_TEST_001"
+
+[success]
+type = "assistant_text_contains"
+text = "CHATARIUM_PROTOCOL_TEST_001"
+
+[settle]
+quiet_network_ms = 1500
+quiet_dom_ms = 750
+minimum_observation_ms = 1000
+
+[retry]
+automatic_after_mutation = false
+
+[capture]
+network = true
+websocket = true
+response_bodies = true
+frontend_assets = true
+page_observations = true
