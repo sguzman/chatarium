@@ -77,7 +77,10 @@ impl JsonlEventStore {
     /// Open or create a journal and rebuild its in-memory event projection.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)?;
         }
 
@@ -106,8 +109,9 @@ impl JsonlEventStore {
             if line.is_empty() {
                 continue;
             }
-            let event = decode_event(line)
-                .map_err(|error| invalid_data(format!("journal line {}: {error}", line_index + 1)))?;
+            let event = decode_event(line).map_err(|error| {
+                invalid_data(format!("journal line {}: {error}", line_index + 1))
+            })?;
             let expected = next_sequence(&events)?;
             if event.sequence != expected {
                 return Err(invalid_data(format!(
@@ -291,7 +295,10 @@ mod tests {
                 .expect("append");
         }
         {
-            let mut file = OpenOptions::new().append(true).open(&path).expect("open raw");
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("open raw");
             file.write_all(br#"{"v":1,"sequence":2"#)
                 .expect("partial write");
             file.sync_data().expect("sync partial");
