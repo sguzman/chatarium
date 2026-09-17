@@ -34,7 +34,11 @@ pub struct MemoryEventStore {
 impl EventStore for MemoryEventStore {
     fn append(&mut self, kind: EventKind, payload: String) -> u64 {
         let sequence = u64::try_from(self.events.len()).expect("event count fits u64") + 1;
-        self.events.push(EventEnvelope { sequence, kind, payload });
+        self.events.push(EventEnvelope {
+            sequence,
+            kind,
+            payload,
+        });
         sequence
     }
 
