@@ -36,9 +36,7 @@ fn run() -> Result<(), String> {
                 .to_owned(),
         ),
         _ => {
-            eprintln!(
-                "Usage:\n  chatarium-importer flight-recorder <export.json> <data-dir>"
-            );
+            eprintln!("Usage:\n  chatarium-importer flight-recorder <export.json> <data-dir>");
             Err("invalid arguments".to_owned())
         }
     }
@@ -379,8 +377,15 @@ fn selected_transcript_messages(export: &Value) -> Vec<SelectedMessage> {
             .get("observedId")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let key = message.get("key").and_then(Value::as_str).unwrap_or_default();
-        let identity = if observed_id.is_empty() { key } else { observed_id };
+        let key = message
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let identity = if observed_id.is_empty() {
+            key
+        } else {
+            observed_id
+        };
         let fingerprint = format!("{role}:{identity}:{}", sha256_hex(text.as_bytes()));
         let scope = message
             .get("conversation")
@@ -572,8 +577,8 @@ fn transcript_event(
         return Ok(None);
     };
     let observed_id = message.get("observedId").and_then(Value::as_str);
-    let is_placeholder = role == "assistant"
-        && observed_id.is_some_and(|id| id.starts_with("request-placeholder-"));
+    let is_placeholder =
+        role == "assistant" && observed_id.is_some_and(|id| id.starts_with("request-placeholder-"));
     let kind = match role {
         "user" => EventKind::TranscriptUserMessageObserved,
         "assistant" if is_placeholder => EventKind::AssistantStatusObserved,
@@ -582,7 +587,12 @@ fn transcript_event(
     };
     let source_key = observed_id
         .map(ToOwned::to_owned)
-        .or_else(|| message.get("key").and_then(Value::as_str).map(ToOwned::to_owned))
+        .or_else(|| {
+            message
+                .get("key")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
         .unwrap_or_else(|| format!("index-{index}"));
     let event_key = format!(
         "message:{}:{}:{}",
