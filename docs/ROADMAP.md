@@ -20,7 +20,18 @@ Exit criterion: a browser/network failure may interrupt a turn, but it cannot er
 
 ## P0.5 — establish the protocol baseline
 
-Create the first controlled observation set of the official ChatGPT web client.
+Create the first controlled observation set of the official ChatGPT web client **without turning the user into a manual DevTools operator**.
+
+The first deliverable is the one-command CDP capture harness described in `docs/CAPTURE_HARNESS.md`:
+
+- dedicated Chatarium Edge profile with one-time normal login;
+- read-only diagnostics (`chatarium-capture doctor`);
+- automated canonical experiment execution;
+- incremental private capture journal;
+- reusable centralized sanitization;
+- one portable sanitized artifact per run;
+- explicit ambiguous-outcome semantics;
+- no automatic retry after a mutating experiment becomes ambiguous.
 
 Canonical experiments:
 
@@ -37,9 +48,9 @@ Canonical experiments:
 11. switch model/settings where exposed;
 12. repeat selected experiments under an intentionally interrupted connection.
 
-Each experiment should have its own capture or clearly delimited action log.
+The first machine-executable experiment definitions live under `protocol/experiments/`. Each experiment should produce its own capture or clearly delimited action log. Human QA is reserved for observations the harness genuinely cannot obtain itself.
 
-Exit criterion: snapshot `2026-09-17.001` (or the actual first observation ID) documents enough of the request/event lifecycle to explain a basic text turn without guessing.
+Exit criterion: snapshot `2026-09-17.001` (or the actual first observation ID) documents enough of the request/event lifecycle to explain a basic text turn without guessing, and equivalent future captures can be reproduced with a single harness command after one-time profile setup.
 
 ## P1 — recorder and diff tooling
 
