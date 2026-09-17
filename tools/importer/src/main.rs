@@ -33,9 +33,7 @@ fn run() -> Result<(), String> {
             import_file(Path::new(export), Path::new(data_dir))
         }
         _ => {
-            eprintln!(
-                "Usage:\n  chatarium-importer flight-recorder <export.json> [data-dir]"
-            );
+            eprintln!("Usage:\n  chatarium-importer flight-recorder <export.json> [data-dir]");
             Err("invalid arguments".to_owned())
         }
     }
@@ -144,8 +142,9 @@ fn archive_source(data_dir: &Path, sha256: &str, bytes: &[u8]) -> Result<PathBuf
     let archive_path = archive_dir.join(format!("{sha256}.json"));
 
     if archive_path.exists() {
-        let existing = fs::read(&archive_path)
-            .map_err(|error| format!("read existing archive {}: {error}", archive_path.display()))?;
+        let existing = fs::read(&archive_path).map_err(|error| {
+            format!("read existing archive {}: {error}", archive_path.display())
+        })?;
         if sha256_hex(&existing) != sha256 {
             return Err(format!(
                 "existing archive {} does not match its content-addressed filename",
@@ -169,13 +168,14 @@ fn archive_source(data_dir: &Path, sha256: &str, bytes: &[u8]) -> Result<PathBuf
     Ok(archive_path)
 }
 
-fn existing_import_keys(events: &[chatarium_store::EventEnvelope], sha256: &str) -> HashSet<String> {
+fn existing_import_keys(
+    events: &[chatarium_store::EventEnvelope],
+    sha256: &str,
+) -> HashSet<String> {
     events
         .iter()
         .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
-        .filter(|payload| {
-            payload.pointer("/source/sha256").and_then(Value::as_str) == Some(sha256)
-        })
+        .filter(|payload| payload.pointer("/source/sha256").and_then(Value::as_str) == Some(sha256))
         .filter_map(|payload| {
             payload
                 .pointer("/source/event_key")
@@ -481,10 +481,7 @@ fn transcript_event(
     }))
 }
 
-fn assistant_wal_event(
-    assistant: &Value,
-    sha256: &str,
-) -> Result<Option<PlannedEvent>, String> {
+fn assistant_wal_event(assistant: &Value, sha256: &str) -> Result<Option<PlannedEvent>, String> {
     let Some(text) = assistant.get("text").and_then(Value::as_str) else {
         return Ok(None);
     };
@@ -600,10 +597,7 @@ fn assistant_fingerprint(value: &Value) -> String {
 }
 
 fn array_len(value: &Value, key: &str) -> usize {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len)
+    value.get(key).and_then(Value::as_array).map_or(0, Vec::len)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
