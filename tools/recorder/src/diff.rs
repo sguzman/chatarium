@@ -128,9 +128,7 @@ fn index_inventory(inventory: &Value) -> Result<EndpointIndex, String> {
         let (_, variants) = index
             .entry(endpoint_key)
             .or_insert_with(|| (endpoint, VariantMap::new()));
-        let (_, count) = variants
-            .entry(shape_key)
-            .or_insert_with(|| (shape, 0_u64));
+        let (_, count) = variants.entry(shape_key).or_insert_with(|| (shape, 0_u64));
         *count = count.saturating_add(1);
     }
 
@@ -239,8 +237,14 @@ mod tests {
     fn identical_inventories_are_unchanged() {
         let value = inventory(vec![entry("GET", "/backend-api/example", 200)]);
         let report = diff_inventories(&value, &value).expect("diff");
-        assert_eq!(report.pointer("/summary/unchanged_endpoints"), Some(&json!(1)));
-        assert_eq!(report.pointer("/summary/changed_endpoints"), Some(&json!(0)));
+        assert_eq!(
+            report.pointer("/summary/unchanged_endpoints"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            report.pointer("/summary/changed_endpoints"),
+            Some(&json!(0))
+        );
     }
 
     #[test]
@@ -248,9 +252,15 @@ mod tests {
         let before = inventory(vec![entry("GET", "/backend-api/example", 200)]);
         let after = inventory(vec![entry("GET", "/backend-api/example", 429)]);
         let report = diff_inventories(&before, &after).expect("diff");
-        assert_eq!(report.pointer("/summary/changed_endpoints"), Some(&json!(1)));
+        assert_eq!(
+            report.pointer("/summary/changed_endpoints"),
+            Some(&json!(1))
+        );
         assert_eq!(report.pointer("/summary/added_endpoints"), Some(&json!(0)));
-        assert_eq!(report.pointer("/summary/removed_endpoints"), Some(&json!(0)));
+        assert_eq!(
+            report.pointer("/summary/removed_endpoints"),
+            Some(&json!(0))
+        );
     }
 
     #[test]
@@ -262,7 +272,10 @@ mod tests {
         ]);
         let report = diff_inventories(&before, &after).expect("diff");
         assert_eq!(report.pointer("/summary/added_endpoints"), Some(&json!(1)));
-        assert_eq!(report.pointer("/summary/unchanged_endpoints"), Some(&json!(1)));
+        assert_eq!(
+            report.pointer("/summary/unchanged_endpoints"),
+            Some(&json!(1))
+        );
     }
 
     #[test]
@@ -271,6 +284,9 @@ mod tests {
         let before = inventory(vec![single.clone()]);
         let after = inventory(vec![single.clone(), single]);
         let report = diff_inventories(&before, &after).expect("diff");
-        assert_eq!(report.pointer("/summary/changed_endpoints"), Some(&json!(1)));
+        assert_eq!(
+            report.pointer("/summary/changed_endpoints"),
+            Some(&json!(1))
+        );
     }
 }
