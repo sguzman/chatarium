@@ -118,6 +118,12 @@ pub enum EventKind {
     AssistantStreamStarted,
     /// Assistant output changed.
     AssistantDeltaObserved,
+    /// A complete assistant DOM/text snapshot was observed without implying generation completed.
+    AssistantSnapshotObserved,
+    /// A user message was observed in a remote/rendered transcript.
+    TranscriptUserMessageObserved,
+    /// A visible client-side/site error was observed.
+    ClientErrorObserved,
     /// Assistant completion was observed.
     AssistantCompletionObserved,
     /// Transport was interrupted.
@@ -126,6 +132,10 @@ pub enum EventKind {
     ReconciliationAttempted,
     /// Reconciliation produced a new observation.
     ReconciliationObserved,
+    /// Import of an external/local capture began.
+    ImportStarted,
+    /// Import of an external/local capture completed.
+    ImportCompleted,
 }
 
 impl EventKind {
@@ -140,10 +150,15 @@ impl EventKind {
             Self::RemoteFailureObserved => "remote_failure_observed",
             Self::AssistantStreamStarted => "assistant_stream_started",
             Self::AssistantDeltaObserved => "assistant_delta_observed",
+            Self::AssistantSnapshotObserved => "assistant_snapshot_observed",
+            Self::TranscriptUserMessageObserved => "transcript_user_message_observed",
+            Self::ClientErrorObserved => "client_error_observed",
             Self::AssistantCompletionObserved => "assistant_completion_observed",
             Self::TransportInterrupted => "transport_interrupted",
             Self::ReconciliationAttempted => "reconciliation_attempted",
             Self::ReconciliationObserved => "reconciliation_observed",
+            Self::ImportStarted => "import_started",
+            Self::ImportCompleted => "import_completed",
         }
     }
 
@@ -158,10 +173,15 @@ impl EventKind {
             "remote_failure_observed" => Some(Self::RemoteFailureObserved),
             "assistant_stream_started" => Some(Self::AssistantStreamStarted),
             "assistant_delta_observed" => Some(Self::AssistantDeltaObserved),
+            "assistant_snapshot_observed" => Some(Self::AssistantSnapshotObserved),
+            "transcript_user_message_observed" => Some(Self::TranscriptUserMessageObserved),
+            "client_error_observed" => Some(Self::ClientErrorObserved),
             "assistant_completion_observed" => Some(Self::AssistantCompletionObserved),
             "transport_interrupted" => Some(Self::TransportInterrupted),
             "reconciliation_attempted" => Some(Self::ReconciliationAttempted),
             "reconciliation_observed" => Some(Self::ReconciliationObserved),
+            "import_started" => Some(Self::ImportStarted),
+            "import_completed" => Some(Self::ImportCompleted),
             _ => None,
         }
     }
@@ -221,10 +241,15 @@ mod tests {
             EventKind::RemoteFailureObserved,
             EventKind::AssistantStreamStarted,
             EventKind::AssistantDeltaObserved,
+            EventKind::AssistantSnapshotObserved,
+            EventKind::TranscriptUserMessageObserved,
+            EventKind::ClientErrorObserved,
             EventKind::AssistantCompletionObserved,
             EventKind::TransportInterrupted,
             EventKind::ReconciliationAttempted,
             EventKind::ReconciliationObserved,
+            EventKind::ImportStarted,
+            EventKind::ImportCompleted,
         ];
 
         for kind in kinds {
