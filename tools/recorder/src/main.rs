@@ -1,7 +1,8 @@
-//! Offline protocol-capture ingestion and sanitization tool.
+//! Offline protocol-capture ingestion, sanitization, and structural inventory tool.
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -31,6 +32,17 @@ fn run() -> Result<(), String> {
             println!("{}  {}", sha256_hex(&sanitized), output);
             Ok(())
         }
+        [command, input, output] if command == "inventory-har" => {
+            let bytes = fs::read(input).map_err(|error| format!("read {input}: {error}"))?;
+            let sanitized = sanitize_har_bytes(&bytes)?;
+            let value = parse_har(&sanitized)?;
+            let inventory = request_inventory(&value)?;
+            let output_bytes = serde_json::to_vec_pretty(&inventory)
+                .map_err(|error| format!("serialize request inventory: {error}"))?;
+            fs::write(output, &output_bytes).map_err(|error| format!("write {output}: {error}"))?;
+            println!("{}  {}", sha256_hex(&output_bytes), output);
+            Ok(())
+        }
         [command, input] if command == "inspect-har" => inspect_har(Path::new(input)),
         [command, input, snapshot_dir, capture_id] if command == "snapshot-har" => {
             snapshot_har(Path::new(input), Path::new(snapshot_dir), capture_id)
@@ -49,13 +61,23 @@ fn run() -> Result<(), String> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  chatarium-recorder sanitize-har <input.har> <output.har>\n  chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>\n  chatarium-recorder inspect-har <input.har>\n  chatarium-recorder fingerprint <file>"
+        "Usage:\n  chatarium-recorder sanitize-har <input.har> <output.har>\n  chatarium-recorder inventory-har <input.har> <output.json>\n  chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>\n  chatarium-recorder inspect-har <input.har>\n  chatarium-recorder fingerprint <file>"
     );
 }
 
+fn parse_har(input: &[u8]) -> Result<Value, String> {
+    serde_json::from_slice(input).map_err(|error| format!("parse HAR JSON: {error}"))
+}
+
+fn har_entries(value: &Value) -> Result<&Vec<Value>, String> {
+    value
+        .pointer("/log/entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "HAR is missing log.entries".to_owned())
+}
+
 fn sanitize_har_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
-    let mut value: Value =
-        serde_json::from_slice(input).map_err(|error| format!("parse HAR JSON: {error}"))?;
+    let mut value = parse_har(input)?;
     sanitize_value(&mut value);
     serde_json::to_vec_pretty(&value).map_err(|error| format!("serialize sanitized HAR: {error}"))
 }
@@ -192,10 +214,143 @@ fn sensitive_name(name: &str) -> bool {
         || normalized.contains("sentinel")
 }
 
+fn request_inventory(har: &Value) -> Result<Value, String> {
+    let entries = har_entries(har)?;
+    let rows = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| inventory_row(index, entry))
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "format": "chatarium-request-inventory",
+        "version": 1,
+        "entry_count": rows.len(),
+        "entries": rows,
+    }))
+}
+
+fn inventory_row(index: usize, entry: &Value) -> Value {
+    let method = entry
+        .pointer("/request/method")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    let raw_url = entry
+        .pointer("/request/url")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    let status = entry
+        .pointer("/response/status")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let mime = entry
+        .pointer("/response/content/mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    let request_mime = entry
+        .pointer("/request/postData/mimeType")
+        .and_then(Value::as_str);
+    let has_request_body = entry.pointer("/request/postData/text").is_some();
+    let resource_type = entry.get("_resourceType").and_then(Value::as_str);
+
+    let (host, path) = endpoint_shape(raw_url);
+    let query_names = name_list(entry.pointer("/request/queryString"));
+    let request_header_names = name_list(entry.pointer("/request/headers"));
+    let response_header_names = name_list(entry.pointer("/response/headers"));
+
+    json!({
+        "index": index,
+        "method": method,
+        "host": host,
+        "path": path,
+        "status": status,
+        "response_mime": mime,
+        "request_mime": request_mime,
+        "has_request_body": has_request_body,
+        "resource_type": resource_type,
+        "query_names": query_names,
+        "request_header_names": request_header_names,
+        "response_header_names": response_header_names,
+    })
+}
+
+fn name_list(value: Option<&Value>) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    if let Some(items) = value.and_then(Value::as_array) {
+        for item in items {
+            if let Some(name) = item.get("name").and_then(Value::as_str) {
+                names.insert(name.to_ascii_lowercase());
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn endpoint_shape(raw_url: &str) -> (String, String) {
+    let Ok(url) = Url::parse(raw_url) else {
+        return ("?".to_owned(), normalize_path(raw_url.split('?').next().unwrap_or(raw_url)));
+    };
+    (
+        url.host_str().unwrap_or("?").to_owned(),
+        normalize_path(url.path()),
+    )
+}
+
+fn normalize_path(path: &str) -> String {
+    let normalized = path
+        .split('/')
+        .map(|segment| {
+            if looks_like_instance_id(segment) {
+                "<id>"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+
+    if normalized.is_empty() {
+        "/".to_owned()
+    } else {
+        normalized
+    }
+}
+
+fn looks_like_instance_id(segment: &str) -> bool {
+    if segment.is_empty() {
+        return false;
+    }
+
+    let bytes = segment.as_bytes();
+    let uuid_shape = bytes.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        && segment
+            .chars()
+            .enumerate()
+            .all(|(index, character)| [8, 13, 18, 23].contains(&index) || character.is_ascii_hexdigit());
+    if uuid_shape {
+        return true;
+    }
+
+    if segment.len() >= 12 && segment.chars().all(|character| character.is_ascii_digit()) {
+        return true;
+    }
+
+    segment.len() >= 20
+        && segment.chars().any(|character| character.is_ascii_digit())
+        && segment
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
 fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(), String> {
     validate_capture_id(capture_id)?;
     let source = fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
     let sanitized = sanitize_har_bytes(&source)?;
+    let sanitized_value = parse_har(&sanitized)?;
+    let inventory = request_inventory(&sanitized_value)?;
+    let inventory_bytes = serde_json::to_vec_pretty(&inventory)
+        .map_err(|error| format!("serialize request inventory: {error}"))?;
 
     let evidence_dir = snapshot_dir.join("evidence");
     let derived_dir = snapshot_dir.join("derived");
@@ -209,14 +364,26 @@ fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(
     fs::write(&capture_path, &sanitized)
         .map_err(|error| format!("write {}: {error}", capture_path.display()))?;
 
+    let relative_inventory_path = format!("derived/{capture_id}.requests.json");
+    let inventory_path = derived_dir.join(format!("{capture_id}.requests.json"));
+    fs::write(&inventory_path, &inventory_bytes)
+        .map_err(|error| format!("write {}: {error}", inventory_path.display()))?;
+
     let metadata_path = derived_dir.join(format!("{capture_id}.meta.json"));
+    let entry_count = inventory
+        .get("entry_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     let metadata = json!({
         "format": "chatarium-har-capture",
-        "version": 1,
+        "version": 2,
         "capture_id": capture_id,
         "sanitized_file": relative_capture_path,
         "sanitized_sha256": sha256_hex(&sanitized),
         "sanitized_bytes": sanitized.len(),
+        "request_inventory_file": relative_inventory_path,
+        "request_inventory_sha256": sha256_hex(&inventory_bytes),
+        "entry_count": entry_count,
         "created_unix_ms": unix_ms()?,
         "recorder_version": env!("CARGO_PKG_VERSION"),
         "raw_retained_outside_git": true,
@@ -228,6 +395,7 @@ fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(
         .map_err(|error| format!("write {}: {error}", metadata_path.display()))?;
 
     println!("capture: {}", capture_path.display());
+    println!("inventory: {}", inventory_path.display());
     println!("metadata: {}", metadata_path.display());
     println!("sha256: {}", sha256_hex(&sanitized));
     Ok(())
@@ -235,36 +403,26 @@ fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(
 
 fn inspect_har(input: &Path) -> Result<(), String> {
     let bytes = fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
-    let value: Value =
-        serde_json::from_slice(&bytes).map_err(|error| format!("parse HAR JSON: {error}"))?;
-    let entries = value
-        .pointer("/log/entries")
+    let sanitized = sanitize_har_bytes(&bytes)?;
+    let value = parse_har(&sanitized)?;
+    let inventory = request_inventory(&value)?;
+    let entries = inventory
+        .get("entries")
         .and_then(Value::as_array)
-        .ok_or_else(|| "HAR is missing log.entries".to_owned())?;
+        .ok_or_else(|| "generated inventory is missing entries".to_owned())?;
 
     println!("entries: {}", entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        let method = entry
-            .pointer("/request/method")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        let raw_url = entry
-            .pointer("/request/url")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
-        let status = entry
-            .pointer("/response/status")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
+    for entry in entries {
+        let index = entry.get("index").and_then(Value::as_u64).unwrap_or_default();
+        let method = entry.get("method").and_then(Value::as_str).unwrap_or("?");
+        let status = entry.get("status").and_then(Value::as_i64).unwrap_or_default();
+        let host = entry.get("host").and_then(Value::as_str).unwrap_or("?");
+        let path = entry.get("path").and_then(Value::as_str).unwrap_or("?");
         let mime = entry
-            .pointer("/response/content/mimeType")
+            .get("response_mime")
             .and_then(Value::as_str)
             .unwrap_or("?");
-        let endpoint = Url::parse(raw_url)
-            .ok()
-            .map(|url| format!("{}{}", url.host_str().unwrap_or("?"), url.path()))
-            .unwrap_or_else(|| raw_url.split('?').next().unwrap_or(raw_url).to_owned());
-        println!("{index:04}  {method:7}  {status:3}  {endpoint}  {mime}");
+        println!("{index:04}  {method:7}  {status:3}  {host}{path}  {mime}");
     }
     Ok(())
 }
@@ -276,7 +434,10 @@ fn validate_capture_id(capture_id: &str) -> Result<(), String> {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
         })
     {
-        return Err("capture-id must contain only ASCII letters, digits, '.', '-', '_' and may not contain '..'".to_owned());
+        return Err(
+            "capture-id must contain only ASCII letters, digits, '.', '-', '_' and may not contain '..'"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -297,14 +458,14 @@ fn unix_ms() -> Result<u128, String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn sanitizer_removes_common_credentials_but_keeps_shape() {
-        let input = br#"{
+    fn sample_har() -> &'static [u8] {
+        br#"{
           "log": {
             "entries": [{
+              "_resourceType": "fetch",
               "request": {
                 "method": "POST",
-                "url": "https://chatgpt.com/backend/test?foo=bar&access_token=url-secret",
+                "url": "https://chatgpt.com/backend-api/conversation/01234567-89ab-cdef-0123-456789abcdef?foo=bar&access_token=url-secret",
                 "headers": [
                   {"name": "Authorization", "value": "Bearer header-secret"},
                   {"name": "Content-Type", "value": "application/json"}
@@ -315,19 +476,26 @@ mod tests {
                   {"name": "access_token", "value": "query-secret"}
                 ],
                 "postData": {
+                  "mimeType": "application/json",
                   "text": "{\"message\":\"TEST123\",\"session_id\":\"body-secret\",\"nested\":{\"refresh_token\":\"nested-secret\"}}"
                 }
               },
               "response": {
                 "status": 200,
-                "headers": [{"name": "Set-Cookie", "value": "response-secret"}],
-                "content": {"mimeType": "application/json", "text": "{\"ok\":true}"}
+                "headers": [
+                  {"name": "Set-Cookie", "value": "response-secret"},
+                  {"name": "Content-Type", "value": "text/event-stream"}
+                ],
+                "content": {"mimeType": "text/event-stream", "text": "data: TEST123"}
               }
             }]
           }
-        }"#;
+        }"#
+    }
 
-        let output = sanitize_har_bytes(input).expect("sanitize");
+    #[test]
+    fn sanitizer_removes_common_credentials_but_keeps_shape() {
+        let output = sanitize_har_bytes(sample_har()).expect("sanitize");
         let text = String::from_utf8(output).expect("utf8");
         assert!(!text.contains("header-secret"));
         assert!(!text.contains("cookie-secret"));
@@ -340,6 +508,33 @@ mod tests {
         assert!(text.contains("application/json"));
         assert!(text.contains("foo=bar"));
         assert!(text.contains(REDACTED));
+    }
+
+    #[test]
+    fn inventory_keeps_structure_without_values_or_instance_ids() {
+        let sanitized = sanitize_har_bytes(sample_har()).expect("sanitize");
+        let value = parse_har(&sanitized).expect("parse");
+        let inventory = request_inventory(&value).expect("inventory");
+        let text = serde_json::to_string(&inventory).expect("json");
+
+        assert!(text.contains("/backend-api/conversation/<id>"));
+        assert!(text.contains("access_token"));
+        assert!(text.contains("authorization"));
+        assert!(text.contains("text/event-stream"));
+        assert!(!text.contains("url-secret"));
+        assert!(!text.contains("header-secret"));
+        assert!(!text.contains("01234567-89ab-cdef-0123-456789abcdef"));
+        assert!(!text.contains("TEST123"));
+    }
+
+    #[test]
+    fn path_normalizer_preserves_endpoint_names() {
+        assert_eq!(
+            normalize_path("/backend-api/conversation/01234567-89ab-cdef-0123-456789abcdef/messages"),
+            "/backend-api/conversation/<id>/messages"
+        );
+        assert_eq!(normalize_path("/backend-api/conversation_limit_info"), "/backend-api/conversation_limit_info");
+        assert_eq!(normalize_path("/api/account/123456789012"), "/api/account/<id>");
     }
 
     #[test]
