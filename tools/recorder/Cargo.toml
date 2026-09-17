@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+default-run = "chatarium-recorder"
 
 [dependencies]
 serde_json = "1.0"
