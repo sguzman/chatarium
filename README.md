@@ -1,4 +1,4 @@
-# Chatarium
+# 🟧 Chatarium
 
 **A locally durable, empirically specified interface to the ChatGPT consumer service.**
 
