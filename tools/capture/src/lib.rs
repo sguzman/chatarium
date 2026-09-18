@@ -1,10 +1,16 @@
 //! Core logic for Chatarium's one-command browser capture harness.
 
+/// Harness-owned Edge process lifecycle and profile safety.
+pub mod edge;
 /// Durable private capture-run state and append-only event journal.
 pub mod run;
+/// Mockable localhost-only DevTools HTTP and CDP WebSocket transport.
+pub mod transport;
 
 use serde::Deserialize;
 use std::env;
+use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 const C00_IDLE_LOAD: &str = include_str!("../../../protocol/experiments/C00-idle-load.toml");
@@ -133,6 +139,10 @@ pub fn known_default_edge_profile_roots() -> Vec<PathBuf> {
         return Vec::new();
     };
 
+    default_edge_profile_roots(&local_app_data)
+}
+
+fn default_edge_profile_roots(local_app_data: &Path) -> Vec<PathBuf> {
     [
         ["Microsoft", "Edge", "User Data"],
         ["Microsoft", "Edge Beta", "User Data"],
@@ -143,7 +153,7 @@ pub fn known_default_edge_profile_roots() -> Vec<PathBuf> {
     .map(|parts| {
         parts
             .into_iter()
-            .fold(local_app_data.clone(), |path, part| path.join(part))
+            .fold(local_app_data.to_path_buf(), |path, part| path.join(part))
     })
     .collect()
 }
@@ -154,15 +164,91 @@ pub fn known_default_edge_profile_roots() -> Vec<PathBuf> {
 /// would contain one. The harness must not gain a `--force` escape hatch for this invariant.
 #[must_use]
 pub fn is_safe_capture_profile(candidate: &Path) -> bool {
-    let candidate = normalized_for_compare(candidate);
-    if candidate.as_os_str().is_empty() {
+    let Some(local_app_data) = env::var_os("LOCALAPPDATA").map(PathBuf::from) else {
+        return false;
+    };
+    if validate_dedicated_capture_profile(candidate, &local_app_data).is_err() {
         return false;
     }
+    let Ok(canonical_local) = fs::canonicalize(&local_app_data) else {
+        return false;
+    };
+    let expected = canonical_local
+        .join("Chatarium")
+        .join("capture-browser")
+        .join("edge-profile");
+    let Some(resolved_candidate) = resolve_existing_prefix(candidate) else {
+        return false;
+    };
+    normalized_windows_path(&resolved_candidate).ok() == normalized_windows_path(&expected).ok()
+}
 
-    known_default_edge_profile_roots().into_iter().all(|root| {
-        let root = normalized_for_compare(&root);
-        candidate != root && !candidate.starts_with(&root) && !root.starts_with(&candidate)
-    })
+fn resolve_existing_prefix(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    let mut suffix = Vec::<OsString>::new();
+    loop {
+        match fs::symlink_metadata(&current) {
+            Ok(_) => {
+                let mut resolved = fs::canonicalize(&current).ok()?;
+                for component in suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Some(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                suffix.push(current.file_name()?.to_os_string());
+                current = current.parent()?.to_path_buf();
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Validate that a profile is exactly the Chatarium-owned dedicated Edge profile.
+///
+/// Known default Edge trees, their descendants, parent paths, and paths containing
+/// dot-segment traversal are rejected. This does not import or inspect profile data.
+pub fn validate_dedicated_capture_profile(
+    candidate: &Path,
+    local_app_data: &Path,
+) -> Result<(), String> {
+    let normalized_candidate = normalized_windows_path(candidate)?;
+    let expected = local_app_data
+        .join("Chatarium")
+        .join("capture-browser")
+        .join("edge-profile");
+    let normalized_expected = normalized_windows_path(&expected)?;
+    if normalized_candidate != normalized_expected {
+        return Err(
+            "capture profile must be the Chatarium-owned dedicated profile under LOCALAPPDATA"
+                .to_owned(),
+        );
+    }
+
+    for root in default_edge_profile_roots(local_app_data) {
+        let normalized_root = normalized_windows_path(&root)?;
+        if paths_intersect(&normalized_candidate, &normalized_root) {
+            return Err(format!(
+                "capture profile intersects a known/default Edge profile path: {}",
+                root.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn paths_intersect(candidate: &str, root: &str) -> bool {
+    candidate == root
+        || candidate.starts_with(&format!("{root}\\"))
+        || root.starts_with(&format!("{candidate}\\"))
+}
+
+fn normalized_windows_path(path: &Path) -> Result<String, String> {
+    let text = path.to_string_lossy().replace('/', "\\");
+    if text.split('\\').any(|part| part == "." || part == "..") {
+        return Err("capture profile path may not contain '.' or '..' components".to_owned());
+    }
+    Ok(text.trim_end_matches('\\').to_ascii_lowercase())
 }
 
 /// Candidate installed Microsoft Edge executables, ordered by preference.
@@ -209,14 +295,6 @@ pub fn find_edge_executable() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn normalized_for_compare(path: &Path) -> PathBuf {
-    let text = path
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    PathBuf::from(text.trim_end_matches('\\'))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,22 +337,28 @@ mod tests {
 
     #[test]
     fn profile_safety_rejects_default_tree_relationships() {
-        let default = PathBuf::from(r"C:\Users\example\AppData\Local\Microsoft\Edge\User Data");
+        let local = Path::new(r"C:\Users\example\AppData\Local");
+        let expected = local.join("Chatarium/capture-browser/edge-profile");
+        assert!(validate_dedicated_capture_profile(&expected, local).is_ok());
+
+        let default = local.join("Microsoft/Edge/User Data");
         let nested = default.join("Default");
-        let parent = PathBuf::from(r"C:\Users\example\AppData\Local\Microsoft\Edge");
-
-        fn local_check(candidate: &Path, root: &Path) -> bool {
-            let candidate = normalized_for_compare(candidate);
-            let root = normalized_for_compare(root);
-            candidate != root && !candidate.starts_with(&root) && !root.starts_with(&candidate)
+        let parent = local.join("Microsoft/Edge");
+        assert!(validate_dedicated_capture_profile(&default, local).is_err());
+        assert!(validate_dedicated_capture_profile(&nested, local).is_err());
+        assert!(validate_dedicated_capture_profile(&parent, local).is_err());
+        for default_root in default_edge_profile_roots(local) {
+            assert!(validate_dedicated_capture_profile(&default_root, local).is_err());
+            assert!(
+                validate_dedicated_capture_profile(&default_root.join("Default"), local).is_err()
+            );
         }
-
-        assert!(!local_check(&default, &default));
-        assert!(!local_check(&nested, &default));
-        assert!(!local_check(&parent, &default));
-        assert!(local_check(
-            Path::new(r"C:\Users\example\AppData\Local\Chatarium\capture-browser\edge-profile"),
-            &default
-        ));
+        assert!(
+            validate_dedicated_capture_profile(
+                Path::new(r"C:\Users\example\AppData\Local\Chatarium\..\Microsoft\Edge\User Data"),
+                local
+            )
+            .is_err()
+        );
     }
 }

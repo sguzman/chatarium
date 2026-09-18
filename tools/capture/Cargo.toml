@@ -11,6 +11,8 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+url = "2.5"
 
 [lints]
 workspace = true
