@@ -25,15 +25,15 @@ names, correlates responses by command ID, and queues unsolicited events. Page
 attachment is limited to `about:blank` and `https://chatgpt.com` targets.
 
 `LaunchedEdge::launch` discovers Edge in standard Windows locations, requires the
-exact `%LOCALAPPDATA%\\Chatarium\\capture-browser\\edge-profile` path, and refuses
+exact `%LOCALAPPDATA%\Chatarium\capture-browser\edge-profile` path, and refuses
 known/default Edge profile trees and path traversal. It launches with
 `--remote-debugging-address=127.0.0.1` and `--remote-debugging-port=0`. Existing
 harness locks or a stale `DevToolsActivePort` cause a visible error; they are never
 silently removed before launch. Call `LaunchedEdge::shutdown` to terminate/wait for
 the owned Edge process tree, remove its lock/active-port file, and append the durable cleanup
-event. On Windows the owned process tree is terminated by `SystemRoot\\System32\\taskkill.exe`
-scoped to the launched PID with `/T /F`; it does not search by image name. Drop also makes a
-best-effort process cleanup if explicit shutdown is missed.
+event. On Windows it invokes `SystemRoot\System32\taskkill.exe` with `/PID`, `/T`, and `/F`,
+scoped to the launched PID; it does not search by image name. Drop also makes best-effort
+process cleanup if explicit shutdown is missed.
 
 The transport issues no ChatGPT backend requests. Its generic CDP command method is
 an infrastructure API only; no `init` or `run` command currently invokes page
