@@ -4,6 +4,21 @@
 
 It is deliberately **offline-first**: give it a HAR you exported yourself and it produces sanitized, fingerprinted evidence plus structural derived data. It does not log into ChatGPT, obtain credentials, or bypass browser/session controls.
 
+The package also exposes a reusable Rust library (`chatarium_recorder`) for in-memory
+sanitization, inventory generation, SHA-256 fingerprints, snapshot writing, and
+portable CDP capture-bundle validation/sanitization. The CLI calls these same
+operations so its behavior is covered alongside the library API.
+
+```rust
+let sanitized = chatarium_recorder::sanitize_har_bytes(har_bytes)?;
+let digest = chatarium_recorder::sha256_hex(&sanitized);
+```
+
+See [`docs/CAPTURE_HARNESS.md`](../../docs/CAPTURE_HARNESS.md) for the capture-bundle
+contract. That contract is newly defined here because this checkout did not contain
+the referenced harness document or an existing bundle fixture; the future CDP harness
+must emit this shape or revise the contract with observed evidence.
+
 ## Commands
 
 ```text
