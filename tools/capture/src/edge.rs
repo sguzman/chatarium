@@ -2,7 +2,7 @@
 
 use crate::run::CaptureRun;
 use crate::transport::{
-    BrowserTransport, DevToolsBrowserTransport, DevToolsEndpoint, DevToolsHttp,
+    DevToolsBrowserTransport, DevToolsEndpoint, DevToolsHttp, DevToolsPort, LoopbackAddressFamily,
     LoopbackDevToolsHttp, LoopbackWebSocketConnector, TransportError, WebSocketConnector,
 };
 use crate::{find_edge_executable, validate_dedicated_capture_profile};
@@ -185,7 +185,7 @@ pub struct LaunchedEdge {
     process: EdgeProcess,
     lock_file: PathBuf,
     active_port_file: PathBuf,
-    transport: DevToolsBrowserTransport,
+    transport: Option<DevToolsBrowserTransport>,
 }
 
 /// Independently verified state after closing a harness-owned Edge process.
@@ -284,7 +284,7 @@ impl LaunchedEdge {
             "browser_process_started",
             json!({
                 "pid": pid,
-                "debugging_address": "127.0.0.1",
+                "requested_debugging_address": "127.0.0.1",
                 "debugging_port": "ephemeral",
             }),
         ) {
@@ -297,7 +297,7 @@ impl LaunchedEdge {
             process,
             lock_file: lock_path,
             active_port_file: active_port_file.clone(),
-            transport: DevToolsBrowserTransport::loopback(DevToolsEndpoint::loopback(1)?),
+            transport: None,
         };
 
         let startup = (|| {
@@ -306,10 +306,16 @@ impl LaunchedEdge {
                 &active_port_file,
                 startup_deadline,
             )?;
-            launched.transport = DevToolsBrowserTransport::with_clients(endpoint, http, websocket);
+            launched.transport = Some(DevToolsBrowserTransport::for_readiness(
+                endpoint, http, websocket,
+            ));
             wait_for_devtools_readiness(
                 &mut launched.process,
-                &mut launched.transport,
+                launched
+                    .transport
+                    .as_mut()
+                    .expect("transport was constructed"),
+                endpoint,
                 run,
                 startup_deadline,
             )
@@ -323,7 +329,9 @@ impl LaunchedEdge {
 
     /// Browser discovery and attachment API.
     pub fn transport(&mut self) -> &mut DevToolsBrowserTransport {
-        &mut self.transport
+        self.transport
+            .as_mut()
+            .expect("launched Edge transport passed readiness before being returned")
     }
 
     /// Verify process, harness-lock, and ephemeral-port cleanup state.
@@ -623,7 +631,7 @@ fn wait_for_debugging_endpoint(
     process: &mut EdgeProcess,
     active_port_file: &Path,
     deadline: Instant,
-) -> Result<DevToolsEndpoint, TransportError> {
+) -> Result<DevToolsPort, TransportError> {
     loop {
         if let Some(exit_code) = process
             .child
@@ -637,7 +645,7 @@ fn wait_for_debugging_endpoint(
             )));
         }
         match fs::read_to_string(active_port_file) {
-            Ok(contents) => return DevToolsEndpoint::from_active_port(&contents),
+            Ok(contents) => return DevToolsPort::from_active_port(&contents),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(TransportError::Process(format!(
@@ -655,30 +663,70 @@ fn wait_for_debugging_endpoint(
 fn wait_for_devtools_readiness(
     process: &mut EdgeProcess,
     transport: &mut DevToolsBrowserTransport,
+    port: DevToolsPort,
     run: &mut CaptureRun,
     deadline: Instant,
 ) -> Result<(), TransportError> {
     run.append_event(
         "devtools_readiness_started",
-        json!({"port": transport.endpoint().port()}),
+        json!({
+            "port": port.port(),
+            "candidate_addresses": ["127.0.0.1", "::1"],
+        }),
     )
     .map_err(TransportError::Journal)?;
 
     let mut attempts = 0u32;
     let mut last_error: Option<String> = None;
     loop {
-        if let Some(exit_code) = process
-            .child
-            .as_mut()
-            .expect("launched process")
-            .try_wait()
-            .map_err(TransportError::Process)?
-        {
-            let error = TransportError::Process(format!(
-                "Edge exited with code {exit_code} during DevTools readiness"
-            ));
-            journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
-            return Err(error);
+        for family in [LoopbackAddressFamily::Ipv4, LoopbackAddressFamily::Ipv6] {
+            if let Some(exit_code) = process
+                .child
+                .as_mut()
+                .expect("launched process")
+                .try_wait()
+                .map_err(TransportError::Process)?
+            {
+                let error = TransportError::Process(format!(
+                    "Edge exited with code {exit_code} during DevTools readiness"
+                ));
+                journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
+                return Err(error);
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            attempts = attempts.saturating_add(1);
+            let endpoint = DevToolsEndpoint::loopback(port, family);
+            match transport.probe_browser_version_at(
+                endpoint,
+                run,
+                remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT),
+            ) {
+                Ok(_) => {
+                    run.append_event(
+                        "devtools_readiness_succeeded",
+                        json!({
+                            "attempts": attempts,
+                            "address": endpoint.address().to_string(),
+                            "address_family": endpoint.family().as_str(),
+                            "last_transient_error": last_error,
+                        }),
+                    )
+                    .map_err(TransportError::Journal)?;
+                    return Ok(());
+                }
+                Err(error @ TransportError::ReadinessTransient(_)) => {
+                    last_error = Some(error.to_string());
+                }
+                Err(error) => {
+                    journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
+                    return Err(error);
+                }
+            }
         }
 
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -689,38 +737,6 @@ fn wait_for_devtools_readiness(
                     "startup deadline expired before a DevTools request could be attempted"
                         .to_owned()
                 }),
-            };
-            journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
-            return Err(error);
-        }
-
-        attempts = attempts.saturating_add(1);
-        match transport.browser_version_with_timeout(run, remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT)) {
-            Ok(_) => {
-                run.append_event(
-                    "devtools_readiness_succeeded",
-                    json!({
-                        "attempts": attempts,
-                        "last_transient_error": last_error,
-                    }),
-                )
-                .map_err(TransportError::Journal)?;
-                return Ok(());
-            }
-            Err(error @ TransportError::ReadinessTransient(_)) => {
-                last_error = Some(error.to_string());
-            }
-            Err(error) => {
-                journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
-                return Err(error);
-            }
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            let error = TransportError::ReadinessTimeout {
-                attempts,
-                last_error: last_error.clone().unwrap_or_default(),
             };
             journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
             return Err(error);
@@ -751,7 +767,7 @@ fn journal_readiness_failure(
 mod tests {
     use super::*;
     use crate::canonical_experiment;
-    use crate::transport::{DevToolsResource, WebSocketConnection};
+    use crate::transport::{BrowserTransport, DevToolsResource, WebSocketConnection};
     use serde_json::Value;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -828,7 +844,7 @@ mod tests {
         version_results: Mutex<VecDeque<Result<Value, TransportError>>>,
         attempts: Arc<Mutex<usize>>,
         exit_signal: Option<Arc<std::sync::atomic::AtomicBool>>,
-        endpoints: Arc<Mutex<Vec<u16>>>,
+        endpoints: Arc<Mutex<Vec<DevToolsEndpoint>>>,
     }
 
     impl SequenceHttp {
@@ -852,7 +868,7 @@ mod tests {
             endpoint: DevToolsEndpoint,
             resource: DevToolsResource,
         ) -> Result<Value, TransportError> {
-            self.endpoints.lock().unwrap().push(endpoint.port());
+            self.endpoints.lock().unwrap().push(endpoint);
             if resource == DevToolsResource::Targets {
                 return Ok(serde_json::json!([]));
             }
@@ -940,6 +956,7 @@ mod tests {
         fn connect(
             &self,
             _endpoint: &url::Url,
+            _selected_endpoint: DevToolsEndpoint,
         ) -> Result<Box<dyn WebSocketConnection>, TransportError> {
             Ok(Box::new(FakeSocket))
         }
@@ -1075,8 +1092,8 @@ mod tests {
         fs::create_dir_all(&profile).unwrap();
         let active_port = profile.join(ACTIVE_PORT_FILE);
         fs::write(&active_port, "not-a-port\n/devtools/browser/stale").unwrap();
-        let error = DevToolsEndpoint::from_active_port(&fs::read_to_string(&active_port).unwrap())
-            .unwrap_err();
+        let error =
+            DevToolsPort::from_active_port(&fs::read_to_string(&active_port).unwrap()).unwrap_err();
         assert!(matches!(error, TransportError::InvalidEndpoint(_)));
         let _ = fs::remove_dir_all(base);
     }
@@ -1133,7 +1150,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*attempts.lock().unwrap(), 2);
-        assert_eq!(*endpoints.lock().unwrap(), vec![9444, 9444]);
+        assert_eq!(
+            *endpoints.lock().unwrap(),
+            vec![
+                DevToolsEndpoint::loopback(
+                    DevToolsPort::new(9444).unwrap(),
+                    LoopbackAddressFamily::Ipv4,
+                ),
+                DevToolsEndpoint::loopback(
+                    DevToolsPort::new(9444).unwrap(),
+                    LoopbackAddressFamily::Ipv6,
+                ),
+            ]
+        );
         assert!(
             run.events()
                 .iter()
@@ -1142,10 +1171,16 @@ mod tests {
         assert!(run.events().iter().any(|event| {
             event.kind == "devtools_readiness_succeeded"
                 && event.payload["attempts"] == 2
+                && event.payload["address_family"] == "ipv6"
                 && event.payload["last_transient_error"]
                     .as_str()
                     .is_some_and(|value| value.contains("connection timed out"))
         }));
+        browser.transport().list_targets(&mut run).unwrap();
+        assert_eq!(
+            endpoints.lock().unwrap().last().unwrap().family(),
+            LoopbackAddressFamily::Ipv6
+        );
         browser.shutdown(&mut run).unwrap();
         assert_eq!(*kills.lock().unwrap(), 1);
         assert_eq!(*waits.lock().unwrap(), 1);
@@ -1164,6 +1199,7 @@ mod tests {
         config.startup_timeout = Duration::from_millis(180);
         let http = SequenceHttp::always_transient();
         let attempts = http.attempts.clone();
+        let endpoints = http.endpoints.clone();
         let kills = Arc::new(Mutex::new(0));
         let waits = Arc::new(Mutex::new(0));
         let spawner = FakeSpawner {
@@ -1189,6 +1225,12 @@ mod tests {
         assert!(matches!(error, TransportError::ReadinessTimeout { .. }));
         assert!(error.to_string().contains("connection refused"));
         assert!(*attempts.lock().unwrap() >= 2);
+        assert!(endpoints.lock().unwrap().iter().any(|endpoint| {
+            endpoint.family() == LoopbackAddressFamily::Ipv4 && endpoint.port() == 9444
+        }));
+        assert!(endpoints.lock().unwrap().iter().any(|endpoint| {
+            endpoint.family() == LoopbackAddressFamily::Ipv6 && endpoint.port() == 9444
+        }));
         assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
         assert_eq!(*kills.lock().unwrap(), 1);
         assert_eq!(*waits.lock().unwrap(), 1);
@@ -1378,6 +1420,13 @@ mod tests {
         ] {
             assert!(event_kinds.contains(&required), "missing {required}");
         }
+        let readiness = run
+            .events()
+            .iter()
+            .find(|event| event.kind == "devtools_readiness_succeeded")
+            .unwrap();
+        assert_eq!(readiness.payload["address"], "127.0.0.1");
+        assert_eq!(readiness.payload["address_family"], "ipv4");
         drop(run);
         let lock_path = local.join("Chatarium/capture-browser").join(LOCK_FILE);
         assert!(!lock_path.exists());
