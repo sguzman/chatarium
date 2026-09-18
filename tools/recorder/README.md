@@ -4,6 +4,24 @@
 
 It is deliberately **offline-first**: give it a HAR you exported yourself and it produces sanitized, fingerprinted evidence plus structural derived data. It does not log into ChatGPT, obtain credentials, or bypass browser/session controls.
 
+The package also exposes a reusable Rust library (`chatarium_recorder`) for schema-
+agnostic JSON value and HAR sanitization, structural inventory generation, SHA-256
+fingerprints, and snapshot writing. The CLI calls these same operations so its
+behavior is covered alongside the library API.
+
+```rust
+let sanitized = chatarium_recorder::sanitize_har_bytes(har_bytes)?;
+let digest = chatarium_recorder::sha256_hex(&sanitized);
+```
+
+The capture-harness specification is in [`docs/CAPTURE_HARNESS.md`](../../docs/CAPTURE_HARNESS.md).
+Portable bundle schema-specific validation is intentionally deferred until the
+harness emitter schema exists. The repository does not yet have a portable bundle
+producer, a versioned emitted manifest schema, or a canonical sanitized bundle
+fixture, so the recorder does not guess a format. A future harness can call the
+schema-agnostic `sanitize_value` primitive to apply the shared redaction rules to
+`serde_json::Value` data.
+
 ## Commands
 
 ```text
