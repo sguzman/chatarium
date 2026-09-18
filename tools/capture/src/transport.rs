@@ -24,6 +24,15 @@ pub enum TransportError {
     InvalidEndpoint(String),
     /// A local socket or I/O operation failed.
     Io(String),
+    /// A local DevTools socket operation failed in a way that can be transient during startup.
+    ReadinessTransient(String),
+    /// The bounded browser startup deadline expired while DevTools remained unavailable.
+    ReadinessTimeout {
+        /// Number of bounded DevTools metadata attempts made.
+        attempts: u32,
+        /// Last transient connection/readiness failure observed.
+        last_error: String,
+    },
     /// A DevTools HTTP endpoint returned an invalid response.
     Http(String),
     /// A CDP JSON message was malformed or unsupported.
@@ -75,6 +84,16 @@ impl fmt::Display for TransportError {
                 write!(formatter, "invalid DevTools endpoint: {reason}")
             }
             Self::Io(reason) => write!(formatter, "transport I/O: {reason}"),
+            Self::ReadinessTransient(reason) => {
+                write!(formatter, "transient DevTools readiness I/O: {reason}")
+            }
+            Self::ReadinessTimeout {
+                attempts,
+                last_error,
+            } => write!(
+                formatter,
+                "DevTools readiness deadline expired after {attempts} attempts; last error: {last_error}"
+            ),
             Self::Http(reason) => write!(formatter, "DevTools HTTP: {reason}"),
             Self::MalformedMessage(reason) => write!(formatter, "malformed CDP message: {reason}"),
             Self::Disconnected => formatter.write_str("CDP WebSocket disconnected"),
@@ -205,6 +224,14 @@ pub struct CdpEvent {
 pub trait BrowserTransport: Send {
     /// Fetch browser and CDP version metadata and journal endpoint discovery.
     fn browser_version(&mut self, run: &mut CaptureRun) -> Result<BrowserVersion, TransportError>;
+    /// Fetch browser metadata with a bounded transport attempt when supported.
+    fn browser_version_with_timeout(
+        &mut self,
+        run: &mut CaptureRun,
+        _timeout: Duration,
+    ) -> Result<BrowserVersion, TransportError> {
+        self.browser_version(run)
+    }
     /// Discover page targets and journal the raw target identifiers/types.
     fn list_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError>;
     /// Attach to a target returned by `list_targets` and journal attachment.
@@ -242,6 +269,18 @@ pub trait DevToolsHttp: Send + Sync {
         endpoint: DevToolsEndpoint,
         resource: DevToolsResource,
     ) -> Result<Value, TransportError>;
+
+    /// Fetch one resource with a caller-supplied upper bound for the complete I/O attempt.
+    ///
+    /// Mock clients may keep the default implementation because they do not perform blocking I/O.
+    fn get_json_with_timeout(
+        &self,
+        endpoint: DevToolsEndpoint,
+        resource: DevToolsResource,
+        _timeout: Duration,
+    ) -> Result<Value, TransportError> {
+        self.get_json(endpoint, resource)
+    }
 }
 
 /// Supported DevTools HTTP resources.
@@ -288,22 +327,35 @@ impl DevToolsHttp for LoopbackDevToolsHttp {
         endpoint: DevToolsEndpoint,
         resource: DevToolsResource,
     ) -> Result<Value, TransportError> {
-        let mut stream = TcpStream::connect_timeout(&endpoint.socket_addr().into(), IO_TIMEOUT)
-            .map_err(|error| TransportError::Io(error.to_string()))?;
+        self.get_json_with_timeout(endpoint, resource, IO_TIMEOUT)
+    }
+
+    fn get_json_with_timeout(
+        &self,
+        endpoint: DevToolsEndpoint,
+        resource: DevToolsResource,
+        timeout: Duration,
+    ) -> Result<Value, TransportError> {
+        let deadline = Instant::now() + timeout;
+        let mut stream = TcpStream::connect_timeout(
+            &endpoint.socket_addr().into(),
+            remaining_io_time(deadline)?,
+        )
+        .map_err(map_readiness_io)?;
         stream
-            .set_read_timeout(Some(IO_TIMEOUT))
-            .map_err(|error| TransportError::Io(error.to_string()))?;
-        stream
-            .set_write_timeout(Some(IO_TIMEOUT))
+            .set_write_timeout(Some(remaining_io_time(deadline)?))
             .map_err(|error| TransportError::Io(error.to_string()))?;
         write!(stream, "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n", resource.path(), endpoint.port())
+            .map_err(map_readiness_io)?;
+        stream
+            .set_read_timeout(Some(remaining_io_time(deadline)?))
             .map_err(|error| TransportError::Io(error.to_string()))?;
 
         let mut response = Vec::new();
         stream
             .take((MAX_HTTP_RESPONSE_BYTES + 1) as u64)
             .read_to_end(&mut response)
-            .map_err(|error| TransportError::Io(error.to_string()))?;
+            .map_err(map_readiness_io)?;
         if response.len() > MAX_HTTP_RESPONSE_BYTES {
             return Err(TransportError::Http(
                 "response exceeded 1 MiB limit".to_owned(),
@@ -323,13 +375,46 @@ impl DevToolsHttp for LoopbackDevToolsHttp {
             .and_then(|value| value.parse::<u16>().ok())
             .ok_or_else(|| TransportError::Http("response status line is malformed".to_owned()))?;
         if status != 200 {
-            return Err(TransportError::Http(format!(
-                "DevTools returned HTTP {status}"
-            )));
+            let reason = format!("DevTools returned HTTP {status}");
+            return Err(if matches!(status, 500 | 502 | 503 | 504) {
+                TransportError::ReadinessTransient(reason)
+            } else {
+                TransportError::Http(reason)
+            });
         }
         let body = &response[body_start + 4..];
         serde_json::from_slice(body)
             .map_err(|error| TransportError::Http(format!("invalid JSON response: {error}")))
+    }
+}
+
+fn remaining_io_time(deadline: Instant) -> Result<Duration, TransportError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err(TransportError::ReadinessTransient(
+            "DevTools I/O attempt deadline expired".to_owned(),
+        ))
+    } else {
+        Ok(remaining)
+    }
+}
+
+fn map_readiness_io(error: std::io::Error) -> TransportError {
+    let transient_kind = matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::WouldBlock
+    );
+    let transient_windows_code =
+        matches!(error.raw_os_error(), Some(10035 | 10054 | 10060 | 10061));
+    if transient_kind || transient_windows_code {
+        TransportError::ReadinessTransient(error.to_string())
+    } else {
+        TransportError::Io(error.to_string())
     }
 }
 
@@ -482,14 +567,25 @@ impl DevToolsBrowserTransport {
     }
 }
 
-impl BrowserTransport for DevToolsBrowserTransport {
-    fn browser_version(&mut self, run: &mut CaptureRun) -> Result<BrowserVersion, TransportError> {
+impl DevToolsBrowserTransport {
+    fn fetch_browser_version(
+        &mut self,
+        run: &mut CaptureRun,
+        timeout: Option<Duration>,
+    ) -> Result<BrowserVersion, TransportError> {
         if let Some(version) = &self.version {
             return Ok(version.clone());
         }
-        let value = self
-            .http
-            .get_json(self.endpoint, DevToolsResource::Version)?;
+        let value = match timeout {
+            Some(timeout) => self.http.get_json_with_timeout(
+                self.endpoint,
+                DevToolsResource::Version,
+                timeout,
+            )?,
+            None => self
+                .http
+                .get_json(self.endpoint, DevToolsResource::Version)?,
+        };
         let browser = required_string(&value, "Browser")?.to_owned();
         let protocol_version = required_string(&value, "Protocol-Version")?.to_owned();
         let websocket_raw = required_string(&value, "webSocketDebuggerUrl")?;
@@ -512,6 +608,20 @@ impl BrowserTransport for DevToolsBrowserTransport {
             .map_err(TransportError::Journal)?;
         self.version = Some(version.clone());
         Ok(version)
+    }
+}
+
+impl BrowserTransport for DevToolsBrowserTransport {
+    fn browser_version(&mut self, run: &mut CaptureRun) -> Result<BrowserVersion, TransportError> {
+        self.fetch_browser_version(run, None)
+    }
+
+    fn browser_version_with_timeout(
+        &mut self,
+        run: &mut CaptureRun,
+        timeout: Duration,
+    ) -> Result<BrowserVersion, TransportError> {
+        self.fetch_browser_version(run, Some(timeout))
     }
 
     fn list_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError> {
@@ -1228,6 +1338,37 @@ mod tests {
             .get_json(endpoint, DevToolsResource::Version)
             .unwrap();
         assert_eq!(value["Browser"], "Microsoft Edge/test");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn readiness_http_attempt_obeys_its_single_io_deadline() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let mut chunk = [0_u8; 512];
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&chunk[..read]);
+            }
+            thread::sleep(Duration::from_millis(180));
+        });
+
+        let started = Instant::now();
+        let result = LoopbackDevToolsHttp.get_json_with_timeout(
+            DevToolsEndpoint::loopback(port).unwrap(),
+            DevToolsResource::Version,
+            Duration::from_millis(35),
+        );
+        let elapsed = started.elapsed();
+        assert!(matches!(result, Err(TransportError::ReadinessTransient(_))));
+        assert!(elapsed < Duration::from_millis(140), "elapsed: {elapsed:?}");
         server.join().unwrap();
     }
 }

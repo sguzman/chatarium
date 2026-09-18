@@ -15,6 +15,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const DEVTOOLS_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
+const DEVTOOLS_RETRY_DELAY: Duration = Duration::from_millis(50);
 const ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
 const LOCK_FILE: &str = "edge-profile.harness.lock";
 
@@ -273,6 +275,7 @@ impl LaunchedEdge {
             arguments.push("--incognito".to_owned());
         }
         arguments.push("about:blank".to_owned());
+        let startup_deadline = Instant::now() + config.startup_timeout;
         let child = spawner
             .spawn(&config.executable, &arguments)
             .map_err(TransportError::Process)?;
@@ -301,20 +304,19 @@ impl LaunchedEdge {
             let endpoint = wait_for_debugging_endpoint(
                 &mut launched.process,
                 &active_port_file,
-                config.startup_timeout,
+                startup_deadline,
             )?;
             launched.transport = DevToolsBrowserTransport::with_clients(endpoint, http, websocket);
-            launched.transport.browser_version(run)?;
-            Ok::<(), TransportError>(())
+            wait_for_devtools_readiness(
+                &mut launched.process,
+                &mut launched.transport,
+                run,
+                startup_deadline,
+            )
         })();
         if let Err(error) = startup {
-            let cleanup = launched.shutdown(run);
-            return match cleanup {
-                Ok(()) => Err(error),
-                Err(cleanup_error) => Err(TransportError::Process(format!(
-                    "{error}; cleanup also failed: {cleanup_error}"
-                ))),
-            };
+            let _ = launched.shutdown(run);
+            return Err(error);
         }
         Ok(launched)
     }
@@ -620,9 +622,8 @@ fn ensure_active_port_absent(path: &Path) -> Result<(), TransportError> {
 fn wait_for_debugging_endpoint(
     process: &mut EdgeProcess,
     active_port_file: &Path,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<DevToolsEndpoint, TransportError> {
-    let deadline = Instant::now() + timeout;
     loop {
         if let Some(exit_code) = process
             .child
@@ -647,8 +648,103 @@ fn wait_for_debugging_endpoint(
         if Instant::now() >= deadline {
             return Err(TransportError::Timeout { command_id: None });
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(DEVTOOLS_RETRY_DELAY.min(deadline.saturating_duration_since(Instant::now())));
     }
+}
+
+fn wait_for_devtools_readiness(
+    process: &mut EdgeProcess,
+    transport: &mut DevToolsBrowserTransport,
+    run: &mut CaptureRun,
+    deadline: Instant,
+) -> Result<(), TransportError> {
+    run.append_event(
+        "devtools_readiness_started",
+        json!({"port": transport.endpoint().port()}),
+    )
+    .map_err(TransportError::Journal)?;
+
+    let mut attempts = 0u32;
+    let mut last_error: Option<String> = None;
+    loop {
+        if let Some(exit_code) = process
+            .child
+            .as_mut()
+            .expect("launched process")
+            .try_wait()
+            .map_err(TransportError::Process)?
+        {
+            let error = TransportError::Process(format!(
+                "Edge exited with code {exit_code} during DevTools readiness"
+            ));
+            journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
+            return Err(error);
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let error = TransportError::ReadinessTimeout {
+                attempts,
+                last_error: last_error.clone().unwrap_or_else(|| {
+                    "startup deadline expired before a DevTools request could be attempted"
+                        .to_owned()
+                }),
+            };
+            journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
+            return Err(error);
+        }
+
+        attempts = attempts.saturating_add(1);
+        match transport.browser_version_with_timeout(run, remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT)) {
+            Ok(_) => {
+                run.append_event(
+                    "devtools_readiness_succeeded",
+                    json!({
+                        "attempts": attempts,
+                        "last_transient_error": last_error,
+                    }),
+                )
+                .map_err(TransportError::Journal)?;
+                return Ok(());
+            }
+            Err(error @ TransportError::ReadinessTransient(_)) => {
+                last_error = Some(error.to_string());
+            }
+            Err(error) => {
+                journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
+                return Err(error);
+            }
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let error = TransportError::ReadinessTimeout {
+                attempts,
+                last_error: last_error.clone().unwrap_or_default(),
+            };
+            journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
+            return Err(error);
+        }
+        thread::sleep(DEVTOOLS_RETRY_DELAY.min(remaining));
+    }
+}
+
+fn journal_readiness_failure(
+    run: &mut CaptureRun,
+    attempts: u32,
+    error: &TransportError,
+    last_transient_error: Option<&str>,
+) -> Result<(), TransportError> {
+    run.append_event(
+        "devtools_readiness_failed",
+        json!({
+            "attempts": attempts,
+            "error": error.to_string(),
+            "last_transient_error": last_transient_error,
+        }),
+    )
+    .map(|_| ())
+    .map_err(TransportError::Journal)
 }
 
 #[cfg(test)]
@@ -657,11 +753,14 @@ mod tests {
     use crate::canonical_experiment;
     use crate::transport::{DevToolsResource, WebSocketConnection};
     use serde_json::Value;
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     struct FakeChild {
         id: u32,
         exited: bool,
+        exit_code: i32,
+        exit_signal: Option<Arc<std::sync::atomic::AtomicBool>>,
         kills: Arc<Mutex<usize>>,
         waits: Arc<Mutex<usize>>,
     }
@@ -692,6 +791,8 @@ mod tests {
             Ok(Box::new(FakeChild {
                 id: 4321,
                 exited: false,
+                exit_code: 0,
+                exit_signal: None,
                 kills: self.kills.clone(),
                 waits: self.waits.clone(),
             }))
@@ -721,6 +822,102 @@ mod tests {
                 }]),
             })
         }
+    }
+
+    struct SequenceHttp {
+        version_results: Mutex<VecDeque<Result<Value, TransportError>>>,
+        attempts: Arc<Mutex<usize>>,
+        exit_signal: Option<Arc<std::sync::atomic::AtomicBool>>,
+        endpoints: Arc<Mutex<Vec<u16>>>,
+    }
+
+    impl SequenceHttp {
+        fn new(version_results: impl IntoIterator<Item = Result<Value, TransportError>>) -> Self {
+            Self {
+                version_results: Mutex::new(version_results.into_iter().collect()),
+                attempts: Arc::new(Mutex::new(0)),
+                exit_signal: None,
+                endpoints: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn always_transient() -> Self {
+            Self::new(std::iter::empty::<Result<Value, TransportError>>())
+        }
+    }
+
+    impl DevToolsHttp for SequenceHttp {
+        fn get_json(
+            &self,
+            endpoint: DevToolsEndpoint,
+            resource: DevToolsResource,
+        ) -> Result<Value, TransportError> {
+            self.endpoints.lock().unwrap().push(endpoint.port());
+            if resource == DevToolsResource::Targets {
+                return Ok(serde_json::json!([]));
+            }
+            let attempt = {
+                let mut attempts = self.attempts.lock().unwrap();
+                *attempts += 1;
+                *attempts
+            };
+            let result = self
+                .version_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(TransportError::ReadinessTransient(
+                        "connection refused (os error 10061)".to_owned(),
+                    ))
+                });
+            if attempt == 1 {
+                if let Some(signal) = &self.exit_signal {
+                    signal.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            result
+        }
+    }
+
+    struct ExitingSpawner {
+        signal: Arc<std::sync::atomic::AtomicBool>,
+        kills: Arc<Mutex<usize>>,
+        waits: Arc<Mutex<usize>>,
+    }
+
+    impl EdgeProcessSpawner for ExitingSpawner {
+        fn spawn(
+            &self,
+            _executable: &Path,
+            arguments: &[String],
+        ) -> Result<Box<dyn ManagedEdgeChild>, String> {
+            let profile = arguments
+                .iter()
+                .find_map(|argument| argument.strip_prefix("--user-data-dir="))
+                .ok_or_else(|| "missing user data directory".to_owned())?;
+            fs::write(
+                Path::new(profile).join(ACTIVE_PORT_FILE),
+                "9444\n/devtools/browser/test",
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(Box::new(FakeChild {
+                id: 4322,
+                exited: false,
+                exit_code: 23,
+                exit_signal: Some(self.signal.clone()),
+                kills: self.kills.clone(),
+                waits: self.waits.clone(),
+            }))
+        }
+    }
+
+    fn valid_version() -> Value {
+        serde_json::json!({
+            "Browser":"Microsoft Edge/test",
+            "Protocol-Version":"1.3",
+            "webSocketDebuggerUrl":"ws://127.0.0.1:9444/devtools/browser/test"
+        })
     }
 
     struct FakeSocket;
@@ -753,7 +950,14 @@ mod tests {
             self.id
         }
         fn try_wait(&mut self) -> Result<Option<i32>, String> {
-            Ok(self.exited.then_some(0))
+            if self
+                .exit_signal
+                .as_ref()
+                .is_some_and(|signal| signal.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                self.exited = true;
+            }
+            Ok(self.exited.then_some(self.exit_code))
         }
         fn kill(&mut self) -> Result<(), String> {
             *self.kills.lock().unwrap() += 1;
@@ -763,7 +967,7 @@ mod tests {
         fn wait(&mut self) -> Result<i32, String> {
             *self.waits.lock().unwrap() += 1;
             self.exited = true;
-            Ok(0)
+            Ok(self.exit_code)
         }
     }
 
@@ -803,6 +1007,8 @@ mod tests {
         let child = FakeChild {
             id: 123,
             exited: false,
+            exit_code: 0,
+            exit_signal: None,
             kills: kills.clone(),
             waits: waits.clone(),
         };
@@ -828,6 +1034,8 @@ mod tests {
         let child = FakeChild {
             id: 124,
             exited: true,
+            exit_code: 0,
+            exit_signal: None,
             kills: kills.clone(),
             waits: waits.clone(),
         };
@@ -881,6 +1089,227 @@ mod tests {
             capture_root: local.join("Chatarium/capture-browser"),
             startup_timeout: Duration::from_secs(1),
         }
+    }
+
+    fn diagnostic_run_under(base: &Path) -> (CaptureRun, PathBuf) {
+        let run_base = base.join("runs");
+        let run = CaptureRun::create_diagnostic(&run_base, "smoke-edge").unwrap();
+        (run, run_base)
+    }
+
+    #[test]
+    fn readiness_retries_after_port_file_until_http_version_is_ready() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let mut config = config_under(&local);
+        config.startup_timeout = Duration::from_secs(1);
+        let attempts = Arc::new(Mutex::new(0));
+        let mut http = SequenceHttp::new([
+            Err(TransportError::ReadinessTransient(
+                "connection timed out".to_owned(),
+            )),
+            Ok(valid_version()),
+        ]);
+        http.attempts = attempts.clone();
+        let endpoints = http.endpoints.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let (mut run, run_base) = diagnostic_run_under(&base);
+
+        let mut browser = LaunchedEdge::launch_with_options(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+        )
+        .unwrap();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        assert_eq!(*endpoints.lock().unwrap(), vec![9444, 9444]);
+        assert!(
+            run.events()
+                .iter()
+                .any(|event| { event.kind == "devtools_readiness_started" })
+        );
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_readiness_succeeded"
+                && event.payload["attempts"] == 2
+                && event.payload["last_transient_error"]
+                    .as_str()
+                    .is_some_and(|value| value.contains("connection timed out"))
+        }));
+        browser.shutdown(&mut run).unwrap();
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        drop(browser);
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn transient_readiness_failures_stop_at_the_overall_startup_deadline_and_cleanup() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let mut config = config_under(&local);
+        config.startup_timeout = Duration::from_millis(180);
+        let http = SequenceHttp::always_transient();
+        let attempts = http.attempts.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let (mut run, run_base) = diagnostic_run_under(&base);
+        let started = Instant::now();
+        let error = LaunchedEdge::launch_with_options(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+        )
+        .err()
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(matches!(error, TransportError::ReadinessTimeout { .. }));
+        assert!(error.to_string().contains("connection refused"));
+        assert!(*attempts.lock().unwrap() >= 2);
+        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(
+            !local
+                .join("Chatarium/capture-browser")
+                .join(LOCK_FILE)
+                .exists()
+        );
+        assert!(!config.profile.join(ACTIVE_PORT_FILE).exists());
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_readiness_failed"
+                && event.payload["attempts"] == *attempts.lock().unwrap()
+                && event.payload["last_transient_error"]
+                    .as_str()
+                    .is_some_and(|value| value.contains("connection refused"))
+        }));
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn edge_exit_during_readiness_fails_immediately_with_status_and_cleanup() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let mut config = config_under(&local);
+        config.startup_timeout = Duration::from_secs(2);
+        let signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut http = SequenceHttp::always_transient();
+        http.exit_signal = Some(signal.clone());
+        let attempts = http.attempts.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = ExitingSpawner {
+            signal,
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let (mut run, run_base) = diagnostic_run_under(&base);
+        let error = LaunchedEdge::launch_with_options(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+        )
+        .err()
+        .unwrap();
+
+        assert!(matches!(error, TransportError::Process(_)));
+        assert!(error.to_string().contains("exited with code 23"));
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        assert_eq!(*kills.lock().unwrap(), 0);
+        assert_eq!(*waits.lock().unwrap(), 0);
+        assert!(
+            !local
+                .join("Chatarium/capture-browser")
+                .join(LOCK_FILE)
+                .exists()
+        );
+        assert!(!config.profile.join(ACTIVE_PORT_FILE).exists());
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_readiness_failed" && event.payload["attempts"] == 1
+        }));
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn permanent_protocol_validation_failure_is_not_retried_and_cleanup_runs() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let mut config = config_under(&local);
+        config.startup_timeout = Duration::from_secs(1);
+        let mut invalid_version = valid_version();
+        invalid_version["webSocketDebuggerUrl"] =
+            serde_json::json!("ws://example.com/devtools/browser/test");
+        let http = SequenceHttp::new([Ok(invalid_version)]);
+        let attempts = http.attempts.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let (mut run, run_base) = diagnostic_run_under(&base);
+        let error = LaunchedEdge::launch_with_options(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+        )
+        .err()
+        .unwrap();
+
+        assert!(matches!(error, TransportError::InvalidEndpoint(_)));
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(
+            !local
+                .join("Chatarium/capture-browser")
+                .join(LOCK_FILE)
+                .exists()
+        );
+        assert!(!config.profile.join(ACTIVE_PORT_FILE).exists());
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_readiness_failed" && event.payload["attempts"] == 1
+        }));
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
     }
 
     #[test]

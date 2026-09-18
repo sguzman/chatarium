@@ -65,6 +65,13 @@ absence is checked before a `PASS` result is printed. The launched Edge process 
 is closed on both success and failure. A failure prints its primary error, cleanup
 status, and run path when the run directory was created.
 
+After parsing the validated loopback port from `DevToolsActivePort`, startup readiness
+retries only transient local connection/readiness errors while Edge remains alive.
+Each HTTP attempt is bounded by the remaining time in the single 15-second startup
+deadline. Invalid endpoint metadata, malformed protocol data, and other permanent
+validation failures stop immediately. The journal records the readiness start and one
+terminal result with attempt count and the last transient error, when present.
+
 Run it manually on Windows with:
 
 ```powershell
