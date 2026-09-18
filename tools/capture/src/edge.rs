@@ -1,5 +1,6 @@
 //! Windows-first harness-owned Edge process lifecycle.
 
+mod job_membership;
 #[cfg(windows)]
 #[path = "edge/windows_plain.rs"]
 mod windows_plain;

@@ -8,6 +8,7 @@
 #![allow(unsafe_code)]
 
 use super::ManagedEdgeChild;
+use super::job_membership::{grow_capacity, max_process_ids, parse_process_id_list};
 use std::ffi::OsStr;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
@@ -260,31 +261,52 @@ fn job_process_ids(job: HANDLE) -> Result<Vec<u32>, String> {
     {
         return Err(last_error("query Edge job process count"));
     }
-    // Header has two u32 fields followed by pointer-sized process IDs.
-    let words = 2 + accounting.ActiveProcesses as usize;
-    let mut storage = vec![0usize; words.max(2)];
-    let mut returned = 0;
-    // SAFETY: Storage is pointer-aligned and sized for the active process count observed above.
-    let ok = unsafe {
-        QueryInformationJobObject(
-            job,
-            JobObjectBasicProcessIdList,
-            storage.as_mut_ptr().cast(),
-            (storage.len() * size_of::<usize>()) as u32,
-            &mut returned,
-        )
-    };
-    if ok == 0 {
-        return Err(last_error("query Edge job process membership"));
+    let mut capacity = (accounting.ActiveProcesses as usize).max(8);
+    const MAX_RETRIES: usize = 8;
+    for attempt in 0..MAX_RETRIES {
+        if capacity > max_process_ids() {
+            return Err(format!(
+                "Edge job process membership exceeded limit {}",
+                max_process_ids()
+            ));
+        }
+        let size = 8usize
+            .checked_add(
+                capacity
+                    .checked_mul(size_of::<usize>())
+                    .ok_or_else(|| "Edge job process query size overflow".to_owned())?,
+            )
+            .ok_or_else(|| "Edge job process query size overflow".to_owned())?;
+        let mut storage = vec![0u8; size];
+        let mut returned = 0;
+        // SAFETY: Storage is byte-aligned for the documented DWORD header and the trailing
+        // ULONG_PTR array starts at offset eight, which is aligned on x86 and x64.
+        let ok = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectBasicProcessIdList,
+                storage.as_mut_ptr().cast(),
+                storage.len() as u32,
+                &mut returned,
+            )
+        };
+        let declared = if storage.len() >= 8 {
+            u32::from_ne_bytes(storage[4..8].try_into().unwrap()) as usize
+        } else {
+            0
+        };
+        if ok != 0 {
+            return parse_process_id_list(&storage, size_of::<usize>());
+        }
+        let error = unsafe { GetLastError() };
+        if error != 122 && error != 234 {
+            return Err(format!(
+                "query Edge job process membership: Windows error {error}"
+            ));
+        }
+        capacity = grow_capacity(capacity, declared, attempt)?;
     }
-    let count = storage[1];
-    if count > storage.len().saturating_sub(2) {
-        return Err("Edge job process membership exceeded its query buffer".to_owned());
-    }
-    Ok(storage[2..2 + count]
-        .iter()
-        .filter_map(|pid| u32::try_from(*pid).ok())
-        .collect())
+    Err("Edge job process membership did not stabilize within bounded retries".to_owned())
 }
 
 fn wide_null(value: &OsStr) -> Vec<u16> {
