@@ -70,9 +70,7 @@ impl RemoteDebuggingPolicy {
     #[must_use]
     pub fn summary(&self) -> String {
         match (&self.machine, &self.user) {
-            (PolicyState::NotConfigured, PolicyState::NotConfigured) => {
-                "not configured".to_owned()
-            }
+            (PolicyState::NotConfigured, PolicyState::NotConfigured) => "not configured".to_owned(),
             (PolicyState::Disabled, PolicyState::Disabled)
             | (PolicyState::Disabled, PolicyState::NotConfigured)
             | (PolicyState::NotConfigured, PolicyState::Disabled) => "disabled".to_owned(),
