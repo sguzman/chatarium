@@ -14,7 +14,7 @@ chatarium-capture run C00-idle-load
 chatarium-capture run C03-send-text
 ```
 
-`init` first launches ordinary Edge with the dedicated persistent profile and no CDP or remote-debugging switches. On Windows, the suspended process is assigned to a private Job Object before it can spawn descendants; native Win32 window inspection checks visible window owners against that retained job membership, including a process-handle membership check to reject PID reuse. The operator signs in normally and closes that visible window. Only after every job process exits (or is terminated within the documented grace) and the profile lock is released does `init` reopen the same profile using the Windows anonymous pipe for read-only final-target verification. The command never claims authentication was verified. `run` remains unavailable and performs no browser launch or remote mutation.
+`init` first launches ordinary Edge with the dedicated persistent profile and no CDP or remote-debugging switches. The operator signs in normally and closes that visible window. Only after the harness-owned process tree exits and the profile lock is released does `init` reopen the same profile using the Windows anonymous pipe for read-only final-target verification. The command never claims authentication was verified. `run` remains unavailable and performs no browser launch or remote mutation.
 
 ## Edge/CDP transport foundation
 
