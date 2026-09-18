@@ -2,6 +2,15 @@
 
 Chatarium is a reliability project first and a UI project second.
 
+## Visual / Codex tracking namespace
+
+- Permanent project color: **🟧 ORANGE — Chatarium**.
+- Every Codex prompt gets a prompt color distinct from the immediately previous Chatarium Codex prompt. Prompt colors are transient; the project color never changes.
+- Every Codex final report must begin with both color lines and end with the same two color lines so the result is visually attributable even when several projects are running concurrently.
+- The director must explicitly state goal state. Use one of: `START NEW GOAL`, `CONTINUE CURRENT GOAL`, `CORRECTION / FOLLOW-UP`, or `DO NOT START CODEX`.
+- Never silently convert a follow-up into a new goal.
+- When a new goal is required from the principal, say exactly: **I NEED A NEW CODEX GOAL NOW**. Do not imply or hint that a new goal is needed.
+
 ## Authority and provenance
 
 - Treat `protocol/` as empirical evidence about the observed ChatGPT web client.
