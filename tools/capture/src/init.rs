@@ -44,7 +44,7 @@ impl InitBrowser for LaunchedInitBrowser {
         self.0.transport().refresh_targets(run)
     }
     fn shutdown(&mut self, run: &mut CaptureRun) -> Result<(), TransportError> {
-        self.0.shutdown(run)
+        self.0.shutdown_for_profile_init(run)
     }
     fn cleanup_status(&self) -> Result<EdgeCleanupStatus, TransportError> {
         self.0.cleanup_status()
@@ -851,6 +851,39 @@ mod tests {
                 .unwrap()
                 .contains("process_exited=false")
         );
+        assert!(base.join("profile/existing.marker").exists());
+        assert_eq!(calls.lock().unwrap().last(), Some(&"shutdown"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn target_validation_remains_primary_when_graceful_cleanup_fails() {
+        let (base, mut launcher, mut operator, calls) = fixture(
+            "target-and-cleanup-failure",
+            vec![target("https://login.example/authorize?code=private")],
+            OperatorResponse::Confirmed,
+        );
+        launcher.shutdown_error = Some(TransportError::Process(
+            "graceful close timed out and owned fallback failed".to_owned(),
+        ));
+
+        let failure = run_init(&base, &launcher, &mut operator).unwrap_err();
+
+        assert!(
+            failure
+                .primary_failure
+                .as_deref()
+                .unwrap()
+                .contains("no HTTPS page target")
+        );
+        assert!(
+            failure
+                .cleanup_failure
+                .as_deref()
+                .unwrap()
+                .contains("owned fallback failed")
+        );
+        assert!(failure.journal_failure.is_none());
         assert!(base.join("profile/existing.marker").exists());
         assert_eq!(calls.lock().unwrap().last(), Some(&"shutdown"));
         let _ = std::fs::remove_dir_all(base);

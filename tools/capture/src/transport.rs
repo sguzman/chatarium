@@ -990,6 +990,10 @@ pub trait CdpMessageChannel: Send {
     fn receive_message(&mut self, timeout: Duration) -> Result<Option<String>, TransportError>;
     /// Close the underlying transport.
     fn close(&mut self) -> Result<(), TransportError>;
+    /// Whether the message channel has already observed a closed transport.
+    fn is_closed(&self) -> bool {
+        false
+    }
 }
 
 struct WebSocketMessageChannel(Box<dyn WebSocketConnection>);
@@ -1053,6 +1057,17 @@ impl CdpPageSession {
             close_channel_on_close: false,
             closed: false,
         }
+    }
+
+    /// Whether this root session or its underlying channel is already closed.
+    pub(crate) fn is_closed(&self) -> bool {
+        if self.closed {
+            return true;
+        }
+        self.core
+            .lock()
+            .map(|core| core.closed || core.channel.is_closed())
+            .unwrap_or(true)
     }
 }
 

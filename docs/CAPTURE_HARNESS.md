@@ -86,7 +86,7 @@ Behavior:
 5. verify that a page target is on the exact `https://chatgpt.com` host;
 6. persist bootstrap metadata in a private diagnostic run and close the harness-owned browser cleanly.
 
-The dedicated profile remains on disk for later runs. Authentication is not programmatically verified. This command must not import credentials from another profile, extract credentials or cookies, inspect browser storage, automate login, or bypass any authentication flow. Closing stdin before Enter is an explicit operator abort. A failed final target check preserves the profile for another manual attempt.
+The dedicated profile remains on disk for later runs. On shutdown, `init` requests `Browser.close` before closing the pipe and gives the owned Edge process up to four seconds to exit naturally; forced termination of that exact process tree is a fallback. A missing `Browser.close` response is resolved against the owned process state. Authentication is not programmatically verified. This command must not import credentials from another profile, extract credentials or cookies, inspect browser storage, automate login, or bypass any authentication flow. Closing stdin before Enter is an explicit operator abort. A failed final target check preserves the profile for another manual attempt.
 
 ### `chatarium-capture run C00-idle-load`
 

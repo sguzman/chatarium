@@ -39,6 +39,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const MAX_READ_CHUNK: usize = 8192;
+const BROWSER_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Windows anonymous pipe pair with parent/child ownership made explicit.
 pub struct WindowsPipePair {
@@ -210,6 +211,10 @@ impl CdpMessageChannel for PipeMessageChannel {
         }
         Ok(())
     }
+
+    fn is_closed(&self) -> bool {
+        self.closed || self.reader_closed.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for PipeMessageChannel {
@@ -320,6 +325,16 @@ impl PipeCdpBrowserTransport {
     /// Close pipe endpoints and cancel the blocking reader.
     pub fn close(&mut self) -> Result<(), TransportError> {
         PageSession::close(&mut self.root)
+    }
+
+    /// Request normal browser shutdown while the browser-wide pipe is still available.
+    pub fn request_browser_close(&mut self) -> Result<(), TransportError> {
+        if self.root.is_closed() {
+            return Err(TransportError::Disconnected);
+        }
+        self.root
+            .command("Browser.close", json!({}), BROWSER_CLOSE_RESPONSE_TIMEOUT)?;
+        Ok(())
     }
 
     /// Discard a prior target snapshot and query the browser again after operator interaction.
