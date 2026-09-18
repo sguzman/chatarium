@@ -2,7 +2,7 @@
 
 `chatarium-capture` is the Windows-first automation boundary for controlled observations of the official ChatGPT web client.
 
-Current status: **substrate only**. The experiment model, dedicated-profile safety rules, Edge discovery, and read-only `doctor` command exist. Live CDP capture is intentionally not enabled until the transport/finalization implementation lands and passes review.
+Current status: **transport foundation**. The experiment model, dedicated-profile safety rules, Edge discovery, read-only `doctor`, and mockable Edge/CDP transport exist. `init` and `run` remain unavailable and do not launch a browser or contact ChatGPT.
 
 ## Commands
 
@@ -13,7 +13,34 @@ chatarium-capture run C00-idle-load
 chatarium-capture run C03-send-text
 ```
 
-At the current scaffold stage, `init` and `run` fail explicitly without launching a browser or mutating remote state.
+`init` and `run` still fail explicitly without launching a browser or mutating remote state. The Rust transport API can launch only the harness-owned Edge process on `about:blank`; it does not log in, navigate, drive the composer, or send messages.
+
+## Edge/CDP transport foundation
+
+The library exposes the mockable `BrowserTransport` and `PageSession` boundaries in
+`chatarium_capture::transport`. `DevToolsBrowserTransport` queries only the local
+`/json/version` and `/json/list` resources, validates all returned WebSocket URLs
+against `127.0.0.1` and the selected ephemeral port, preserves raw CDP event method
+names, correlates responses by command ID, and queues unsolicited events. Page
+attachment is limited to `about:blank` and `https://chatgpt.com` targets.
+
+`LaunchedEdge::launch` discovers Edge in standard Windows locations, requires the
+exact `%LOCALAPPDATA%\Chatarium\capture-browser\edge-profile` path, and refuses
+known/default Edge profile trees and path traversal. It launches with
+`--remote-debugging-address=127.0.0.1` and `--remote-debugging-port=0`. Existing
+harness locks or a stale `DevToolsActivePort` cause a visible error; they are never
+silently removed before launch. Call `LaunchedEdge::shutdown` to terminate/wait for
+the owned Edge process tree, remove its lock/active-port file, and append the durable cleanup
+event. On Windows it invokes `SystemRoot\System32\taskkill.exe` with `/PID`, `/T`, and `/F`,
+scoped to the launched PID; it does not search by image name. Drop also makes best-effort
+process cleanup if explicit shutdown is missed.
+
+The transport issues no ChatGPT backend requests. Its generic CDP command method is
+an infrastructure API only; no `init` or `run` command currently invokes page
+commands. Once a command is sent, timeout, disconnect, or I/O failure does not prove
+that the browser did not execute it; callers must preserve that uncertainty and must
+not automatically retry a mutating command. Tests inject process, HTTP, and WebSocket implementations, so they require
+neither an installed Edge browser nor a ChatGPT account.
 
 ## `doctor`
 
@@ -42,4 +69,4 @@ cargo run -p chatarium-capture -- doctor
 - Live capture must journal incrementally before the project treats it as usable evidence.
 - Portable artifacts and private local evidence are different products.
 
-See `docs/CAPTURE_HARNESS.md` for the authoritative v0.1 contract and GitHub issue #1 for implementation acceptance criteria.
+See `docs/CAPTURE_HARNESS.md` for the authoritative v0.1 contract and GitHub issue #5 for implementation acceptance criteria.
