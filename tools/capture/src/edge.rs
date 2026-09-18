@@ -360,6 +360,13 @@ impl BrowserTransport for EdgeBrowserTransport {
             Self::Pipe(transport) => transport.list_targets(run),
         }
     }
+    fn refresh_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError> {
+        match self {
+            Self::Tcp(transport) => transport.list_targets(run),
+            #[cfg(windows)]
+            Self::Pipe(transport) => transport.refresh_targets(run),
+        }
+    }
     fn attach(
         &mut self,
         target_id: &str,
@@ -413,7 +420,7 @@ impl LaunchedEdge {
     pub fn launch_read_only_smoke(run: &mut CaptureRun) -> Result<Self, TransportError> {
         #[cfg(windows)]
         {
-            return Self::launch_pipe_read_only_smoke(run);
+            return Self::launch_pipe_profile(run, "about:blank", true);
         }
         #[cfg(not(windows))]
         {
@@ -429,8 +436,27 @@ impl LaunchedEdge {
         }
     }
 
+    /// Launch the persistent dedicated profile at ChatGPT using the Windows pipe transport.
+    pub fn launch_profile_init(run: &mut CaptureRun) -> Result<Self, TransportError> {
+        #[cfg(windows)]
+        {
+            Self::launch_pipe_profile(run, crate::init::CHATGPT_START_URL, false)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = run;
+            Err(TransportError::Process(
+                "profile bootstrap requires the Windows anonymous-pipe Edge transport".to_owned(),
+            ))
+        }
+    }
+
     #[cfg(windows)]
-    fn launch_pipe_read_only_smoke(run: &mut CaptureRun) -> Result<Self, TransportError> {
+    fn launch_pipe_profile(
+        run: &mut CaptureRun,
+        start_url: &str,
+        incognito: bool,
+    ) -> Result<Self, TransportError> {
         use crate::pipe::spawn_edge_with_pipe;
 
         #[cfg(test)]
@@ -480,7 +506,7 @@ impl LaunchedEdge {
             ));
         }
 
-        let arguments = pipe_smoke_arguments(&config.profile);
+        let arguments = pipe_profile_arguments(&config.profile, start_url, incognito);
         let startup_deadline = Instant::now() + config.startup_timeout;
         let (child, transport) = match spawn_edge_with_pipe(&config.executable, &arguments, run) {
             Ok(pair) => pair,
@@ -918,20 +944,23 @@ impl LaunchedEdge {
             && process_result.is_ok()
             && endpoint_file_result.is_ok()
             && cleanup_status_value.is_some_and(EdgeCleanupStatus::is_complete);
-        let cleanup_error = pipe_close
-            .as_ref()
-            .err()
-            .map(ToString::to_string)
-            .or_else(|| process_result.as_ref().err().cloned())
-            .or_else(|| endpoint_file_result.as_ref().err().map(ToString::to_string))
-            .or_else(|| cleanup_status.as_ref().err().map(ToString::to_string))
-            .or_else(|| {
-                cleanup_status_value
-                    .filter(|status| !status.is_complete())
-                    .map(|_| {
-                        "process, harness lock, or active-port cleanup was not verified".to_owned()
-                    })
-            });
+        let mut cleanup_errors = Vec::new();
+        if let Err(error) = &pipe_close {
+            cleanup_errors.push(format!("close pipe transport: {error}"));
+        }
+        if let Err(error) = &process_result {
+            cleanup_errors.push(format!("terminate Edge process: {error}"));
+        }
+        if let Err(error) = &endpoint_file_result {
+            cleanup_errors.push(error.to_string());
+        }
+        if let Err(error) = &cleanup_status {
+            cleanup_errors.push(format!("verify cleanup: {error}"));
+        } else if cleanup_status_value.is_some_and(|status| !status.is_complete()) {
+            cleanup_errors
+                .push("process, harness lock, or active-port cleanup was not verified".to_owned());
+        }
+        let cleanup_error = (!cleanup_errors.is_empty()).then(|| cleanup_errors.join("; "));
         let journal_result = run
             .append_event(
                 "browser_shutdown_cleanup",
@@ -946,16 +975,22 @@ impl LaunchedEdge {
                 }),
             )
             .map_err(TransportError::Journal);
-        pipe_close?;
-        process_result.map_err(TransportError::Process)?;
-        endpoint_file_result?;
-        let cleanup_status = cleanup_status?;
-        if !cleanup_status.is_complete() {
-            return Err(TransportError::Process(
-                "Edge cleanup did not satisfy the process/lock/active-port invariant".to_owned(),
-            ));
+        let journal_failure = journal_result.err().map(|error| error.to_string());
+        match (cleanup_error, journal_failure) {
+            (Some(cleanup_failure), Some(journal_failure)) => {
+                return Err(TransportError::DiagnosticJournalFailure {
+                    primary_failure: Some(cleanup_failure),
+                    journal_failure,
+                });
+            }
+            (Some(cleanup_failure), None) => {
+                return Err(TransportError::Process(cleanup_failure));
+            }
+            (None, Some(journal_failure)) => {
+                return Err(TransportError::Journal(journal_failure));
+            }
+            (None, None) => {}
         }
-        journal_result?;
         Ok(())
     }
 }
@@ -971,15 +1006,23 @@ fn path_is_absent(path: &Path) -> Result<bool, TransportError> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn pipe_smoke_arguments(profile: &Path) -> Vec<String> {
-    vec![
+    pipe_profile_arguments(profile, "about:blank", true)
+}
+
+#[cfg(windows)]
+fn pipe_profile_arguments(profile: &Path, start_url: &str, incognito: bool) -> Vec<String> {
+    let mut arguments = vec![
         format!("--user-data-dir={}", profile.display()),
         "--no-first-run".to_owned(),
         "--no-default-browser-check".to_owned(),
-        "--incognito".to_owned(),
-        "about:blank".to_owned(),
-    ]
+    ];
+    if incognito {
+        arguments.push("--incognito".to_owned());
+    }
+    arguments.push(start_url.to_owned());
+    arguments
 }
 
 #[cfg(windows)]
@@ -1134,9 +1177,15 @@ fn fail_pipe_startup(
         } => (primary_failure.clone(), vec![journal_failure.clone()]),
         other => (Some(other.to_string()), Vec::new()),
     };
-    let shutdown_error = launched.shutdown(run).err();
-    if let Some(TransportError::Journal(journal)) = shutdown_error {
-        journal_failures.push(journal);
+    if let Err(error) = launched.shutdown(run) {
+        match error {
+            TransportError::Journal(journal)
+            | TransportError::DiagnosticJournalFailure {
+                journal_failure: journal,
+                ..
+            } => journal_failures.push(journal),
+            _ => {}
+        }
     }
     if journal_failures.is_empty() {
         original
@@ -1488,6 +1537,34 @@ mod tests {
                 .any(|arg| arg == "--no-default-browser-check")
         );
         assert!(arguments.iter().any(|arg| arg == "--incognito"));
+        assert!(
+            !arguments
+                .iter()
+                .any(|arg| arg.starts_with("--remote-debugging-port"))
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|arg| arg.starts_with("--remote-debugging-address"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_profile_init_arguments_use_persistent_profile_and_exact_chatgpt_url() {
+        let profile =
+            Path::new(r"C:\Users\example\AppData\Local\Chatarium\capture-browser\edge-profile");
+        let arguments = pipe_profile_arguments(profile, crate::init::CHATGPT_START_URL, false);
+        assert_eq!(
+            arguments.last().map(String::as_str),
+            Some("https://chatgpt.com/")
+        );
+        assert!(
+            arguments
+                .iter()
+                .any(|arg| arg == &format!("--user-data-dir={}", profile.display()))
+        );
+        assert!(!arguments.iter().any(|arg| arg == "--incognito"));
         assert!(
             !arguments
                 .iter()
@@ -1887,6 +1964,26 @@ mod tests {
         assert!(
             validate_dedicated_capture_profile(&config.profile, &config.local_app_data).is_ok()
         );
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn existing_dedicated_profile_is_reused_without_rewriting_its_contents() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let config = config_under(&local);
+        fs::create_dir_all(&config.profile).unwrap();
+        let marker = config.profile.join("existing-site-data.marker");
+        fs::write(&marker, b"existing Edge-managed profile state").unwrap();
+
+        ensure_profile_directories(&config).unwrap();
+
+        assert_eq!(
+            fs::read(&marker).unwrap(),
+            b"existing Edge-managed profile state"
+        );
+        assert!(config.profile.is_dir());
         let _ = fs::remove_dir_all(base);
     }
 

@@ -75,19 +75,18 @@ It reports:
 
 ### `chatarium-capture init`
 
-One-time interactive bootstrap.
+Operator-confirmed bootstrap for the dedicated persistent Edge profile.
 
 Behavior:
 
 1. create the dedicated capture profile directory if absent;
-2. launch Edge with that profile and a localhost-only debugging endpoint;
-3. open `https://chatgpt.com/`;
-4. wait for the user to complete the normal ChatGPT login in that dedicated profile if login is required;
-5. detect that a normal ChatGPT page surface is available;
-6. persist only Chatarium bootstrap metadata outside the browser profile;
-7. close the harness-owned browser cleanly when setup is complete.
+2. launch Edge with that persistent profile at `https://chatgpt.com/` using the Windows anonymous-pipe DevTools transport;
+3. let the operator sign in through the normal ChatGPT UI if needed;
+4. wait for one terminal Enter confirmation;
+5. verify that a page target is on the exact `https://chatgpt.com` host;
+6. persist bootstrap metadata in a private diagnostic run and close the harness-owned browser cleanly.
 
-This command must not import credentials from another profile, copy cookies, inspect password stores, or bypass any authentication flow.
+The dedicated profile remains on disk for later runs. Authentication is not programmatically verified. This command must not import credentials from another profile, extract credentials or cookies, inspect browser storage, automate login, or bypass any authentication flow. Closing stdin before Enter is an explicit operator abort. A failed final target check preserves the profile for another manual attempt.
 
 ### `chatarium-capture run C00-idle-load`
 

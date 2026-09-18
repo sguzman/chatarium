@@ -350,6 +350,10 @@ pub trait BrowserTransport: Send {
     }
     /// Discover page targets and journal the raw target identifiers/types.
     fn list_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError>;
+    /// Re-query page targets after an external wait rather than relying on an earlier snapshot.
+    fn refresh_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError> {
+        self.list_targets(run)
+    }
     /// Attach to a target returned by `list_targets` and journal attachment.
     fn attach(
         &mut self,
