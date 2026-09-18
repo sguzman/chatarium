@@ -5,13 +5,13 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 use tungstenite::client;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::WebSocket;
-use url::Url;
+use url::{Host, Url};
 
 const MAX_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_QUEUED_MESSAGES: usize = 4096;
@@ -134,15 +134,15 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
-/// Ephemeral HTTP endpoint bound to IPv4 loopback only.
+/// Validated port selected by the harness-owned browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DevToolsEndpoint {
+pub struct DevToolsPort {
     port: u16,
 }
 
-impl DevToolsEndpoint {
-    /// Construct a loopback endpoint from a nonzero port.
-    pub fn loopback(port: u16) -> Result<Self, TransportError> {
+impl DevToolsPort {
+    /// Construct a selected DevTools port from a nonzero value.
+    pub fn new(port: u16) -> Result<Self, TransportError> {
         if port == 0 {
             return Err(TransportError::InvalidEndpoint(
                 "port must be nonzero".to_owned(),
@@ -164,7 +164,7 @@ impl DevToolsEndpoint {
             .map_err(|_| {
                 TransportError::InvalidEndpoint("DevToolsActivePort has an invalid port".to_owned())
             })?;
-        Self::loopback(port)
+        Self::new(port)
     }
 
     /// Port selected by the harness-owned browser.
@@ -172,9 +172,77 @@ impl DevToolsEndpoint {
     pub const fn port(self) -> u16 {
         self.port
     }
+}
 
-    fn socket_addr(self) -> SocketAddrV4 {
-        SocketAddrV4::new(Ipv4Addr::LOCALHOST, self.port)
+/// The concrete loopback address selected by readiness for this browser launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopbackAddressFamily {
+    /// IPv4 loopback address `127.0.0.1`.
+    Ipv4,
+    /// IPv6 loopback address `::1`.
+    Ipv6,
+}
+
+impl LoopbackAddressFamily {
+    /// Candidate IP address probed for this family.
+    #[must_use]
+    pub const fn address(self) -> IpAddr {
+        match self {
+            Self::Ipv4 => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Self::Ipv6 => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        }
+    }
+
+    /// Stable journal value for the concrete loopback family.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ipv4 => "ipv4",
+            Self::Ipv6 => "ipv6",
+        }
+    }
+}
+
+/// Validated DevTools socket endpoint: one selected port and one concrete loopback address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DevToolsEndpoint {
+    port: DevToolsPort,
+    family: LoopbackAddressFamily,
+}
+
+impl DevToolsEndpoint {
+    /// Construct one of the two permitted concrete loopback endpoints.
+    pub fn loopback(port: DevToolsPort, family: LoopbackAddressFamily) -> Self {
+        Self { port, family }
+    }
+
+    /// Port selected by the harness-owned browser.
+    #[must_use]
+    pub const fn port(self) -> u16 {
+        self.port.port()
+    }
+
+    /// Concrete loopback family pinned for network connections.
+    #[must_use]
+    pub const fn family(self) -> LoopbackAddressFamily {
+        self.family
+    }
+
+    /// Concrete IP address pinned for network connections.
+    #[must_use]
+    pub const fn address(self) -> IpAddr {
+        self.family.address()
+    }
+
+    fn socket_addr(self) -> SocketAddr {
+        SocketAddr::new(self.address(), self.port())
+    }
+
+    fn host_header(self) -> String {
+        match self.family {
+            LoopbackAddressFamily::Ipv4 => format!("127.0.0.1:{}", self.port()),
+            LoopbackAddressFamily::Ipv6 => format!("[::1]:{}", self.port()),
+        }
     }
 }
 
@@ -301,10 +369,14 @@ impl DevToolsResource {
     }
 }
 
-/// Mockable WebSocket connection factory.
+/// Mockable WebSocket connection factory with an explicitly pinned socket destination.
 pub trait WebSocketConnector: Send + Sync {
-    /// Connect to a previously validated localhost CDP WebSocket URL.
-    fn connect(&self, endpoint: &Url) -> Result<Box<dyn WebSocketConnection>, TransportError>;
+    /// Preserve URL handshake metadata while connecting only to the selected loopback endpoint.
+    fn connect(
+        &self,
+        browser_url: &Url,
+        selected_endpoint: DevToolsEndpoint,
+    ) -> Result<Box<dyn WebSocketConnection>, TransportError>;
 }
 
 /// Mockable WebSocket message boundary.
@@ -337,16 +409,19 @@ impl DevToolsHttp for LoopbackDevToolsHttp {
         timeout: Duration,
     ) -> Result<Value, TransportError> {
         let deadline = Instant::now() + timeout;
-        let mut stream = TcpStream::connect_timeout(
-            &endpoint.socket_addr().into(),
-            remaining_io_time(deadline)?,
-        )
-        .map_err(map_readiness_io)?;
+        let mut stream =
+            TcpStream::connect_timeout(&endpoint.socket_addr(), remaining_io_time(deadline)?)
+                .map_err(map_readiness_io)?;
         stream
             .set_write_timeout(Some(remaining_io_time(deadline)?))
             .map_err(|error| TransportError::Io(error.to_string()))?;
-        write!(stream, "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n", resource.path(), endpoint.port())
-            .map_err(map_readiness_io)?;
+        write!(
+            stream,
+            "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            resource.path(),
+            endpoint.host_header()
+        )
+        .map_err(map_readiness_io)?;
         stream
             .set_read_timeout(Some(remaining_io_time(deadline)?))
             .map_err(|error| TransportError::Io(error.to_string()))?;
@@ -418,15 +493,18 @@ fn map_readiness_io(error: std::io::Error) -> TransportError {
     }
 }
 
-/// Real WebSocket connector restricted to IPv4 loopback.
+/// Real WebSocket connector restricted to the selected concrete loopback endpoint.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LoopbackWebSocketConnector;
 
 impl WebSocketConnector for LoopbackWebSocketConnector {
-    fn connect(&self, endpoint: &Url) -> Result<Box<dyn WebSocketConnection>, TransportError> {
-        let port = validate_websocket_url(endpoint, None)?;
-        let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-        let stream = TcpStream::connect_timeout(&address.into(), IO_TIMEOUT)
+    fn connect(
+        &self,
+        browser_url: &Url,
+        selected_endpoint: DevToolsEndpoint,
+    ) -> Result<Box<dyn WebSocketConnection>, TransportError> {
+        let destination = validated_websocket_destination(browser_url, selected_endpoint)?;
+        let stream = TcpStream::connect_timeout(&destination, IO_TIMEOUT)
             .map_err(|error| TransportError::Io(error.to_string()))?;
         stream
             .set_nodelay(true)
@@ -437,7 +515,7 @@ impl WebSocketConnector for LoopbackWebSocketConnector {
         stream
             .set_write_timeout(Some(IO_TIMEOUT))
             .map_err(|error| TransportError::Io(error.to_string()))?;
-        let request = endpoint
+        let request = browser_url
             .as_str()
             .into_client_request()
             .map_err(|error| TransportError::InvalidEndpoint(error.to_string()))?;
@@ -526,7 +604,8 @@ fn map_websocket_error(error: tungstenite::Error) -> TransportError {
 
 /// Concrete HTTP/WebSocket CDP browser implementation.
 pub struct DevToolsBrowserTransport {
-    endpoint: DevToolsEndpoint,
+    port: DevToolsPort,
+    selected_endpoint: Option<DevToolsEndpoint>,
     http: Box<dyn DevToolsHttp>,
     websocket: Box<dyn WebSocketConnector>,
     version: Option<BrowserVersion>,
@@ -534,7 +613,7 @@ pub struct DevToolsBrowserTransport {
 }
 
 impl DevToolsBrowserTransport {
-    /// Build a transport with concrete localhost clients.
+    /// Build a transport pinned to one validated concrete loopback endpoint.
     #[must_use]
     pub fn loopback(endpoint: DevToolsEndpoint) -> Self {
         Self::with_clients(
@@ -552,7 +631,10 @@ impl DevToolsBrowserTransport {
         websocket: Box<dyn WebSocketConnector>,
     ) -> Self {
         Self {
-            endpoint,
+            port: DevToolsPort {
+                port: endpoint.port(),
+            },
+            selected_endpoint: Some(endpoint),
             http,
             websocket,
             version: None,
@@ -560,16 +642,63 @@ impl DevToolsBrowserTransport {
         }
     }
 
-    /// Validated ephemeral debugging endpoint.
+    pub(crate) fn for_readiness(
+        port: DevToolsPort,
+        http: Box<dyn DevToolsHttp>,
+        websocket: Box<dyn WebSocketConnector>,
+    ) -> Self {
+        Self {
+            port,
+            selected_endpoint: None,
+            http,
+            websocket,
+            version: None,
+            targets: HashMap::new(),
+        }
+    }
+
+    /// Concrete endpoint selected by readiness, if one has succeeded.
     #[must_use]
-    pub const fn endpoint(&self) -> DevToolsEndpoint {
-        self.endpoint
+    pub const fn selected_endpoint(&self) -> Option<DevToolsEndpoint> {
+        self.selected_endpoint
     }
 }
 
 impl DevToolsBrowserTransport {
+    pub(crate) fn probe_browser_version_at(
+        &mut self,
+        endpoint: DevToolsEndpoint,
+        run: &mut CaptureRun,
+        timeout: Duration,
+    ) -> Result<BrowserVersion, TransportError> {
+        if endpoint.port() != self.port.port() {
+            return Err(TransportError::InvalidEndpoint(
+                "readiness endpoint port does not match DevToolsActivePort".to_owned(),
+            ));
+        }
+        self.fetch_browser_version_at(endpoint, run, Some(timeout))
+    }
+
+    fn require_selected_endpoint(&self) -> Result<DevToolsEndpoint, TransportError> {
+        self.selected_endpoint.ok_or_else(|| {
+            TransportError::InvalidEndpoint(
+                "DevTools loopback address has not passed readiness".to_owned(),
+            )
+        })
+    }
+
     fn fetch_browser_version(
         &mut self,
+        run: &mut CaptureRun,
+        timeout: Option<Duration>,
+    ) -> Result<BrowserVersion, TransportError> {
+        let endpoint = self.require_selected_endpoint()?;
+        self.fetch_browser_version_at(endpoint, run, timeout)
+    }
+
+    fn fetch_browser_version_at(
+        &mut self,
+        endpoint: DevToolsEndpoint,
         run: &mut CaptureRun,
         timeout: Option<Duration>,
     ) -> Result<BrowserVersion, TransportError> {
@@ -577,19 +706,16 @@ impl DevToolsBrowserTransport {
             return Ok(version.clone());
         }
         let value = match timeout {
-            Some(timeout) => self.http.get_json_with_timeout(
-                self.endpoint,
-                DevToolsResource::Version,
-                timeout,
-            )?,
-            None => self
-                .http
-                .get_json(self.endpoint, DevToolsResource::Version)?,
+            Some(timeout) => {
+                self.http
+                    .get_json_with_timeout(endpoint, DevToolsResource::Version, timeout)?
+            }
+            None => self.http.get_json(endpoint, DevToolsResource::Version)?,
         };
         let browser = required_string(&value, "Browser")?.to_owned();
         let protocol_version = required_string(&value, "Protocol-Version")?.to_owned();
         let websocket_raw = required_string(&value, "webSocketDebuggerUrl")?;
-        parse_websocket_url(websocket_raw, self.endpoint.port())?;
+        parse_websocket_url(websocket_raw, self.port.port())?;
         let version = BrowserVersion {
             browser,
             protocol_version,
@@ -597,8 +723,9 @@ impl DevToolsBrowserTransport {
         run.append_event(
             "debugging_endpoint_discovered",
             json!({
-                "address": "127.0.0.1",
-                "port": self.endpoint.port(),
+                "address": endpoint.address().to_string(),
+                "address_family": endpoint.family().as_str(),
+                "port": endpoint.port(),
                 "browser": version.browser,
                 "protocol_version": version.protocol_version,
             }),
@@ -606,6 +733,7 @@ impl DevToolsBrowserTransport {
         .map_err(TransportError::Journal)?;
         run.set_browser_versions(version.browser.clone(), version.protocol_version.clone())
             .map_err(TransportError::Journal)?;
+        self.selected_endpoint = Some(endpoint);
         self.version = Some(version.clone());
         Ok(version)
     }
@@ -625,9 +753,8 @@ impl BrowserTransport for DevToolsBrowserTransport {
     }
 
     fn list_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError> {
-        let value = self
-            .http
-            .get_json(self.endpoint, DevToolsResource::Targets)?;
+        let endpoint = self.require_selected_endpoint()?;
+        let value = self.http.get_json(endpoint, DevToolsResource::Targets)?;
         let entries = value.as_array().ok_or_else(|| {
             TransportError::MalformedMessage("/json/list response is not an array".to_owned())
         })?;
@@ -644,7 +771,7 @@ impl BrowserTransport for DevToolsBrowserTransport {
             let title = required_string(entry, "title")?.to_owned();
             let url = required_string(entry, "url")?.to_owned();
             let websocket_raw = required_string(entry, "webSocketDebuggerUrl")?;
-            let websocket_url = parse_websocket_url(websocket_raw, self.endpoint.port())?;
+            let websocket_url = parse_websocket_url(websocket_raw, self.port.port())?;
             if targets.contains_key(&id) {
                 return Err(TransportError::MalformedMessage(format!(
                     "/json/list contains duplicate page target ID '{id}'"
@@ -695,7 +822,9 @@ impl BrowserTransport for DevToolsBrowserTransport {
                     .to_owned(),
             ));
         }
-        let socket = self.websocket.connect(&target.websocket_url)?;
+        let socket = self
+            .websocket
+            .connect(&target.websocket_url, self.require_selected_endpoint()?)?;
         if let Err(error) = run.append_event(
             "cdp_target_attached",
             json!({
@@ -979,19 +1108,34 @@ fn parse_websocket_url(raw: &str, expected_port: u16) -> Result<Url, TransportEr
     Ok(endpoint)
 }
 
+fn validated_websocket_destination(
+    browser_url: &Url,
+    selected_endpoint: DevToolsEndpoint,
+) -> Result<SocketAddr, TransportError> {
+    validate_websocket_url(browser_url, Some(selected_endpoint.port()))?;
+    Ok(selected_endpoint.socket_addr())
+}
+
 fn validate_websocket_url(
     endpoint: &Url,
     expected_port: Option<u16>,
 ) -> Result<u16, TransportError> {
+    let loopback_host = match endpoint.host() {
+        Some(Host::Domain("localhost")) => true,
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
     if endpoint.scheme() != "ws"
-        || endpoint.host_str() != Some("127.0.0.1")
+        || !loopback_host
         || !endpoint.username().is_empty()
         || endpoint.password().is_some()
         || endpoint.query().is_some()
         || endpoint.fragment().is_some()
     {
         return Err(TransportError::InvalidEndpoint(
-            "only credential-free ws://127.0.0.1 endpoints are allowed".to_owned(),
+            "only credential-free ws://localhost or literal loopback endpoints are allowed"
+                .to_owned(),
         ));
     }
     let port = endpoint.port().ok_or_else(|| {
@@ -1184,14 +1328,18 @@ mod tests {
     struct MockHttp {
         version: Value,
         targets: Value,
+        observed_endpoints: Option<Arc<Mutex<Vec<(DevToolsResource, DevToolsEndpoint)>>>>,
     }
 
     impl DevToolsHttp for MockHttp {
         fn get_json(
             &self,
-            _endpoint: DevToolsEndpoint,
+            endpoint: DevToolsEndpoint,
             resource: DevToolsResource,
         ) -> Result<Value, TransportError> {
+            if let Some(observed) = &self.observed_endpoints {
+                observed.lock().unwrap().push((resource, endpoint));
+            }
             Ok(match resource {
                 DevToolsResource::Version => self.version.clone(),
                 DevToolsResource::Targets => self.targets.clone(),
@@ -1200,35 +1348,47 @@ mod tests {
     }
 
     struct MockConnector {
-        endpoints: Arc<Mutex<Vec<Url>>>,
+        endpoints: Arc<Mutex<Vec<(Url, DevToolsEndpoint)>>>,
     }
 
     impl WebSocketConnector for MockConnector {
-        fn connect(&self, endpoint: &Url) -> Result<Box<dyn WebSocketConnection>, TransportError> {
-            self.endpoints.lock().unwrap().push(endpoint.clone());
+        fn connect(
+            &self,
+            browser_url: &Url,
+            selected_endpoint: DevToolsEndpoint,
+        ) -> Result<Box<dyn WebSocketConnection>, TransportError> {
+            self.endpoints
+                .lock()
+                .unwrap()
+                .push((browser_url.clone(), selected_endpoint));
             Ok(Box::new(MockSocket::with_messages([]).0))
         }
     }
 
     #[test]
     fn mocked_target_discovery_and_attachment_are_journaled() {
-        let endpoint = DevToolsEndpoint::loopback(9321).unwrap();
+        let port = DevToolsPort::new(9321).unwrap();
+        let endpoint = DevToolsEndpoint::loopback(port, LoopbackAddressFamily::Ipv6);
+        let observed_http = Arc::new(Mutex::new(Vec::new()));
         let http = MockHttp {
-            version: json!({"Browser":"Microsoft Edge/1.2","Protocol-Version":"1.3","webSocketDebuggerUrl":"ws://127.0.0.1:9321/devtools/browser/test"}),
+            version: json!({"Browser":"Microsoft Edge/1.2","Protocol-Version":"1.3","webSocketDebuggerUrl":"ws://localhost:9321/devtools/browser/test"}),
             targets: json!([
-                {"id":"page-1","type":"page","title":"blank","url":"about:blank","webSocketDebuggerUrl":"ws://127.0.0.1:9321/devtools/page/page-1"},
-                {"id":"other-page","type":"page","title":"other","url":"https://example.com/","webSocketDebuggerUrl":"ws://127.0.0.1:9321/devtools/page/other-page"},
+                {"id":"page-1","type":"page","title":"blank","url":"about:blank","webSocketDebuggerUrl":"ws://localhost:9321/devtools/page/page-1"},
+                {"id":"other-page","type":"page","title":"other","url":"https://example.com/","webSocketDebuggerUrl":"ws://localhost:9321/devtools/page/other-page"},
                 {"id":"other-1","type":"service_worker"}
             ]),
+            observed_endpoints: Some(observed_http.clone()),
         };
-        let endpoints = Arc::new(Mutex::new(Vec::new()));
+        let endpoints: Arc<Mutex<Vec<(Url, DevToolsEndpoint)>>> = Arc::new(Mutex::new(Vec::new()));
         let connector = MockConnector {
             endpoints: endpoints.clone(),
         };
         let mut browser =
             DevToolsBrowserTransport::with_clients(endpoint, Box::new(http), Box::new(connector));
         let (mut run, dir) = capture_run("targets");
-        let version = browser.browser_version(&mut run).unwrap();
+        let version = browser
+            .probe_browser_version_at(endpoint, &mut run, Duration::from_millis(50))
+            .unwrap();
         assert_eq!(version.browser, "Microsoft Edge/1.2");
         assert_eq!(
             run.manifest().edge_version.as_deref(),
@@ -1244,7 +1404,21 @@ mod tests {
         ));
         let mut session = browser.attach("page-1", &mut run).unwrap();
         session.close().unwrap();
-        assert_eq!(endpoints.lock().unwrap()[0].port(), Some(9321));
+        assert_eq!(endpoints.lock().unwrap()[0].0.port(), Some(9321));
+        assert_eq!(endpoints.lock().unwrap()[0].0.host_str(), Some("localhost"));
+        assert_eq!(
+            endpoints.lock().unwrap()[0].1.family(),
+            LoopbackAddressFamily::Ipv6
+        );
+        assert!(
+            observed_http
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(resource, selected)| {
+                    *resource == DevToolsResource::Targets && *selected == endpoint
+                })
+        );
         let kinds = run
             .events()
             .iter()
@@ -1266,12 +1440,27 @@ mod tests {
 
     #[test]
     fn invalid_or_stale_endpoint_values_are_rejected() {
-        assert!(DevToolsEndpoint::loopback(0).is_err());
-        assert!(DevToolsEndpoint::from_active_port("\n/devtools/browser/x").is_err());
-        assert!(DevToolsEndpoint::from_active_port("65536\n/devtools/browser/x").is_err());
+        assert!(DevToolsPort::new(0).is_err());
+        assert!(DevToolsPort::from_active_port("\n/devtools/browser/x").is_err());
+        assert!(DevToolsPort::from_active_port("65536\n/devtools/browser/x").is_err());
         assert!(parse_websocket_url("ws://192.168.1.10:9321/devtools/browser/x", 9321).is_err());
+        assert!(parse_websocket_url("ws://[2001:db8::1]:9321/devtools/browser/x", 9321).is_err());
+        assert!(
+            parse_websocket_url("ws://not-localhost.example:9321/devtools/browser/x", 9321)
+                .is_err()
+        );
         assert!(parse_websocket_url("ws://127.0.0.1:9322/devtools/browser/x", 9321).is_err());
         assert!(parse_websocket_url("ws://user@127.0.0.1:9321/devtools/browser/x", 9321).is_err());
+        assert!(
+            parse_websocket_url("ws://localhost:9321/devtools/browser/x?token=1", 9321).is_err()
+        );
+        for url in [
+            "ws://localhost:9321/devtools/browser/x",
+            "ws://127.0.0.1:9321/devtools/browser/x",
+            "ws://[::1]:9321/devtools/browser/x",
+        ] {
+            assert!(parse_websocket_url(url, 9321).is_ok(), "rejected {url}");
+        }
         assert!(allowed_target_url("about:blank"));
         assert!(allowed_target_url("https://chatgpt.com/"));
         assert!(!allowed_target_url("https://chatgpt.com.evil.example/"));
@@ -1279,14 +1468,29 @@ mod tests {
     }
 
     #[test]
+    fn localhost_websocket_metadata_keeps_path_but_uses_only_selected_ipv6_socket() {
+        let port = DevToolsPort::new(9321).unwrap();
+        let selected = DevToolsEndpoint::loopback(port, LoopbackAddressFamily::Ipv6);
+        let browser_url = Url::parse("ws://localhost:9321/devtools/page/page-7").unwrap();
+
+        let destination = validated_websocket_destination(&browser_url, selected).unwrap();
+
+        assert_eq!(destination, "[::1]:9321".parse().unwrap());
+        assert_eq!(browser_url.host_str(), Some("localhost"));
+        assert_eq!(browser_url.path(), "/devtools/page/page-7");
+    }
+
+    #[test]
     fn duplicate_page_target_ids_are_rejected_as_malformed() {
-        let endpoint = DevToolsEndpoint::loopback(9321).unwrap();
+        let port = DevToolsPort::new(9321).unwrap();
+        let endpoint = DevToolsEndpoint::loopback(port, LoopbackAddressFamily::Ipv4);
         let http = MockHttp {
             version: json!({}),
             targets: json!([
                 {"id":"duplicate","type":"page","title":"one","url":"about:blank","webSocketDebuggerUrl":"ws://127.0.0.1:9321/devtools/page/one"},
                 {"id":"duplicate","type":"page","title":"two","url":"about:blank","webSocketDebuggerUrl":"ws://127.0.0.1:9321/devtools/page/two"}
             ]),
+            observed_endpoints: None,
         };
         let mut browser = DevToolsBrowserTransport::with_clients(
             endpoint,
@@ -1295,6 +1499,7 @@ mod tests {
                 endpoints: Arc::new(Mutex::new(Vec::new())),
             }),
         );
+        browser.selected_endpoint = Some(endpoint);
         let (mut run, dir) = capture_run("duplicate-targets");
         assert!(matches!(
             browser.list_targets(&mut run),
@@ -1333,7 +1538,10 @@ mod tests {
             )
             .unwrap();
         });
-        let endpoint = DevToolsEndpoint::loopback(port).unwrap();
+        let endpoint = DevToolsEndpoint::loopback(
+            DevToolsPort::new(port).unwrap(),
+            LoopbackAddressFamily::Ipv4,
+        );
         let value = LoopbackDevToolsHttp
             .get_json(endpoint, DevToolsResource::Version)
             .unwrap();
@@ -1362,7 +1570,10 @@ mod tests {
 
         let started = Instant::now();
         let result = LoopbackDevToolsHttp.get_json_with_timeout(
-            DevToolsEndpoint::loopback(port).unwrap(),
+            DevToolsEndpoint::loopback(
+                DevToolsPort::new(port).unwrap(),
+                LoopbackAddressFamily::Ipv4,
+            ),
             DevToolsResource::Version,
             Duration::from_millis(35),
         );

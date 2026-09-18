@@ -27,7 +27,7 @@ attachment is limited to `about:blank` and `https://chatgpt.com` targets.
 
 `LaunchedEdge::launch` discovers Edge in standard Windows locations, requires the
 exact `%LOCALAPPDATA%\Chatarium\capture-browser\edge-profile` path, and refuses
-known/default Edge profile trees and path traversal. It launches with
+known/default Edge profile trees and path traversal. It requests
 `--remote-debugging-address=127.0.0.1` and `--remote-debugging-port=0`. Existing
 harness locks or a stale `DevToolsActivePort` cause a visible error; they are never
 silently removed before launch. Call `LaunchedEdge::shutdown` to terminate/wait for
@@ -71,6 +71,12 @@ Each HTTP attempt is bounded by the remaining time in the single 15-second start
 deadline. Invalid endpoint metadata, malformed protocol data, and other permanent
 validation failures stop immediately. The journal records the readiness start and one
 terminal result with attempt count and the last transient error, when present.
+Readiness probes only `127.0.0.1` and `::1` at that selected port. The first family
+that returns valid DevTools version metadata is retained for subsequent HTTP and
+WebSocket socket connections. Browser-provided WebSocket URLs may identify
+`localhost`, IPv4 loopback, or IPv6 loopback; their path/handshake metadata is preserved,
+but Chatarium connects to the selected concrete loopback socket without resolving
+browser-provided hostnames.
 
 Run it manually on Windows with:
 
