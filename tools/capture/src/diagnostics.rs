@@ -52,22 +52,37 @@ pub struct RemoteDebuggingPolicy {
 }
 
 impl RemoteDebuggingPolicy {
-    /// Whether either inspected policy scope explicitly disables remote debugging.
+    /// Whether the inspected registry values establish an unambiguous disabled state.
+    ///
+    /// Conflicting or unreadable values are diagnostic evidence, not proof that the effective
+    /// Edge policy disables remote debugging, so startup must not short-circuit on them.
     #[must_use]
     pub fn is_disabled(&self) -> bool {
-        self.machine == PolicyState::Disabled || self.user == PolicyState::Disabled
+        matches!(
+            (&self.machine, &self.user),
+            (PolicyState::Disabled, PolicyState::Disabled)
+                | (PolicyState::Disabled, PolicyState::NotConfigured)
+                | (PolicyState::NotConfigured, PolicyState::Disabled)
+        )
     }
 
     /// Short diagnostic state, preserving conflict/unknown information.
     #[must_use]
     pub fn summary(&self) -> String {
         match (&self.machine, &self.user) {
-            (PolicyState::Disabled, _) | (_, PolicyState::Disabled) => "disabled".to_owned(),
+            (PolicyState::NotConfigured, PolicyState::NotConfigured) => {
+                "not configured".to_owned()
+            }
+            (PolicyState::Disabled, PolicyState::Disabled)
+            | (PolicyState::Disabled, PolicyState::NotConfigured)
+            | (PolicyState::NotConfigured, PolicyState::Disabled) => "disabled".to_owned(),
+            (PolicyState::Enabled, PolicyState::Enabled)
+            | (PolicyState::Enabled, PolicyState::NotConfigured)
+            | (PolicyState::NotConfigured, PolicyState::Enabled) => "enabled".to_owned(),
             (PolicyState::Unreadable(_), _) | (_, PolicyState::Unreadable(_)) => {
                 "unreadable/error".to_owned()
             }
-            (PolicyState::Enabled, _) | (_, PolicyState::Enabled) => "enabled".to_owned(),
-            _ => "not configured".to_owned(),
+            _ => "conflict/unknown".to_owned(),
         }
     }
 }
@@ -271,14 +286,19 @@ mod tests {
             .summary(),
             "enabled"
         );
-        assert_eq!(
-            RemoteDebuggingPolicy {
-                machine: PolicyState::Disabled,
-                user: PolicyState::Enabled,
-            }
-            .summary(),
-            "disabled"
-        );
+        let conflicting = RemoteDebuggingPolicy {
+            machine: PolicyState::Disabled,
+            user: PolicyState::Enabled,
+        };
+        assert_eq!(conflicting.summary(), "conflict/unknown");
+        assert!(!conflicting.is_disabled());
+
+        let unambiguous_disabled = RemoteDebuggingPolicy {
+            machine: PolicyState::Disabled,
+            user: PolicyState::NotConfigured,
+        };
+        assert_eq!(unambiguous_disabled.summary(), "disabled");
+        assert!(unambiguous_disabled.is_disabled());
         assert_eq!(
             RemoteDebuggingPolicy {
                 machine: PolicyState::Unreadable("denied".to_owned()),
