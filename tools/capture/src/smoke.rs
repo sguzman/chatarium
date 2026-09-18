@@ -188,7 +188,16 @@ fn run_smoke_with_run(
         match launcher.launch(run) {
             Ok(launched) => browser = Some(launched),
             Err(error) => {
-                primary_failure = Some(format!("launch Edge: {error}"));
+                match error {
+                    TransportError::DiagnosticJournalFailure {
+                        primary_failure: primary,
+                        journal_failure: failure,
+                    } => {
+                        primary_failure = primary.map(|error| format!("launch Edge: {error}"));
+                        journal_failure = Some(failure);
+                    }
+                    other => primary_failure = Some(format!("launch Edge: {other}")),
+                }
                 diagnostic_summary = format_windows_diagnostics(run);
                 match recorded_launch_cleanup(run) {
                     Some(Ok(())) => cleanup_verified = true,
@@ -637,6 +646,24 @@ mod tests {
         state: Arc<Mutex<MockState>>,
     }
 
+    struct DiagnosticJournalFailureLauncher;
+
+    impl SmokeLauncher for DiagnosticJournalFailureLauncher {
+        fn launch(&self, run: &mut CaptureRun) -> Result<Box<dyn SmokeBrowser>, TransportError> {
+            run.append_event(
+                "browser_shutdown_cleanup",
+                json!({"cleanup_succeeded": true}),
+            )
+            .map_err(TransportError::Journal)?;
+            Err(TransportError::DiagnosticJournalFailure {
+                primary_failure: Some(
+                    "DevTools readiness deadline expired after 12 attempts".to_owned(),
+                ),
+                journal_failure: "append final listener snapshot: disk full".to_owned(),
+            })
+        }
+    }
+
     impl MockLauncher {
         fn new(config: MockConfig) -> (Self, Arc<Mutex<MockState>>) {
             let state = Arc::new(Mutex::new(MockState::default()));
@@ -861,6 +888,33 @@ mod tests {
         assert!(summary.contains("RemoteDebuggingAllowed: disabled"));
         assert!(summary.contains("not sampled (no port was selected)"));
         assert!(summary.contains("connect result: not attempted"));
+        drop(run);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn diagnostic_journal_failure_is_visible_separately_from_primary_and_cleanup() {
+        let (mut run, base) = diagnostic_run();
+        let failure = run_smoke_with_run(&mut run, &DiagnosticJournalFailureLauncher).unwrap_err();
+
+        assert!(
+            failure
+                .primary_failure
+                .as_deref()
+                .is_some_and(|message| message.contains("DevTools readiness deadline expired"))
+        );
+        assert!(
+            failure
+                .journal_failure
+                .as_deref()
+                .is_some_and(|message| message.contains("final listener snapshot: disk full"))
+        );
+        assert!(failure.cleanup_verified);
+        assert!(failure.cleanup_failure.is_none());
+        let output = failure.to_string();
+        assert!(output.contains("primary: launch Edge: DevTools readiness deadline expired"));
+        assert!(output.contains("journal: failed (append final listener snapshot: disk full)"));
+        assert!(output.contains("cleanup: passed"));
         drop(run);
         let _ = std::fs::remove_dir_all(base);
     }

@@ -77,6 +77,13 @@ pub enum TransportError {
     StaleState(String),
     /// Microsoft Edge policy explicitly disables remote debugging.
     RemoteDebuggingDisabled(String),
+    /// Startup diagnostics could not be durably journaled; the primary failure is preserved.
+    DiagnosticJournalFailure {
+        /// Startup/readiness failure, if one occurred before the diagnostic append failure.
+        primary_failure: Option<String>,
+        /// One or more failed diagnostic event appends.
+        journal_failure: String,
+    },
 }
 
 impl fmt::Display for TransportError {
@@ -134,6 +141,17 @@ impl fmt::Display for TransportError {
                 formatter,
                 "Microsoft Edge remote debugging is disabled by policy: {reason}"
             ),
+            Self::DiagnosticJournalFailure {
+                primary_failure: Some(primary),
+                journal_failure,
+            } => write!(
+                formatter,
+                "{primary}; diagnostic journal failure: {journal_failure}"
+            ),
+            Self::DiagnosticJournalFailure {
+                primary_failure: None,
+                journal_failure,
+            } => write!(formatter, "diagnostic journal failure: {journal_failure}"),
         }
     }
 }

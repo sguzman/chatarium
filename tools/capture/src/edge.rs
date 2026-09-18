@@ -83,14 +83,21 @@ impl StartupEvidence {
         json!({ "listeners": listeners, "inspection_error": snapshot.error })
     }
 
-    fn journal(&self, run: &mut CaptureRun, stage: &str, diagnostics: &dyn EdgeDiagnostics) {
+    fn journal(
+        &self,
+        run: &mut CaptureRun,
+        stage: &str,
+        diagnostics: &dyn EdgeDiagnostics,
+        writer: &dyn DiagnosticEventWriter,
+    ) -> Result<(), String> {
         let snapshot = match stage {
             "initial" => Some(&self.initial),
             "final" => self.final_snapshot.as_ref(),
             _ => None,
         };
         let listeners = snapshot.map(|snapshot| self.snapshot_value(snapshot, diagnostics));
-        let _ = run.append_event(
+        writer.append(
+            run,
             "devtools_os_diagnostics",
             json!({
                 "stage": stage,
@@ -104,7 +111,29 @@ impl StartupEvidence {
                 "listener_snapshot": listeners,
                 "connect_results": self.connections,
             }),
-        );
+        )
+    }
+}
+
+trait DiagnosticEventWriter: Send + Sync {
+    fn append(
+        &self,
+        run: &mut CaptureRun,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), String>;
+}
+
+struct DurableDiagnosticEventWriter;
+
+impl DiagnosticEventWriter for DurableDiagnosticEventWriter {
+    fn append(
+        &self,
+        run: &mut CaptureRun,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), String> {
+        run.append_event(kind, payload).map(|_| ())
     }
 }
 
@@ -377,6 +406,7 @@ impl LaunchedEdge {
             websocket,
             incognito,
             diagnostics,
+            &DurableDiagnosticEventWriter,
         )
     }
 
@@ -388,6 +418,7 @@ impl LaunchedEdge {
         websocket: Box<dyn WebSocketConnector>,
         incognito: bool,
         diagnostics: &dyn EdgeDiagnostics,
+        diagnostic_writer: &dyn DiagnosticEventWriter,
     ) -> Result<Self, TransportError> {
         validate_dedicated_capture_profile(&config.profile, &config.local_app_data)
             .map_err(TransportError::UnsafeProfile)?;
@@ -436,7 +467,8 @@ impl LaunchedEdge {
         let mut startup_evidence = None;
         let startup = (|| {
             let policy = diagnostics.remote_debugging_policy();
-            run.append_event(
+            let policy_preflight = diagnostic_writer.append(
+                run,
                 "devtools_os_diagnostics",
                 json!({
                     "stage": "policy_preflight",
@@ -451,8 +483,13 @@ impl LaunchedEdge {
                     "listener_snapshot": null,
                     "connect_results": [],
                 }),
-            )
-            .map_err(TransportError::Journal)?;
+            );
+            if let Err(journal_failure) = policy_preflight {
+                return Err(TransportError::DiagnosticJournalFailure {
+                    primary_failure: None,
+                    journal_failure,
+                });
+            }
             if policy.is_disabled() {
                 return Err(TransportError::RemoteDebuggingDisabled(format!(
                     "HKLM={}, HKCU={}",
@@ -495,7 +532,15 @@ impl LaunchedEdge {
                     },
                 ],
             };
-            evidence.journal(run, "initial", diagnostics);
+            if let Err(journal_failure) =
+                evidence.journal(run, "initial", diagnostics, diagnostic_writer)
+            {
+                startup_evidence = Some(evidence);
+                return Err(TransportError::DiagnosticJournalFailure {
+                    primary_failure: None,
+                    journal_failure,
+                });
+            }
             launched.transport = Some(DevToolsBrowserTransport::for_readiness(
                 port, http, websocket,
             ));
@@ -509,12 +554,18 @@ impl LaunchedEdge {
                 run,
                 startup_deadline,
                 &mut evidence,
-                diagnostics,
             );
             startup_evidence = Some(evidence);
             result
         })();
         if let Err(error) = startup {
+            let (primary_failure, mut journal_failures) = match &error {
+                TransportError::DiagnosticJournalFailure {
+                    primary_failure,
+                    journal_failure,
+                } => (primary_failure.clone(), vec![journal_failure.clone()]),
+                other => (Some(other.to_string()), Vec::new()),
+            };
             if let Some(evidence) = &mut startup_evidence {
                 evidence.final_snapshot = Some(match diagnostics.listeners(evidence.port) {
                     Ok(listeners) => SnapshotEvidence {
@@ -526,9 +577,19 @@ impl LaunchedEdge {
                         error: Some(error),
                     },
                 });
-                evidence.journal(run, "final", diagnostics);
+                if let Err(journal_failure) =
+                    evidence.journal(run, "final", diagnostics, diagnostic_writer)
+                {
+                    journal_failures.push(journal_failure);
+                }
             }
             let _ = launched.shutdown(run);
+            if !journal_failures.is_empty() {
+                return Err(TransportError::DiagnosticJournalFailure {
+                    primary_failure,
+                    journal_failure: journal_failures.join("; "),
+                });
+            }
             return Err(error);
         }
         Ok(launched)
@@ -874,7 +935,6 @@ fn wait_for_devtools_readiness(
     run: &mut CaptureRun,
     deadline: Instant,
     evidence: &mut StartupEvidence,
-    diagnostics: &dyn EdgeDiagnostics,
 ) -> Result<(), TransportError> {
     run.append_event(
         "devtools_readiness_started",
@@ -920,7 +980,6 @@ fn wait_for_devtools_readiness(
                 Ok(_) => {
                     evidence.connection_mut(family).succeeded = true;
                     evidence.connection_mut(family).last_result = Some("connected".to_owned());
-                    evidence.journal(run, "ready", diagnostics);
                     run.append_event(
                         "devtools_readiness_succeeded",
                         json!({
@@ -939,7 +998,6 @@ fn wait_for_devtools_readiness(
                 }
                 Err(error) => {
                     evidence.connection_mut(family).last_result = Some(error.to_string());
-                    evidence.journal(run, "failed", diagnostics);
                     journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
                     return Err(error);
                 }
@@ -955,7 +1013,6 @@ fn wait_for_devtools_readiness(
                         .to_owned()
                 }),
             };
-            evidence.journal(run, "failed", diagnostics);
             journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
             return Err(error);
         }
@@ -997,6 +1054,27 @@ mod tests {
         policy: RemoteDebuggingPolicy,
         parent_map: HashMap<u32, Option<u32>>,
         requested_ports: Mutex<Vec<u16>>,
+    }
+
+    struct ScriptedDiagnosticEventWriter {
+        failing_stage: &'static str,
+    }
+
+    impl DiagnosticEventWriter for ScriptedDiagnosticEventWriter {
+        fn append(
+            &self,
+            run: &mut CaptureRun,
+            kind: &str,
+            payload: serde_json::Value,
+        ) -> Result<(), String> {
+            if kind == "devtools_os_diagnostics" && payload["stage"] == self.failing_stage {
+                return Err(format!(
+                    "injected {0} diagnostic append failure",
+                    self.failing_stage
+                ));
+            }
+            run.append_event(kind, payload).map(|_| ())
+        }
     }
 
     impl ScriptedDiagnostics {
@@ -1453,6 +1531,18 @@ mod tests {
                     .as_str()
                     .is_some_and(|value| value.contains("connection timed out"))
         }));
+        assert_eq!(
+            run.events()
+                .iter()
+                .filter(|event| {
+                    event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "initial"
+                })
+                .count(),
+            1
+        );
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "policy_preflight"
+        }));
         browser.transport().list_targets(&mut run).unwrap();
         assert_eq!(
             endpoints.lock().unwrap().last().unwrap().family(),
@@ -1565,6 +1655,7 @@ mod tests {
             Box::new(FakeConnector),
             true,
             &diagnostics,
+            &DurableDiagnosticEventWriter,
         )
         .err()
         .unwrap();
@@ -1645,6 +1736,7 @@ mod tests {
             Box::new(FakeConnector),
             true,
             &diagnostics,
+            &DurableDiagnosticEventWriter,
         )
         .err()
         .unwrap();
@@ -1654,12 +1746,154 @@ mod tests {
         assert_eq!(*attempts.lock().unwrap(), 0);
         assert_eq!(*kills.lock().unwrap(), 1);
         assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(!config.capture_root.join(LOCK_FILE).exists());
+        assert!(!config.profile.join(ACTIVE_PORT_FILE).exists());
         assert!(run.events().iter().any(|event| {
             event.kind == "devtools_os_diagnostics"
                 && event.payload["stage"] == "policy_preflight"
                 && event.payload["remote_debugging_allowed"]["summary"] == "disabled"
         }));
         assert!(diagnostics.requested_ports.lock().unwrap().is_empty());
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn initial_diagnostic_append_failure_stops_readiness_and_still_cleans_up() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let config = config_under(&local);
+        let http = SequenceHttp::always_transient();
+        let attempts = http.attempts.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let diagnostics = ScriptedDiagnostics::new(
+            [Ok(Vec::new()), Ok(Vec::new())],
+            no_policy(),
+            HashMap::new(),
+        );
+        let writer = ScriptedDiagnosticEventWriter {
+            failing_stage: "initial",
+        };
+        let (mut run, run_base) = diagnostic_run_under(&base);
+
+        let error = LaunchedEdge::launch_with_diagnostics(
+            config,
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+            &diagnostics,
+            &writer,
+        )
+        .err()
+        .unwrap();
+
+        match error {
+            TransportError::DiagnosticJournalFailure {
+                primary_failure,
+                journal_failure,
+            } => {
+                assert!(primary_failure.is_none());
+                assert!(journal_failure.contains("initial diagnostic append failure"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        assert_eq!(*attempts.lock().unwrap(), 0);
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "final"
+        }));
+        let cleanup = run
+            .events()
+            .iter()
+            .find(|event| event.kind == "browser_shutdown_cleanup")
+            .unwrap();
+        assert_eq!(cleanup.payload["cleanup_succeeded"], true);
+        assert_eq!(cleanup.payload["process_exited"], true);
+        assert_eq!(cleanup.payload["harness_lock_absent"], true);
+        assert_eq!(cleanup.payload["active_port_file_absent"], true);
+        assert!(diagnostics.requested_ports.lock().unwrap().len() == 2);
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn final_diagnostic_append_failure_keeps_readiness_failure_primary_and_cleans_up() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let mut config = config_under(&local);
+        config.startup_timeout = Duration::from_millis(80);
+        let http = SequenceHttp::always_transient();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let diagnostics = ScriptedDiagnostics::new(
+            [Ok(Vec::new()), Ok(Vec::new())],
+            no_policy(),
+            HashMap::new(),
+        );
+        let writer = ScriptedDiagnosticEventWriter {
+            failing_stage: "final",
+        };
+        let (mut run, run_base) = diagnostic_run_under(&base);
+
+        let error = LaunchedEdge::launch_with_diagnostics(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+            &diagnostics,
+            &writer,
+        )
+        .err()
+        .unwrap();
+
+        match error {
+            TransportError::DiagnosticJournalFailure {
+                primary_failure: Some(primary),
+                journal_failure,
+            } => {
+                assert!(primary.contains("DevTools readiness deadline expired"));
+                assert!(journal_failure.contains("final diagnostic append failure"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(!config.capture_root.join(LOCK_FILE).exists());
+        assert!(!config.profile.join(ACTIVE_PORT_FILE).exists());
+        let cleanup = run
+            .events()
+            .iter()
+            .find(|event| event.kind == "browser_shutdown_cleanup")
+            .unwrap();
+        assert_eq!(cleanup.payload["cleanup_succeeded"], true);
+        assert_eq!(cleanup.payload["process_exited"], true);
+        assert_eq!(cleanup.payload["harness_lock_absent"], true);
+        assert_eq!(cleanup.payload["active_port_file_absent"], true);
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "initial"
+        }));
         drop(run);
         let _ = fs::remove_dir_all(base);
         let _ = fs::remove_dir_all(run_base);
@@ -1864,6 +2098,7 @@ mod tests {
             Box::new(FakeConnector),
             true,
             &diagnostics,
+            &DurableDiagnosticEventWriter,
         )
         .unwrap();
         let discovered = browser.transport().list_targets(&mut run).unwrap();
