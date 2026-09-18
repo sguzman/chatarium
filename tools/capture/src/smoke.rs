@@ -546,7 +546,7 @@ fn run_diagnostics(
     }
     run.append_event(
         "smoke_diagnostic_command_completed",
-        json!({"method": DIAGNOSTIC_METHOD, "frame_url": frame_url}),
+        json!({"method": DIAGNOSTIC_METHOD, "frame_url": frame_url, "frame_tree": result}),
     )
     .map_err(|error| ("journal diagnostic result", error))?;
     Ok((
@@ -629,7 +629,7 @@ mod tests {
             target_type: "page".to_owned(),
             title: String::new(),
             url: url.to_owned(),
-            websocket_url: Url::parse("ws://127.0.0.1:9321/devtools/page/test").unwrap(),
+            websocket_url: Some(Url::parse("ws://127.0.0.1:9321/devtools/page/test").unwrap()),
         }
     }
 

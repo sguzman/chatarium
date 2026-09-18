@@ -39,6 +39,11 @@ pub enum TransportError {
     MalformedMessage(String),
     /// The WebSocket closed before the requested operation completed.
     Disconnected,
+    /// A byte stream reached EOF; the flag identifies a truncated ASCIIZ message.
+    Eof {
+        /// EOF arrived after message bytes but before their NUL delimiter.
+        unterminated_message: bool,
+    },
     /// A CDP command was sent or may have been sent, but its response is unknown.
     CommandOutcomeUnknown {
         /// Command ID assigned before attempting to send the command.
@@ -64,6 +69,13 @@ pub enum TransportError {
         expected: Option<u64>,
         /// Response ID received from CDP.
         received: u64,
+    },
+    /// A flattened CDP response arrived for a different session than the command used.
+    UnexpectedSessionId {
+        /// Session ID attached to the command, if any.
+        expected: Option<String>,
+        /// Session ID returned by CDP, if any.
+        received: Option<String>,
     },
     /// A requested target was not among the most recently discovered page targets.
     UnknownTarget(String),
@@ -106,6 +118,12 @@ impl fmt::Display for TransportError {
             Self::Http(reason) => write!(formatter, "DevTools HTTP: {reason}"),
             Self::MalformedMessage(reason) => write!(formatter, "malformed CDP message: {reason}"),
             Self::Disconnected => formatter.write_str("CDP WebSocket disconnected"),
+            Self::Eof {
+                unterminated_message: true,
+            } => formatter.write_str("CDP pipe reached EOF before the message delimiter"),
+            Self::Eof {
+                unterminated_message: false,
+            } => formatter.write_str("CDP pipe reached EOF between messages"),
             Self::CommandOutcomeUnknown { command_id, reason } => write!(
                 formatter,
                 "CDP command {command_id} may have executed; outcome is unknown: {reason}"
@@ -130,6 +148,10 @@ impl fmt::Display for TransportError {
                 expected: None,
                 received,
             } => write!(formatter, "unsolicited CDP response ID {received}"),
+            Self::UnexpectedSessionId { expected, received } => write!(
+                formatter,
+                "unexpected CDP session ID {received:?} while waiting for {expected:?}"
+            ),
             Self::UnknownTarget(target) => {
                 write!(formatter, "page target '{target}' was not discovered")
             }
@@ -290,7 +312,7 @@ pub struct TargetInfo {
     pub title: String,
     /// Raw target URL.
     pub url: String,
-    pub(crate) websocket_url: Url,
+    pub(crate) websocket_url: Option<Url>,
 }
 
 impl fmt::Debug for TargetInfo {
@@ -310,6 +332,8 @@ pub struct CdpEvent {
     pub method: String,
     /// Raw CDP event parameters.
     pub params: Value,
+    /// Raw flattened-session provenance when this event belongs to an attached target.
+    pub session_id: Option<String>,
 }
 
 /// Mockable browser discovery and page-attachment boundary.
@@ -795,7 +819,7 @@ impl BrowserTransport for DevToolsBrowserTransport {
             let title = required_string(entry, "title")?.to_owned();
             let url = required_string(entry, "url")?.to_owned();
             let websocket_raw = required_string(entry, "webSocketDebuggerUrl")?;
-            let websocket_url = parse_websocket_url(websocket_raw, self.port.port())?;
+            let websocket_url = Some(parse_websocket_url(websocket_raw, self.port.port())?);
             if targets.contains_key(&id) {
                 return Err(TransportError::MalformedMessage(format!(
                     "/json/list contains duplicate page target ID '{id}'"
@@ -846,9 +870,12 @@ impl BrowserTransport for DevToolsBrowserTransport {
                     .to_owned(),
             ));
         }
-        let socket = self
-            .websocket
-            .connect(&target.websocket_url, self.require_selected_endpoint()?)?;
+        let socket = self.websocket.connect(
+            target.websocket_url.as_ref().ok_or_else(|| {
+                TransportError::InvalidEndpoint("page target has no WebSocket URL".to_owned())
+            })?,
+            self.require_selected_endpoint()?,
+        )?;
         if let Err(error) = run.append_event(
             "cdp_target_attached",
             json!({
@@ -866,6 +893,7 @@ impl BrowserTransport for DevToolsBrowserTransport {
 
 struct ParsedResponse {
     id: u64,
+    session_id: Option<String>,
     result: Option<Value>,
     error: Option<(i64, String)>,
 }
@@ -899,6 +927,10 @@ fn parse_cdp_message(text: &str) -> Result<ParsedMessage, TransportError> {
         return Ok(ParsedMessage::Event(CdpEvent {
             method: method.to_owned(),
             params: object.get("params").cloned().unwrap_or(Value::Null),
+            session_id: object
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         }));
     }
     let id = object.get("id").and_then(Value::as_u64).ok_or_else(|| {
@@ -924,6 +956,10 @@ fn parse_cdp_message(text: &str) -> Result<ParsedMessage, TransportError> {
         let message = required_string(error, "message")?.to_owned();
         return Ok(ParsedMessage::Response(ParsedResponse {
             id,
+            session_id: object
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             result: None,
             error: Some((code, message)),
         }));
@@ -933,32 +969,195 @@ fn parse_cdp_message(text: &str) -> Result<ParsedMessage, TransportError> {
     })?;
     Ok(ParsedMessage::Response(ParsedResponse {
         id,
+        session_id: object
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         result: Some(result),
         error: None,
     }))
 }
 
-/// One synchronous CDP command/event session with ID correlation and queued events.
-pub struct CdpPageSession {
-    websocket: Box<dyn WebSocketConnection>,
+/// Wire-level CDP message channel shared by WebSocket and ASCIIZ pipe sessions.
+pub trait CdpMessageChannel: Send {
+    /// Send one raw JSON message.
+    fn send_message(&mut self, text: &str) -> Result<(), TransportError>;
+    /// Receive one complete raw JSON message, or `None` when the wait expires.
+    fn receive_message(&mut self, timeout: Duration) -> Result<Option<String>, TransportError>;
+    /// Close the underlying transport.
+    fn close(&mut self) -> Result<(), TransportError>;
+}
+
+struct WebSocketMessageChannel(Box<dyn WebSocketConnection>);
+
+impl CdpMessageChannel for WebSocketMessageChannel {
+    fn send_message(&mut self, text: &str) -> Result<(), TransportError> {
+        self.0.send_text(text)
+    }
+    fn receive_message(&mut self, timeout: Duration) -> Result<Option<String>, TransportError> {
+        self.0.receive_text(timeout)
+    }
+    fn close(&mut self) -> Result<(), TransportError> {
+        self.0.close()
+    }
+}
+
+pub(crate) struct CdpSessionCore {
+    channel: Box<dyn CdpMessageChannel>,
     next_id: u64,
-    events: VecDeque<CdpEvent>,
+    events: HashMap<Option<String>, VecDeque<CdpEvent>>,
     responses: HashMap<u64, ParsedResponse>,
     closed: bool,
 }
 
+/// One synchronous CDP command/event session with shared ID correlation and session routing.
+pub struct CdpPageSession {
+    core: std::sync::Arc<std::sync::Mutex<CdpSessionCore>>,
+    session_id: Option<String>,
+    close_channel_on_close: bool,
+    closed: bool,
+}
+
 impl CdpPageSession {
-    /// Create a CDP session over an injected socket.
+    /// Create a CDP session over an injected WebSocket.
     #[must_use]
     pub fn new(websocket: Box<dyn WebSocketConnection>) -> Self {
+        Self::with_channel(Box::new(WebSocketMessageChannel(websocket)))
+    }
+
+    /// Create a browser-wide CDP root session over a reusable message channel.
+    #[must_use]
+    pub fn with_channel(channel: Box<dyn CdpMessageChannel>) -> Self {
         Self {
-            websocket,
-            next_id: 1,
-            events: VecDeque::new(),
-            responses: HashMap::new(),
+            core: std::sync::Arc::new(std::sync::Mutex::new(CdpSessionCore {
+                channel,
+                next_id: 1,
+                events: HashMap::new(),
+                responses: HashMap::new(),
+                closed: false,
+            })),
+            session_id: None,
+            close_channel_on_close: true,
             closed: false,
         }
     }
+
+    pub(crate) fn attached_to(&self, _target_id: String, session_id: String) -> Self {
+        Self {
+            core: self.core.clone(),
+            session_id: Some(session_id),
+            close_channel_on_close: false,
+            closed: false,
+        }
+    }
+}
+
+fn cdp_command(
+    core: &mut CdpSessionCore,
+    session_id: Option<&str>,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value, TransportError> {
+    if core.closed {
+        return Err(TransportError::Disconnected);
+    }
+    if method.is_empty() || !params.is_object() {
+        return Err(TransportError::MalformedMessage(
+            "command requires a nonempty method and object params".to_owned(),
+        ));
+    }
+    let id = core.next_id;
+    core.next_id = core
+        .next_id
+        .checked_add(1)
+        .ok_or_else(|| TransportError::MalformedMessage("command ID exhausted".to_owned()))?;
+    let mut command = json!({ "id": id, "method": method, "params": params });
+    if let Some(session_id) = session_id {
+        command["sessionId"] = json!(session_id);
+    }
+    let text = serde_json::to_string(&command)
+        .map_err(|error| TransportError::MalformedMessage(error.to_string()))?;
+    if let Err(error) = core.channel.send_message(&text) {
+        return Err(TransportError::CommandOutcomeUnknown {
+            command_id: id,
+            reason: error.to_string(),
+        });
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(response) = core.responses.remove(&id) {
+            if response.session_id.as_deref() != session_id {
+                return Err(TransportError::UnexpectedSessionId {
+                    expected: session_id.map(str::to_owned),
+                    received: response.session_id,
+                });
+            }
+            return response_result(response);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(TransportError::CommandOutcomeUnknown {
+                command_id: id,
+                reason: "timed out waiting for the matching response".to_owned(),
+            });
+        }
+        let text = match core.channel.receive_message(remaining) {
+            Ok(Some(text)) => text,
+            Ok(None) => {
+                return Err(TransportError::CommandOutcomeUnknown {
+                    command_id: id,
+                    reason: "timed out waiting for the matching response".to_owned(),
+                });
+            }
+            Err(error) => {
+                return Err(TransportError::CommandOutcomeUnknown {
+                    command_id: id,
+                    reason: error.to_string(),
+                });
+            }
+        };
+        match parse_cdp_message(&text).map_err(|error| TransportError::CommandOutcomeUnknown {
+            command_id: id,
+            reason: error.to_string(),
+        })? {
+            ParsedMessage::Event(event) => queue_cdp_event(core, event).map_err(|error| {
+                TransportError::CommandOutcomeUnknown {
+                    command_id: id,
+                    reason: error.to_string(),
+                }
+            })?,
+            ParsedMessage::Response(response) if response.id == id => {
+                if response.session_id.as_deref() != session_id {
+                    return Err(TransportError::UnexpectedSessionId {
+                        expected: session_id.map(str::to_owned),
+                        received: response.session_id,
+                    });
+                }
+                return response_result(response);
+            }
+            ParsedMessage::Response(response) => {
+                if core.responses.len() >= MAX_QUEUED_MESSAGES {
+                    return Err(TransportError::CommandOutcomeUnknown {
+                        command_id: id,
+                        reason: "too many unmatched CDP responses".to_owned(),
+                    });
+                }
+                core.responses.insert(response.id, response);
+            }
+        }
+    }
+}
+
+fn queue_cdp_event(core: &mut CdpSessionCore, event: CdpEvent) -> Result<(), TransportError> {
+    let queue = core.events.entry(event.session_id.clone()).or_default();
+    if queue.len() >= MAX_QUEUED_MESSAGES {
+        return Err(TransportError::MalformedMessage(
+            "too many queued CDP events".to_owned(),
+        ));
+    }
+    queue.push_back(event);
+    Ok(())
 }
 
 impl PageSession for CdpPageSession {
@@ -971,87 +1170,30 @@ impl PageSession for CdpPageSession {
         if self.closed {
             return Err(TransportError::Disconnected);
         }
-        if method.is_empty() || !params.is_object() {
-            return Err(TransportError::MalformedMessage(
-                "command requires a nonempty method and object params".to_owned(),
-            ));
-        }
-        let id = self.next_id;
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .ok_or_else(|| TransportError::MalformedMessage("command ID exhausted".to_owned()))?;
-        let text = serde_json::to_string(&json!({ "id": id, "method": method, "params": params }))
-            .map_err(|error| TransportError::MalformedMessage(error.to_string()))?;
-        if let Err(error) = self.websocket.send_text(&text) {
-            return Err(TransportError::CommandOutcomeUnknown {
-                command_id: id,
-                reason: error.to_string(),
-            });
-        }
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(response) = self.responses.remove(&id) {
-                return response_result(response);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(TransportError::CommandOutcomeUnknown {
-                    command_id: id,
-                    reason: "timed out waiting for the matching response".to_owned(),
-                });
-            }
-            let text = match self.websocket.receive_text(remaining) {
-                Ok(Some(text)) => text,
-                Ok(None) => {
-                    return Err(TransportError::CommandOutcomeUnknown {
-                        command_id: id,
-                        reason: "timed out waiting for the matching response".to_owned(),
-                    });
-                }
-                Err(error) => {
-                    return Err(TransportError::CommandOutcomeUnknown {
-                        command_id: id,
-                        reason: error.to_string(),
-                    });
-                }
-            };
-            let parsed = parse_cdp_message(&text).map_err(|error| {
-                TransportError::CommandOutcomeUnknown {
-                    command_id: id,
-                    reason: error.to_string(),
-                }
-            })?;
-            match parsed {
-                ParsedMessage::Event(event) => {
-                    self.push_event(event).map_err(|error| {
-                        TransportError::CommandOutcomeUnknown {
-                            command_id: id,
-                            reason: error.to_string(),
-                        }
-                    })?;
-                }
-                ParsedMessage::Response(response) if response.id == id => {
-                    return response_result(response);
-                }
-                ParsedMessage::Response(response) => {
-                    if self.responses.len() >= MAX_QUEUED_MESSAGES {
-                        return Err(TransportError::CommandOutcomeUnknown {
-                            command_id: id,
-                            reason: "too many unmatched CDP responses".to_owned(),
-                        });
-                    }
-                    self.responses.insert(response.id, response);
-                }
-            }
-        }
+        let mut core = self.core.lock().map_err(|_| TransportError::Disconnected)?;
+        cdp_command(
+            &mut core,
+            self.session_id.as_deref(),
+            method,
+            params,
+            timeout,
+        )
     }
 
     fn next_event(&mut self, timeout: Duration) -> Result<Option<CdpEvent>, TransportError> {
-        if let Some(event) = self.events.pop_front() {
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        let mut core = self.core.lock().map_err(|_| TransportError::Disconnected)?;
+        if let Some(event) = core
+            .events
+            .entry(self.session_id.clone())
+            .or_default()
+            .pop_front()
+        {
             return Ok(Some(event));
         }
-        if self.closed {
+        if core.closed {
             return Err(TransportError::Disconnected);
         }
         let deadline = Instant::now() + timeout;
@@ -1060,18 +1202,21 @@ impl PageSession for CdpPageSession {
             if remaining.is_zero() {
                 return Ok(None);
             }
-            let Some(text) = self.websocket.receive_text(remaining)? else {
+            let Some(text) = core.channel.receive_message(remaining)? else {
                 return Ok(None);
             };
             match parse_cdp_message(&text)? {
-                ParsedMessage::Event(event) => return Ok(Some(event)),
+                ParsedMessage::Event(event) if event.session_id == self.session_id => {
+                    return Ok(Some(event));
+                }
+                ParsedMessage::Event(event) => queue_cdp_event(&mut core, event)?,
                 ParsedMessage::Response(response) => {
-                    if self.responses.len() >= MAX_QUEUED_MESSAGES {
+                    if core.responses.len() >= MAX_QUEUED_MESSAGES {
                         return Err(TransportError::MalformedMessage(
                             "too many unmatched CDP responses".to_owned(),
                         ));
                     }
-                    self.responses.insert(response.id, response);
+                    core.responses.insert(response.id, response);
                 }
             }
         }
@@ -1082,19 +1227,23 @@ impl PageSession for CdpPageSession {
             return Ok(());
         }
         self.closed = true;
-        self.websocket.close()
-    }
-}
-
-impl CdpPageSession {
-    fn push_event(&mut self, event: CdpEvent) -> Result<(), TransportError> {
-        if self.events.len() >= MAX_QUEUED_MESSAGES {
-            return Err(TransportError::MalformedMessage(
-                "too many queued CDP events".to_owned(),
-            ));
+        if let Some(session_id) = &self.session_id {
+            let mut core = self.core.lock().map_err(|_| TransportError::Disconnected)?;
+            let result = cdp_command(
+                &mut core,
+                None,
+                "Target.detachFromTarget",
+                json!({ "sessionId": session_id }),
+                Duration::from_secs(2),
+            );
+            result.map(|_| ())
+        } else if self.close_channel_on_close {
+            let mut core = self.core.lock().map_err(|_| TransportError::Disconnected)?;
+            core.closed = true;
+            core.channel.close()
+        } else {
+            Ok(())
         }
-        self.events.push_back(event);
-        Ok(())
     }
 }
 
@@ -1298,6 +1447,60 @@ mod tests {
             .unwrap();
         assert_eq!(event.method, "Network.requestWillBeSent");
         assert_eq!(event.params["requestId"], "r1");
+    }
+
+    #[test]
+    fn flattened_pipe_sessions_preserve_session_id_for_commands_and_route_events() {
+        let messages = [
+            Ok(r#"{"method":"Page.loadEventFired","params":{"timestamp":1},"sessionId":"session-a"}"#.to_owned()),
+            Ok(r#"{"id":1,"result":{"product":"Microsoft Edge/1","protocolVersion":"1.3"}}"#.to_owned()),
+            Ok(r#"{"id":2,"result":{"frameTree":{"frame":{"url":"about:blank"}}},"sessionId":"session-a"}"#.to_owned()),
+            Ok(r#"{"id":3,"result":{}}"#.to_owned()),
+        ];
+        let (socket, state) = MockSocket::with_messages(messages);
+        let mut browser = CdpPageSession::new(Box::new(socket));
+        browser
+            .command("Browser.getVersion", json!({}), Duration::from_secs(1))
+            .unwrap();
+        let mut page = browser.attached_to("target-a".to_owned(), "session-a".to_owned());
+        let event = page.next_event(Duration::from_secs(1)).unwrap().unwrap();
+        assert_eq!(event.method, "Page.loadEventFired");
+        assert_eq!(event.session_id.as_deref(), Some("session-a"));
+        let result = page
+            .command("Page.getFrameTree", json!({}), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(result["frameTree"]["frame"]["url"], "about:blank");
+        page.close().unwrap();
+
+        let outgoing = &state.lock().unwrap().outgoing;
+        assert_eq!(outgoing.len(), 3);
+        assert_eq!(
+            serde_json::from_str::<Value>(&outgoing[1]).unwrap()["sessionId"],
+            "session-a"
+        );
+        let detach = serde_json::from_str::<Value>(&outgoing[2]).unwrap();
+        assert_eq!(detach["method"], "Target.detachFromTarget");
+        assert_eq!(detach["params"]["sessionId"], "session-a");
+    }
+
+    #[test]
+    fn malformed_pipe_json_and_wrong_flattened_response_session_are_visible() {
+        let (socket, _) = MockSocket::with_messages([Ok("not-json".to_owned())]);
+        let mut session = CdpPageSession::new(Box::new(socket));
+        assert!(matches!(
+            session.command("Browser.getVersion", json!({}), Duration::from_secs(1)),
+            Err(TransportError::CommandOutcomeUnknown { .. })
+        ));
+
+        let (socket, _) = MockSocket::with_messages([Ok(
+            r#"{"id":1,"result":{},"sessionId":"wrong"}"#.to_owned(),
+        )]);
+        let browser = CdpPageSession::new(Box::new(socket));
+        let mut session = browser.attached_to("target-a".to_owned(), "session-a".to_owned());
+        assert!(matches!(
+            session.command("Page.getFrameTree", json!({}), Duration::from_secs(1)),
+            Err(TransportError::UnexpectedSessionId { .. })
+        ));
     }
 
     #[test]

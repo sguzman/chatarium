@@ -7,8 +7,9 @@ use crate::diagnostics::SystemEdgeDiagnostics;
 use crate::diagnostics::{EdgeDiagnostics, ListenerRecord, OwnerRelation, RemoteDebuggingPolicy};
 use crate::run::CaptureRun;
 use crate::transport::{
-    DevToolsBrowserTransport, DevToolsEndpoint, DevToolsHttp, DevToolsPort, LoopbackAddressFamily,
-    LoopbackDevToolsHttp, LoopbackWebSocketConnector, TransportError, WebSocketConnector,
+    BrowserTransport, BrowserVersion, DevToolsBrowserTransport, DevToolsEndpoint, DevToolsHttp,
+    DevToolsPort, LoopbackAddressFamily, LoopbackDevToolsHttp, LoopbackWebSocketConnector,
+    PageSession, TargetInfo, TransportError, WebSocketConnector,
 };
 use crate::{find_edge_executable, validate_dedicated_capture_profile};
 use serde_json::json;
@@ -323,7 +324,53 @@ pub struct LaunchedEdge {
     process: EdgeProcess,
     lock_file: PathBuf,
     active_port_file: PathBuf,
-    transport: Option<DevToolsBrowserTransport>,
+    transport: Option<EdgeBrowserTransport>,
+    active_port_required: bool,
+}
+
+enum EdgeBrowserTransport {
+    Tcp(DevToolsBrowserTransport),
+    #[cfg(windows)]
+    Pipe(crate::pipe::PipeCdpBrowserTransport),
+}
+
+impl BrowserTransport for EdgeBrowserTransport {
+    fn browser_version(&mut self, run: &mut CaptureRun) -> Result<BrowserVersion, TransportError> {
+        match self {
+            Self::Tcp(transport) => transport.browser_version(run),
+            #[cfg(windows)]
+            Self::Pipe(transport) => transport.browser_version(run),
+        }
+    }
+    fn browser_version_with_timeout(
+        &mut self,
+        run: &mut CaptureRun,
+        timeout: Duration,
+    ) -> Result<BrowserVersion, TransportError> {
+        match self {
+            Self::Tcp(transport) => transport.browser_version_with_timeout(run, timeout),
+            #[cfg(windows)]
+            Self::Pipe(transport) => transport.browser_version(run),
+        }
+    }
+    fn list_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError> {
+        match self {
+            Self::Tcp(transport) => transport.list_targets(run),
+            #[cfg(windows)]
+            Self::Pipe(transport) => transport.list_targets(run),
+        }
+    }
+    fn attach(
+        &mut self,
+        target_id: &str,
+        run: &mut CaptureRun,
+    ) -> Result<Box<dyn PageSession>, TransportError> {
+        match self {
+            Self::Tcp(transport) => transport.attach(target_id, run),
+            #[cfg(windows)]
+            Self::Pipe(transport) => transport.attach(target_id, run),
+        }
+    }
 }
 
 /// Independently verified state after closing a harness-owned Edge process.
@@ -364,15 +411,244 @@ impl LaunchedEdge {
     /// The harness-owned profile remains the user-data root, while the private window avoids
     /// loading that profile's persisted site session during a diagnostic run.
     pub fn launch_read_only_smoke(run: &mut CaptureRun) -> Result<Self, TransportError> {
+        #[cfg(windows)]
+        {
+            return Self::launch_pipe_read_only_smoke(run);
+        }
+        #[cfg(not(windows))]
+        {
+            let config = EdgeLaunchConfig::discover()?;
+            Self::launch_with_options(
+                config,
+                run,
+                &SystemEdgeSpawner,
+                Box::new(LoopbackDevToolsHttp),
+                Box::new(LoopbackWebSocketConnector),
+                true,
+            )
+        }
+    }
+
+    #[cfg(windows)]
+    fn launch_pipe_read_only_smoke(run: &mut CaptureRun) -> Result<Self, TransportError> {
+        use crate::pipe::spawn_edge_with_pipe;
+
+        #[cfg(test)]
+        let diagnostics: &dyn EdgeDiagnostics = &TestEdgeDiagnostics;
+        #[cfg(not(test))]
+        let diagnostics: &dyn EdgeDiagnostics = &SystemEdgeDiagnostics;
+
         let config = EdgeLaunchConfig::discover()?;
-        Self::launch_with_options(
-            config,
-            run,
-            &SystemEdgeSpawner,
-            Box::new(LoopbackDevToolsHttp),
-            Box::new(LoopbackWebSocketConnector),
-            true,
-        )
+        validate_dedicated_capture_profile(&config.profile, &config.local_app_data)
+            .map_err(TransportError::UnsafeProfile)?;
+        ensure_profile_directories(&config)?;
+        let lock_path = config.capture_root.join(LOCK_FILE);
+        let lock = ProfileLock::acquire(lock_path.clone())?;
+        let policy = diagnostics.remote_debugging_policy();
+        if let Err(error) = run.append_event(
+            "devtools_os_diagnostics",
+            json!({
+                "stage": "policy_preflight",
+                "transport_mode": "pipe",
+                "port": null,
+                "remote_debugging_disabled": policy.is_disabled(),
+                "remote_debugging_allowed": {
+                    "summary": policy.summary(),
+                    "machine": policy.machine,
+                    "user": policy.user,
+                },
+                "listener_snapshot": null,
+                "connect_results": [],
+            }),
+        ) {
+            return Err(record_prelaunch_cleanup(
+                run,
+                lock_path,
+                lock,
+                TransportError::Journal(error),
+            ));
+        }
+        if policy.is_disabled() {
+            return Err(record_prelaunch_cleanup(
+                run,
+                lock_path,
+                lock,
+                TransportError::RemoteDebuggingDisabled(format!(
+                    "HKLM={}, HKCU={}",
+                    policy.machine, policy.user
+                )),
+            ));
+        }
+
+        let arguments = pipe_smoke_arguments(&config.profile);
+        let startup_deadline = Instant::now() + config.startup_timeout;
+        let (child, transport) = match spawn_edge_with_pipe(&config.executable, &arguments, run) {
+            Ok(pair) => pair,
+            Err(error) => {
+                return Err(record_prelaunch_cleanup(run, lock_path, lock, error));
+            }
+        };
+        let pid = child.id();
+        let process = EdgeProcess::new(child, lock);
+        let mut launched = Self {
+            process,
+            lock_file: lock_path,
+            active_port_file: config.profile.join(ACTIVE_PORT_FILE),
+            transport: Some(EdgeBrowserTransport::Pipe(transport)),
+            active_port_required: false,
+        };
+        if let Err(error) = run.append_event(
+            "browser_process_started",
+            json!({"pid":pid, "transport_mode":"pipe", "debugging_endpoint":"anonymous_pipes"}),
+        ) {
+            return Err(fail_pipe_startup(
+                &mut launched,
+                run,
+                TransportError::DiagnosticJournalFailure {
+                    primary_failure: None,
+                    journal_failure: error,
+                },
+            ));
+        }
+        let startup_result = (|| {
+            run.append_event(
+                "devtools_pipe_readiness_started",
+                json!({"transport_mode":"pipe"}),
+            )
+            .map_err(TransportError::Journal)?;
+            let mut attempts = 0_u32;
+            let mut last_error = None;
+            let version = loop {
+                let remaining = startup_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    let error = TransportError::ReadinessTimeout {
+                        attempts,
+                        last_error: last_error.unwrap_or_else(|| {
+                            "pipe setup exceeded browser startup deadline".to_owned()
+                        }),
+                    };
+                    return Err(journal_pipe_readiness_failure(run, attempts, &error));
+                }
+                attempts = attempts.saturating_add(1);
+                let result = {
+                    let transport = match launched.transport.as_mut().expect("pipe transport set") {
+                        EdgeBrowserTransport::Pipe(transport) => transport,
+                        EdgeBrowserTransport::Tcp(_) => unreachable!(),
+                    };
+                    transport.set_command_timeout(remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT));
+                    transport.browser_version(run)
+                };
+                match result {
+                    Ok(version) => break version,
+                    Err(error) if pipe_readiness_retryable(&error) => {
+                        if let Some(code) = launched
+                            .process
+                            .try_wait()
+                            .map_err(TransportError::Process)?
+                        {
+                            return Err(TransportError::Process(format!(
+                                "Edge exited during pipe readiness with status {code}; last CDP error: {error}"
+                            )));
+                        }
+                        last_error = Some(error.to_string());
+                        thread::sleep(
+                            DEVTOOLS_RETRY_DELAY
+                                .min(startup_deadline.saturating_duration_since(Instant::now())),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            run.append_event(
+                "devtools_pipe_first_cdp_response",
+                json!({"method":"Browser.getVersion", "transport_mode":"pipe"}),
+            )
+            .map_err(TransportError::Journal)?;
+            if let Some(code) = launched
+                .process
+                .try_wait()
+                .map_err(TransportError::Process)?
+            {
+                return Err(TransportError::Process(format!(
+                    "Edge exited during pipe readiness with status {code}"
+                )));
+            }
+            let remaining = startup_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(TransportError::ReadinessTimeout {
+                    attempts: 1,
+                    last_error: "browser startup deadline expired before Target.getTargets"
+                        .to_owned(),
+                });
+            }
+            let transport = match launched.transport.as_mut().expect("pipe transport set") {
+                EdgeBrowserTransport::Pipe(transport) => transport,
+                EdgeBrowserTransport::Tcp(_) => unreachable!(),
+            };
+            transport.set_command_timeout(remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT));
+            let mut target_attempts = 0_u32;
+            loop {
+                let remaining = startup_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    let error = TransportError::ReadinessTimeout {
+                        attempts: attempts.saturating_add(target_attempts),
+                        last_error: last_error.clone().unwrap_or_else(|| {
+                            "browser startup deadline expired before Target.getTargets completed"
+                                .to_owned()
+                        }),
+                    };
+                    return Err(journal_pipe_readiness_failure(
+                        run,
+                        attempts.saturating_add(target_attempts),
+                        &error,
+                    ));
+                }
+                target_attempts = target_attempts.saturating_add(1);
+                let result = {
+                    let transport = match launched.transport.as_mut().expect("pipe transport set") {
+                        EdgeBrowserTransport::Pipe(transport) => transport,
+                        EdgeBrowserTransport::Tcp(_) => unreachable!(),
+                    };
+                    transport.set_command_timeout(remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT));
+                    transport.list_targets(run)
+                };
+                match result {
+                    Ok(_) => break,
+                    Err(error) if pipe_readiness_retryable(&error) => {
+                        if let Some(code) = launched
+                            .process
+                            .try_wait()
+                            .map_err(TransportError::Process)?
+                        {
+                            return Err(TransportError::Process(format!(
+                                "Edge exited during pipe readiness with status {code}; last CDP error: {error}"
+                            )));
+                        }
+                        last_error = Some(error.to_string());
+                        thread::sleep(
+                            DEVTOOLS_RETRY_DELAY
+                                .min(startup_deadline.saturating_duration_since(Instant::now())),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if let Some(code) = launched
+                .process
+                .try_wait()
+                .map_err(TransportError::Process)?
+            {
+                return Err(TransportError::Process(format!(
+                    "Edge exited during pipe readiness with status {code}"
+                )));
+            }
+            run.append_event("devtools_pipe_readiness_succeeded", json!({"transport_mode":"pipe", "browser":version.browser, "protocol_version":version.protocol_version})).map_err(TransportError::Journal)?;
+            Ok(())
+        })();
+        if let Err(error) = startup_result {
+            return Err(fail_pipe_startup(&mut launched, run, error));
+        }
+        Ok(launched)
     }
 
     #[cfg(test)]
@@ -462,6 +738,7 @@ impl LaunchedEdge {
             lock_file: lock_path,
             active_port_file: active_port_file.clone(),
             transport: None,
+            active_port_required: true,
         };
 
         let mut startup_evidence = None;
@@ -541,20 +818,18 @@ impl LaunchedEdge {
                     journal_failure,
                 });
             }
-            launched.transport = Some(DevToolsBrowserTransport::for_readiness(
-                port, http, websocket,
-            ));
+            let mut transport = DevToolsBrowserTransport::for_readiness(port, http, websocket);
             let result = wait_for_devtools_readiness(
                 &mut launched.process,
-                launched
-                    .transport
-                    .as_mut()
-                    .expect("transport was constructed"),
+                &mut transport,
                 port,
                 run,
                 startup_deadline,
                 &mut evidence,
             );
+            if result.is_ok() {
+                launched.transport = Some(EdgeBrowserTransport::Tcp(transport));
+            }
             startup_evidence = Some(evidence);
             result
         })();
@@ -596,9 +871,10 @@ impl LaunchedEdge {
     }
 
     /// Browser discovery and attachment API.
-    pub fn transport(&mut self) -> &mut DevToolsBrowserTransport {
+    pub fn transport(&mut self) -> &mut dyn BrowserTransport {
         self.transport
             .as_mut()
+            .map(|transport| transport as &mut dyn BrowserTransport)
             .expect("launched Edge transport passed readiness before being returned")
     }
 
@@ -607,14 +883,25 @@ impl LaunchedEdge {
         Ok(EdgeCleanupStatus {
             process_exited: self.process.exit_code.is_some(),
             harness_lock_absent: path_is_absent(&self.lock_file)?,
-            active_port_file_absent: path_is_absent(&self.active_port_file)?,
+            active_port_file_absent: !self.active_port_required
+                || path_is_absent(&self.active_port_file)?,
         })
     }
 
     /// Explicitly terminate Edge, remove the harness lock, and durably journal cleanup.
     pub fn shutdown(&mut self, run: &mut CaptureRun) -> Result<(), TransportError> {
+        let pipe_close =
+            if let Some(EdgeBrowserTransport::Pipe(transport)) = self.transport.as_mut() {
+                transport.close()
+            } else {
+                Ok(())
+            };
+        self.transport.take();
+        // Process termination must still happen when canceling a reader reports an error.
         let process_result = self.process.shutdown();
-        let endpoint_file_result = if process_result.is_ok() {
+        let endpoint_file_result = if !self.active_port_required {
+            Ok(false)
+        } else if process_result.is_ok() {
             match fs::remove_file(&self.active_port_file) {
                 Ok(()) => Ok(true),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -627,13 +914,15 @@ impl LaunchedEdge {
         };
         let cleanup_status = self.cleanup_status();
         let cleanup_status_value = cleanup_status.as_ref().ok();
-        let cleanup_succeeded = process_result.is_ok()
+        let cleanup_succeeded = pipe_close.is_ok()
+            && process_result.is_ok()
             && endpoint_file_result.is_ok()
             && cleanup_status_value.is_some_and(EdgeCleanupStatus::is_complete);
-        let cleanup_error = process_result
+        let cleanup_error = pipe_close
             .as_ref()
             .err()
-            .cloned()
+            .map(ToString::to_string)
+            .or_else(|| process_result.as_ref().err().cloned())
             .or_else(|| endpoint_file_result.as_ref().err().map(ToString::to_string))
             .or_else(|| cleanup_status.as_ref().err().map(ToString::to_string))
             .or_else(|| {
@@ -657,6 +946,7 @@ impl LaunchedEdge {
                 }),
             )
             .map_err(TransportError::Journal);
+        pipe_close?;
         process_result.map_err(TransportError::Process)?;
         endpoint_file_result?;
         let cleanup_status = cleanup_status?;
@@ -681,6 +971,64 @@ fn path_is_absent(path: &Path) -> Result<bool, TransportError> {
     }
 }
 
+#[cfg(windows)]
+fn pipe_smoke_arguments(profile: &Path) -> Vec<String> {
+    vec![
+        format!("--user-data-dir={}", profile.display()),
+        "--no-first-run".to_owned(),
+        "--no-default-browser-check".to_owned(),
+        "--incognito".to_owned(),
+        "about:blank".to_owned(),
+    ]
+}
+
+#[cfg(windows)]
+fn record_prelaunch_cleanup(
+    run: &mut CaptureRun,
+    lock_path: PathBuf,
+    lock: ProfileLock,
+    primary: TransportError,
+) -> TransportError {
+    drop(lock);
+    let (lock_absent, cleanup_error) = match path_is_absent(&lock_path) {
+        Ok(absent) => (absent, None),
+        Err(error) => (false, Some(error.to_string())),
+    };
+    let cleanup_succeeded = lock_absent && cleanup_error.is_none();
+    let cleanup_journal = run.append_event(
+        "browser_shutdown_cleanup",
+        json!({
+            "exit_code": null,
+            "process_exited": true,
+            "harness_lock_absent": lock_absent,
+            "active_port_file_absent": true,
+            "active_port_file_required": false,
+            "cleanup_succeeded": cleanup_succeeded,
+            "cleanup_error": cleanup_error,
+        }),
+    );
+    let original = primary.clone();
+    let (primary_failure, mut journal_failures) = match primary {
+        TransportError::Journal(error) => (None, vec![error]),
+        TransportError::DiagnosticJournalFailure {
+            primary_failure,
+            journal_failure,
+        } => (primary_failure, vec![journal_failure]),
+        other => (Some(other.to_string()), Vec::new()),
+    };
+    if let Err(error) = cleanup_journal {
+        journal_failures.push(error);
+    }
+    if journal_failures.is_empty() {
+        original
+    } else {
+        TransportError::DiagnosticJournalFailure {
+            primary_failure,
+            journal_failure: journal_failures.join("; "),
+        }
+    }
+}
+
 struct EdgeProcess {
     child: Option<Box<dyn ManagedEdgeChild>>,
     lock: Option<ProfileLock>,
@@ -695,6 +1043,24 @@ impl EdgeProcess {
             lock: Some(lock),
             exit_code: None,
         }
+    }
+
+    fn try_wait(&mut self) -> Result<Option<i32>, String> {
+        if self.exit_code.is_some() {
+            return Ok(self.exit_code);
+        }
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| "owned Edge child is missing".to_owned())?;
+        let status = child.try_wait()?;
+        if let Some(code) = status {
+            self.exit_code = Some(code);
+            if let Some(lock) = self.lock.take() {
+                lock.release()?;
+            }
+        }
+        Ok(status)
     }
 
     fn shutdown(&mut self) -> Result<i32, String> {
@@ -723,6 +1089,62 @@ impl EdgeProcess {
             lock.release()?;
         }
         Ok(code)
+    }
+}
+
+#[cfg(windows)]
+fn pipe_readiness_retryable(error: &TransportError) -> bool {
+    match error {
+        TransportError::CommandOutcomeUnknown { reason, .. } => reason.contains("timed out"),
+        TransportError::Timeout { .. } => true,
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn journal_pipe_readiness_failure(
+    run: &mut CaptureRun,
+    attempts: u32,
+    primary: &TransportError,
+) -> TransportError {
+    match run.append_event(
+        "devtools_pipe_readiness_failed",
+        json!({"transport_mode":"pipe", "attempts":attempts, "error":primary.to_string()}),
+    ) {
+        Ok(_) => primary.clone(),
+        Err(journal_failure) => TransportError::DiagnosticJournalFailure {
+            primary_failure: Some(primary.to_string()),
+            journal_failure,
+        },
+    }
+}
+
+#[cfg(windows)]
+fn fail_pipe_startup(
+    launched: &mut LaunchedEdge,
+    run: &mut CaptureRun,
+    error: TransportError,
+) -> TransportError {
+    let original = error.clone();
+    let (primary_failure, mut journal_failures) = match &error {
+        TransportError::Journal(journal) => (None, vec![journal.clone()]),
+        TransportError::DiagnosticJournalFailure {
+            primary_failure,
+            journal_failure,
+        } => (primary_failure.clone(), vec![journal_failure.clone()]),
+        other => (Some(other.to_string()), Vec::new()),
+    };
+    let shutdown_error = launched.shutdown(run).err();
+    if let Some(TransportError::Journal(journal)) = shutdown_error {
+        journal_failures.push(journal);
+    }
+    if journal_failures.is_empty() {
+        original
+    } else {
+        TransportError::DiagnosticJournalFailure {
+            primary_failure,
+            journal_failure: journal_failures.join("; "),
+        }
     }
 }
 
@@ -1043,11 +1465,40 @@ mod tests {
     use super::*;
     use crate::canonical_experiment;
     use crate::diagnostics::relation_from_parent_map;
-    use crate::transport::{BrowserTransport, DevToolsResource, WebSocketConnection};
+    use crate::transport::{DevToolsResource, WebSocketConnection};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_read_only_smoke_arguments_select_pipe_and_keep_about_blank() {
+        let arguments = pipe_smoke_arguments(Path::new("C:\\local\\capture profile"));
+        assert!(arguments.iter().any(|arg| arg == "about:blank"));
+        assert!(
+            arguments
+                .iter()
+                .any(|arg| arg.starts_with("--user-data-dir="))
+        );
+        assert!(arguments.iter().any(|arg| arg == "--no-first-run"));
+        assert!(
+            arguments
+                .iter()
+                .any(|arg| arg == "--no-default-browser-check")
+        );
+        assert!(arguments.iter().any(|arg| arg == "--incognito"));
+        assert!(
+            !arguments
+                .iter()
+                .any(|arg| arg.starts_with("--remote-debugging-port"))
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|arg| arg.starts_with("--remote-debugging-address"))
+        );
+    }
 
     struct ScriptedDiagnostics {
         snapshots: Mutex<VecDeque<Result<Vec<ListenerRecord>, String>>>,

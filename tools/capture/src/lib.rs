@@ -3,6 +3,8 @@
 pub mod diagnostics;
 /// Harness-owned Edge process lifecycle and profile safety.
 pub mod edge;
+/// ASCIIZ framing for browser-wide DevTools pipe communication.
+pub mod pipe;
 /// Durable private capture-run state and append-only event journal.
 pub mod run;
 /// Automated read-only Edge/CDP smoke command orchestration.
