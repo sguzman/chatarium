@@ -302,13 +302,13 @@ pub fn run_init(
                         phase_boundary_released = true;
                         if let Err(error) = run.append_event(
                             "profile_phase_boundary_released",
-                            json!({"plain_process_tree_exited":true, "harness_lock_absent":true, "profile_preserved":true}),
+                            json!({"plain_owned_job_empty":true, "harness_lock_absent":true, "profile_preserved":true}),
                         ) {
                             failure.journal_failure = Some(error);
                         }
                     }
                     Ok(false) => {
-                        failure.cleanup_failure.get_or_insert_with(|| "plain Edge process tree or profile lock remains; pipe verification was not started".to_owned());
+                        failure.cleanup_failure.get_or_insert_with(|| "plain Edge job or profile lock remains; pipe verification was not started".to_owned());
                     }
                     Err(error) => {
                         failure
@@ -1227,7 +1227,7 @@ mod tests {
                 .cleanup_failure
                 .as_deref()
                 .unwrap()
-                .contains("process tree or profile lock remains")
+                .contains("job or profile lock remains")
         );
         assert_eq!(
             calls.lock().unwrap().as_slice(),
