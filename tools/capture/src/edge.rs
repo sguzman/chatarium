@@ -393,6 +393,434 @@ pub struct EdgeCleanupStatus {
     pub active_port_file_absent: bool,
 }
 
+/// Plain-browser authentication window observation, limited to the owned Edge process tree.
+pub trait PlainAuthWindowObserver: Send + Sync {
+    /// Return whether any visible top-level window belongs to the owned Edge process tree.
+    fn has_visible_owned_window(&self, root_pid: u32) -> Result<bool, String>;
+    /// Return whether the root process or any currently identifiable descendant remains.
+    fn owned_process_tree_alive(&self, root_pid: u32) -> Result<bool, String>;
+}
+
+/// System observer used only while the plain, non-CDP authentication browser is open.
+#[derive(Debug, Default)]
+pub struct SystemPlainAuthWindowObserver;
+
+impl PlainAuthWindowObserver for SystemPlainAuthWindowObserver {
+    fn has_visible_owned_window(&self, root_pid: u32) -> Result<bool, String> {
+        #[cfg(windows)]
+        {
+            let pids = owned_process_tree_pids(root_pid)?;
+            let csv = pids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let script = format!(
+                r#"
+                $ErrorActionPreference = 'Stop'
+                Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class ChatariumWindowProbe {{ [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data); [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd); [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid); delegate bool EnumProc(IntPtr hwnd, IntPtr data); public static bool HasVisibleWindow(uint[] owned) {{ return EnumWindows((hwnd, data) => {{ if (!IsWindowVisible(hwnd)) return true; uint pid; GetWindowThreadProcessId(hwnd, out pid); foreach (uint candidate in owned) if (candidate == pid) return false; return true; }}, IntPtr.Zero) == false; }} }}'
+                $owned = @({csv})
+                if ([ChatariumWindowProbe]::HasVisibleWindow([uint32[]]$owned)) {{ 'visible' }} else {{ 'closed' }}
+            "#
+            );
+            let output = run_powershell_probe(&script)?;
+            match output.trim() {
+                "visible" => Ok(true),
+                "closed" => Ok(false),
+                _ => Err(format!(
+                    "unexpected owned-window probe result: {}",
+                    output.trim()
+                )),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = root_pid;
+            Err("plain Edge window observation requires Windows".to_owned())
+        }
+    }
+
+    fn owned_process_tree_alive(&self, root_pid: u32) -> Result<bool, String> {
+        #[cfg(windows)]
+        {
+            use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+            let mut system = System::new();
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing(),
+            );
+            let parents: std::collections::HashMap<u32, Option<u32>> = system
+                .processes()
+                .iter()
+                .map(|(pid, process)| {
+                    (pid.as_u32(), process.parent().map(|parent| parent.as_u32()))
+                })
+                .collect();
+            Ok(parents
+                .keys()
+                .any(|pid| process_is_descendant(*pid, root_pid, &parents)))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = root_pid;
+            Err("plain Edge process-tree observation requires Windows".to_owned())
+        }
+    }
+}
+
+#[cfg(windows)]
+fn process_is_descendant(
+    pid: u32,
+    root_pid: u32,
+    parents: &std::collections::HashMap<u32, Option<u32>>,
+) -> bool {
+    let mut current = pid;
+    let mut visited = std::collections::HashSet::new();
+    for _ in 0..1024 {
+        if current == root_pid {
+            return true;
+        }
+        if !visited.insert(current) {
+            return false;
+        }
+        let Some(Some(parent)) = parents.get(&current) else {
+            return false;
+        };
+        current = *parent;
+    }
+    false
+}
+
+#[cfg(windows)]
+fn owned_process_tree_pids(root_pid: u32) -> Result<Vec<u32>, String> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let parents: std::collections::HashMap<u32, Option<u32>> = system
+        .processes()
+        .iter()
+        .map(|(pid, process)| (pid.as_u32(), process.parent().map(|parent| parent.as_u32())))
+        .collect();
+    let pids = parents
+        .keys()
+        .copied()
+        .filter(|pid| process_is_descendant(*pid, root_pid, &parents))
+        .collect::<Vec<_>>();
+    Ok(pids)
+}
+
+#[cfg(windows)]
+fn run_powershell_probe(script: &str) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let system_root = std::env::var_os("SystemRoot")
+        .ok_or_else(|| "SystemRoot is unavailable for owned-window observation".to_owned())?;
+    let powershell = PathBuf::from(system_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let output = Command::new(powershell)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .creation_flags(0x0800_0000)
+        .output()
+        .map_err(|error| format!("run scoped Win32 window probe: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "scoped Win32 window probe failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("decode scoped window probe output: {error}"))
+}
+
+/// Harness-owned plain Edge process used for the human authentication phase.
+pub struct LaunchedPlainEdge {
+    process: EdgeProcess,
+    lock_file: PathBuf,
+    observer: Box<dyn PlainAuthWindowObserver>,
+    startup_timeout: Duration,
+    process_exit_grace: Duration,
+    window_close_observed: bool,
+}
+
+fn plain_profile_arguments(profile: &Path, start_url: &str) -> Vec<String> {
+    vec![
+        format!("--user-data-dir={}", profile.display()),
+        start_url.to_owned(),
+    ]
+}
+
+impl LaunchedPlainEdge {
+    /// Launch ordinary Edge with only the persistent user-data directory and requested URL.
+    pub fn launch_profile_auth(run: &mut CaptureRun) -> Result<Self, TransportError> {
+        let config = EdgeLaunchConfig::discover()?;
+        validate_dedicated_capture_profile(&config.profile, &config.local_app_data)
+            .map_err(TransportError::UnsafeProfile)?;
+        ensure_profile_directories(&config)?;
+        let lock_path = config.capture_root.join(LOCK_FILE);
+        let lock = ProfileLock::acquire(lock_path.clone())?;
+        let arguments = plain_profile_arguments(&config.profile, crate::init::CHATGPT_START_URL);
+        let child = match SystemEdgeSpawner.spawn(&config.executable, &arguments) {
+            Ok(child) => child,
+            Err(error) => {
+                return Err(record_prelaunch_cleanup(
+                    run,
+                    lock_path,
+                    lock,
+                    TransportError::Process(format!("launch plain Edge: {error}")),
+                ));
+            }
+        };
+        let pid = child.id();
+        let mut launched = Self {
+            process: EdgeProcess::new(child, lock),
+            lock_file: lock_path,
+            observer: Box::<SystemPlainAuthWindowObserver>::default(),
+            startup_timeout: config.startup_timeout,
+            process_exit_grace: PLAIN_PROCESS_EXIT_GRACE,
+            window_close_observed: false,
+        };
+        if let Err(error) = run.append_event(
+            "plain_auth_edge_process_started",
+            json!({
+                "pid": pid,
+                "transport_mode": "none",
+                "remote_debugging": false,
+                "profile": crate::init::PROFILE_IDENTITY,
+                "requested_start_url": crate::init::CHATGPT_START_URL,
+            }),
+        ) {
+            launched.preserve_active_process();
+            return Err(TransportError::DiagnosticJournalFailure {
+                primary_failure: Some("plain Edge started but its durable launch event failed; browser and profile lock were retained safely".to_owned()),
+                journal_failure: error,
+            });
+        }
+        Ok(launched)
+    }
+
+    #[cfg(test)]
+    fn with_observer(
+        process: EdgeProcess,
+        lock_file: PathBuf,
+        observer: Box<dyn PlainAuthWindowObserver>,
+        startup_timeout: Duration,
+        process_exit_grace: Duration,
+    ) -> Self {
+        Self {
+            process,
+            lock_file,
+            observer,
+            startup_timeout,
+            process_exit_grace,
+            window_close_observed: false,
+        }
+    }
+
+    /// Wait for a visible owned window and then for its disappearance as operator completion.
+    pub fn wait_for_window_close(&mut self, run: &mut CaptureRun) -> Result<(), TransportError> {
+        let started = run.append_event(
+            "auth_phase_started",
+            json!({"auth_phase_transport":"plain_browser", "remote_debugging":false}),
+        );
+        if let Err(error) = started {
+            return Err(TransportError::Journal(error));
+        }
+        let deadline = Instant::now() + self.startup_timeout;
+        let mut window_seen = false;
+        let mut close_observed_at = None;
+        loop {
+            if let Some(exit_code) = self
+                .process
+                .try_wait_preserving_lock()
+                .map_err(|error| TransportError::Process(format!("inspect plain Edge: {error}")))?
+            {
+                if !window_seen {
+                    let tree_alive = self
+                        .observer
+                        .owned_process_tree_alive(self.process.id())
+                        .map_err(|error| {
+                            TransportError::Process(format!(
+                                "verify plain Edge descendants after exit: {error}"
+                            ))
+                        })?;
+                    if tree_alive {
+                        self.process.preserve_on_drop();
+                    } else {
+                        self.process.release_lock_after_exit().map_err(|error| {
+                            TransportError::Process(format!(
+                                "release profile lock after plain Edge exit: {error}"
+                            ))
+                        })?;
+                    }
+                    let lock_absent = path_is_absent(&self.lock_file).unwrap_or(false);
+                    let cleanup_event = run.append_event("plain_auth_browser_cleanup", json!({
+                        "exit_code":exit_code, "process_exited":true, "owned_descendants_remain":tree_alive, "harness_lock_absent":lock_absent, "cleanup_succeeded":!tree_alive && lock_absent, "cleanup_error":if tree_alive { Some("owned Edge descendants remain; profile lock retained") } else { None }
+                    }));
+                    let primary = if tree_alive {
+                        TransportError::Process(format!(
+                            "plain Edge exited with code {exit_code} before a window appeared; owned descendants remain"
+                        ))
+                    } else {
+                        TransportError::Process(format!(
+                            "plain Edge exited with code {exit_code} before an authentication window appeared"
+                        ))
+                    };
+                    return match cleanup_event {
+                        Ok(_) => Err(primary),
+                        Err(journal_failure) => Err(TransportError::DiagnosticJournalFailure {
+                            primary_failure: Some(primary.to_string()),
+                            journal_failure,
+                        }),
+                    };
+                }
+                if close_observed_at.is_none() {
+                    close_observed_at = Some(Instant::now());
+                }
+            }
+
+            let visible = self
+                .observer
+                .has_visible_owned_window(self.process.id())
+                .map_err(|error| {
+                    TransportError::Process(format!("observe plain Edge window: {error}"))
+                })?;
+            if visible {
+                window_seen = true;
+                close_observed_at = None;
+            } else if window_seen && close_observed_at.is_none() {
+                close_observed_at = Some(Instant::now());
+            }
+
+            if let Some(closed_at) = close_observed_at {
+                if Instant::now().duration_since(closed_at) >= INIT_PLAIN_CLOSE_GRACE {
+                    self.window_close_observed = true;
+                    run.append_event(
+                        "auth_phase_completed_by_window_close",
+                        json!({"owned_window_seen":true, "close_grace_ms":INIT_PLAIN_CLOSE_GRACE.as_millis()}),
+                    ).map_err(TransportError::Journal)?;
+                    return Ok(());
+                }
+            } else if !window_seen && Instant::now() >= deadline {
+                return Err(TransportError::Process(
+                    "plain Edge did not show an owned authentication window before the startup deadline".to_owned(),
+                ));
+            }
+            thread::sleep(PLAIN_WINDOW_POLL_INTERVAL);
+        }
+    }
+
+    /// After the visible window closed, wait briefly, then terminate only the owned process tree.
+    pub fn shutdown_after_window_close(
+        &mut self,
+        run: &mut CaptureRun,
+    ) -> Result<(), TransportError> {
+        let mut cleanup_error = None;
+        let mut exit_code = None;
+        match self
+            .process
+            .wait_for_exit_preserving_lock(self.process_exit_grace)
+        {
+            Ok(code) => exit_code = code,
+            Err(error) => cleanup_error = Some(format!("wait for plain Edge exit: {error}")),
+        }
+        if exit_code.is_none() && cleanup_error.is_none() {
+            match self.process.shutdown_process_only() {
+                Ok((code, _, _)) => exit_code = Some(code),
+                Err(error) => {
+                    cleanup_error = Some(format!("terminate owned plain Edge tree: {error}"))
+                }
+            }
+        }
+        if exit_code.is_some() && cleanup_error.is_none() {
+            match self.observer.owned_process_tree_alive(self.process.id()) {
+                Ok(false) => {
+                    if let Err(error) = self.process.release_lock_after_exit() {
+                        cleanup_error
+                            .get_or_insert_with(|| format!("release profile lock: {error}"));
+                    }
+                }
+                Ok(true) => {
+                    cleanup_error.get_or_insert_with(|| "owned Edge descendants remain after the root process exited; retaining the profile lock".to_owned());
+                    self.process.preserve_on_drop();
+                }
+                Err(error) => {
+                    cleanup_error
+                        .get_or_insert_with(|| format!("verify owned Edge process tree: {error}"));
+                    self.process.preserve_on_drop();
+                }
+            }
+        }
+        let lock_absent = path_is_absent(&self.lock_file).unwrap_or(false);
+        let process_exited = exit_code.is_some();
+        let cleanup_succeeded = process_exited && lock_absent && cleanup_error.is_none();
+        if !cleanup_succeeded && cleanup_error.is_none() {
+            cleanup_error = Some(format!(
+                "plain Edge cleanup incomplete (process_exited={process_exited}, harness_lock_absent={lock_absent})"
+            ));
+        }
+        let journal = run.append_event(
+            "plain_auth_browser_cleanup",
+            json!({
+                "exit_code":exit_code,
+                "process_exited":process_exited,
+                "harness_lock_absent":lock_absent,
+                "cleanup_succeeded":cleanup_succeeded,
+                "cleanup_error":cleanup_error,
+            }),
+        );
+        match (cleanup_error, journal) {
+            (Some(primary), Err(journal_failure)) => {
+                Err(TransportError::DiagnosticJournalFailure {
+                    primary_failure: Some(primary),
+                    journal_failure,
+                })
+            }
+            (Some(primary), Ok(_)) => Err(TransportError::Process(primary)),
+            (None, Err(journal_failure)) => Err(TransportError::Journal(journal_failure)),
+            (None, Ok(_)) => Ok(()),
+        }
+    }
+
+    /// Preserve an active browser and lock if window ownership could not be established.
+    pub fn preserve_active_process(&mut self) {
+        self.process.preserve_on_drop();
+    }
+
+    /// Whether an owned visible window has been observed closed for the configured grace.
+    #[must_use]
+    pub const fn window_close_observed(&self) -> bool {
+        self.window_close_observed
+    }
+
+    /// Verify that both the owned process tree and Chatarium profile lock are released.
+    pub fn phase_boundary_released(&self) -> Result<bool, TransportError> {
+        let tree_alive = self
+            .observer
+            .owned_process_tree_alive(self.process.id())
+            .map_err(|error| {
+                TransportError::Process(format!("verify plain Edge process tree: {error}"))
+            })?;
+        Ok(self.process.exit_code.is_some() && !tree_alive && path_is_absent(&self.lock_file)?)
+    }
+}
+
+const PLAIN_WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(750);
+const INIT_PLAIN_CLOSE_GRACE: Duration = Duration::from_millis(500);
+const PLAIN_PROCESS_EXIT_GRACE: Duration = Duration::from_secs(4);
+
 impl EdgeCleanupStatus {
     /// Whether every required cleanup condition was positively established.
     #[must_use]
@@ -1349,6 +1777,7 @@ struct EdgeProcess {
     child: Option<Box<dyn ManagedEdgeChild>>,
     lock: Option<ProfileLock>,
     exit_code: Option<i32>,
+    shutdown_on_drop: bool,
 }
 
 impl EdgeProcess {
@@ -1358,6 +1787,7 @@ impl EdgeProcess {
             child: Some(child),
             lock: Some(lock),
             exit_code: None,
+            shutdown_on_drop: true,
         }
     }
 
@@ -1406,6 +1836,13 @@ impl EdgeProcess {
         let (code, _, _) = self.shutdown_process_only()?;
         self.release_lock_after_exit()?;
         Ok(code)
+    }
+
+    fn preserve_on_drop(&mut self) {
+        self.shutdown_on_drop = false;
+        if let Some(lock) = &mut self.lock {
+            lock.retained_on_drop = true;
+        }
     }
 
     fn shutdown_process_only(&mut self) -> Result<(i32, bool, bool), String> {
@@ -1507,7 +1944,9 @@ fn fail_pipe_startup(
 
 impl Drop for EdgeProcess {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if self.shutdown_on_drop {
+            let _ = self.shutdown();
+        }
     }
 }
 
@@ -1889,6 +2328,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plain_auth_arguments_have_only_the_profile_and_exact_start_url() {
+        let profile =
+            Path::new(r"C:\Users\example\AppData\Local\Chatarium\capture-browser\edge-profile");
+        let arguments = plain_profile_arguments(profile, crate::init::CHATGPT_START_URL);
+        assert_eq!(
+            arguments,
+            [
+                format!("--user-data-dir={}", profile.display()),
+                "https://chatgpt.com/".to_owned(),
+            ]
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|arg| arg.starts_with("--remote-debugging-"))
+        );
+        assert!(!arguments.iter().any(|arg| arg == "--incognito"));
+    }
+
     struct ScriptedDiagnostics {
         snapshots: Mutex<VecDeque<Result<Vec<ListenerRecord>, String>>>,
         policy: RemoteDebuggingPolicy,
@@ -1988,6 +2447,20 @@ mod tests {
         kills: Arc<Mutex<usize>>,
         waits: Arc<Mutex<usize>>,
         fail_kill: bool,
+    }
+
+    struct ScriptedPlainWindowObserver {
+        visible: Arc<Mutex<VecDeque<bool>>>,
+        tree_alive: bool,
+    }
+
+    impl PlainAuthWindowObserver for ScriptedPlainWindowObserver {
+        fn has_visible_owned_window(&self, _root_pid: u32) -> Result<bool, String> {
+            Ok(self.visible.lock().unwrap().pop_front().unwrap_or(false))
+        }
+        fn owned_process_tree_alive(&self, _root_pid: u32) -> Result<bool, String> {
+            Ok(self.tree_alive)
+        }
     }
 
     #[cfg(windows)]
@@ -2262,6 +2735,55 @@ mod tests {
             self.exited = true;
             Ok(self.exit_code)
         }
+    }
+
+    #[test]
+    fn plain_auth_waits_for_owned_window_close_before_killing_a_lingering_edge_process() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let lock_path = base.join(LOCK_FILE);
+        let lock = ProfileLock::acquire(lock_path.clone()).unwrap();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let child = Box::new(FakeChild {
+            id: 4321,
+            exited: false,
+            exit_code: 0,
+            exit_signal: None,
+            kills: kills.clone(),
+            waits,
+            fail_kill: false,
+        });
+        let process = EdgeProcess::new(child, lock);
+        let mut launched = LaunchedPlainEdge::with_observer(
+            process,
+            lock_path.clone(),
+            Box::new(ScriptedPlainWindowObserver {
+                visible: Arc::new(Mutex::new(VecDeque::from([true, true, false]))),
+                tree_alive: false,
+            }),
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        );
+        let mut run = CaptureRun::create_diagnostic(&base.join("runs"), "plain-auth-test").unwrap();
+        run.start().unwrap();
+
+        launched.wait_for_window_close(&mut run).unwrap();
+        assert_eq!(
+            *kills.lock().unwrap(),
+            0,
+            "visible auth window must not be killed"
+        );
+        launched.shutdown_after_window_close(&mut run).unwrap();
+
+        assert_eq!(
+            *kills.lock().unwrap(),
+            1,
+            "lingering owned Edge tree is cleaned only after close"
+        );
+        assert!(!lock_path.exists());
+        assert!(launched.phase_boundary_released().unwrap());
+        let _ = fs::remove_dir_all(base);
     }
 
     fn temp_dir() -> PathBuf {

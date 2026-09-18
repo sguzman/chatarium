@@ -50,7 +50,7 @@ fn run() -> Result<(), String> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  chatarium-capture doctor\n  chatarium-capture smoke-edge\n  chatarium-capture init\n  chatarium-capture run <experiment-id>\n\nExperiments:\n  {}\n\nsmoke-edge launches installed Edge in incognito mode with the dedicated profile\n  %LOCALAPPDATA%\\Chatarium\\capture-browser\\edge-profile at about:blank.\n  It persists Edge-managed profile state there plus run.json/events.jsonl under\n  %LOCALAPPDATA%\\Chatarium\\captures\\diagnostics\\<run-id>. It does not contact\n  ChatGPT or use the normal Edge profile, and closes the launched browser.\n\ninit opens ChatGPT in Chatarium's dedicated persistent Edge profile; sign in manually\n  and press Enter once in this terminal when ready. Chatarium does not extract\n  credentials or cookies. The profile remains stored for future capture runs.\n  Windows uses the local anonymous-pipe DevTools transport.",
+        "Usage:\n  chatarium-capture doctor\n  chatarium-capture smoke-edge\n  chatarium-capture init\n  chatarium-capture run <experiment-id>\n\nExperiments:\n  {}\n\nsmoke-edge launches installed Edge in incognito mode with the dedicated profile\n  %LOCALAPPDATA%\\Chatarium\\capture-browser\\edge-profile at about:blank.\n  It persists Edge-managed profile state there plus run.json/events.jsonl under\n  %LOCALAPPDATA%\\Chatarium\\captures\\diagnostics\\<run-id>. It does not contact\n  ChatGPT or use the normal Edge profile, and closes the launched browser.\n\ninit first opens ChatGPT in a normal Edge window using Chatarium's dedicated persistent\n  profile, with no DevTools or remote-debugging transport. Sign in manually, then close\n  that window to continue. After the process tree exits and the profile lock is released,\n  init reopens the profile over the Windows anonymous pipe for read-only target verification.\n  It does not inspect credentials, cookies, storage, or authentication data. The profile is\n  preserved for future capture runs.",
         canonical_experiment_ids().join("\n  ")
     );
 }
@@ -63,7 +63,7 @@ fn init() -> Result<(), String> {
     match run_init(&diagnostic_base, &SystemInitLauncher, &mut operator) {
         Ok(success) => {
             println!(
-                "PASS\nprofile bootstrap: operator confirmed\nfinal target: {}\nprofile: persistent\ncleanup: passed\nrun: {}",
+                "PASS\nprofile bootstrap: operator completed\nverification: chatgpt.com target observed\nfinal target: {}\nprofile: persistent\ncleanup: passed\nrun: {}",
                 success.final_target_url,
                 success.run_path.display()
             );

@@ -31,7 +31,7 @@ Human QA exists only for state or perception that cannot reasonably be automated
 
 Microsoft Edge exposes the Chromium DevTools Protocol to custom tooling. A client can discover page targets through the local DevTools HTTP endpoints and attach to a target's DevTools WebSocket. The protocol exposes browser/network/runtime events that are sufficient for a first-party-page observation harness.
 
-The Windows `smoke-edge` command uses Chromium's browser-wide DevTools pipe in ASCIIZ mode. It sends read-only CDP commands from the dedicated Chatarium profile and does not depend on a TCP listener or `DevToolsActivePort`; pipe startup failures are reported without falling back to TCP. The localhost TCP transport remains available to other capture paths and diagnostics. This transport choice does not enable the deferred `init` or `run` flows or define a portable capture-bundle format.
+The Windows `smoke-edge` command uses Chromium's browser-wide DevTools pipe in ASCIIZ mode. It sends read-only CDP commands from the dedicated Chatarium profile and does not depend on a TCP listener or `DevToolsActivePort`; pipe startup failures are reported without falling back to TCP. The localhost TCP transport remains available to other capture paths and diagnostics. This smoke command does not change `init` or enable the deferred `run` flow, and it does not define a portable capture-bundle format.
 
 References:
 
@@ -75,18 +75,20 @@ It reports:
 
 ### `chatarium-capture init`
 
-Operator-confirmed bootstrap for the dedicated persistent Edge profile.
+Manual bootstrap for the dedicated persistent Edge profile, split across plain-browser authentication and pipe-only verification.
 
 Behavior:
 
-1. create the dedicated capture profile directory if absent;
-2. launch Edge with that persistent profile at `https://chatgpt.com/` using the Windows anonymous-pipe DevTools transport;
+1. create the dedicated capture profile directory if absent and acquire the harness profile lock;
+2. launch ordinary Edge at `https://chatgpt.com/` with only the dedicated `--user-data-dir` and URL arguments; this phase has no CDP transport and no remote-debugging switches;
 3. let the operator sign in through the normal ChatGPT UI if needed;
-4. wait for one terminal Enter confirmation;
-5. verify that a page target is on the exact `https://chatgpt.com` host;
-6. persist bootstrap metadata in a private diagnostic run and close the harness-owned browser cleanly.
+4. observe a visible window in the owned Edge process tree and treat its close as the one completion action;
+5. wait for the owned process tree to exit, using a bounded grace period after close before terminating the exact owned tree; release and verify the harness lock;
+6. only after process-tree exit and lock release, reopen the same persistent profile over the Windows anonymous pipe;
+7. perform read-only target discovery and verify an HTTPS page target on the exact `https://chatgpt.com` host;
+8. persist phase and target metadata in the private diagnostic run, then request `Browser.close` and clean up the pipe-verification browser.
 
-The dedicated profile remains on disk for later runs. On shutdown, `init` requests `Browser.close` before closing the pipe and gives the owned Edge process up to four seconds to exit naturally; forced termination of that exact process tree is a fallback. A missing `Browser.close` response is resolved against the owned process state. Authentication is not programmatically verified. This command must not import credentials from another profile, extract credentials or cookies, inspect browser storage, automate login, or bypass any authentication flow. Closing stdin before Enter is an explicit operator abort. A failed final target check preserves the profile for another manual attempt.
+The dedicated profile remains on disk for later runs. The phase-1 close grace is 500 ms to allow a just-closed window to reappear, followed by up to four seconds for natural process-tree exit; forced termination of the exact owned tree occurs only after the owned visible window has been observed closed. If visible-window ownership cannot be established, `init` leaves the browser and profile lock intact rather than killing a possibly active login session. Authentication is not programmatically verified: a matching target is operator-completed bootstrap evidence only. This command must not import credentials from another profile, extract credentials or cookies, inspect browser storage or authentication traffic, automate login, or bypass any authentication flow. Phase 2 uses the existing pipe transport only and has no TCP fallback. Failures preserve the profile; the pipe phase never starts unless phase 1's owned process tree has exited and the harness lock is absent.
 
 ### `chatarium-capture run C00-idle-load`
 
