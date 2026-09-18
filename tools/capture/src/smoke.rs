@@ -183,11 +183,9 @@ fn run_smoke_with_run(
             Err(error) => {
                 primary_failure = Some(format!("launch Edge: {error}"));
                 match recorded_launch_cleanup(run) {
-                    Some(true) => cleanup_verified = true,
-                    Some(false) => {
-                        cleanup_failure = Some(
-                            "the launch cleanup journal reports incomplete cleanup".to_owned(),
-                        );
+                    Some(Ok(())) => cleanup_verified = true,
+                    Some(Err(reason)) => {
+                        cleanup_failure = Some(format!("startup cleanup: {reason}"));
                     }
                     None => {
                         cleanup_failure =
@@ -411,13 +409,29 @@ fn run_diagnostics(
     ))
 }
 
-fn recorded_launch_cleanup(run: &CaptureRun) -> Option<bool> {
+fn recorded_launch_cleanup(run: &CaptureRun) -> Option<Result<(), String>> {
     run.events()
         .iter()
         .rev()
         .find(|event| event.kind == "browser_shutdown_cleanup")
-        .and_then(|event| event.payload.get("cleanup_succeeded"))
-        .and_then(Value::as_bool)
+        .and_then(|event| {
+            event
+                .payload
+                .get("cleanup_succeeded")
+                .and_then(Value::as_bool)
+                .map(|succeeded| {
+                    if succeeded {
+                        Ok(())
+                    } else {
+                        Err(event
+                            .payload
+                            .get("cleanup_error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the launch cleanup journal reports incomplete cleanup")
+                            .to_owned())
+                    }
+                })
+        })
 }
 
 #[cfg(test)]
