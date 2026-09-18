@@ -14,5 +14,10 @@ toml = "0.8"
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
 url = "2.5"
 
+[target.'cfg(windows)'.dependencies]
+netstat2 = "0.11.2"
+sysinfo = { version = "0.33.1", default-features = false, features = ["system"] }
+winreg = "0.56"
+
 [lints]
 workspace = true

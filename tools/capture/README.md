@@ -65,6 +65,20 @@ absence is checked before a `PASS` result is printed. The launched Edge process 
 is closed on both success and failure. A failure prints its primary error, cleanup
 status, and run path when the run directory was created.
 
+When a DevTools port is discovered, Windows diagnostics take one TCP-table snapshot
+before readiness and a second immediately before cleanup if startup fails. Only TCP
+records with the selected port are journaled. The summary includes address family,
+state, owner PID, and whether the owner is the launched Edge process, a descendant, a
+different process, or unknown. It also reads the HKLM and HKCU
+`RemoteDebuggingAllowed` values without changing registry state; an explicit disabled
+value stops readiness attempts. Connection failures are reported separately from
+listener observations, and no firewall cause is inferred from a failed connection.
+If Windows cannot expose a snapshot, the diagnostic records the inspection error and
+leaves the result unknown.
+The policy values are checked as soon as the owned Edge process starts, before waiting
+for `DevToolsActivePort`; an explicit disabled value stops startup promptly. In that
+preflight case no listener snapshot is possible because no port has been selected.
+
 After parsing the validated loopback port from `DevToolsActivePort`, startup readiness
 retries only transient local connection/readiness errors while Edge remains alive.
 Each HTTP attempt is bounded by the remaining time in the single 15-second startup

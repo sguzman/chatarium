@@ -1,5 +1,10 @@
 //! Windows-first harness-owned Edge process lifecycle.
 
+#[cfg(test)]
+use crate::diagnostics::PolicyState;
+#[cfg(not(test))]
+use crate::diagnostics::SystemEdgeDiagnostics;
+use crate::diagnostics::{EdgeDiagnostics, ListenerRecord, OwnerRelation, RemoteDebuggingPolicy};
 use crate::run::CaptureRun;
 use crate::transport::{
     DevToolsBrowserTransport, DevToolsEndpoint, DevToolsHttp, DevToolsPort, LoopbackAddressFamily,
@@ -19,6 +24,89 @@ const DEVTOOLS_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
 const DEVTOOLS_RETRY_DELAY: Duration = Duration::from_millis(50);
 const ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
 const LOCK_FILE: &str = "edge-profile.harness.lock";
+
+#[derive(Debug, Clone)]
+struct SnapshotEvidence {
+    listeners: Vec<ListenerRecord>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConnectionEvidence {
+    family: &'static str,
+    attempts: u32,
+    last_result: Option<String>,
+    succeeded: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StartupEvidence {
+    port: u16,
+    launched_pid: u32,
+    policy: RemoteDebuggingPolicy,
+    initial: SnapshotEvidence,
+    final_snapshot: Option<SnapshotEvidence>,
+    connections: [ConnectionEvidence; 2],
+}
+
+impl StartupEvidence {
+    fn connection_mut(&mut self, family: LoopbackAddressFamily) -> &mut ConnectionEvidence {
+        match family {
+            LoopbackAddressFamily::Ipv4 => &mut self.connections[0],
+            LoopbackAddressFamily::Ipv6 => &mut self.connections[1],
+        }
+    }
+
+    fn snapshot_value(
+        &self,
+        snapshot: &SnapshotEvidence,
+        diagnostics: &dyn EdgeDiagnostics,
+    ) -> serde_json::Value {
+        let listeners = snapshot
+            .listeners
+            .iter()
+            .map(|listener| {
+                let relation = listener.owning_pid.map_or(OwnerRelation::Unknown, |owner| {
+                    diagnostics.owner_relation(owner, self.launched_pid)
+                });
+                json!({
+                    "local_address": listener.local_address.to_string(),
+                    "family": if listener.local_address.is_ipv4() { "ipv4" } else { "ipv6" },
+                    "local_port": listener.local_port,
+                    "state": listener.state,
+                    "owning_pid": listener.owning_pid,
+                    "owner_relation": relation,
+                    "same_as_launched_pid": listener.owning_pid == Some(self.launched_pid),
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({ "listeners": listeners, "inspection_error": snapshot.error })
+    }
+
+    fn journal(&self, run: &mut CaptureRun, stage: &str, diagnostics: &dyn EdgeDiagnostics) {
+        let snapshot = match stage {
+            "initial" => Some(&self.initial),
+            "final" => self.final_snapshot.as_ref(),
+            _ => None,
+        };
+        let listeners = snapshot.map(|snapshot| self.snapshot_value(snapshot, diagnostics));
+        let _ = run.append_event(
+            "devtools_os_diagnostics",
+            json!({
+                "stage": stage,
+                "port": self.port,
+                "launched_edge_pid": self.launched_pid,
+                "remote_debugging_allowed": {
+                    "summary": self.policy.summary(),
+                    "machine": self.policy.machine,
+                    "user": self.policy.user,
+                },
+                "listener_snapshot": listeners,
+                "connect_results": self.connections,
+            }),
+        );
+    }
+}
 
 /// Child-process operations isolated for deterministic process-lifecycle testing.
 pub trait ManagedEdgeChild: Send {
@@ -43,6 +131,27 @@ pub trait EdgeProcessSpawner: Send + Sync {
 }
 
 struct SystemEdgeSpawner;
+
+#[cfg(test)]
+struct TestEdgeDiagnostics;
+
+#[cfg(test)]
+impl EdgeDiagnostics for TestEdgeDiagnostics {
+    fn listeners(&self, _port: u16) -> Result<Vec<ListenerRecord>, String> {
+        Ok(Vec::new())
+    }
+
+    fn remote_debugging_policy(&self) -> RemoteDebuggingPolicy {
+        RemoteDebuggingPolicy {
+            machine: PolicyState::NotConfigured,
+            user: PolicyState::NotConfigured,
+        }
+    }
+
+    fn owner_relation(&self, _owner_pid: u32, _launched_pid: u32) -> OwnerRelation {
+        OwnerRelation::Unknown
+    }
+}
 
 impl EdgeProcessSpawner for SystemEdgeSpawner {
     fn spawn(
@@ -256,6 +365,30 @@ impl LaunchedEdge {
         websocket: Box<dyn WebSocketConnector>,
         incognito: bool,
     ) -> Result<Self, TransportError> {
+        #[cfg(test)]
+        let diagnostics: &dyn EdgeDiagnostics = &TestEdgeDiagnostics;
+        #[cfg(not(test))]
+        let diagnostics: &dyn EdgeDiagnostics = &SystemEdgeDiagnostics;
+        Self::launch_with_diagnostics(
+            config,
+            run,
+            spawner,
+            http,
+            websocket,
+            incognito,
+            diagnostics,
+        )
+    }
+
+    fn launch_with_diagnostics(
+        config: EdgeLaunchConfig,
+        run: &mut CaptureRun,
+        spawner: &dyn EdgeProcessSpawner,
+        http: Box<dyn DevToolsHttp>,
+        websocket: Box<dyn WebSocketConnector>,
+        incognito: bool,
+        diagnostics: &dyn EdgeDiagnostics,
+    ) -> Result<Self, TransportError> {
         validate_dedicated_capture_profile(&config.profile, &config.local_app_data)
             .map_err(TransportError::UnsafeProfile)?;
         ensure_profile_directories(&config)?;
@@ -300,27 +433,101 @@ impl LaunchedEdge {
             transport: None,
         };
 
+        let mut startup_evidence = None;
         let startup = (|| {
-            let endpoint = wait_for_debugging_endpoint(
+            let policy = diagnostics.remote_debugging_policy();
+            run.append_event(
+                "devtools_os_diagnostics",
+                json!({
+                    "stage": "policy_preflight",
+                    "port": null,
+                    "launched_edge_pid": pid,
+                    "remote_debugging_disabled": policy.is_disabled(),
+                    "remote_debugging_allowed": {
+                        "summary": policy.summary(),
+                        "machine": policy.machine,
+                        "user": policy.user,
+                    },
+                    "listener_snapshot": null,
+                    "connect_results": [],
+                }),
+            )
+            .map_err(TransportError::Journal)?;
+            if policy.is_disabled() {
+                return Err(TransportError::RemoteDebuggingDisabled(format!(
+                    "HKLM={}, HKCU={}",
+                    policy.machine, policy.user
+                )));
+            }
+            let port = wait_for_debugging_endpoint(
                 &mut launched.process,
                 &active_port_file,
                 startup_deadline,
             )?;
+            let initial = match diagnostics.listeners(port.port()) {
+                Ok(listeners) => SnapshotEvidence {
+                    listeners,
+                    error: None,
+                },
+                Err(error) => SnapshotEvidence {
+                    listeners: Vec::new(),
+                    error: Some(error),
+                },
+            };
+            let mut evidence = StartupEvidence {
+                port: port.port(),
+                launched_pid: pid,
+                policy,
+                initial,
+                final_snapshot: None,
+                connections: [
+                    ConnectionEvidence {
+                        family: "ipv4",
+                        attempts: 0,
+                        last_result: None,
+                        succeeded: false,
+                    },
+                    ConnectionEvidence {
+                        family: "ipv6",
+                        attempts: 0,
+                        last_result: None,
+                        succeeded: false,
+                    },
+                ],
+            };
+            evidence.journal(run, "initial", diagnostics);
             launched.transport = Some(DevToolsBrowserTransport::for_readiness(
-                endpoint, http, websocket,
+                port, http, websocket,
             ));
-            wait_for_devtools_readiness(
+            let result = wait_for_devtools_readiness(
                 &mut launched.process,
                 launched
                     .transport
                     .as_mut()
                     .expect("transport was constructed"),
-                endpoint,
+                port,
                 run,
                 startup_deadline,
-            )
+                &mut evidence,
+                diagnostics,
+            );
+            startup_evidence = Some(evidence);
+            result
         })();
         if let Err(error) = startup {
+            if let Some(evidence) = &mut startup_evidence {
+                evidence.final_snapshot = Some(match diagnostics.listeners(evidence.port) {
+                    Ok(listeners) => SnapshotEvidence {
+                        listeners,
+                        error: None,
+                    },
+                    Err(error) => SnapshotEvidence {
+                        listeners: Vec::new(),
+                        error: Some(error),
+                    },
+                });
+                evidence.journal(run, "final", diagnostics);
+            }
             let _ = launched.shutdown(run);
             return Err(error);
         }
@@ -666,6 +873,8 @@ fn wait_for_devtools_readiness(
     port: DevToolsPort,
     run: &mut CaptureRun,
     deadline: Instant,
+    evidence: &mut StartupEvidence,
+    diagnostics: &dyn EdgeDiagnostics,
 ) -> Result<(), TransportError> {
     run.append_event(
         "devtools_readiness_started",
@@ -700,6 +909,8 @@ fn wait_for_devtools_readiness(
             }
 
             attempts = attempts.saturating_add(1);
+            let connection = evidence.connection_mut(family);
+            connection.attempts = connection.attempts.saturating_add(1);
             let endpoint = DevToolsEndpoint::loopback(port, family);
             match transport.probe_browser_version_at(
                 endpoint,
@@ -707,6 +918,9 @@ fn wait_for_devtools_readiness(
                 remaining.min(DEVTOOLS_ATTEMPT_TIMEOUT),
             ) {
                 Ok(_) => {
+                    evidence.connection_mut(family).succeeded = true;
+                    evidence.connection_mut(family).last_result = Some("connected".to_owned());
+                    evidence.journal(run, "ready", diagnostics);
                     run.append_event(
                         "devtools_readiness_succeeded",
                         json!({
@@ -721,8 +935,11 @@ fn wait_for_devtools_readiness(
                 }
                 Err(error @ TransportError::ReadinessTransient(_)) => {
                     last_error = Some(error.to_string());
+                    evidence.connection_mut(family).last_result = Some(error.to_string());
                 }
                 Err(error) => {
+                    evidence.connection_mut(family).last_result = Some(error.to_string());
+                    evidence.journal(run, "failed", diagnostics);
                     journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
                     return Err(error);
                 }
@@ -738,6 +955,7 @@ fn wait_for_devtools_readiness(
                         .to_owned()
                 }),
             };
+            evidence.journal(run, "failed", diagnostics);
             journal_readiness_failure(run, attempts, &error, last_error.as_deref())?;
             return Err(error);
         }
@@ -767,10 +985,69 @@ fn journal_readiness_failure(
 mod tests {
     use super::*;
     use crate::canonical_experiment;
+    use crate::diagnostics::relation_from_parent_map;
     use crate::transport::{BrowserTransport, DevToolsResource, WebSocketConnection};
     use serde_json::Value;
+    use std::collections::HashMap;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+
+    struct ScriptedDiagnostics {
+        snapshots: Mutex<VecDeque<Result<Vec<ListenerRecord>, String>>>,
+        policy: RemoteDebuggingPolicy,
+        parent_map: HashMap<u32, Option<u32>>,
+        requested_ports: Mutex<Vec<u16>>,
+    }
+
+    impl ScriptedDiagnostics {
+        fn new(
+            snapshots: impl IntoIterator<Item = Result<Vec<ListenerRecord>, String>>,
+            policy: RemoteDebuggingPolicy,
+            parent_map: HashMap<u32, Option<u32>>,
+        ) -> Self {
+            Self {
+                snapshots: Mutex::new(snapshots.into_iter().collect()),
+                policy,
+                parent_map,
+                requested_ports: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl EdgeDiagnostics for ScriptedDiagnostics {
+        fn listeners(&self, port: u16) -> Result<Vec<ListenerRecord>, String> {
+            self.requested_ports.lock().unwrap().push(port);
+            self.snapshots
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Ok(Vec::new()))
+        }
+
+        fn remote_debugging_policy(&self) -> RemoteDebuggingPolicy {
+            self.policy.clone()
+        }
+
+        fn owner_relation(&self, owner_pid: u32, launched_pid: u32) -> OwnerRelation {
+            relation_from_parent_map(owner_pid, launched_pid, &self.parent_map)
+        }
+    }
+
+    fn no_policy() -> RemoteDebuggingPolicy {
+        RemoteDebuggingPolicy {
+            machine: PolicyState::NotConfigured,
+            user: PolicyState::NotConfigured,
+        }
+    }
+
+    fn listener(address: &str, port: u16, pid: Option<u32>) -> ListenerRecord {
+        ListenerRecord {
+            local_address: address.parse().unwrap(),
+            local_port: port,
+            state: "LISTEN".to_owned(),
+            owning_pid: pid,
+        }
+    }
 
     struct FakeChild {
         id: u32,
@@ -1254,6 +1531,198 @@ mod tests {
     }
 
     #[test]
+    fn listener_snapshots_report_owner_and_listener_disappearance_after_timeout() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let mut config = config_under(&local);
+        config.startup_timeout = Duration::from_millis(90);
+        let http = SequenceHttp::always_transient();
+        let attempts = http.attempts.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let diagnostics = ScriptedDiagnostics::new(
+            [
+                Ok(vec![listener("127.0.0.1", 9444, Some(4321))]),
+                Ok(Vec::new()),
+            ],
+            no_policy(),
+            HashMap::new(),
+        );
+        let (mut run, run_base) = diagnostic_run_under(&base);
+
+        let error = LaunchedEdge::launch_with_diagnostics(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+            &diagnostics,
+        )
+        .err()
+        .unwrap();
+
+        assert!(matches!(error, TransportError::ReadinessTimeout { .. }));
+        assert!(*attempts.lock().unwrap() > 0);
+        assert_eq!(
+            *diagnostics.requested_ports.lock().unwrap(),
+            vec![9444, 9444]
+        );
+        let events = run.events();
+        let initial = events
+            .iter()
+            .find(|event| {
+                event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "initial"
+            })
+            .unwrap();
+        let final_event = events
+            .iter()
+            .find(|event| {
+                event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "final"
+            })
+            .unwrap();
+        assert_eq!(
+            initial.payload["listener_snapshot"]["listeners"][0]["family"],
+            "ipv4"
+        );
+        assert_eq!(
+            initial.payload["listener_snapshot"]["listeners"][0]["owner_relation"],
+            "same"
+        );
+        assert_eq!(
+            final_event.payload["listener_snapshot"]["listeners"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(!config.profile.join(ACTIVE_PORT_FILE).exists());
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn disabled_remote_debugging_policy_short_circuits_and_still_cleans_up() {
+        let base = temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let local = fs::canonicalize(&base).unwrap();
+        let config = config_under(&local);
+        let http = SequenceHttp::always_transient();
+        let attempts = http.attempts.clone();
+        let kills = Arc::new(Mutex::new(0));
+        let waits = Arc::new(Mutex::new(0));
+        let spawner = FakeSpawner {
+            active_port_contents: "9444\n/devtools/browser/test".to_owned(),
+            arguments: Arc::new(Mutex::new(Vec::new())),
+            kills: kills.clone(),
+            waits: waits.clone(),
+        };
+        let diagnostics = ScriptedDiagnostics::new(
+            [],
+            RemoteDebuggingPolicy {
+                machine: PolicyState::Disabled,
+                user: PolicyState::NotConfigured,
+            },
+            HashMap::new(),
+        );
+        let (mut run, run_base) = diagnostic_run_under(&base);
+
+        let error = LaunchedEdge::launch_with_diagnostics(
+            config.clone(),
+            &mut run,
+            &spawner,
+            Box::new(http),
+            Box::new(FakeConnector),
+            true,
+            &diagnostics,
+        )
+        .err()
+        .unwrap();
+
+        assert!(matches!(error, TransportError::RemoteDebuggingDisabled(_)));
+        assert!(error.to_string().contains("disabled by policy"));
+        assert_eq!(*attempts.lock().unwrap(), 0);
+        assert_eq!(*kills.lock().unwrap(), 1);
+        assert_eq!(*waits.lock().unwrap(), 1);
+        assert!(run.events().iter().any(|event| {
+            event.kind == "devtools_os_diagnostics"
+                && event.payload["stage"] == "policy_preflight"
+                && event.payload["remote_debugging_allowed"]["summary"] == "disabled"
+        }));
+        assert!(diagnostics.requested_ports.lock().unwrap().is_empty());
+        drop(run);
+        let _ = fs::remove_dir_all(base);
+        let _ = fs::remove_dir_all(run_base);
+    }
+
+    #[test]
+    fn listener_recording_supports_ipv4_ipv6_and_descendant_ownership() {
+        let evidence = StartupEvidence {
+            port: 9444,
+            launched_pid: 4321,
+            policy: no_policy(),
+            initial: SnapshotEvidence {
+                listeners: vec![
+                    listener("127.0.0.1", 9444, Some(4321)),
+                    listener("::1", 9444, Some(4321)),
+                ],
+                error: None,
+            },
+            final_snapshot: Some(SnapshotEvidence {
+                listeners: vec![listener("::1", 9444, Some(7002))],
+                error: None,
+            }),
+            connections: [
+                ConnectionEvidence {
+                    family: "ipv4",
+                    attempts: 1,
+                    last_result: Some("timed out".to_owned()),
+                    succeeded: false,
+                },
+                ConnectionEvidence {
+                    family: "ipv6",
+                    attempts: 1,
+                    last_result: Some("timed out".to_owned()),
+                    succeeded: false,
+                },
+            ],
+        };
+        let diagnostics = ScriptedDiagnostics::new(
+            [],
+            no_policy(),
+            HashMap::from([(7002, Some(7001)), (7001, Some(4321))]),
+        );
+
+        let initial = evidence.snapshot_value(&evidence.initial, &diagnostics);
+        let final_snapshot =
+            evidence.snapshot_value(evidence.final_snapshot.as_ref().unwrap(), &diagnostics);
+
+        assert_eq!(initial["listeners"][0]["family"], "ipv4");
+        assert_eq!(initial["listeners"][0]["owner_relation"], "same");
+        assert_eq!(initial["listeners"][1]["family"], "ipv6");
+        assert_eq!(initial["listeners"][1]["owner_relation"], "same");
+        assert_eq!(final_snapshot["listeners"][0]["family"], "ipv6");
+        assert_eq!(
+            final_snapshot["listeners"][0]["owner_relation"],
+            "descendant"
+        );
+        assert_eq!(
+            evidence.connections[0].last_result.as_deref(),
+            Some("timed out")
+        );
+    }
+
+    #[test]
     fn edge_exit_during_readiness_fails_immediately_with_status_and_cleanup() {
         let base = temp_dir();
         fs::create_dir_all(&base).unwrap();
@@ -1378,13 +1847,23 @@ mod tests {
             )
         };
 
-        let mut browser = LaunchedEdge::launch_with_options(
+        let diagnostics = ScriptedDiagnostics::new(
+            [Ok(Vec::new())],
+            RemoteDebuggingPolicy {
+                machine: PolicyState::Enabled,
+                user: PolicyState::NotConfigured,
+            },
+            HashMap::new(),
+        );
+
+        let mut browser = LaunchedEdge::launch_with_diagnostics(
             config,
             &mut run,
             &spawner,
             Box::new(FakeHttp),
             Box::new(FakeConnector),
             true,
+            &diagnostics,
         )
         .unwrap();
         let discovered = browser.transport().list_targets(&mut run).unwrap();
