@@ -2,6 +2,7 @@
 
 use chatarium_capture::{
     canonical_experiment, canonical_experiment_ids, capture_profile_path, find_edge_executable,
+    init::{StdinInitOperator, SystemInitLauncher, run_init},
     is_safe_capture_profile,
     smoke::{SystemSmokeLauncher, diagnostic_run_base, run_smoke},
 };
@@ -23,14 +24,11 @@ fn run() -> Result<(), String> {
     match args.as_slice() {
         [command] if command == "doctor" => doctor(),
         [command] if command == "smoke-edge" => smoke_edge(),
+        [command] if command == "init" => init(),
         [command] if command == "--help" || command == "-h" => {
             print_usage();
             Ok(())
         }
-        [command] if command == "init" => Err(
-            "`init` is specified but CDP/browser bootstrap is not implemented yet; no state was changed"
-                .to_owned(),
-        ),
         [command, experiment_id] if command == "run" => {
             let experiment = canonical_experiment(experiment_id).ok_or_else(|| {
                 format!(
@@ -52,9 +50,27 @@ fn run() -> Result<(), String> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  chatarium-capture doctor\n  chatarium-capture smoke-edge\n  chatarium-capture init\n  chatarium-capture run <experiment-id>\n\nExperiments:\n  {}\n\nsmoke-edge launches installed Edge in incognito mode with the dedicated profile\n  %LOCALAPPDATA%\\Chatarium\\capture-browser\\edge-profile at about:blank.\n  It persists Edge-managed profile state there plus run.json/events.jsonl under\n  %LOCALAPPDATA%\\Chatarium\\captures\\diagnostics\\<run-id>. It does not contact\n  ChatGPT or use the normal Edge profile, and closes the launched browser.",
+        "Usage:\n  chatarium-capture doctor\n  chatarium-capture smoke-edge\n  chatarium-capture init\n  chatarium-capture run <experiment-id>\n\nExperiments:\n  {}\n\nsmoke-edge launches installed Edge in incognito mode with the dedicated profile\n  %LOCALAPPDATA%\\Chatarium\\capture-browser\\edge-profile at about:blank.\n  It persists Edge-managed profile state there plus run.json/events.jsonl under\n  %LOCALAPPDATA%\\Chatarium\\captures\\diagnostics\\<run-id>. It does not contact\n  ChatGPT or use the normal Edge profile, and closes the launched browser.\n\ninit opens ChatGPT in Chatarium's dedicated persistent Edge profile; sign in manually\n  and press Enter once in this terminal when ready. Chatarium does not extract\n  credentials or cookies. The profile remains stored for future capture runs.\n  Windows uses the local anonymous-pipe DevTools transport.",
         canonical_experiment_ids().join("\n  ")
     );
+}
+
+fn init() -> Result<(), String> {
+    let diagnostic_base = diagnostic_run_base().map_err(|error| {
+        format!("FAIL\nprimary: prepare bootstrap run location: {error}\nrun: not created")
+    })?;
+    let mut operator = StdinInitOperator;
+    match run_init(&diagnostic_base, &SystemInitLauncher, &mut operator) {
+        Ok(success) => {
+            println!(
+                "PASS\nprofile bootstrap: operator confirmed\nfinal target: {}\nprofile: persistent\ncleanup: passed\nrun: {}",
+                success.final_target_url,
+                success.run_path.display()
+            );
+            Ok(())
+        }
+        Err(failure) => Err(failure.to_string()),
+    }
 }
 
 fn smoke_edge() -> Result<(), String> {

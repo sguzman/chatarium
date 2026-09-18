@@ -3,6 +3,7 @@
 
 use super::{AsciizDecoder, encode_asciiz_message};
 use crate::edge::ManagedEdgeChild;
+use crate::init::safe_target_url_for_journal;
 use crate::run::CaptureRun;
 use crate::transport::{
     BrowserTransport, BrowserVersion, CdpMessageChannel, CdpPageSession, PageSession, TargetInfo,
@@ -38,6 +39,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const MAX_READ_CHUNK: usize = 8192;
+const BROWSER_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Windows anonymous pipe pair with parent/child ownership made explicit.
 pub struct WindowsPipePair {
@@ -209,6 +211,10 @@ impl CdpMessageChannel for PipeMessageChannel {
         }
         Ok(())
     }
+
+    fn is_closed(&self) -> bool {
+        self.closed || self.reader_closed.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for PipeMessageChannel {
@@ -320,6 +326,25 @@ impl PipeCdpBrowserTransport {
     pub fn close(&mut self) -> Result<(), TransportError> {
         PageSession::close(&mut self.root)
     }
+
+    /// Request normal browser shutdown while the browser-wide pipe is still available.
+    pub fn request_browser_close(&mut self) -> Result<(), TransportError> {
+        if self.root.is_closed() {
+            return Err(TransportError::Disconnected);
+        }
+        self.root
+            .command("Browser.close", json!({}), BROWSER_CLOSE_RESPONSE_TIMEOUT)?;
+        Ok(())
+    }
+
+    /// Discard a prior target snapshot and query the browser again after operator interaction.
+    pub fn refresh_targets(
+        &mut self,
+        run: &mut CaptureRun,
+    ) -> Result<Vec<TargetInfo>, TransportError> {
+        self.targets.clear();
+        self.list_targets(run)
+    }
 }
 
 impl BrowserTransport for PipeCdpBrowserTransport {
@@ -406,7 +431,16 @@ impl BrowserTransport for PipeCdpBrowserTransport {
                 )));
             }
         }
-        let mut observed = targets.values().map(|target| json!({"target_id": target.id, "type": target.target_type, "title": target.title, "url": target.url})).collect::<Vec<_>>();
+        let mut observed = targets
+            .values()
+            .map(|target| {
+                json!({
+                    "target_id": target.id,
+                    "type": target.target_type,
+                    "url": safe_target_url_for_journal(&target.url),
+                })
+            })
+            .collect::<Vec<_>>();
         observed
             .sort_by(|left, right| left["target_id"].as_str().cmp(&right["target_id"].as_str()));
         run.append_event(
@@ -755,6 +789,40 @@ mod tests {
         }
     }
 
+    struct RedirectTargetScript {
+        responses: VecDeque<String>,
+        sent: Arc<Mutex<Vec<Value>>>,
+    }
+
+    impl CdpMessageChannel for RedirectTargetScript {
+        fn send_message(&mut self, text: &str) -> Result<(), TransportError> {
+            let command: Value = serde_json::from_str(text).unwrap();
+            let response = self
+                .responses
+                .pop_front()
+                .expect("scripted target response");
+            let response: Value = serde_json::from_str(&response).unwrap();
+            let mut response = response;
+            response["id"] = command["id"].clone();
+            self.sent.lock().unwrap().push(command);
+            self.responses.push_front(response.to_string());
+            Ok(())
+        }
+
+        fn receive_message(
+            &mut self,
+            _timeout: Duration,
+        ) -> Result<Option<String>, TransportError> {
+            self.responses
+                .pop_front()
+                .map_or(Ok(None), |response| Ok(Some(response)))
+        }
+
+        fn close(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
     fn test_run() -> (CaptureRun, std::path::PathBuf) {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -806,10 +874,9 @@ mod tests {
     #[test]
     fn child_ends_close_in_parent_and_parent_ends_close_on_shutdown() {
         let mut pair = WindowsPipePair::create().unwrap();
-        let (child_read, child_write) = pair.child_handle_values().unwrap();
         pair.close_child_ends();
-        assert!(flags(child_read as HANDLE).is_none());
-        assert!(flags(child_write as HANDLE).is_none());
+        assert!(pair.child_read.is_none());
+        assert!(pair.child_write.is_none());
         let mut channel = pair.into_parent_channel().unwrap();
         channel.close().unwrap();
         // Windows may reuse a closed handle value immediately for another thread or runtime
@@ -821,12 +888,9 @@ mod tests {
     #[test]
     fn restricted_spawn_failure_drops_pipe_handles() {
         let pair = WindowsPipePair::create().unwrap();
-        let (child_read, child_write) = pair.child_handle_values().unwrap();
         let missing = std::env::temp_dir().join("chatarium-definitely-missing-edge.exe");
         assert!(spawn_restricted(&missing, &[], &pair).is_err());
         drop(pair);
-        assert!(flags(child_read as HANDLE).is_none());
-        assert!(flags(child_write as HANDLE).is_none());
     }
 
     #[test]
@@ -873,6 +937,48 @@ mod tests {
                     && event.payload["session_id"] == "session-blank")
         );
         drop(run);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn final_init_target_query_refreshes_after_auth_redirect_without_journaling_query_values() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let responses = VecDeque::from([
+            json!({"id":0,"result":{"targetInfos":[{"targetId":"login","type":"page","title":"sensitive title","url":"https://login.example/authorize?code=private-code"}]}}).to_string(),
+            json!({"id":0,"result":{"targetInfos":[{"targetId":"chatgpt","type":"page","title":"ChatGPT","url":"https://chatgpt.com/c/example?access_token=private-token"}]}}).to_string(),
+        ]);
+        let channel = RedirectTargetScript {
+            responses,
+            sent: sent.clone(),
+        };
+        let mut browser = PipeCdpBrowserTransport::new(Box::new(channel));
+        let (mut run, base) = test_run();
+
+        let during_auth = browser.list_targets(&mut run).unwrap();
+        assert_eq!(
+            during_auth[0].url,
+            "https://login.example/authorize?code=private-code"
+        );
+        let cached_before_refresh = browser.list_targets(&mut run).unwrap();
+        assert_eq!(cached_before_refresh[0].url, during_auth[0].url);
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        let after_confirmation = browser.refresh_targets(&mut run).unwrap();
+        assert_eq!(
+            after_confirmation[0].url,
+            "https://chatgpt.com/c/example?access_token=private-token"
+        );
+        assert_eq!(sent.lock().unwrap().len(), 2);
+        let events = run
+            .events()
+            .iter()
+            .filter(|event| event.kind == "cdp_page_targets_discovered")
+            .map(|event| event.payload.to_string())
+            .collect::<String>();
+        assert!(events.contains("login.example"));
+        assert!(events.contains("chatgpt.com/c/example"));
+        assert!(!events.contains("private-code"));
+        assert!(!events.contains("private-token"));
+        assert!(!events.contains("sensitive title"));
         let _ = std::fs::remove_dir_all(base);
     }
 

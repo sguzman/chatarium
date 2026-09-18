@@ -259,6 +259,15 @@ fn run_smoke_with_run(
             Err(TransportError::Journal(error)) => {
                 journal_failure.get_or_insert(error);
             }
+            Err(TransportError::DiagnosticJournalFailure {
+                primary_failure,
+                journal_failure: error,
+            }) => {
+                if let Some(primary) = primary_failure {
+                    cleanup_failure.get_or_insert(format!("shut down Edge: {primary}"));
+                }
+                journal_failure.get_or_insert(error);
+            }
             Err(error) => {
                 cleanup_failure.get_or_insert_with(|| format!("shut down Edge: {error}"));
             }

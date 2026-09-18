@@ -350,6 +350,10 @@ pub trait BrowserTransport: Send {
     }
     /// Discover page targets and journal the raw target identifiers/types.
     fn list_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError>;
+    /// Re-query page targets after an external wait rather than relying on an earlier snapshot.
+    fn refresh_targets(&mut self, run: &mut CaptureRun) -> Result<Vec<TargetInfo>, TransportError> {
+        self.list_targets(run)
+    }
     /// Attach to a target returned by `list_targets` and journal attachment.
     fn attach(
         &mut self,
@@ -986,6 +990,10 @@ pub trait CdpMessageChannel: Send {
     fn receive_message(&mut self, timeout: Duration) -> Result<Option<String>, TransportError>;
     /// Close the underlying transport.
     fn close(&mut self) -> Result<(), TransportError>;
+    /// Whether the message channel has already observed a closed transport.
+    fn is_closed(&self) -> bool {
+        false
+    }
 }
 
 struct WebSocketMessageChannel(Box<dyn WebSocketConnection>);
@@ -1049,6 +1057,17 @@ impl CdpPageSession {
             close_channel_on_close: false,
             closed: false,
         }
+    }
+
+    /// Whether this root session or its underlying channel is already closed.
+    pub(crate) fn is_closed(&self) -> bool {
+        if self.closed {
+            return true;
+        }
+        self.core
+            .lock()
+            .map(|core| core.closed || core.channel.is_closed())
+            .unwrap_or(true)
     }
 }
 
