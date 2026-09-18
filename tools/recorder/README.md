@@ -14,10 +14,13 @@ let sanitized = chatarium_recorder::sanitize_har_bytes(har_bytes)?;
 let digest = chatarium_recorder::sha256_hex(&sanitized);
 ```
 
-See [`docs/CAPTURE_HARNESS.md`](../../docs/CAPTURE_HARNESS.md) for the capture-bundle
-contract. That contract is newly defined here because this checkout did not contain
-the referenced harness document or an existing bundle fixture; the future CDP harness
-must emit this shape or revise the contract with observed evidence.
+See [`docs/CAPTURE_HARNESS.md`](../../docs/CAPTURE_HARNESS.md) for the portable artifact
+design. The harness specification describes a ZIP artifact, but this branch has no
+bundle producer, versioned manifest schema, or sanitized bundle fixture yet. The
+library's current `sanitize_capture_bundle_bytes` API operates on the decoded JSON
+capture envelope (`format`, `version`, and `captures[].har`) and is a reusable shared
+redaction boundary. Wiring it to an archive-level validator remains contingent on the
+emitter's manifest and artifact schema; those are not inferred here.
 
 ## Commands
 
