@@ -495,12 +495,19 @@ fn inherited_handle_allowlist(pair: &WindowsPipePair) -> Result<[HANDLE; 2], Tra
     Ok([read as HANDLE, write as HANDLE])
 }
 
+fn handle_to_uint32(handle: HANDLE) -> u32 {
+    // Chromium serializes inherited Windows handles as unsigned 32-bit values. Windows keeps
+    // kernel handle values 32-bit for 32/64-bit interoperability even though HANDLE is pointer-sized.
+    handle as usize as u32
+}
+
 fn append_pipe_switches(arguments: &[String], handles: [HANDLE; 2]) -> Vec<String> {
     let mut result = arguments.to_vec();
     result.push("--remote-debugging-pipe=asciiz".to_owned());
     result.push(format!(
         "--remote-debugging-io-pipes={},{}",
-        handles[0] as usize, handles[1] as usize
+        handle_to_uint32(handles[0]),
+        handle_to_uint32(handles[1])
     ));
     result
 }
@@ -552,7 +559,13 @@ impl ManagedEdgeChild for Win32EdgeChild {
         Ok(Some(code as i32))
     }
     fn kill(&mut self) -> Result<(), String> {
-        let status = Command::new("taskkill.exe")
+        let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+            "SystemRoot is unavailable; cannot terminate the owned Edge process tree".to_owned()
+        })?;
+        let taskkill = Path::new(&system_root)
+            .join("System32")
+            .join("taskkill.exe");
+        let status = Command::new(taskkill)
             .args(["/PID", &self.pid.to_string(), "/T", "/F"])
             .status()
             .map_err(|error| error.to_string())?;
