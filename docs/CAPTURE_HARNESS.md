@@ -31,6 +31,8 @@ Human QA exists only for state or perception that cannot reasonably be automated
 
 Microsoft Edge exposes the Chromium DevTools Protocol to custom tooling. A client can discover page targets through the local DevTools HTTP endpoints and attach to a target's DevTools WebSocket. The protocol exposes browser/network/runtime events that are sufficient for a first-party-page observation harness.
 
+The Windows `smoke-edge` command uses Chromium's browser-wide DevTools pipe in ASCIIZ mode. It sends read-only CDP commands from the dedicated Chatarium profile and does not depend on a TCP listener or `DevToolsActivePort`; pipe startup failures are reported without falling back to TCP. The localhost TCP transport remains available to other capture paths and diagnostics. This transport choice does not enable the deferred `init` or `run` flows or define a portable capture-bundle format.
+
 References:
 
 - https://learn.microsoft.com/en-us/microsoft-edge/devtools/protocol/

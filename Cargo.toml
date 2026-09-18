@@ -18,7 +18,8 @@ license = "MIT"
 repository = "https://github.com/sguzman/chatarium"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Keep unsafe code denied by default while allowing the isolated Win32 pipe module to opt in.
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
