@@ -453,35 +453,6 @@ pub fn fingerprint_file(path: &Path) -> Result<String, String> {
     Ok(sha256_hex(&bytes))
 }
 
-/// Sanitize one portable CDP capture bundle encoded as JSON.
-///
-/// Bundle validation requires the documented format marker/version and a `captures`
-/// array; each capture must contain a `har` object with `log.entries`. Unknown fields
-/// are retained and passed through the centralized value sanitizer.
-pub fn sanitize_capture_bundle_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
-    let mut bundle: Value = serde_json::from_slice(input)
-        .map_err(|error| format!("parse capture bundle JSON: {error}"))?;
-    if bundle.get("format").and_then(Value::as_str) != Some("chatarium-cdp-capture-bundle") {
-        return Err("unsupported capture bundle format".to_owned());
-    }
-    if bundle.get("version").and_then(Value::as_u64) != Some(1) {
-        return Err("unsupported capture bundle version".to_owned());
-    }
-    let captures = bundle
-        .get_mut("captures")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| "capture bundle is missing captures array".to_owned())?;
-    for (index, capture) in captures.iter_mut().enumerate() {
-        let har = capture
-            .get_mut("har")
-            .ok_or_else(|| format!("capture {index} is missing har"))?;
-        har_entries(har).map_err(|error| format!("capture {index}: {error}"))?;
-    }
-    sanitize_value(&mut bundle);
-    serde_json::to_vec_pretty(&bundle)
-        .map_err(|error| format!("serialize sanitized capture bundle: {error}"))
-}
-
 fn unix_ms() -> Result<u128, String> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -596,29 +567,21 @@ mod tests {
     }
 
     #[test]
-    fn bundle_validation_and_sanitization_use_the_shared_redactor() {
-        let bundle = json!({
-            "format": "chatarium-cdp-capture-bundle",
-            "version": 1,
-            "authorization": "top-level-secret",
-            "captures": [{"id": "C01", "har": serde_json::from_slice::<Value>(sample_har()).unwrap()}]
-        });
-        let output = sanitize_capture_bundle_bytes(&serde_json::to_vec(&bundle).unwrap()).unwrap();
-        let text = String::from_utf8(output).unwrap();
-        assert!(!text.contains("top-level-secret"));
-        assert!(!text.contains("header-secret"));
-        assert!(text.contains(REDACTED));
-
-        let invalid =
-            json!({"format":"chatarium-cdp-capture-bundle", "version":1, "captures":[{"har":{}}]});
-        assert!(sanitize_capture_bundle_bytes(&serde_json::to_vec(&invalid).unwrap()).is_err());
-    }
-
-    #[test]
     fn library_har_api_matches_json_value_sanitizer() {
         let mut value = serde_json::from_slice::<Value>(sample_har()).unwrap();
         sanitize_value(&mut value);
         let from_value = serde_json::to_vec_pretty(&value).unwrap();
         assert_eq!(sanitize_har_bytes(sample_har()).unwrap(), from_value);
+    }
+
+    #[test]
+    fn value_sanitizer_is_schema_agnostic() {
+        let mut value = json!({
+            "metadata": {"access_token": "sensitive"},
+            "records": [{"headers": [{"name": "Authorization", "value": "Bearer sensitive"}] }]
+        });
+        sanitize_value(&mut value);
+        assert_eq!(value["metadata"]["access_token"], REDACTED);
+        assert_eq!(value["records"][0]["headers"][0]["value"], REDACTED);
     }
 }

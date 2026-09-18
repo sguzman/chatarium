@@ -4,23 +4,23 @@
 
 It is deliberately **offline-first**: give it a HAR you exported yourself and it produces sanitized, fingerprinted evidence plus structural derived data. It does not log into ChatGPT, obtain credentials, or bypass browser/session controls.
 
-The package also exposes a reusable Rust library (`chatarium_recorder`) for in-memory
-sanitization, inventory generation, SHA-256 fingerprints, snapshot writing, and
-portable CDP capture-bundle validation/sanitization. The CLI calls these same
-operations so its behavior is covered alongside the library API.
+The package also exposes a reusable Rust library (`chatarium_recorder`) for schema-
+agnostic JSON value and HAR sanitization, structural inventory generation, SHA-256
+fingerprints, and snapshot writing. The CLI calls these same operations so its
+behavior is covered alongside the library API.
 
 ```rust
 let sanitized = chatarium_recorder::sanitize_har_bytes(har_bytes)?;
 let digest = chatarium_recorder::sha256_hex(&sanitized);
 ```
 
-See [`docs/CAPTURE_HARNESS.md`](../../docs/CAPTURE_HARNESS.md) for the portable artifact
-design. The harness specification describes a ZIP artifact, but this branch has no
-bundle producer, versioned manifest schema, or sanitized bundle fixture yet. The
-library's current `sanitize_capture_bundle_bytes` API operates on the decoded JSON
-capture envelope (`format`, `version`, and `captures[].har`) and is a reusable shared
-redaction boundary. Wiring it to an archive-level validator remains contingent on the
-emitter's manifest and artifact schema; those are not inferred here.
+The capture-harness specification is in [`docs/CAPTURE_HARNESS.md`](../../docs/CAPTURE_HARNESS.md).
+Portable bundle schema-specific validation is intentionally deferred until the
+harness emitter schema exists. The repository does not yet have a portable bundle
+producer, a versioned emitted manifest schema, or a canonical sanitized bundle
+fixture, so the recorder does not guess a format. A future harness can call the
+schema-agnostic `sanitize_value` primitive to apply the shared redaction rules to
+`serde_json::Value` data.
 
 ## Commands
 
