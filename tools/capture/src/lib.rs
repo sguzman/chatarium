@@ -1,5 +1,6 @@
 //! Core logic for Chatarium's one-command browser capture harness.
 
+pub mod diagnostics;
 /// Harness-owned Edge process lifecycle and profile safety.
 pub mod edge;
 /// Durable private capture-run state and append-only event journal.

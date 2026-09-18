@@ -37,6 +37,8 @@ pub struct SmokeFailure {
     pub cleanup_verified: bool,
     /// Failure to durably append/finalize a smoke journal event, if any.
     pub journal_failure: Option<String>,
+    /// Compact Windows DevTools listener/policy evidence when available.
+    pub diagnostic_summary: Option<String>,
     /// Run path, or `None` if a run directory could not be created.
     pub run_path: Option<PathBuf>,
     /// Diagnostic base path requested for this invocation.
@@ -59,6 +61,9 @@ impl fmt::Display for SmokeFailure {
         }
         if let Some(journal) = &self.journal_failure {
             writeln!(formatter, "journal: failed ({journal})")?;
+        }
+        if let Some(summary) = &self.diagnostic_summary {
+            writeln!(formatter, "{summary}")?;
         }
         if let Some(path) = &self.run_path {
             writeln!(formatter, "run: {}", path.display())
@@ -141,6 +146,7 @@ pub fn run_smoke(
                 cleanup_failure: None,
                 cleanup_verified: true,
                 journal_failure: None,
+                diagnostic_summary: None,
                 run_path: None,
                 diagnostic_base: diagnostic_base.to_path_buf(),
             }
@@ -158,6 +164,7 @@ fn run_smoke_with_run(
     let mut cleanup_failure = None;
     let mut cleanup_verified = false;
     let mut journal_failure = None;
+    let mut diagnostic_summary = None;
     let mut browser_version = None;
     let mut cdp_protocol_version = None;
     let mut frame_url = None;
@@ -181,7 +188,17 @@ fn run_smoke_with_run(
         match launcher.launch(run) {
             Ok(launched) => browser = Some(launched),
             Err(error) => {
-                primary_failure = Some(format!("launch Edge: {error}"));
+                match error {
+                    TransportError::DiagnosticJournalFailure {
+                        primary_failure: primary,
+                        journal_failure: failure,
+                    } => {
+                        primary_failure = primary.map(|error| format!("launch Edge: {error}"));
+                        journal_failure = Some(failure);
+                    }
+                    other => primary_failure = Some(format!("launch Edge: {other}")),
+                }
+                diagnostic_summary = format_windows_diagnostics(run);
                 match recorded_launch_cleanup(run) {
                     Some(Ok(())) => cleanup_verified = true,
                     Some(Err(reason)) => {
@@ -273,6 +290,9 @@ fn run_smoke_with_run(
         && browser_version.is_some()
         && cdp_protocol_version.is_some()
         && frame_url.as_deref() == Some("about:blank");
+    if primary_failure.is_some() && diagnostic_summary.is_none() {
+        diagnostic_summary = format_windows_diagnostics(run);
+    }
     if let Err(error) = run.append_event(
         "smoke_finished",
         json!({
@@ -314,9 +334,136 @@ fn run_smoke_with_run(
         cleanup_failure,
         cleanup_verified,
         journal_failure,
+        diagnostic_summary,
         run_path: Some(run_path),
         diagnostic_base,
     })
+}
+
+fn format_windows_diagnostics(run: &CaptureRun) -> Option<String> {
+    let events = run.events();
+    let initial = events.iter().find(|event| {
+        event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "initial"
+    });
+    let Some(initial) = initial else {
+        let preflight = events.iter().find(|event| {
+            event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "policy_preflight"
+        })?;
+        let policy = preflight.payload["remote_debugging_allowed"]["summary"]
+            .as_str()
+            .unwrap_or("unknown");
+        let pid = preflight.payload["launched_edge_pid"]
+            .as_u64()
+            .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string());
+        let diagnosis = if preflight.payload["remote_debugging_disabled"] == true {
+            "listener diagnosis: readiness stopped because remote debugging is disabled by policy"
+        } else {
+            "listener diagnosis: no port was discovered before startup failed; listener state is unknown"
+        };
+        return Some(format!(
+            "DevTools port: not discovered\nRemoteDebuggingAllowed: {policy}\nlaunched Edge pid: {pid}\nlistener at initial probe: not sampled (no port was selected)\nlistener at final probe: not sampled (no port was selected)\n{diagnosis}\nconnect result: not attempted"
+        ));
+    };
+    let final_event = events
+        .iter()
+        .rev()
+        .find(|event| event.kind == "devtools_os_diagnostics" && event.payload["stage"] == "final");
+    let port = initial.payload["port"].as_u64()?;
+    let policy = initial.payload["remote_debugging_allowed"]["summary"]
+        .as_str()
+        .unwrap_or("unknown");
+    let pid = initial.payload["launched_edge_pid"]
+        .as_u64()
+        .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string());
+    let render_listeners = |event: &serde_json::Value| {
+        let snapshot = &event["listener_snapshot"];
+        if let Some(error) = snapshot["inspection_error"].as_str() {
+            return format!("unknown ({error})");
+        }
+        let listeners = snapshot["listeners"].as_array();
+        match listeners {
+            Some(listeners) if listeners.is_empty() => "none".to_owned(),
+            Some(listeners) => listeners
+                .iter()
+                .map(|listener| {
+                    let address = listener["local_address"].as_str().unwrap_or("unknown");
+                    let formatted_address = if address.contains(':') {
+                        format!("[{address}]")
+                    } else {
+                        address.to_owned()
+                    };
+                    format!(
+                        "{}:{} state={} pid={} relation={}",
+                        formatted_address,
+                        listener["local_port"].as_u64().unwrap_or_default(),
+                        listener["state"].as_str().unwrap_or("unknown"),
+                        listener["owning_pid"]
+                            .as_u64()
+                            .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string()),
+                        listener["owner_relation"].as_str().unwrap_or("unknown"),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            None => snapshot["inspection_error"].as_str().map_or_else(
+                || "unknown".to_owned(),
+                |error| format!("unknown ({error})"),
+            ),
+        }
+    };
+    let connections = final_event.unwrap_or(initial).payload["connect_results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|connection| {
+            format!(
+                "{}: {}",
+                connection["family"].as_str().unwrap_or("unknown"),
+                connection["last_result"]
+                    .as_str()
+                    .unwrap_or("not attempted"),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let final_listeners = final_event.map_or_else(
+        || "not captured".to_owned(),
+        |event| render_listeners(&event.payload),
+    );
+    let has_listener = |event: &serde_json::Value| {
+        event["listener_snapshot"]["listeners"]
+            .as_array()
+            .is_some_and(|listeners| {
+                listeners
+                    .iter()
+                    .any(|listener| listener["state"] == "LISTEN")
+            })
+    };
+    let snapshot_has_listener = |event: &serde_json::Value| {
+        let snapshot = &event["listener_snapshot"];
+        if snapshot["inspection_error"].as_str().is_some() {
+            None
+        } else {
+            snapshot["listeners"]
+                .as_array()
+                .map(|_| has_listener(event))
+        }
+    };
+    let initial_has_listener = snapshot_has_listener(&initial.payload);
+    let final_has_listener = final_event.and_then(|event| snapshot_has_listener(&event.payload));
+    let diagnosis = if initial_has_listener == Some(false) && final_has_listener == Some(false) {
+        "listener diagnosis: Edge advertised a DevTools port but no TCP listener was observed"
+    } else if final_has_listener == Some(true) {
+        "listener diagnosis: TCP listener observed; connection readiness failed separately"
+    } else if initial_has_listener == Some(true) && final_has_listener == Some(false) {
+        "listener diagnosis: listener was observed initially and absent at the final probe; it may have disappeared during startup"
+    } else {
+        "listener diagnosis: unknown from available OS snapshots"
+    };
+    Some(format!(
+        "DevTools port: {port}\nRemoteDebuggingAllowed: {policy}\nlaunched Edge pid: {pid}\nlistener at initial probe: {}\nlistener at final probe: {final_listeners}\n{diagnosis}\nconnect result: {connections}",
+        render_listeners(&initial.payload),
+    ))
 }
 
 fn run_diagnostics(
@@ -499,6 +646,24 @@ mod tests {
         state: Arc<Mutex<MockState>>,
     }
 
+    struct DiagnosticJournalFailureLauncher;
+
+    impl SmokeLauncher for DiagnosticJournalFailureLauncher {
+        fn launch(&self, run: &mut CaptureRun) -> Result<Box<dyn SmokeBrowser>, TransportError> {
+            run.append_event(
+                "browser_shutdown_cleanup",
+                json!({"cleanup_succeeded": true}),
+            )
+            .map_err(TransportError::Journal)?;
+            Err(TransportError::DiagnosticJournalFailure {
+                primary_failure: Some(
+                    "DevTools readiness deadline expired after 12 attempts".to_owned(),
+                ),
+                journal_failure: "append final listener snapshot: disk full".to_owned(),
+            })
+        }
+    }
+
     impl MockLauncher {
         fn new(config: MockConfig) -> (Self, Arc<Mutex<MockState>>) {
             let state = Arc::new(Mutex::new(MockState::default()));
@@ -620,6 +785,138 @@ mod tests {
         let base = std::env::temp_dir().join(format!("chatarium-smoke-{stamp}"));
         let run = CaptureRun::create_diagnostic(&base, DIAGNOSTIC_ID).unwrap();
         (run, base)
+    }
+
+    #[test]
+    fn terminal_failure_summary_renders_listener_policy_pid_and_connection_evidence() {
+        let (mut run, base) = diagnostic_run();
+        run.append_event(
+            "devtools_os_diagnostics",
+            json!({
+                "stage":"initial",
+                "port":12345,
+                "launched_edge_pid":1234,
+                "remote_debugging_allowed":{"summary":"not configured"},
+                "listener_snapshot":{"listeners":[]},
+                "connect_results":[
+                    {"family":"ipv4","last_result":"timed out"},
+                    {"family":"ipv6","last_result":"timed out"}
+                ]
+            }),
+        )
+        .unwrap();
+        run.append_event(
+            "devtools_os_diagnostics",
+            json!({
+                "stage":"final",
+                "port":12345,
+                "launched_edge_pid":1234,
+                "remote_debugging_allowed":{"summary":"not configured"},
+                "listener_snapshot":{"listeners":[{
+                    "local_address":"::1",
+                    "local_port":12345,
+                    "state":"LISTEN",
+                    "owning_pid":5678,
+                    "owner_relation":"descendant"
+                }]},
+                "connect_results":[
+                    {"family":"ipv4","last_result":"timed out"},
+                    {"family":"ipv6","last_result":"timed out"}
+                ]
+            }),
+        )
+        .unwrap();
+
+        let summary = format_windows_diagnostics(&run).unwrap();
+        assert!(summary.contains("DevTools port: 12345"));
+        assert!(summary.contains("RemoteDebuggingAllowed: not configured"));
+        assert!(summary.contains("launched Edge pid: 1234"));
+        assert!(summary.contains("listener at initial probe: none"));
+        assert!(summary.contains("[::1]:12345 state=LISTEN pid=5678 relation=descendant"));
+        assert!(summary.contains("connection readiness failed separately"));
+        assert!(summary.contains("ipv6: timed out"));
+        drop(run);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn terminal_failure_identifies_no_listener_at_either_snapshot() {
+        let (mut run, base) = diagnostic_run();
+        for stage in ["initial", "final"] {
+            run.append_event(
+                "devtools_os_diagnostics",
+                json!({
+                    "stage":stage,
+                    "port":12345,
+                    "launched_edge_pid":1234,
+                    "remote_debugging_allowed":{"summary":"enabled"},
+                    "listener_snapshot":{"listeners":[]},
+                    "connect_results":[
+                        {"family":"ipv4","last_result":"connection refused"},
+                        {"family":"ipv6","last_result":"connection refused"}
+                    ]
+                }),
+            )
+            .unwrap();
+        }
+
+        let summary = format_windows_diagnostics(&run).unwrap();
+        assert!(summary.contains("no TCP listener was observed"));
+        assert!(summary.contains("RemoteDebuggingAllowed: enabled"));
+        drop(run);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn policy_preflight_failure_reports_that_no_port_or_listener_was_sampled() {
+        let (mut run, base) = diagnostic_run();
+        run.append_event(
+            "devtools_os_diagnostics",
+            json!({
+                "stage":"policy_preflight",
+                "port":null,
+                "launched_edge_pid":1234,
+                "remote_debugging_allowed":{"summary":"disabled"},
+                "remote_debugging_disabled":true,
+                "listener_snapshot":null,
+                "connect_results":[]
+            }),
+        )
+        .unwrap();
+
+        let summary = format_windows_diagnostics(&run).unwrap();
+        assert!(summary.contains("RemoteDebuggingAllowed: disabled"));
+        assert!(summary.contains("not sampled (no port was selected)"));
+        assert!(summary.contains("connect result: not attempted"));
+        drop(run);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn diagnostic_journal_failure_is_visible_separately_from_primary_and_cleanup() {
+        let (mut run, base) = diagnostic_run();
+        let failure = run_smoke_with_run(&mut run, &DiagnosticJournalFailureLauncher).unwrap_err();
+
+        assert!(
+            failure
+                .primary_failure
+                .as_deref()
+                .is_some_and(|message| message.contains("DevTools readiness deadline expired"))
+        );
+        assert!(
+            failure
+                .journal_failure
+                .as_deref()
+                .is_some_and(|message| message.contains("final listener snapshot: disk full"))
+        );
+        assert!(failure.cleanup_verified);
+        assert!(failure.cleanup_failure.is_none());
+        let output = failure.to_string();
+        assert!(output.contains("primary: launch Edge: DevTools readiness deadline expired"));
+        assert!(output.contains("journal: failed (append final listener snapshot: disk full)"));
+        assert!(output.contains("cleanup: passed"));
+        drop(run);
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
