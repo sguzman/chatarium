@@ -8,6 +8,7 @@ Current status: **transport foundation**. The experiment model, dedicated-profil
 
 ```text
 chatarium-capture doctor
+chatarium-capture smoke-edge
 chatarium-capture init
 chatarium-capture run C00-idle-load
 chatarium-capture run C03-send-text
@@ -41,6 +42,36 @@ commands. Once a command is sent, timeout, disconnect, or I/O failure does not p
 that the browser did not execute it; callers must preserve that uncertainty and must
 not automatically retry a mutating command. Tests inject process, HTTP, and WebSocket implementations, so they require
 neither an installed Edge browser nor a ChatGPT account.
+
+## `smoke-edge`
+
+This explicit operator command verifies the concrete local Edge/CDP transport before
+ChatGPT login, navigation, or experiments are enabled. It launches the standard
+installed Microsoft Edge executable with exactly `about:blank`, using only the
+Chatarium-owned `%LOCALAPPDATA%\Chatarium\capture-browser\edge-profile` profile in
+incognito mode and an ephemeral `127.0.0.1` DevTools port. It attaches only when
+DevTools reports exactly one `about:blank` page target and executes the read-only
+`Page.getFrameTree` command.
+It never navigates to ChatGPT or contacts `chatgpt.com`, does not require login, does
+not request or copy cookies, and does not use the user's normal Edge profile.
+
+The dedicated `edge-profile` remains on disk after the smoke command; the diagnostic
+uses an incognito window so it does not restore that profile's previous browser
+session. The private diagnostic run is stored under
+`%LOCALAPPDATA%\Chatarium\captures\diagnostics\<run-id>` with `run.json` and
+append-only `events.jsonl`; the smoke does not collect page bodies or cookie data.
+The temporary harness lock and `DevToolsActivePort` file are removed and their
+absence is checked before a `PASS` result is printed. The launched Edge process tree
+is closed on both success and failure. A failure prints its primary error, cleanup
+status, and run path when the run directory was created.
+
+Run it manually on Windows with:
+
+```powershell
+cargo run -p chatarium-capture -- smoke-edge
+```
+
+This smoke command does not enable `init` or `run`.
 
 ## `doctor`
 

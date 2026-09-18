@@ -3,6 +3,7 @@
 use chatarium_capture::{
     canonical_experiment, canonical_experiment_ids, capture_profile_path, find_edge_executable,
     is_safe_capture_profile,
+    smoke::{SystemSmokeLauncher, diagnostic_run_base, run_smoke},
 };
 use std::env;
 use std::process::ExitCode;
@@ -21,6 +22,11 @@ fn run() -> Result<(), String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
         [command] if command == "doctor" => doctor(),
+        [command] if command == "smoke-edge" => smoke_edge(),
+        [command] if command == "--help" || command == "-h" => {
+            print_usage();
+            Ok(())
+        }
         [command] if command == "init" => Err(
             "`init` is specified but CDP/browser bootstrap is not implemented yet; no state was changed"
                 .to_owned(),
@@ -38,12 +44,36 @@ fn run() -> Result<(), String> {
             ))
         }
         _ => {
-            eprintln!(
-                "Usage:\n  chatarium-capture doctor\n  chatarium-capture init\n  chatarium-capture run <experiment-id>\n\nExperiments:\n  {}",
-                canonical_experiment_ids().join("\n  ")
-            );
+            print_usage();
             Err("invalid arguments".to_owned())
         }
+    }
+}
+
+fn print_usage() {
+    println!(
+        "Usage:\n  chatarium-capture doctor\n  chatarium-capture smoke-edge\n  chatarium-capture init\n  chatarium-capture run <experiment-id>\n\nExperiments:\n  {}\n\nsmoke-edge launches installed Edge in incognito mode with the dedicated profile\n  %LOCALAPPDATA%\\Chatarium\\capture-browser\\edge-profile at about:blank.\n  It persists Edge-managed profile state there plus run.json/events.jsonl under\n  %LOCALAPPDATA%\\Chatarium\\captures\\diagnostics\\<run-id>. It does not contact\n  ChatGPT or use the normal Edge profile, and closes the launched browser.",
+        canonical_experiment_ids().join("\n  ")
+    );
+}
+
+fn smoke_edge() -> Result<(), String> {
+    let diagnostic_base = diagnostic_run_base().map_err(|error| {
+        format!(
+            "FAIL\nprimary: {error}\ncleanup: not needed (Edge was not launched)\nrun: not created"
+        )
+    })?;
+    match run_smoke(&diagnostic_base, &SystemSmokeLauncher) {
+        Ok(result) => {
+            println!(
+                "PASS\nEdge: {}\nCDP: {}\ntarget: about:blank\ndiagnostic: passed\ncleanup: passed\nrun: {}",
+                result.edge_version,
+                result.cdp_protocol_version,
+                result.run_path.display()
+            );
+            Ok(())
+        }
+        Err(failure) => Err(failure.to_string()),
     }
 }
 

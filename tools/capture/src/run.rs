@@ -62,7 +62,7 @@ pub struct CaptureRunManifest {
     pub version: u64,
     /// Locally unique capture run identifier.
     pub run_id: String,
-    /// Canonical experiment identifier.
+    /// Canonical experiment or named diagnostic identifier for this run.
     pub experiment_id: String,
     /// Whether the experiment definition may mutate remote state.
     pub experiment_mutation: bool,
@@ -146,6 +146,36 @@ pub struct CaptureRun {
 impl CaptureRun {
     /// Create a new run directory before any browser or remote mutation occurs.
     pub fn create(base_dir: &Path, experiment: &Experiment) -> Result<Self, String> {
+        Self::create_inner(
+            base_dir,
+            &experiment.id,
+            experiment.mutation,
+            experiment.action.text.clone(),
+            experiment.success.text.clone(),
+        )
+    }
+
+    /// Create a non-mutating diagnostic run without adding a canonical experiment definition.
+    pub fn create_diagnostic(base_dir: &Path, diagnostic_id: &str) -> Result<Self, String> {
+        if diagnostic_id.is_empty()
+            || !diagnostic_id
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        {
+            return Err(
+                "diagnostic ID must contain only ASCII letters, digits, and hyphens".into(),
+            );
+        }
+        Self::create_inner(base_dir, diagnostic_id, false, None, None)
+    }
+
+    fn create_inner(
+        base_dir: &Path,
+        experiment_id: &str,
+        experiment_mutation: bool,
+        exact_action_text: Option<String>,
+        expected_marker: Option<String>,
+    ) -> Result<Self, String> {
         fs::create_dir_all(base_dir)
             .map_err(|error| format!("create capture base {}: {error}", base_dir.display()))?;
 
@@ -168,10 +198,10 @@ impl CaptureRun {
             schema: RUN_SCHEMA.to_owned(),
             version: RUN_SCHEMA_VERSION,
             run_id,
-            experiment_id: experiment.id.clone(),
-            experiment_mutation: experiment.mutation,
-            exact_action_text: experiment.action.text.clone(),
-            expected_marker: experiment.success.text.clone(),
+            experiment_id: experiment_id.to_owned(),
+            experiment_mutation,
+            exact_action_text,
+            expected_marker,
             harness_version: env!("CARGO_PKG_VERSION").to_owned(),
             state: CaptureRunState::Preparing,
             started_unix_ms,
@@ -199,8 +229,8 @@ impl CaptureRun {
         run.append_event(
             "run_created",
             serde_json::json!({
-                "experiment_id": experiment.id,
-                "mutation": experiment.mutation,
+                "experiment_id": experiment_id,
+                "mutation": experiment_mutation,
             }),
         )?;
         Ok(run)
@@ -489,6 +519,19 @@ mod tests {
 
         let reopened = CaptureRun::open(&run.paths().root).expect("reopen run");
         assert_eq!(reopened.events(), run.events());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn diagnostic_run_is_non_mutating_without_changing_canonical_experiments() {
+        let base = temp_dir("diagnostic");
+        let run = CaptureRun::create_diagnostic(&base, "smoke-edge").expect("diagnostic run");
+        assert_eq!(run.manifest().experiment_id, "smoke-edge");
+        assert!(!run.manifest().experiment_mutation);
+        assert!(run.manifest().exact_action_text.is_none());
+        assert!(run.manifest().expected_marker.is_none());
+        assert!(!run.manifest().remote_mutation_started);
+        assert!(CaptureRun::create_diagnostic(&base, "../unsafe").is_err());
         let _ = fs::remove_dir_all(base);
     }
 

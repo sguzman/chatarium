@@ -4,6 +4,8 @@
 pub mod edge;
 /// Durable private capture-run state and append-only event journal.
 pub mod run;
+/// Automated read-only Edge/CDP smoke command orchestration.
+pub mod smoke;
 /// Mockable localhost-only DevTools HTTP and CDP WebSocket transport.
 pub mod transport;
 
