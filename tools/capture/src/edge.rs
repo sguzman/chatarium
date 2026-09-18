@@ -181,23 +181,61 @@ impl EdgeLaunchConfig {
 /// Running harness-owned browser plus its local DevTools transport.
 pub struct LaunchedEdge {
     process: EdgeProcess,
+    lock_file: PathBuf,
     active_port_file: PathBuf,
     transport: DevToolsBrowserTransport,
+}
+
+/// Independently verified state after closing a harness-owned Edge process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeCleanupStatus {
+    /// The child process was positively observed to exit and be waited.
+    pub process_exited: bool,
+    /// The harness profile lock path is absent.
+    pub harness_lock_absent: bool,
+    /// Chromium's `DevToolsActivePort` path is absent.
+    pub active_port_file_absent: bool,
+}
+
+impl EdgeCleanupStatus {
+    /// Whether every required cleanup condition was positively established.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.process_exited && self.harness_lock_absent && self.active_port_file_absent
+    }
 }
 
 impl LaunchedEdge {
     /// Launch Edge with the dedicated profile and localhost-only ephemeral debugging port.
     pub fn launch(run: &mut CaptureRun) -> Result<Self, TransportError> {
         let config = EdgeLaunchConfig::discover()?;
-        Self::launch_with(
+        Self::launch_with_options(
             config,
             run,
             &SystemEdgeSpawner,
             Box::new(LoopbackDevToolsHttp),
             Box::new(LoopbackWebSocketConnector),
+            false,
         )
     }
 
+    /// Launch an incognito `about:blank` browser for the read-only transport smoke.
+    ///
+    /// The harness-owned profile remains the user-data root, while the private window avoids
+    /// loading that profile's persisted site session during a diagnostic run.
+    pub fn launch_read_only_smoke(run: &mut CaptureRun) -> Result<Self, TransportError> {
+        let config = EdgeLaunchConfig::discover()?;
+        Self::launch_with_options(
+            config,
+            run,
+            &SystemEdgeSpawner,
+            Box::new(LoopbackDevToolsHttp),
+            Box::new(LoopbackWebSocketConnector),
+            true,
+        )
+    }
+
+    #[cfg(test)]
     fn launch_with(
         config: EdgeLaunchConfig,
         run: &mut CaptureRun,
@@ -205,22 +243,36 @@ impl LaunchedEdge {
         http: Box<dyn DevToolsHttp>,
         websocket: Box<dyn WebSocketConnector>,
     ) -> Result<Self, TransportError> {
+        Self::launch_with_options(config, run, spawner, http, websocket, false)
+    }
+
+    fn launch_with_options(
+        config: EdgeLaunchConfig,
+        run: &mut CaptureRun,
+        spawner: &dyn EdgeProcessSpawner,
+        http: Box<dyn DevToolsHttp>,
+        websocket: Box<dyn WebSocketConnector>,
+        incognito: bool,
+    ) -> Result<Self, TransportError> {
         validate_dedicated_capture_profile(&config.profile, &config.local_app_data)
             .map_err(TransportError::UnsafeProfile)?;
         ensure_profile_directories(&config)?;
         let lock_path = config.capture_root.join(LOCK_FILE);
-        let lock = ProfileLock::acquire(lock_path)?;
+        let lock = ProfileLock::acquire(lock_path.clone())?;
         let active_port_file = config.profile.join(ACTIVE_PORT_FILE);
         ensure_active_port_absent(&active_port_file)?;
 
-        let arguments = vec![
+        let mut arguments = vec![
             format!("--user-data-dir={}", config.profile.display()),
             "--remote-debugging-address=127.0.0.1".to_owned(),
             "--remote-debugging-port=0".to_owned(),
             "--no-first-run".to_owned(),
             "--no-default-browser-check".to_owned(),
-            "about:blank".to_owned(),
         ];
+        if incognito {
+            arguments.push("--incognito".to_owned());
+        }
+        arguments.push("about:blank".to_owned());
         let child = spawner
             .spawn(&config.executable, &arguments)
             .map_err(TransportError::Process)?;
@@ -240,6 +292,7 @@ impl LaunchedEdge {
         let process = EdgeProcess::new(child, lock);
         let mut launched = Self {
             process,
+            lock_file: lock_path,
             active_port_file: active_port_file.clone(),
             transport: DevToolsBrowserTransport::loopback(DevToolsEndpoint::loopback(1)?),
         };
@@ -271,6 +324,15 @@ impl LaunchedEdge {
         &mut self.transport
     }
 
+    /// Verify process, harness-lock, and ephemeral-port cleanup state.
+    pub fn cleanup_status(&self) -> Result<EdgeCleanupStatus, TransportError> {
+        Ok(EdgeCleanupStatus {
+            process_exited: self.process.exit_code.is_some(),
+            harness_lock_absent: path_is_absent(&self.lock_file)?,
+            active_port_file_absent: path_is_absent(&self.active_port_file)?,
+        })
+    }
+
     /// Explicitly terminate Edge, remove the harness lock, and durably journal cleanup.
     pub fn shutdown(&mut self, run: &mut CaptureRun) -> Result<(), TransportError> {
         let process_result = self.process.shutdown();
@@ -285,18 +347,33 @@ impl LaunchedEdge {
         } else {
             Ok(false)
         };
-        let cleanup_succeeded = process_result.is_ok() && endpoint_file_result.is_ok();
+        let cleanup_status = self.cleanup_status();
+        let cleanup_status_value = cleanup_status.as_ref().ok();
+        let cleanup_succeeded = process_result.is_ok()
+            && endpoint_file_result.is_ok()
+            && cleanup_status_value.is_some_and(EdgeCleanupStatus::is_complete);
         let cleanup_error = process_result
             .as_ref()
             .err()
             .cloned()
-            .or_else(|| endpoint_file_result.as_ref().err().map(ToString::to_string));
+            .or_else(|| endpoint_file_result.as_ref().err().map(ToString::to_string))
+            .or_else(|| cleanup_status.as_ref().err().map(ToString::to_string))
+            .or_else(|| {
+                cleanup_status_value
+                    .filter(|status| !status.is_complete())
+                    .map(|_| {
+                        "process, harness lock, or active-port cleanup was not verified".to_owned()
+                    })
+            });
         let journal_result = run
             .append_event(
                 "browser_shutdown_cleanup",
                 json!({
                     "exit_code": process_result.as_ref().ok().copied(),
                     "active_port_file_removed": endpoint_file_result.as_ref().ok().copied().unwrap_or(false),
+                    "process_exited": cleanup_status_value.map(|status| status.process_exited),
+                    "harness_lock_absent": cleanup_status_value.map(|status| status.harness_lock_absent),
+                    "active_port_file_absent": cleanup_status_value.map(|status| status.active_port_file_absent),
                     "cleanup_succeeded": cleanup_succeeded,
                     "cleanup_error": cleanup_error,
                 }),
@@ -304,8 +381,25 @@ impl LaunchedEdge {
             .map_err(TransportError::Journal);
         process_result.map_err(TransportError::Process)?;
         endpoint_file_result?;
+        let cleanup_status = cleanup_status?;
+        if !cleanup_status.is_complete() {
+            return Err(TransportError::Process(
+                "Edge cleanup did not satisfy the process/lock/active-port invariant".to_owned(),
+            ));
+        }
         journal_result?;
         Ok(())
+    }
+}
+
+fn path_is_absent(path: &Path) -> Result<bool, TransportError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(TransportError::Process(format!(
+            "verify cleanup path {}: {error}",
+            path.display()
+        ))),
     }
 }
 
@@ -790,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn mocked_edge_launch_discovery_attachment_and_cleanup_are_journaled() {
+    fn mocked_read_only_edge_launch_discovery_attachment_and_cleanup_are_journaled() {
         let base = temp_dir();
         fs::create_dir_all(&base).unwrap();
         let local = fs::canonicalize(&base).unwrap();
@@ -813,12 +907,13 @@ mod tests {
             )
         };
 
-        let mut browser = LaunchedEdge::launch_with(
+        let mut browser = LaunchedEdge::launch_with_options(
             config,
             &mut run,
             &spawner,
             Box::new(FakeHttp),
             Box::new(FakeConnector),
+            true,
         )
         .unwrap();
         let discovered = browser.transport().list_targets(&mut run).unwrap();
@@ -833,7 +928,9 @@ mod tests {
         let args = arguments.lock().unwrap().clone();
         assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
         assert!(args.contains(&"--remote-debugging-port=0".to_owned()));
+        assert!(args.contains(&"--incognito".to_owned()));
         assert!(args.contains(&"about:blank".to_owned()));
+        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
         assert!(!args.iter().any(|argument| argument.contains("chatgpt.com")));
         assert_eq!(*kills.lock().unwrap(), 1);
         assert_eq!(*waits.lock().unwrap(), 1);

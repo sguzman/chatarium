@@ -23,3 +23,24 @@ fn init_and_run_remain_unavailable_for_remote_mutation() {
         );
     }
 }
+
+#[test]
+fn help_documents_the_read_only_edge_smoke_boundary() {
+    let binary = env!("CARGO_BIN_EXE_chatarium-capture");
+    let output = Command::new(binary).arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for required in [
+        "chatarium-capture smoke-edge",
+        "capture-browser\\edge-profile",
+        "about:blank",
+        "captures\\diagnostics\\<run-id>",
+        "does not contact",
+        "closes the launched browser",
+    ] {
+        assert!(
+            stdout.contains(required),
+            "help output omitted {required:?}"
+        );
+    }
+}

@@ -179,7 +179,7 @@ pub struct TargetInfo {
     pub title: String,
     /// Raw target URL.
     pub url: String,
-    websocket_url: Url,
+    pub(crate) websocket_url: Url,
 }
 
 impl fmt::Debug for TargetInfo {
