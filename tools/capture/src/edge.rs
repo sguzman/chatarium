@@ -2075,11 +2075,18 @@ fn reclaim_or_reject_lock(
             .map_err(|error| {
                 TransportError::StaleState(format!("install recovered harness lock: {error}"))
             })?;
-        file.write_all(replacement.as_bytes())
-            .and_then(|()| file.sync_all())
-            .map_err(|error| {
-                TransportError::Process(format!("write recovered harness lock: {error}"))
-            })?;
+        let write_result = file
+            .write_all(replacement.as_bytes())
+            .and_then(|()| file.sync_all());
+        if let Err(error) = write_result {
+            drop(file);
+            if fs::read_to_string(path).ok().as_deref() == Some(replacement) {
+                let _ = fs::remove_file(path);
+            }
+            return Err(TransportError::Process(format!(
+                "write recovered harness lock: {error}"
+            )));
+        }
         return Ok(ProfileLock {
             path: path.to_owned(),
             token: replacement.to_owned(),
