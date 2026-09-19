@@ -2,7 +2,7 @@
 
 `chatarium-capture` is the Windows-first automation boundary for controlled observations of the official ChatGPT web client.
 
-Current status: **transport foundation**. The experiment model, dedicated-profile safety rules, Edge discovery, read-only `doctor`, and mockable Edge/CDP transport exist. `init` and `run` remain unavailable and do not launch a browser or contact ChatGPT.
+Current status: **read-only capture foundation**. The experiment model, dedicated-profile safety rules, Edge discovery, read-only `doctor`, smoke diagnostics, reusable transport, and manual profile bootstrap exist. Canonical experiment execution remains unavailable.
 
 ## Commands
 
@@ -14,7 +14,7 @@ chatarium-capture run C00-idle-load
 chatarium-capture run C03-send-text
 ```
 
-`init` and `run` still fail explicitly without launching a browser or mutating remote state. The Rust transport API can launch only the harness-owned Edge process on `about:blank`; it does not log in, navigate, drive the composer, or send messages.
+`init` first launches ordinary Edge with the dedicated persistent profile and no CDP or remote-debugging switches. On Windows, the suspended process is assigned to a private Job Object before it can spawn descendants; native Win32 window inspection checks visible window owners against that retained job membership, including a process-handle membership check to reject PID reuse. The operator signs in normally and closes that visible window. Only after every job process exits (or is terminated within the documented grace) and the profile lock is released does `init` reopen the same profile using the Windows anonymous pipe for read-only final-target verification. The command never claims authentication was verified. `run` remains unavailable and performs no browser launch or remote mutation.
 
 ## Edge/CDP transport foundation
 
@@ -36,9 +36,9 @@ event. On Windows it invokes `SystemRoot\System32\taskkill.exe` with `/PID`, `/T
 scoped to the launched PID; it does not search by image name. Drop also makes best-effort
 process cleanup if explicit shutdown is missed.
 
-The transport issues no ChatGPT backend requests. Its generic CDP command method is
-an infrastructure API only; no `init` or `run` command currently invokes page
-commands. Once a command is sent, timeout, disconnect, or I/O failure does not prove
+The transport issues no ChatGPT backend requests. `init` uses only browser readiness
+and target-discovery commands during its verification phase; it does not attach to a
+page or mutate page state. `run` does not invoke CDP. Once a command is sent, timeout, disconnect, or I/O failure does not prove
 that the browser did not execute it; callers must preserve that uncertainty and must
 not automatically retry a mutating command. Tests inject process, HTTP, and WebSocket implementations, so they require
 neither an installed Edge browser nor a ChatGPT account.
@@ -98,7 +98,7 @@ Run it manually on Windows with:
 cargo run -p chatarium-capture -- smoke-edge
 ```
 
-This smoke command does not enable `init` or `run`.
+This smoke command does not enable `run`.
 
 ## `doctor`
 

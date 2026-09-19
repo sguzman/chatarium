@@ -73,15 +73,16 @@ fn help_documents_the_read_only_edge_smoke_boundary() {
         "captures\\diagnostics\\<run-id>",
         "does not contact",
         "closes the launched browser",
-        "init opens ChatGPT in Chatarium's dedicated persistent Edge profile",
-        "press Enter once",
-        "does not extract",
-        "credentials or cookies",
-        "Windows uses the local anonymous-pipe DevTools transport",
+        "init first opens ChatGPT in a normal Edge window",
+        "no DevTools or remote-debugging transport",
+        "that window to continue",
+        "reopens the profile over the Windows anonymous pipe",
+        "does not inspect credentials, cookies, storage",
     ] {
         assert!(
             stdout.contains(required),
             "help output omitted {required:?}"
         );
     }
+    assert!(!stdout.contains("press Enter"));
 }
