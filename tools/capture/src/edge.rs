@@ -2,6 +2,9 @@
 
 mod job_membership;
 #[cfg(windows)]
+#[path = "edge/lock_recovery.rs"]
+mod lock_recovery;
+#[cfg(windows)]
 #[path = "edge/windows_plain.rs"]
 mod windows_plain;
 
@@ -1950,14 +1953,17 @@ struct ProfileLock {
 
 impl ProfileLock {
     fn acquire(path: PathBuf) -> Result<Self, TransportError> {
-        let token = format!("pid={} created_unix_ms={}\n", std::process::id(), unix_ms());
+        let profile = path
+            .parent()
+            .map(|parent| parent.join("edge-profile"))
+            .ok_or_else(|| {
+                TransportError::StaleState("harness lock has no profile root".to_owned())
+            })?;
+        let token = lock_contents(&path)?;
         let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(TransportError::StaleState(format!(
-                    "{} already exists; inspect the harness-owned Edge state and remove the lock only after confirming no capture browser is running",
-                    path.display()
-                )));
+                return reclaim_or_reject_lock(&path, &profile, &token);
             }
             Err(error) => {
                 return Err(TransportError::Process(format!(
@@ -2002,6 +2008,91 @@ impl ProfileLock {
             .map_err(|error| format!("remove harness lock {}: {error}", self.path.display()))?;
         self.released = true;
         Ok(())
+    }
+}
+
+fn lock_contents(_path: &Path) -> Result<String, TransportError> {
+    #[cfg(windows)]
+    {
+        let identity = lock_recovery::current_process_identity()?;
+        return Ok(format!(
+            "version=2\nharness_pid={}\nharness_creation_filetime={}\nlock_created_unix_ms={}\ntoken={}\n",
+            std::process::id(),
+            identity,
+            unix_ms(),
+            unix_ms()
+        ));
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(format!(
+            "pid={} created_unix_ms={}\n",
+            std::process::id(),
+            unix_ms()
+        ))
+    }
+}
+
+fn reclaim_or_reject_lock(
+    path: &Path,
+    profile: &Path,
+    replacement: &str,
+) -> Result<ProfileLock, TransportError> {
+    #[cfg(windows)]
+    {
+        let _mutex = lock_recovery::RecoveryMutex::acquire(profile)?;
+        let existing = fs::read_to_string(path).map_err(|error| {
+            TransportError::StaleState(format!("read existing harness lock: {error}"))
+        })?;
+        let record = lock_recovery::parse_lock(&existing)?;
+        match lock_recovery::owner_state(&record)? {
+            lock_recovery::OwnerState::LiveSame | lock_recovery::OwnerState::LiveUnknown => {
+                return Err(TransportError::StaleState(format!(
+                    "existing harness lock belongs to live Chatarium process {}",
+                    record.pid()
+                )));
+            }
+            lock_recovery::OwnerState::Dead | lock_recovery::OwnerState::Reused => {}
+        }
+        if lock_recovery::profile_singleton_present(profile)? {
+            return Err(TransportError::StaleState(
+                "existing harness lock is orphaned but the dedicated Edge profile is still active"
+                    .to_owned(),
+            ));
+        }
+        if fs::read_to_string(path).ok().as_deref() != Some(existing.as_str()) {
+            return Err(TransportError::StaleState(
+                "harness lock changed during stale-lock recovery".to_owned(),
+            ));
+        }
+        fs::remove_file(path).map_err(|error| {
+            TransportError::StaleState(format!("reclaim stale harness lock: {error}"))
+        })?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|error| {
+                TransportError::StaleState(format!("install recovered harness lock: {error}"))
+            })?;
+        file.write_all(replacement.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| {
+                TransportError::Process(format!("write recovered harness lock: {error}"))
+            })?;
+        return Ok(ProfileLock {
+            path: path.to_owned(),
+            token: replacement.to_owned(),
+            released: false,
+            retained_on_drop: false,
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, profile, replacement);
+        Err(TransportError::StaleState(
+            "existing harness lock ownership could not be established safely".to_owned(),
+        ))
     }
 }
 

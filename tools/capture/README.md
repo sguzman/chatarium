@@ -16,6 +16,8 @@ chatarium-capture run C03-send-text
 
 `init` first launches ordinary Edge with the dedicated persistent profile and no CDP or remote-debugging switches. On Windows, the suspended process is assigned to a private Job Object before it can spawn descendants; native Win32 window inspection checks visible window owners against that retained job membership, including a process-handle membership check to reject PID reuse. The operator signs in normally and closes that visible window. Only after every job process exits (or is terminated within the documented grace) and the profile lock is released does `init` reopen the same profile using the Windows anonymous pipe for read-only final-target verification. The command never claims authentication was verified. `run` remains unavailable and performs no browser launch or remote mutation.
 
+Harness locks use a versioned process-identity record on Windows. A dead legacy or current Chatarium owner lock is reclaimed automatically only while a bounded recovery mutex is held and the exact profile's Chromium ProcessSingleton is absent; active or uncertain ownership remains fail-safe. Chromium-owned profile lock files and profile contents are never removed.
+
 ## Edge/CDP transport foundation
 
 The library exposes the mockable `BrowserTransport` and `PageSession` boundaries in
