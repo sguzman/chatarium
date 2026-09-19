@@ -277,7 +277,8 @@ fn job_process_ids(job: HANDLE) -> Result<Vec<u32>, String> {
                     .ok_or_else(|| "Edge job process query size overflow".to_owned())?,
             )
             .ok_or_else(|| "Edge job process query size overflow".to_owned())?;
-        let mut storage = vec![0u8; size];
+        let words = size.div_ceil(size_of::<usize>());
+        let mut storage = vec![0usize; words];
         let mut returned = 0;
         // SAFETY: Storage is byte-aligned for the documented DWORD header and the trailing
         // ULONG_PTR array starts at offset eight, which is aligned on x86 and x64.
@@ -286,17 +287,20 @@ fn job_process_ids(job: HANDLE) -> Result<Vec<u32>, String> {
                 job,
                 JobObjectBasicProcessIdList,
                 storage.as_mut_ptr().cast(),
-                storage.len() as u32,
+                size as u32,
                 &mut returned,
             )
         };
-        let declared = if storage.len() >= 8 {
-            u32::from_ne_bytes(storage[4..8].try_into().unwrap()) as usize
+        // SAFETY: the FFI write has completed; this read-only byte view uses the aligned
+        // pointer-sized allocation and only the requested byte length.
+        let bytes = unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<u8>(), size) };
+        let declared = if bytes.len() >= 8 {
+            u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize
         } else {
             0
         };
         if ok != 0 {
-            return parse_process_id_list(&storage, size_of::<usize>());
+            return parse_process_id_list(bytes, size_of::<usize>());
         }
         let error = unsafe { GetLastError() };
         if error != 122 && error != 234 {

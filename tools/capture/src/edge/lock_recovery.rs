@@ -6,7 +6,7 @@ use std::mem::zeroed;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, GetLastError, HANDLE, SetLastError, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, GetProcessTimes, OpenProcess,
@@ -170,6 +170,7 @@ pub(super) fn profile_singleton_present(
     let class = wide("Chrome_MessageWindow");
     let title = wide(profile.display().to_string());
     // SAFETY: exact class/title lookup under the message-only window desktop.
+    unsafe { SetLastError(0) };
     let hwnd = unsafe {
         FindWindowExW(
             HWND_MESSAGE,
@@ -178,7 +179,17 @@ pub(super) fn profile_singleton_present(
             title.as_ptr(),
         )
     };
-    Ok(!hwnd.is_null())
+    if !hwnd.is_null() {
+        return Ok(true);
+    }
+    let error = unsafe { GetLastError() };
+    if error == 0 {
+        Ok(false)
+    } else {
+        Err(crate::transport::TransportError::StaleState(format!(
+            "dedicated profile singleton probe failed: Windows error {error}"
+        )))
+    }
 }
 
 fn process_creation(handle: HANDLE) -> Result<u64, crate::transport::TransportError> {

@@ -2065,26 +2065,39 @@ fn reclaim_or_reject_lock(
                 "harness lock changed during stale-lock recovery".to_owned(),
             ));
         }
-        fs::remove_file(path).map_err(|error| {
-            TransportError::StaleState(format!("reclaim stale harness lock: {error}"))
-        })?;
+        let temp_path = path.with_extension(format!("recovery-{}.tmp", std::process::id()));
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(path)
+            .open(&temp_path)
             .map_err(|error| {
-                TransportError::StaleState(format!("install recovered harness lock: {error}"))
+                TransportError::StaleState(format!("prepare recovered harness lock: {error}"))
             })?;
         let write_result = file
             .write_all(replacement.as_bytes())
             .and_then(|()| file.sync_all());
         if let Err(error) = write_result {
             drop(file);
-            if fs::read_to_string(path).ok().as_deref() == Some(replacement) {
-                let _ = fs::remove_file(path);
-            }
+            let _ = fs::remove_file(&temp_path);
             return Err(TransportError::Process(format!(
                 "write recovered harness lock: {error}"
+            )));
+        }
+        drop(file);
+        if fs::read_to_string(path).ok().as_deref() != Some(existing.as_str()) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(TransportError::StaleState(
+                "harness lock changed during stale-lock installation".to_owned(),
+            ));
+        }
+        fs::remove_file(path).map_err(|error| {
+            let _ = fs::remove_file(&temp_path);
+            TransportError::StaleState(format!("reclaim stale harness lock: {error}"))
+        })?;
+        if let Err(error) = fs::rename(&temp_path, path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(TransportError::StaleState(format!(
+                "install recovered harness lock: {error}"
             )));
         }
         return Ok(ProfileLock {
