@@ -299,9 +299,8 @@ fn job_process_ids(job: HANDLE) -> Result<Vec<u32>, String> {
             )
         };
         // SAFETY: storage remains alive and unchanged while this read-only byte view is used.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(storage.as_ptr().cast::<u8>(), storage_len)
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(storage.as_ptr().cast::<u8>(), storage_len) };
         let declared = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize;
         if ok != 0 {
             return parse_process_id_list(bytes, word_size);
