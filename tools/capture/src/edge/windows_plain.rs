@@ -277,26 +277,33 @@ fn job_process_ids(job: HANDLE) -> Result<Vec<u32>, String> {
                     .ok_or_else(|| "Edge job process query size overflow".to_owned())?,
             )
             .ok_or_else(|| "Edge job process query size overflow".to_owned())?;
-        let mut storage = vec![0u8; size];
+        let word_size = size_of::<usize>();
+        let words = size
+            .checked_add(word_size - 1)
+            .ok_or_else(|| "Edge job process query size overflow".to_owned())?
+            / word_size;
+        // Back the C structure with pointer-aligned storage. Parsing remains byte-oriented
+        // because the header contains two DWORDs followed by ULONG_PTR entries at offset 8.
+        let mut storage = vec![0usize; words];
+        let storage_len = storage.len() * word_size;
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<u8>(), storage_len)
+        };
         let mut returned = 0;
-        // SAFETY: Storage is byte-aligned for the documented DWORD header and the trailing
-        // ULONG_PTR array starts at offset eight, which is aligned on x86 and x64.
+        // SAFETY: storage is aligned for ULONG_PTR and large enough for the DWORD header plus
+        // the requested trailing process-ID capacity.
         let ok = unsafe {
             QueryInformationJobObject(
                 job,
                 JobObjectBasicProcessIdList,
                 storage.as_mut_ptr().cast(),
-                storage.len() as u32,
+                storage_len as u32,
                 &mut returned,
             )
         };
-        let declared = if storage.len() >= 8 {
-            u32::from_ne_bytes(storage[4..8].try_into().unwrap()) as usize
-        } else {
-            0
-        };
+        let declared = u32::from_ne_bytes(bytes[4..8].try_into().unwrap()) as usize;
         if ok != 0 {
-            return parse_process_id_list(&storage, size_of::<usize>());
+            return parse_process_id_list(bytes, word_size);
         }
         let error = unsafe { GetLastError() };
         if error != 122 && error != 234 {
