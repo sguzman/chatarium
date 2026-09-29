@@ -359,13 +359,39 @@ impl WorkerLifecycle {
     }
 }
 
+/// Opaque local identity for one bounded continuation lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ContinuationLeaseId(u64);
+
+impl ContinuationLeaseId {
+    /// Construct a lease identity from a caller-owned local value.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Return the opaque local value for persistence/diagnostics.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ContinuationLeaseId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// Bounded explicit authority for a controller to issue continuation prompts.
 ///
 /// A lease is correlated to exactly one goal. Each successful authorization burns
 /// one unit. Creating another lease is therefore an explicit new controller/user
 /// decision rather than an implicit self-sustaining loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ContinuationLease {
+    id: ContinuationLeaseId,
+    worker_id: WorkerId,
     goal_id: WorkerGoalId,
     remaining: u32,
     issued: u32,
@@ -374,29 +400,54 @@ pub struct ContinuationLease {
 impl ContinuationLease {
     /// Create explicit bounded continuation authority for one goal.
     #[must_use]
-    pub const fn new(goal_id: WorkerGoalId, allowance: u32) -> Self {
+    pub const fn new(
+        id: ContinuationLeaseId,
+        worker_id: WorkerId,
+        goal_id: WorkerGoalId,
+        allowance: u32,
+    ) -> Self {
         Self {
+            id,
+            worker_id,
             goal_id,
             remaining: allowance,
             issued: 0,
         }
     }
 
+    /// Lease identity.
+    #[must_use]
+    pub const fn id(&self) -> ContinuationLeaseId {
+        self.id
+    }
+
+    /// Worker identity to which this lease is bound.
+    #[must_use]
+    pub const fn worker_id(&self) -> WorkerId {
+        self.worker_id
+    }
+
     /// Goal identity to which this lease is bound.
     #[must_use]
-    pub const fn goal_id(self) -> WorkerGoalId {
+    pub const fn goal_id(&self) -> WorkerGoalId {
         self.goal_id
+    }
+
+    /// Original explicit allowance for this lease.
+    #[must_use]
+    pub const fn allowance(&self) -> u32 {
+        self.remaining + self.issued
     }
 
     /// Remaining continuation authorizations.
     #[must_use]
-    pub const fn remaining(self) -> u32 {
+    pub const fn remaining(&self) -> u32 {
         self.remaining
     }
 
     /// Number of permits already issued from this lease.
     #[must_use]
-    pub const fn issued(self) -> u32 {
+    pub const fn issued(&self) -> u32 {
         self.issued
     }
 
@@ -433,6 +484,8 @@ impl ContinuationLease {
         self.remaining -= 1;
         self.issued += 1;
         Ok(ContinuationPermit {
+            lease_id: self.id,
+            worker_id: self.worker_id,
             goal_id: self.goal_id,
             ordinal: self.issued,
         })
@@ -442,11 +495,34 @@ impl ContinuationLease {
 /// One explicit continuation authorization correlated to a goal lifecycle.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ContinuationPermit {
+    lease_id: ContinuationLeaseId,
+    worker_id: WorkerId,
     goal_id: WorkerGoalId,
     ordinal: u32,
 }
 
+/// Copyable inert reference to one already-issued continuation permit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ContinuationPermitRef {
+    /// Originating lease identity.
+    pub lease_id: ContinuationLeaseId,
+    /// One-based ordinal within that lease.
+    pub ordinal: u32,
+}
+
 impl ContinuationPermit {
+    /// Originating continuation lease.
+    #[must_use]
+    pub const fn lease_id(&self) -> ContinuationLeaseId {
+        self.lease_id
+    }
+
+    /// Worker identity authorized by this permit.
+    #[must_use]
+    pub const fn worker_id(&self) -> WorkerId {
+        self.worker_id
+    }
+
     /// Goal identity authorized by this permit.
     #[must_use]
     pub const fn goal_id(&self) -> WorkerGoalId {
@@ -457,6 +533,15 @@ impl ContinuationPermit {
     #[must_use]
     pub const fn ordinal(&self) -> u32 {
         self.ordinal
+    }
+
+    /// Inert durable reference to this permit.
+    #[must_use]
+    pub const fn reference(&self) -> ContinuationPermitRef {
+        ContinuationPermitRef {
+            lease_id: self.lease_id,
+            ordinal: self.ordinal,
+        }
     }
 }
 
@@ -495,6 +580,8 @@ pub enum ContinuationDenied {
 mod tests {
     use super::*;
 
+    const W1: WorkerId = WorkerId::new(10);
+    const L1: ContinuationLeaseId = ContinuationLeaseId::new(20);
     const G1: WorkerGoalId = WorkerGoalId::new(1);
     const G2: WorkerGoalId = WorkerGoalId::new(2);
 
@@ -528,8 +615,10 @@ mod tests {
     fn working_progress_and_explicit_continue_are_allowed() {
         let worker = working(G1);
         worker.report_progress(G1).unwrap();
-        let mut lease = ContinuationLease::new(G1, 2);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 2);
         let permit = lease.authorize(&worker).unwrap();
+        assert_eq!(permit.lease_id(), L1);
+        assert_eq!(permit.worker_id(), W1);
         assert_eq!(permit.goal_id(), G1);
         assert_eq!(permit.ordinal(), 1);
         assert_eq!(lease.remaining(), 1);
@@ -540,7 +629,7 @@ mod tests {
     fn needs_input_halts_continuation_without_consuming_allowance() {
         let mut worker = working(G1);
         worker.request_input(G1).unwrap();
-        let mut lease = ContinuationLease::new(G1, 2);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 2);
         assert_eq!(
             lease.authorize(&worker),
             Err(ContinuationDenied::AttentionRequired {
@@ -554,7 +643,7 @@ mod tests {
     fn blocked_halts_continuation_without_consuming_allowance() {
         let mut worker = working(G1);
         worker.mark_blocked(G1).unwrap();
-        let mut lease = ContinuationLease::new(G1, 2);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 2);
         assert_eq!(
             lease.authorize(&worker),
             Err(ContinuationDenied::AttentionRequired {
@@ -584,7 +673,7 @@ mod tests {
         let mut worker = working(G1);
         assert_eq!(worker.complete(G1), Ok(TransitionOutcome::Changed));
         assert!(worker.phase().is_terminal());
-        let mut lease = ContinuationLease::new(G1, 3);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 3);
         assert_eq!(
             lease.authorize(&worker),
             Err(ContinuationDenied::Terminal {
@@ -599,7 +688,7 @@ mod tests {
         let mut worker = working(G1);
         assert_eq!(worker.fail(G1), Ok(TransitionOutcome::Changed));
         assert!(worker.phase().is_terminal());
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         assert_eq!(
             lease.authorize(&worker),
             Err(ContinuationDenied::Terminal {
@@ -613,7 +702,7 @@ mod tests {
         let mut worker = working(G1);
         assert_eq!(worker.stop(G1), Ok(TransitionOutcome::Changed));
         assert!(worker.phase().is_terminal());
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         assert_eq!(
             lease.authorize(&worker),
             Err(ContinuationDenied::Terminal {
@@ -625,7 +714,7 @@ mod tests {
     #[test]
     fn continue_without_goal_is_rejected() {
         let worker = WorkerLifecycle::default();
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         assert_eq!(lease.authorize(&worker), Err(ContinuationDenied::NoGoal));
         assert_eq!(lease.remaining(), 1);
     }
@@ -634,7 +723,7 @@ mod tests {
     fn ready_goal_is_not_implicitly_continueable() {
         let mut worker = WorkerLifecycle::default();
         worker.assign_goal(G1).unwrap();
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         assert_eq!(
             lease.authorize(&worker),
             Err(ContinuationDenied::NotWorking {
@@ -658,7 +747,7 @@ mod tests {
             })
         );
 
-        let mut stale_lease = ContinuationLease::new(G1, 2);
+        let mut stale_lease = ContinuationLease::new(L1, W1, G1, 2);
         assert_eq!(
             stale_lease.authorize(&worker),
             Err(ContinuationDenied::GoalMismatch {
@@ -766,7 +855,7 @@ mod tests {
     #[test]
     fn bounded_continuation_lease_exhausts_instead_of_looping_forever() {
         let worker = working(G1);
-        let mut lease = ContinuationLease::new(G1, 3);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 3);
         let permits: Vec<_> = (0..3).map(|_| lease.authorize(&worker).unwrap()).collect();
         assert_eq!(
             permits
@@ -786,7 +875,7 @@ mod tests {
     #[test]
     fn completion_halts_immediately_even_with_unused_allowance() {
         let mut worker = working(G1);
-        let mut lease = ContinuationLease::new(G1, 5);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 5);
         lease.authorize(&worker).unwrap();
         assert_eq!(lease.remaining(), 4);
         worker.complete(G1).unwrap();
