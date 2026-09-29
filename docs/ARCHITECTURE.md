@@ -158,6 +158,29 @@ The implementation advertises the newest observation it was validated against. C
 
 Authentication will initially remain an explicit boundary rather than guessed code. Captures may show how the official client proves an authenticated session, but committed fixtures must remove reusable credentials. Chatarium may use a user's own authenticated session where technically appropriate; it must not bypass authentication or protections.
 
+## Future orchestration and tool plane
+
+The direct ChatGPT adapter is not the final architecture boundary. The long-term workstation adds a **local routing/policy plane** above reliable single-session primitives.
+
+That plane will coordinate:
+
+- human-authored conversation messages;
+- master/controller-session instructions;
+- worker-session status/results;
+- goal updates and continuation/stop control messages;
+- MCP/tool request/result envelopes;
+- user approval/deny decisions.
+
+The intended design is an explicit durable message bus, not hidden prompt automation. Every routed action should have a source, destination, identity/correlation, lifecycle state, provenance, and policy decision where applicable.
+
+A controller/master session may coordinate worker sessions, but it is subordinate to user policy. The desktop UI must eventually let the operator inspect queued/dispatched/completed traffic and allow, block/forbid, require approval for, redirect, or interrupt routes.
+
+Cross-session orchestration must use explicit lifecycle/control states rather than infer completion from ordinary prose. In particular, the system needs machine-recognizable completion/blocked/input-needed states so controller and worker sessions cannot accidentally enter unbounded mutual `continue` loops.
+
+MCP/tool integration should reuse or adapt the user's existing XML-oriented envelope from the Braizen/ChatGPT JavaScript-shim work where practical. Until that schema is recovered and committed, its concrete wire fields remain unspecified; Chatarium must not invent them from memory.
+
+The durable event model should be extensible to this plane. Orchestration state must survive restart, and tool/session actions must remain auditable. See [`PRODUCT_VISION.md`](PRODUCT_VISION.md).
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
