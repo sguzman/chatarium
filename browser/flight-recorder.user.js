@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.5.1
+// @version      0.6.0
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -17,7 +17,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.5.1';
+  const VERSION = '0.6.0';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -159,6 +159,346 @@
     }
   }
 
+  function conversationScopeFromProtocolId(conversationId) {
+    return conversationId ? `conversation:${conversationId}` : conversationKey();
+  }
+
+  function protocolMessageText(message) {
+    const parts = message?.content?.parts;
+    if (!Array.isArray(parts)) return '';
+    return parts.filter((part) => typeof part === 'string').join('');
+  }
+
+  function archiveProtocolMessage(message, conversationId, extra = {}) {
+    if (!message?.id || !message?.author?.role) return;
+    const text = protocolMessageText(message);
+    if (!text && message.author.role !== 'assistant') return;
+
+    const conversation = conversationScopeFromProtocolId(conversationId);
+    const record = {
+      key: `${conversation}:id:${message.id}`,
+      conversation,
+      href: location.href,
+      observedAt: now(),
+      observedId: message.id,
+      role: message.author.role,
+      index: null,
+      contentHash: fallbackHash(text),
+      transientStatus: message.status !== 'finished_successfully',
+      text,
+      source: 'protocol-sse',
+      protocolStatus: message.status ?? null,
+      protocolEndTurn: message.end_turn ?? null,
+      ...extra,
+    };
+
+    void tx('messages', 'readwrite', (store) => store.put(record)).catch((error) => {
+      console.error('[chatarium] protocol message archive write failed', error);
+    });
+
+    if (message.author.role === 'assistant' && message.channel === 'final') {
+      writeAssistantWal(record);
+    }
+  }
+
+  function createProtocolStreamState(streamId) {
+    return {
+      streamId,
+      sseBuffer: '',
+      frameIndex: 0,
+      deltaEncoding: null,
+      conversationId: null,
+      assistant: null,
+      completion: {
+        finishedSuccessfully: false,
+        endTurn: false,
+        isComplete: false,
+        messageStreamComplete: false,
+        done: false,
+      },
+    };
+  }
+
+  function observeProtocolUserInput(state, payload) {
+    const message = payload?.input_message;
+    if (message?.author?.role !== 'user') return;
+
+    const text = normalizeText(protocolMessageText(message));
+    if (!text) return;
+
+    const conversationId = payload?.conversation_id ?? state.conversationId ?? null;
+    if (conversationId) state.conversationId = conversationId;
+    const conversation = conversationScopeFromProtocolId(conversationId);
+
+    confirmObservedUserMessage(text, message.id ?? null, {
+      conversation,
+      evidence: 'protocol-input-message',
+    });
+    archiveProtocolMessage(message, conversationId, {
+      protocolEvidence: 'input_message',
+    });
+    appendEvent('protocol-user-message-observed', {
+      streamId: state.streamId,
+      observedMessageId: message.id ?? null,
+      conversation,
+      contentHash: fallbackHash(text),
+    });
+  }
+
+  function observeProtocolAssistantMessage(state, envelope) {
+    const message = envelope?.message;
+    if (
+      message?.author?.role !== 'assistant'
+      || message?.channel !== 'final'
+      || message?.content?.content_type !== 'text'
+      || !message.id
+    ) {
+      return;
+    }
+
+    const conversationId = envelope?.conversation_id ?? state.conversationId ?? null;
+    if (conversationId) state.conversationId = conversationId;
+
+    state.assistant = {
+      id: message.id,
+      conversationId,
+      text: protocolMessageText(message),
+      status: message.status ?? null,
+      endTurn: message.end_turn ?? null,
+      metadata: { ...(message.metadata ?? {}) },
+    };
+
+    archiveProtocolMessage(
+      {
+        ...message,
+        content: {
+          ...message.content,
+          parts: [state.assistant.text],
+        },
+      },
+      conversationId,
+      { protocolEvidence: 'final-assistant-message' },
+    );
+    appendEvent('protocol-assistant-message-observed', {
+      streamId: state.streamId,
+      observedMessageId: message.id,
+      conversation: conversationScopeFromProtocolId(conversationId),
+      status: state.assistant.status,
+      endTurn: state.assistant.endTurn,
+      contentHash: fallbackHash(state.assistant.text),
+    });
+  }
+
+  function persistProtocolAssistantState(state, evidence) {
+    const assistant = state.assistant;
+    if (!assistant?.id) return;
+
+    const message = {
+      id: assistant.id,
+      author: { role: 'assistant' },
+      content: { content_type: 'text', parts: [assistant.text] },
+      status: assistant.status,
+      end_turn: assistant.endTurn,
+      metadata: assistant.metadata,
+      channel: 'final',
+    };
+
+    archiveProtocolMessage(message, assistant.conversationId ?? state.conversationId, {
+      protocolEvidence: evidence,
+      protocolIsComplete: Boolean(assistant.metadata?.is_complete),
+    });
+  }
+
+  function observeProtocolDelta(state, payload) {
+    if (!payload || typeof payload !== 'object') return;
+
+    if (payload?.v?.conversation_id) state.conversationId = payload.v.conversation_id;
+    if (payload?.v?.message) observeProtocolAssistantMessage(state, payload.v);
+
+    if (!state.assistant) return;
+
+    if (
+      payload.o === 'append'
+      && payload.p === '/message/content/parts/0'
+      && typeof payload.v === 'string'
+    ) {
+      state.assistant.text += payload.v;
+      persistProtocolAssistantState(state, 'delta-append');
+      appendEvent('protocol-assistant-text-appended', {
+        streamId: state.streamId,
+        observedMessageId: state.assistant.id,
+        appendedChars: payload.v.length,
+        totalChars: state.assistant.text.length,
+      });
+      return;
+    }
+
+    if (payload.o === 'patch' && Array.isArray(payload.v)) {
+      const evidence = {};
+      for (const operation of payload.v) {
+        if (!operation || typeof operation !== 'object') continue;
+        if (operation.p === '/message/status' && operation.o === 'replace') {
+          state.assistant.status = operation.v;
+          evidence.status = operation.v;
+          if (operation.v === 'finished_successfully') {
+            state.completion.finishedSuccessfully = true;
+          }
+        } else if (operation.p === '/message/end_turn' && operation.o === 'replace') {
+          state.assistant.endTurn = operation.v;
+          evidence.endTurn = operation.v;
+          if (operation.v === true) state.completion.endTurn = true;
+        } else if (
+          operation.p === '/message/metadata'
+          && operation.o === 'append'
+          && operation.v
+          && typeof operation.v === 'object'
+        ) {
+          Object.assign(state.assistant.metadata, operation.v);
+          evidence.metadataKeys = Object.keys(operation.v);
+          if (operation.v.is_complete === true) state.completion.isComplete = true;
+        }
+      }
+
+      if (Object.keys(evidence).length) {
+        persistProtocolAssistantState(state, 'delta-completion-patch');
+        appendEvent('protocol-assistant-completion-patch', {
+          streamId: state.streamId,
+          observedMessageId: state.assistant.id,
+          ...evidence,
+        });
+      }
+    }
+  }
+
+  function observeProtocolControlFrame(state, payload) {
+    if (!payload || typeof payload !== 'object') return;
+
+    const conversationId = payload.conversation_id ?? null;
+    if (conversationId) state.conversationId = conversationId;
+
+    switch (payload.type) {
+      case 'resume_conversation_token':
+        appendEvent('protocol-conversation-identity-observed', {
+          streamId: state.streamId,
+          conversation: conversationScopeFromProtocolId(conversationId),
+          kind: payload.kind ?? null,
+        });
+        break;
+      case 'input_message':
+        observeProtocolUserInput(state, payload);
+        break;
+      case 'message_marker':
+        appendEvent('protocol-message-marker-observed', {
+          streamId: state.streamId,
+          conversation: conversationScopeFromProtocolId(conversationId),
+          observedMessageId: payload.message_id ?? null,
+          marker: payload.marker ?? null,
+          event: payload.event ?? null,
+        });
+        break;
+      case 'message_stream_complete':
+        state.completion.messageStreamComplete = true;
+        appendEvent('protocol-message-stream-complete', {
+          streamId: state.streamId,
+          conversation: conversationScopeFromProtocolId(conversationId),
+          observedMessageId: state.assistant?.id ?? null,
+        });
+        break;
+      case 'title_generation':
+      case 'conversation_detail_metadata':
+      case 'server_ste_metadata':
+        appendEvent('protocol-control-frame-observed', {
+          streamId: state.streamId,
+          type: payload.type,
+          conversation: conversationScopeFromProtocolId(conversationId),
+        });
+        break;
+      default:
+        appendEvent('protocol-unknown-control-frame-observed', {
+          streamId: state.streamId,
+          type: typeof payload.type === 'string' ? payload.type : null,
+        });
+        break;
+    }
+  }
+
+  function observeProtocolSseFrame(state, eventName, data) {
+    const frameIndex = state.frameIndex;
+    state.frameIndex += 1;
+
+    if (data === '[DONE]') {
+      state.completion.done = true;
+      appendEvent('protocol-sse-done', {
+        streamId: state.streamId,
+        frameIndex,
+        completionEvidence: { ...state.completion },
+        observedMessageId: state.assistant?.id ?? null,
+      });
+      return;
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(data);
+    } catch (error) {
+      appendEvent('protocol-sse-parse-error', {
+        streamId: state.streamId,
+        frameIndex,
+        event: eventName,
+        message: String(error?.message ?? error),
+        dataChars: data.length,
+      });
+      return;
+    }
+
+    if (eventName === 'delta_encoding') {
+      if (typeof payload === 'string') {
+        state.deltaEncoding = payload;
+        appendEvent('protocol-delta-encoding-observed', {
+          streamId: state.streamId,
+          frameIndex,
+          encoding: payload,
+        });
+      }
+      return;
+    }
+
+    if (eventName === 'delta') {
+      observeProtocolDelta(state, payload);
+      return;
+    }
+
+    observeProtocolControlFrame(state, payload);
+  }
+
+  function feedProtocolSseText(state, text) {
+    state.sseBuffer = (state.sseBuffer + text).replace(/\r\n/g, '\n');
+
+    while (true) {
+      const boundary = state.sseBuffer.indexOf('\n\n');
+      if (boundary < 0) break;
+
+      const rawFrame = state.sseBuffer.slice(0, boundary);
+      state.sseBuffer = state.sseBuffer.slice(boundary + 2);
+      if (!rawFrame.trim()) continue;
+
+      let eventName = null;
+      const dataLines = [];
+      for (const line of rawFrame.split('\n')) {
+        if (!line || line.startsWith(':')) continue;
+        if (line.startsWith('event:')) {
+          eventName = line.slice('event:'.length).trim();
+        } else if (line.startsWith('data:')) {
+          const value = line.slice('data:'.length);
+          dataLines.push(value.startsWith(' ') ? value.slice(1) : value);
+        }
+      }
+
+      if (!dataLines.length) continue;
+      observeProtocolSseFrame(state, eventName, dataLines.join('\n'));
+    }
+  }
+
   async function captureNetworkResponseStream(response, requestInfo) {
     const streamId = makeId('network-stream');
     const contentType = response.headers.get('content-type') ?? '';
@@ -166,6 +506,7 @@
     let totalBytes = 0;
     let chunkIndex = 0;
     let truncated = false;
+    const protocolState = createProtocolStreamState(streamId);
 
     appendEvent('network-stream-start', {
       streamId,
@@ -223,6 +564,7 @@
           text,
           privateEvidence: true,
         });
+        feedProtocolSseText(protocolState, text);
         chunkIndex += 1;
 
         terminalProbe = (terminalProbe + text).slice(-256);
@@ -243,6 +585,7 @@
             text: tail,
             privateEvidence: true,
           });
+          feedProtocolSseText(protocolState, tail);
           chunkIndex += 1;
         }
         if (sawSseDone) {
@@ -543,11 +886,12 @@
     writeLocalJson(draftWalKey(conversation), cleared, 'confirmed draft clear');
   }
 
-  function confirmObservedUserMessage(text, observedMessageId) {
+  function confirmObservedUserMessage(text, observedMessageId, options = {}) {
     const normalized = normalizeText(text);
     if (!normalized) return;
 
-    const currentConversation = conversationKey();
+    const confirmedConversation = options.conversation ?? conversationKey();
+    const evidence = options.evidence ?? 'dom-transcript';
     const intents = readSendIntents();
     let changed = false;
 
@@ -557,21 +901,24 @@
       if (normalizeText(intent.text) !== normalized) continue;
 
       const ageMs = Date.now() - Date.parse(intent.at);
-      const sameConversation = intent.conversation === currentConversation;
+      const sameConversation = intent.conversation === confirmedConversation;
       const recentPreConversationRoute = intent.conversation.startsWith('route:') && ageMs >= 0 && ageMs < 120_000;
       if (!sameConversation && !recentPreConversationRoute) continue;
 
       const originConversation = intent.conversation;
       intent.state = 'confirmed';
       intent.confirmedAt = now();
-      intent.confirmedConversation = currentConversation;
+      intent.confirmedConversation = confirmedConversation;
       intent.observedMessageId = observedMessageId ?? null;
+      intent.confirmationEvidence = evidence;
       clearDraftIfMatches(originConversation, normalized);
-      if (originConversation !== currentConversation) clearDraftIfMatches(currentConversation, normalized);
+      if (originConversation !== confirmedConversation) clearDraftIfMatches(confirmedConversation, normalized);
       changed = true;
       appendEvent('send-confirmed', {
         id: intent.id,
         observedMessageId: observedMessageId ?? null,
+        confirmedConversation,
+        evidence,
       });
       break;
     }
