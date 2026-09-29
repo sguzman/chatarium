@@ -1,7 +1,7 @@
 //! Typed authored-turn rows derived only from authoritative durable journal events.
 
-use crate::authored::{DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope};
 use crate::EventEnvelope;
+use crate::authored::{DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope};
 use chatarium_core::{
     AssistantEvidence, LocalConversationId, LocalEvidence, LocalMessageId, LocalTurnId,
     RemoteEvidence, TurnEvidence,
@@ -33,7 +33,9 @@ struct Accumulator {
 }
 
 /// Derive typed authored turns from journal events without inventing IDs for legacy commits.
-pub(crate) fn derive_authored_turns(events: &[EventEnvelope]) -> Result<Vec<AuthoredTurnRow>, String> {
+pub(crate) fn derive_authored_turns(
+    events: &[EventEnvelope],
+) -> Result<Vec<AuthoredTurnRow>, String> {
     let mut turns = BTreeMap::<LocalTurnId, Accumulator>::new();
     let mut message_ids = BTreeSet::<LocalMessageId>::new();
     let mut scopes = BTreeMap::<String, LocalTurnId>::new();
@@ -65,7 +67,10 @@ pub(crate) fn derive_authored_turns(events: &[EventEnvelope]) -> Result<Vec<Auth
                 message.message_id
             ));
         }
-        if scopes.insert(expected_scope.clone(), message.turn_id).is_some() {
+        if scopes
+            .insert(expected_scope.clone(), message.turn_id)
+            .is_some()
+        {
             return Err(format!("duplicate typed local-turn scope {expected_scope}"));
         }
 
@@ -227,7 +232,11 @@ mod tests {
         let mut store = MemoryEventStore::default();
         commit_user_message(&mut store, &message).unwrap();
         store
-            .append_scoped(Some(scope.clone()), EventKind::DispatchAttempted, String::new())
+            .append_scoped(
+                Some(scope.clone()),
+                EventKind::DispatchAttempted,
+                String::new(),
+            )
             .unwrap();
         store
             .append_scoped(Some(scope), EventKind::TransportInterrupted, String::new())
@@ -284,10 +293,7 @@ mod tests {
         }
 
         let row = derive_authored_turns(store.events()).unwrap().remove(0);
-        assert_eq!(
-            row.evidence.assistant,
-            AssistantEvidence::CompletedObserved
-        );
+        assert_eq!(row.evidence.assistant, AssistantEvidence::CompletedObserved);
     }
 
     #[test]
@@ -312,7 +318,10 @@ mod tests {
     fn legacy_commit_does_not_invent_typed_turn() {
         let mut store = MemoryEventStore::default();
         store
-            .append(EventKind::UserMessageCommitted, "legacy exact text".to_owned())
+            .append(
+                EventKind::UserMessageCommitted,
+                "legacy exact text".to_owned(),
+            )
             .unwrap();
         assert!(derive_authored_turns(store.events()).unwrap().is_empty());
     }
@@ -338,7 +347,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(derive_authored_turns(store.events()).unwrap_err().contains("expected"));
+        assert!(
+            derive_authored_turns(store.events())
+                .unwrap_err()
+                .contains("expected")
+        );
     }
 
     #[test]
