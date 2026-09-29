@@ -154,6 +154,8 @@ Worker identity and lifecycle are now also restart-safe through the authoritativ
 
 Orchestration controls are now also modeled as typed semantic commands separate from ordinary prose. Start/resume, continue, stop, and goal-correlated status requests are admitted against a worker lifecycle snapshot before any future transport is involved. A continue command consumes one opaque bounded continuation permit, so that authority cannot be trivially copied/reused. Command admission itself never mutates worker state: Chatarium changes lifecycle only when later evidence explicitly records the transition.
 
+Those admitted commands are now restart-safe audit facts as well. Chatarium can reconstruct which control it admitted and its worker/goal/continuation correlation after a crash without confusing admission with dispatch or confusing dispatch with a worker transition.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.
