@@ -1,0 +1,47 @@
+{
+  "schema": "chatarium-protocol-snapshot",
+  "version": 1,
+  "revision": "2026-09-29.002",
+  "observation_kind": "flight_recorder_c03_send_text",
+  "canonical_experiment": "C03-send-text",
+  "capture_start_utc": "2026-09-29T10:50:21.576Z",
+  "stream_start_utc": "2026-09-29T10:50:23.060Z",
+  "stream_done_utc": "2026-09-29T10:50:28.190Z",
+  "recorder": {
+    "name": "Chatarium Flight Recorder",
+    "version": "0.5.0"
+  },
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "b5742efc55e0e5f1ca72eb13d0c7305ef91a47cd2b4900688fd7a3f98904e574",
+    "raw_bytes": 32091,
+    "committed_to_git": false
+  },
+  "controlled_action": {
+    "type": "send_text",
+    "exact_text": "respond with exactly CHATARIUM_PROTOCOL_TEST_001"
+  },
+  "observed_stream": {
+    "endpoint": "/backend-api/f/conversation",
+    "status": 200,
+    "content_type": "text/event-stream; charset=utf-8",
+    "captured_chunks": 17,
+    "captured_bytes": 17054,
+    "parsed_sse_frames": 29,
+    "delta_encoding": "v1",
+    "terminal_marker": "[DONE]"
+  },
+  "observed_result": {
+    "assistant_final_text": "CHATARIUM_PROTOCOL_TEST_001",
+    "assistant_status": "finished_successfully",
+    "assistant_end_turn": true,
+    "message_stream_complete_observed": true,
+    "terminal_done_observed": true
+  },
+  "capture_artifact_note": "Recorder v0.5.0 attempted one read after [DONE] and observed BodyStreamBuffer was aborted. Because [DONE] and message_stream_complete were already captured, this is classified as a recorder terminal-condition artifact rather than remote turn failure.",
+  "limitations": [
+    "One completed turn does not establish required versus optional fields or long-term protocol stability.",
+    "The flight-recorder export contains private and reusable material and is not publication-safe.",
+    "WebSocket completion was established in snapshot 2026-09-29.001; this capture focused on the fetch/SSE response stream."
+  ]
+}
