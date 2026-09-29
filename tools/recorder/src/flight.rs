@@ -1219,7 +1219,7 @@ data: [DONE]
         );
         assert_eq!(
             derived.pointer("/inventory/streams/0/delta_path_counts/~1message~1content~1parts~10"),
-            None
+            Some(&json!(1))
         );
         assert_eq!(derived.pointer("/inventory/warning_count"), Some(&json!(0)));
     }
@@ -1227,9 +1227,15 @@ data: [DONE]
     #[test]
     fn malformed_sse_is_fail_closed() {
         let mut export = cumulative_export();
-        export["events"][3]["payload"]["text"] =
-            json!("event: delta\\ndata: {PRIVATE RAW BROKEN FRAME}\\n\\n");
-        export["events"][4]["payload"]["text"] = json!("");
+        {
+            let events = export["events"].as_array_mut().expect("events array");
+            let mut chunks = events.iter_mut().filter(|event| {
+                event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
+            });
+            chunks.next().expect("first stream chunk")["payload"]["text"] =
+                json!("event: delta\\ndata: {PRIVATE RAW BROKEN FRAME}\\n\\n");
+            chunks.next().expect("second stream chunk")["payload"]["text"] = json!("");
+        }
 
         let selected = select_latest_run(&export).unwrap();
         let experiment = sample_experiment();
