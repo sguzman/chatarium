@@ -440,7 +440,7 @@ impl ContinuationLease {
 }
 
 /// One explicit continuation authorization correlated to a goal lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ContinuationPermit {
     goal_id: WorkerGoalId,
     ordinal: u32,
@@ -449,13 +449,13 @@ pub struct ContinuationPermit {
 impl ContinuationPermit {
     /// Goal identity authorized by this permit.
     #[must_use]
-    pub const fn goal_id(self) -> WorkerGoalId {
+    pub const fn goal_id(&self) -> WorkerGoalId {
         self.goal_id
     }
 
     /// One-based permit ordinal within its lease.
     #[must_use]
-    pub const fn ordinal(self) -> u32 {
+    pub const fn ordinal(&self) -> u32 {
         self.ordinal
     }
 }
