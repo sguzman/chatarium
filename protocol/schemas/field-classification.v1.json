@@ -149,6 +149,10 @@
         "class": "diagnostic",
         "rationale": "Parse warnings describe local interpreter coverage/failure, not remote semantic state."
       }
+    },
+    "stream_presence": {
+      "class": "structural_candidate",
+      "rationale": "The presence of a sanitized method+endpoint stream is part of the observed protocol surface for an equivalent experiment."
     }
   }
 }
