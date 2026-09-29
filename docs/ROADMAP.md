@@ -71,7 +71,7 @@ Canonical experiments:
 
 The first machine-executable experiment definitions live under `protocol/experiments/`. Each experiment should produce its own capture or clearly delimited action log. Human QA is reserved for observations the harness genuinely cannot obtain itself.
 
-Current state: the basic canonical text-turn stream is directly observed and typed in `crates/protocol`; browser-local capture and protocol-backed reconciliation work on Linux. P1 work is now automating private Flight Recorder export ingestion, fail-closed sanitization, structural inventory, and future diffs.
+Current state: the basic canonical text-turn stream is directly observed and typed in `crates/protocol`; browser-local capture and protocol-backed reconciliation work on Linux. Flight Recorder export ingestion, fail-closed selected-run sanitization, structural inventory, Flight/HAR inventory diffs, and committed-corpus validation are automated. P1's remaining gaps are chiefly explicit stable-vs-ephemeral field annotations, sanitization reporting polish, and frontend asset identity where the observation surface can provide it.
 
 P0.5 exit criterion: equivalent controlled captures can be repeated and transformed into deterministic sanitized evidence/inventory without Windows-specific bootstrap machinery or manual protocol archaeology from zero.
 
