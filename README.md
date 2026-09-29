@@ -49,13 +49,15 @@ chatarium/
 
 ## Status
 
-Chatarium is in **P0 durability / P0.5 protocol-baseline** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; and the recorder can sanitize/inventory/diff controlled captures.
+Chatarium has completed **P1 protocol observatory** and **P2 durable application core** work and is entering **P3 read-only remote integration**.
 
-The protocol baseline now includes complementary observations from a manual Edge/Linux HAR and a canonical C03 Flight Recorder capture. Snapshot `2026-09-29.002` establishes the observed v1 SSE text-turn grammar, and Flight Recorder v0.6.0 has passed live protocol-backed send/assistant reconciliation without relying on current DOM selectors.
+The protocol baseline includes complementary observations from a manual Edge/Linux HAR and a canonical C03 Flight Recorder capture. Snapshot `2026-09-29.002` establishes the observed v1 SSE text-turn grammar, and Flight Recorder v0.6.0 has passed live protocol-backed send/assistant reconciliation without relying on current DOM selectors. The recorder pipeline can ingest private cumulative exports into fail-closed sanitized evidence, validate the committed corpus, classify structural changes, and diff comparable observations.
 
-Raw HAR and Flight Recorder exports remain private evidence. `chatarium-recorder snapshot-flight` is the active evidence-ingestion path: it selects one run from a cumulative recorder export, reconstructs SSE frames, fails closed around private/server-controlled values, and writes deterministic sanitized evidence plus a structural inventory.
+The durable core now has typed local conversation/turn/message identities, fsync-backed user-message commits, an append-only JSONL authority, rebuildable schema-v2 SQLite projections, replayable evidence state, and a persistent crash-transition matrix. Once a typed local commit succeeds, later torn-tail recovery or stale projection state cannot erase authorship or fabricate remote certainty.
 
-Automated browser capture remains a longer-term goal rather than a prerequisite for protocol discovery. The existing capture harness contains substantial Windows-specific bootstrap/CDP work and is currently parked; the active protocol workflow is cross-platform and Linux-friendly.
+Raw HAR and Flight Recorder exports remain private evidence. `chatarium-recorder snapshot-flight` remains the active evidence-ingestion path. The next active work is P3: acquire and encode read-side protocol evidence for conversation listing/fetching, then mirror selected remote conversations into the local durable model before enabling direct remote mutation.
+
+Automated browser capture remains a longer-term goal rather than a prerequisite for protocol discovery. The existing Windows capture harness is parked; the active protocol workflow is cross-platform and Linux-friendly.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CAPTURE_HARNESS.md`](docs/CAPTURE_HARNESS.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), and [`protocol/README.md`](protocol/README.md).
 
