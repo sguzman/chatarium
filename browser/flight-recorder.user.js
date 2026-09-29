@@ -714,6 +714,20 @@
     const text = String(record.text ?? '');
     const truncated = text.length > MAX_ASSISTANT_WAL_CHARS;
     const storedText = truncated ? text.slice(-MAX_ASSISTANT_WAL_CHARS) : text;
+    const previous = readAssistantWal();
+    const incomingSource = record.source ?? 'dom-transcript';
+    const sameObservedMessage = Boolean(
+      previous &&
+      previous.observedId &&
+      record.observedId &&
+      previous.observedId === record.observedId
+    );
+    const previousSources = sameObservedMessage
+      ? (Array.isArray(previous.evidenceSources)
+        ? previous.evidenceSources
+        : [previous.source].filter(Boolean))
+      : [];
+    const evidenceSources = [...new Set([...previousSources, incomingSource])];
     const wal = {
       version: 3,
       at: now(),
@@ -723,11 +737,12 @@
       text: storedText,
       originalChars: text.length,
       truncatedPrefix: truncated,
-      source: record.source ?? 'dom-transcript',
-      protocolEvidence: record.protocolEvidence ?? null,
-      protocolStatus: record.protocolStatus ?? null,
-      protocolEndTurn: record.protocolEndTurn ?? null,
-      protocolIsComplete: record.protocolIsComplete ?? null,
+      source: incomingSource,
+      evidenceSources,
+      protocolEvidence: record.protocolEvidence ?? (sameObservedMessage ? previous.protocolEvidence : null) ?? null,
+      protocolStatus: record.protocolStatus ?? (sameObservedMessage ? previous.protocolStatus : null) ?? null,
+      protocolEndTurn: record.protocolEndTurn ?? (sameObservedMessage ? previous.protocolEndTurn : null) ?? null,
+      protocolIsComplete: record.protocolIsComplete ?? (sameObservedMessage ? previous.protocolIsComplete : null) ?? null,
     };
     writeLocalJson(ASSISTANT_WAL_KEY, wal, 'assistant WAL');
     return wal;
