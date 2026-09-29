@@ -193,6 +193,8 @@ Control-to-route correlation is a separate durable provenance layer. A typed `Co
 
 Local session identity is now explicit rather than implicit in routing endpoints. `SessionId`, `WorkerId`, and `RouteEndpointId` are separate local identity domains. The authoritative journal can register sessions, bind a session one-to-one to a routing endpoint, and bind a worker one-to-one to a session. These records remain independent of remote ChatGPT identity and do not create route proposals or worker lifecycle state merely by existing. Master/controller designation remains a later relationship layer.
 
+Controller/worker supervision is now a separate durable relationship layer above those identities. A controller session is explicitly designated, may supervise multiple worker sessions, and each worker session may have at most one controller. Controller and worker roles are intentionally disjoint in this first model to prevent accidental controller chains/cycles. Supervision does not alter route policy, issue continuation/dispatch permits, create controls, or mutate worker lifecycle; the user remains the authority above the controller.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
