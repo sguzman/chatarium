@@ -51,9 +51,11 @@ chatarium/
 
 Chatarium is in **P0 durability / P0.5 protocol-baseline** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; and the recorder can sanitize/inventory/diff controlled captures.
 
-The first empirical protocol snapshot is now committed as `2026-09-29.001`, derived from a manual Edge/Linux HAR of a completed text turn. The raw HAR remains private because it contains secret-bearing and unrelated private material even after browser-side sanitization.
+The protocol baseline now includes complementary observations from a manual Edge/Linux HAR and a canonical C03 Flight Recorder capture. Snapshot `2026-09-29.002` establishes the observed v1 SSE text-turn grammar, and Flight Recorder v0.6.0 has passed live protocol-backed send/assistant reconciliation without relying on current DOM selectors.
 
-Automated capture remains a goal rather than a prerequisite for protocol discovery. The existing capture harness contains substantial Windows-specific bootstrap/CDP work, while current protocol work may use manual HAR on Linux when that is the shorter path. Canonical `C00`/`C03` experiment definitions remain the reproducibility target.
+Raw HAR and Flight Recorder exports remain private evidence. `chatarium-recorder snapshot-flight` is the active evidence-ingestion path: it selects one run from a cumulative recorder export, reconstructs SSE frames, fails closed around private/server-controlled values, and writes deterministic sanitized evidence plus a structural inventory.
+
+Automated browser capture remains a longer-term goal rather than a prerequisite for protocol discovery. The existing capture harness contains substantial Windows-specific bootstrap/CDP work and is currently parked; the active protocol workflow is cross-platform and Linux-friendly.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CAPTURE_HARNESS.md`](docs/CAPTURE_HARNESS.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), and [`protocol/README.md`](protocol/README.md).
 
@@ -63,6 +65,6 @@ Chatarium is not a claim that ChatGPT exposes a supported public consumer API. I
 
 ## Development
 
-The workspace is Rust-first and Windows-first initially. The desktop shell uses `eframe`/`egui`; asynchronous and blocking work must remain off the render thread. Protocol captures are data, not hand-maintained folklore: when behavior changes, preserve a new observation and adapt against it.
+The workspace is Rust-first. Some legacy capture/bootstrap machinery is Windows-specific, but protocol observation, ingestion, typed interpretation, and the durable core are not architecturally Windows-bound. The desktop shell uses `eframe`/`egui`; asynchronous and blocking work must remain off the render thread. Protocol captures are data, not hand-maintained folklore: when behavior changes, preserve a new observation and adapt against it.
 
 The repository is intentionally documentation-heavy because the hardest part of this system is not drawing a chat window. It is maintaining epistemic clarity across a mutable remote service, unreliable transport, local persistence, and recovery.
