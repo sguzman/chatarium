@@ -942,6 +942,29 @@ text = "CHATARIUM_PROTOCOL_TEST_001"
     }
 
     fn cumulative_export() -> Value {
+        let first_chunk = r#"event: delta_encoding
+data: "v1"
+
+data: {"type":"resume_conversation_token","token":"signed-secret","conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+
+data: {"type":"input_message","input_message":{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","author":{"role":"user"},"content":{"content_type":"text","parts":["respond with exactly CHATARIUM_PROTOCOL_TEST_001"]},"status":"finished_successfully","metadata":{"request_id":"dddddddd-dddd-dddd-dddd-dddddddddddd","private_note":"do not leak me"}},"conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+
+event: delta
+data: {"v":{"message":{"id":"cccccccc-cccc-cccc-cccc-cccccccccccc","author":{"role":"assistant"},"content":{"content_type":"text","parts":[""]},"status":"in_progress","channel":"final"},"conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}}
+
+event: delta
+data: {"p":"/message/content/parts/0","o":"append","v":"CHATARIUM_PROTOCOL_"#;
+
+        let second_chunk = r#"TEST_001"}
+
+data: {"type":"server_ste_metadata","metadata":{"plan_type":"plus","cluster_region":"secret-region","request_id":"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"},"conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+
+data: {"type":"message_stream_complete","conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+
+data: [DONE]
+
+"#;
+
         json!({
             "format": "chatarium-flight-recorder-export",
             "version": 3,
@@ -1025,7 +1048,7 @@ text = "CHATARIUM_PROTOCOL_TEST_001"
                     "kind": "network-stream-chunk",
                     "payload": {
                         "streamId": "secret-stream-id",
-                        "text": "event: delta_encoding\\ndata: \\"v1\\"\\n\\ndata: {\\"type\\":\\"resume_conversation_token\\",\\"token\\":\\"signed-secret\\",\\"conversation_id\\":\\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\\"}\\n\\ndata: {\\"type\\":\\"input_message\\",\\"input_message\\":{\\"id\\":\\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\\",\\"author\\":{\\"role\\":\\"user\\"},\\"content\\":{\\"content_type\\":\\"text\\",\\"parts\\":[\\"respond with exactly CHATARIUM_PROTOCOL_TEST_001\\"]},\\"status\\":\\"finished_successfully\\",\\"metadata\\":{\\"request_id\\":\\"dddddddd-dddd-dddd-dddd-dddddddddddd\\",\\"private_note\\":\\"do not leak me\\"}},\\"conversation_id\\":\\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\\"}\\n\\nevent: delta\\ndata: {\\"v\\":{\\"message\\":{\\"id\\":\\"cccccccc-cccc-cccc-cccc-cccccccccccc\\",\\"author\\":{\\"role\\":\\"assistant\\"},\\"content\\":{\\"content_type\\":\\"text\\",\\"parts\\":[\\"\\"]},\\"status\\":\\"in_progress\\",\\"channel\\":\\"final\\"},\\"conversation_id\\":\\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\\"}}\\n\\nevent: delta\\ndata: {\\"p\\":\\"/message/content/parts/0\\",\\"o\\":\\"append\\",\\"v\\":\\"CHATARIUM_PROTOCOL_"
+                        "text": first_chunk
                     }
                 },
                 {
@@ -1034,7 +1057,7 @@ text = "CHATARIUM_PROTOCOL_TEST_001"
                     "kind": "network-stream-chunk",
                     "payload": {
                         "streamId": "secret-stream-id",
-                        "text": "TEST_001\\"}\\n\\ndata: {\\"type\\":\\"server_ste_metadata\\",\\"metadata\\":{\\"plan_type\\":\\"plus\\",\\"cluster_region\\":\\"secret-region\\",\\"request_id\\":\\"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee\\"},\\"conversation_id\\":\\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\\"}\\n\\ndata: {\\"type\\":\\"message_stream_complete\\",\\"conversation_id\\":\\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\\"}\\n\\ndata: [DONE]\\n\\n"
+                        "text": second_chunk
                     }
                 },
                 {
