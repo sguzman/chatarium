@@ -408,6 +408,53 @@ mod tests {
         assert!(replay_control_provenance_audit(store.events()).is_err());
     }
 
+
+    #[test]
+    fn missing_controller_session_id_is_rejected() {
+        let mut store = MemoryEventStore::default();
+        register_controller(&mut store, C1);
+        let control = record_control(&mut store, 1);
+        store
+            .append_scoped(
+                Some(control_issuer_scope(control.id())),
+                EventKind::WorkerControlIssuerBound,
+                json!({
+                    "schema": CONTROL_PROVENANCE_SCHEMA,
+                    "version": CONTROL_PROVENANCE_VERSION,
+                    "record": "control_issuer_bound",
+                    "control_id": control.id().get(),
+                    "issuer": "controller_session",
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        assert!(replay_control_provenance_audit(store.events()).is_err());
+    }
+
+    #[test]
+    fn issuer_scope_mismatch_is_rejected() {
+        let mut store = MemoryEventStore::default();
+        let control = record_control(&mut store, 1);
+        store
+            .append_scoped(
+                Some(control_issuer_scope(ControlId::new(99))),
+                EventKind::WorkerControlIssuerBound,
+                json!({
+                    "schema": CONTROL_PROVENANCE_SCHEMA,
+                    "version": CONTROL_PROVENANCE_VERSION,
+                    "record": "control_issuer_bound",
+                    "control_id": control.id().get(),
+                    "issuer": "user",
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        let error = replay_control_provenance_audit(store.events()).unwrap_err();
+        assert!(error.contains("scope"));
+    }
+
     #[test]
     fn undesignated_controller_issuer_is_rejected() {
         let mut store = MemoryEventStore::default();
