@@ -38,7 +38,7 @@ The first persistent implementation is a newline-delimited JSON event journal in
 
 Startup treats only an **unterminated final fragment** as a torn last write and truncates it back to the previous newline. A malformed complete record is a hard integrity error; it is not silently skipped.
 
-SQLite is intended as a later projection/index layer. It does not replace the append journal as the evidence history.
+SQLite now exists as a rebuildable projection/index layer in `crates/store`. It does not replace the append journal as the evidence history. The projection database is versioned independently, can be deleted and rebuilt entirely from durable journal events, and is updated/rebuilt transactionally so a failed rebuild cannot replace a previously valid projection.
 
 The minimum event vocabulary includes:
 
@@ -113,7 +113,7 @@ Streaming                         |
 
 ### `crates/core`
 
-Owns domain identifiers, local/remote evidence state, events, commands, and recovery decisions. Stable event names used by durable storage are defined here. It knows nothing about egui and should know as little as possible about concrete HTTP shapes.
+Owns domain identifiers, local/remote evidence state, events, commands, and recovery decisions. Local conversation, turn, and message identities are distinct UUIDv7-backed Rust types; their UUID ordering is not treated as semantic chronology. Stable event names used by durable storage are defined here. It knows nothing about egui and should know as little as possible about concrete HTTP shapes.
 
 ### `crates/protocol`
 
@@ -121,7 +121,7 @@ Owns typed interpretations of empirically observed ChatGPT request/response/even
 
 ### `crates/store`
 
-Owns durable persistence, migrations, event append, projection rebuild, and transactional guarantees. The first implementation is the crash-recoverable JSONL journal; SQLite projections come later. No network logic belongs here.
+Owns durable persistence, migrations, event append, projection rebuild, and transactional guarantees. The authoritative implementation is the crash-recoverable JSONL journal. SQLite is a subordinate query projection with explicit schema migration, sequence validation, scope/kind indexes, and transactionally safe rebuild semantics. No network logic belongs here.
 
 ### `tools/recorder`
 
