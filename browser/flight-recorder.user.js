@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.5.0
+// @version      0.5.1
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -17,7 +17,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.5.0';
+  const VERSION = '0.5.1';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -188,6 +188,8 @@
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let terminalProbe = '';
+      let sawSseDone = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -222,6 +224,12 @@
           privateEvidence: true,
         });
         chunkIndex += 1;
+
+        terminalProbe = (terminalProbe + text).slice(-256);
+        if (/(?:^|\r?\n)data:\s*\[DONE\](?:\r?\n|$)/.test(terminalProbe)) {
+          sawSseDone = true;
+          break;
+        }
       }
 
       if (!truncated) {
@@ -237,11 +245,20 @@
           });
           chunkIndex += 1;
         }
+        if (sawSseDone) {
+          try {
+            await reader.cancel('Chatarium observed terminal SSE [DONE]');
+          } catch {
+            // The terminal marker is already durable evidence. A clone-cancel failure after
+            // [DONE] does not change the observed remote outcome.
+          }
+        }
         appendEvent('network-stream-end', {
           streamId,
           endpoint,
           chunks: chunkIndex,
           capturedBytes: totalBytes,
+          terminal: sawSseDone ? 'sse-done' : 'eof',
           privateEvidence: true,
         });
       }
