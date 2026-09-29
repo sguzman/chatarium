@@ -74,10 +74,11 @@ Creates evidence in the same shape used by `protocol/SNAPSHOT_FORMAT.md`:
 │   └── <capture-id>.har.json
 └── derived/
     ├── <capture-id>.meta.json
-    └── <capture-id>.requests.json
+    ├── <capture-id>.requests.json
+    └── <capture-id>.sanitization.json
 ```
 
-The request inventory is derived from the sanitized HAR, not directly from raw input. The metadata records both fingerprints, entry count, sanitized size, recorder version, capture timestamp, and the fact that raw evidence is retained outside Git. It intentionally does **not** copy the raw HAR filename or raw byte size into the public snapshot metadata.
+The request inventory is derived from the sanitized HAR, not directly from raw input. A deterministic sanitization report records transformation counts such as sensitive-value redactions, URL/query rewrites, and embedded JSON rewrites without retaining the removed values. Metadata hashes/references the report. The metadata also records evidence/inventory fingerprints, entry count, sanitized size, recorder version, capture timestamp, and the fact that raw evidence is retained outside Git. It intentionally does **not** copy the raw HAR filename or raw byte size into the public snapshot metadata.
 
 Example:
 
@@ -103,7 +104,9 @@ The command:
 - redacts signed token values, unknown scalar metadata, arbitrary message bodies, generated titles, and private hidden context;
 - fails closed for an SSE frame it cannot parse instead of copying the raw frame text;
 - writes a structural inventory with event-kind counts, SSE event/control types, delta operations/paths, marker counts, encodings, and completion signals;
-- records the raw source SHA-256 and byte count for provenance without copying the raw file or source path into the snapshot.
+- emits a deterministic sanitization report counting fail-closed/redaction/generalization operations without retaining the removed values;
+- records the raw source SHA-256 and byte count for provenance without copying the raw file or source path into the snapshot;
+- hashes/references the sanitization report from metadata.
 
 Output:
 
@@ -113,7 +116,8 @@ Output:
 │   └── <capture-id>.flight.json
 └── derived/
     ├── <capture-id>.flight.inventory.json
-    └── <capture-id>.flight.meta.json
+    ├── <capture-id>.flight.meta.json
+    └── <capture-id>.flight.sanitization.json
 ```
 
 Example:
@@ -126,7 +130,7 @@ cargo run -p chatarium-recorder -- snapshot-flight \
   C03-send-text
 ```
 
-The raw recorder export remains private. The derived output is designed to be dramatically safer and less noisy, but it is still evidence that should be reviewed before publication; the tool does not claim to be a universal privacy oracle.
+The raw recorder export remains private. Sanitization reports contain counts and policy names only; they do not preserve removed values and explicitly do not claim publication safety. The derived output is designed to be dramatically safer and less noisy, but it is still evidence that should be reviewed before publication; the tool does not claim to be a universal privacy oracle.
 
 ### `inspect-har`
 
