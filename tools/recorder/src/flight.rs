@@ -742,7 +742,8 @@ fn sanitize_sse_frame(
     warnings: &mut Vec<String>,
 ) -> Value {
     inventory.frame_count += 1;
-    if let Some(event) = frame.event.as_deref() {
+    let public_event = frame.event.as_deref().map(safe_sse_event_name);
+    if let Some(event) = public_event.as_deref() {
         *inventory
             .named_event_counts
             .entry(event.to_owned())
@@ -752,7 +753,7 @@ fn sanitize_sse_frame(
     if frame.data == "[DONE]" {
         inventory.done = true;
         return json!({
-            "event": frame.event,
+            "event": public_event,
             "data": "[DONE]",
         });
     }
@@ -764,18 +765,22 @@ fn sanitize_sse_frame(
             inventory.frame_count
         ));
         return json!({
-            "event": frame.event,
+            "event": public_event,
             "data": "<redacted-unparsed-sse>",
         });
     };
 
     observe_frame_shape(frame, &payload, inventory);
-    if frame.event.as_deref() != Some("delta_encoding") {
+    if frame.event.as_deref() == Some("delta_encoding") {
+        if payload.as_str() != Some("v1") {
+            payload = Value::String(REDACTED_VALUE.to_owned());
+        }
+    } else {
         sanitize_protocol_json(&mut payload, None, allowed_texts, ids);
     }
 
     json!({
-        "event": frame.event,
+        "event": public_event,
         "data": payload,
     })
 }
@@ -794,9 +799,10 @@ fn observe_frame_shape(frame: &SseFrame, payload: &Value, inventory: &mut Stream
     }
 
     if let Some(kind) = payload.get("type").and_then(Value::as_str) {
+        let public_kind = safe_structural_value("type", kind);
         *inventory
             .control_type_counts
-            .entry(kind.to_owned())
+            .entry(public_kind)
             .or_default() += 1;
         if kind == "message_stream_complete" {
             inventory.message_stream_complete = true;
@@ -805,11 +811,11 @@ fn observe_frame_shape(frame: &SseFrame, payload: &Value, inventory: &mut Stream
             let marker = payload
                 .get("marker")
                 .and_then(Value::as_str)
-                .unwrap_or("<missing>");
+                .map_or_else(|| "<missing>".to_owned(), |value| safe_structural_value("marker", value));
             let event = payload
                 .get("event")
                 .and_then(Value::as_str)
-                .unwrap_or("<missing>");
+                .map_or_else(|| "<missing>".to_owned(), |value| safe_structural_value("event", value));
             *inventory
                 .marker_counts
                 .entry(format!("{marker}:{event}"))
@@ -822,13 +828,13 @@ fn observe_delta_shape(payload: &Value, inventory: &mut StreamInventory) {
     if let Some(operation) = payload.get("o").and_then(Value::as_str) {
         *inventory
             .delta_operation_counts
-            .entry(operation.to_owned())
+            .entry(safe_structural_value("o", operation))
             .or_default() += 1;
     }
     if let Some(path) = payload.get("p").and_then(Value::as_str) {
         *inventory
             .delta_path_counts
-            .entry(path.to_owned())
+            .entry(safe_protocol_path(path))
             .or_default() += 1;
     }
     if payload.get("o").and_then(Value::as_str) == Some("patch") {
@@ -837,13 +843,13 @@ fn observe_delta_shape(payload: &Value, inventory: &mut StreamInventory) {
                 if let Some(name) = operation.get("o").and_then(Value::as_str) {
                     *inventory
                         .delta_operation_counts
-                        .entry(name.to_owned())
+                        .entry(safe_structural_value("o", name))
                         .or_default() += 1;
                 }
                 if let Some(path) = operation.get("p").and_then(Value::as_str) {
                     *inventory
                         .delta_path_counts
-                        .entry(path.to_owned())
+                        .entry(safe_protocol_path(path))
                         .or_default() += 1;
                 }
             }
@@ -876,7 +882,11 @@ fn sanitize_protocol_json(
                 if !allowed_texts.contains(text) {
                     *text = REDACTED_CONTENT.to_owned();
                 }
-            } else if !structural_string_field(field) && !allowed_texts.contains(text) {
+            } else if field == "p" {
+                *text = safe_protocol_path(text);
+            } else if structural_string_field(field) {
+                *text = safe_structural_value(field, text);
+            } else if !allowed_texts.contains(text) {
                 *text = REDACTED_VALUE.to_owned();
             }
         }
@@ -946,13 +956,71 @@ fn structural_string_field(key: &str) -> bool {
             | "channel"
             | "recipient"
             | "o"
-            | "p"
             | "marker"
             | "event"
             | "message_type"
             | "reasoning_status"
             | "reasoning_recap_type"
     )
+}
+
+fn safe_sse_event_name(value: &str) -> String {
+    match value {
+        "delta" | "delta_encoding" => value.to_owned(),
+        _ => "<redacted-event-name>".to_owned(),
+    }
+}
+
+fn safe_structural_value(field: &str, value: &str) -> String {
+    let allowed = match field {
+        "type" => matches!(
+            value,
+            "resume_conversation_token"
+                | "input_message"
+                | "title_generation"
+                | "message_marker"
+                | "server_ste_metadata"
+                | "message_stream_complete"
+                | "conversation_detail_metadata"
+                | "text"
+                | "reasoning_recap"
+                | "model_editable_context"
+                | "stop"
+        ),
+        "kind" => matches!(value, "topic"),
+        "role" => matches!(value, "user" | "assistant" | "system" | "developer" | "tool"),
+        "content_type" => matches!(value, "text" | "reasoning_recap" | "model_editable_context"),
+        "status" => matches!(value, "finished_successfully" | "in_progress"),
+        "channel" => matches!(value, "final"),
+        "recipient" => matches!(value, "all"),
+        "o" => matches!(value, "add" | "append" | "patch" | "replace"),
+        "marker" => matches!(
+            value,
+            "cot_token" | "user_visible_token" | "final_channel_token" | "last_token"
+        ),
+        "event" => matches!(value, "first" | "last"),
+        "message_type" => matches!(value, "next"),
+        "reasoning_status" => matches!(value, "reasoning_ended"),
+        "reasoning_recap_type" => matches!(value, "hide_all"),
+        _ => false,
+    };
+    if allowed {
+        value.to_owned()
+    } else {
+        REDACTED_VALUE.to_owned()
+    }
+}
+
+fn safe_protocol_path(value: &str) -> String {
+    match value {
+        ""
+        | "/message/content/parts/0"
+        | "/message/status"
+        | "/message/end_turn"
+        | "/message/metadata"
+        | "/message/metadata/conversation_followup_suggestions_eligible" => value.to_owned(),
+        _ => "<redacted-path>".to_owned(),
+    }
 }
 
 fn count_field(values: &[Value], field: &str) -> BTreeMap<String, u64> {
@@ -1184,6 +1252,82 @@ data: [DONE]
         assert!(text.contains("<message:"));
         assert!(text.contains("\"data\": \"v1\""));
         assert!(text.contains("\"request_id\": \"<id>\""));
+    }
+
+    #[test]
+    fn unknown_server_structural_strings_are_fail_closed() {
+        let mut export = cumulative_export();
+        {
+            let events = export["events"].as_array_mut().expect("events array");
+            let chunk = events
+                .iter_mut()
+                .find(|event| {
+                    event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
+                        && event.pointer("/payload/text").and_then(Value::as_str).is_some_and(|text| {
+                            text.contains("server_ste_metadata")
+                        })
+                })
+                .expect("server metadata chunk");
+            chunk["payload"]["text"] = json!(
+                "data: {\"type\":\"PRIVATE_CONTROL_SECRET\",\"conversation_id\":\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\"}\n\nevent: PRIVATE_EVENT_SECRET\ndata: {\"p\":\"/message/PRIVATE_PATH_SECRET\",\"o\":\"PRIVATE_OP_SECRET\",\"v\":\"PRIVATE_VALUE_SECRET\"}\n\n"
+            );
+        }
+
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = sample_experiment();
+        let allowed = BTreeSet::from([
+            experiment.action.text.clone().unwrap(),
+            experiment.success.text.clone().unwrap(),
+        ]);
+        let derived = derive_sanitized_run(&export, &selected, &experiment, &allowed).unwrap();
+        let text = serde_json::to_string_pretty(&derived).unwrap();
+
+        for secret in [
+            "PRIVATE_CONTROL_SECRET",
+            "PRIVATE_EVENT_SECRET",
+            "PRIVATE_PATH_SECRET",
+            "PRIVATE_OP_SECRET",
+            "PRIVATE_VALUE_SECRET",
+        ] {
+            assert!(!text.contains(secret), "unknown structural value survived: {secret}");
+        }
+        assert!(text.contains("<redacted-event-name>"));
+        assert!(text.contains("<redacted-path>"));
+        assert!(text.contains("<redacted-value>"));
+    }
+
+    #[test]
+    fn unknown_delta_encoding_is_redacted() {
+        let mut export = cumulative_export();
+        {
+            let events = export["events"].as_array_mut().expect("events array");
+            let chunk = events
+                .iter_mut()
+                .find(|event| {
+                    event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
+                        && event.pointer("/payload/text").and_then(Value::as_str).is_some_and(|text| {
+                            text.contains("delta_encoding")
+                        })
+                })
+                .expect("delta encoding chunk");
+            let text = chunk["payload"]["text"].as_str().unwrap().replace(
+                "event: delta_encoding\ndata: \"v1\"",
+                "event: delta_encoding\ndata: \"PRIVATE_ENCODING_SECRET\"",
+            );
+            chunk["payload"]["text"] = json!(text);
+        }
+
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = sample_experiment();
+        let allowed = BTreeSet::from([
+            experiment.action.text.clone().unwrap(),
+            experiment.success.text.clone().unwrap(),
+        ]);
+        let derived = derive_sanitized_run(&export, &selected, &experiment, &allowed).unwrap();
+        let text = serde_json::to_string_pretty(&derived).unwrap();
+
+        assert!(!text.contains("PRIVATE_ENCODING_SECRET"));
+        assert!(text.contains("<redacted-value>"));
     }
 
     #[test]
