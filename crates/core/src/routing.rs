@@ -443,10 +443,7 @@ mod tests {
 
     #[test]
     fn user_can_explicitly_override_policy_denial() {
-        let mut gate = RouteGate::new(
-            request(R1, TOOL, RouteClass::ToolCall),
-            RoutePolicy::Deny,
-        );
+        let mut gate = RouteGate::new(request(R1, TOOL, RouteClass::ToolCall), RoutePolicy::Deny);
         assert_eq!(gate.user_allow(), Ok(DecisionOutcome::Changed));
         let permit = gate.authorize_dispatch(R1).unwrap();
         assert_eq!(permit.authorized_by(), DecisionAuthority::User);
