@@ -5,7 +5,7 @@
 
 use crate::EventEnvelope;
 use chatarium_core::EventKind;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -150,23 +150,46 @@ impl SqliteProjection {
             Ok((sequence, at_unix_ms, scope, kind_name, payload))
         })?;
 
-        let mut projected = Vec::new();
-        for row in rows {
-            let (sequence, at_unix_ms, scope, kind_name, payload) = row?;
-            let kind = EventKind::from_stable_name(&kind_name).ok_or_else(|| {
-                ProjectionError::InvalidJournal(format!(
-                    "projection contains unknown event kind '{kind_name}'"
-                ))
-            })?;
-            projected.push(EventEnvelope {
-                sequence: i64_to_u64(sequence)?,
-                at_unix_ms: i64_to_u64(at_unix_ms)?,
-                scope,
-                kind,
-                payload,
-            });
-        }
-        Ok(projected)
+        collect_projected_rows(rows)
+    }
+
+    /// Read projected events for one exact scope in durable sequence order.
+    pub fn events_for_scope(&self, scope: &str) -> Result<Vec<EventEnvelope>, ProjectionError> {
+        self.query_events(
+            "SELECT sequence, at_unix_ms, scope, kind, payload
+             FROM projected_events
+             WHERE scope = ?1
+             ORDER BY sequence",
+            [scope],
+        )
+    }
+
+    /// Read projected events of one semantic kind in durable sequence order.
+    pub fn events_of_kind(&self, kind: EventKind) -> Result<Vec<EventEnvelope>, ProjectionError> {
+        self.query_events(
+            "SELECT sequence, at_unix_ms, scope, kind, payload
+             FROM projected_events
+             WHERE kind = ?1
+             ORDER BY sequence",
+            [kind.stable_name()],
+        )
+    }
+
+    fn query_events<const N: usize>(
+        &self,
+        sql: &str,
+        parameters: [&str; N],
+    ) -> Result<Vec<EventEnvelope>, ProjectionError> {
+        let mut statement = self.connection.prepare(sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(parameters), |row| {
+            let sequence: i64 = row.get(0)?;
+            let at_unix_ms: i64 = row.get(1)?;
+            let scope: Option<String> = row.get(2)?;
+            let kind_name: String = row.get(3)?;
+            let payload: String = row.get(4)?;
+            Ok((sequence, at_unix_ms, scope, kind_name, payload))
+        })?;
+        collect_projected_rows(rows)
     }
 
     fn migrate(&mut self) -> Result<(), ProjectionError> {
@@ -242,13 +265,16 @@ fn replace_projected_events(
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
 
+    #[cfg(not(test))]
+    let _ = fail_after;
+
     for (index, event) in events.iter().enumerate() {
         statement.execute(params![
             u64_to_i64(event.sequence, "sequence")?,
             u64_to_i64(event.at_unix_ms, "at_unix_ms")?,
-            event.scope,
+            event.scope.as_deref(),
             event.kind.stable_name(),
-            event.payload,
+            event.payload.as_str(),
         ])?;
 
         #[cfg(test)]
@@ -257,6 +283,31 @@ fn replace_projected_events(
         }
     }
     Ok(())
+}
+
+fn collect_projected_rows<T>(
+    rows: rusqlite::MappedRows<'_, T>,
+) -> Result<Vec<EventEnvelope>, ProjectionError>
+where
+    T: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<(i64, i64, Option<String>, String, String)>,
+{
+    let mut projected = Vec::new();
+    for row in rows {
+        let (sequence, at_unix_ms, scope, kind_name, payload) = row?;
+        let kind = EventKind::from_stable_name(&kind_name).ok_or_else(|| {
+            ProjectionError::InvalidJournal(format!(
+                "projection contains unknown event kind '{kind_name}'"
+            ))
+        })?;
+        projected.push(EventEnvelope {
+            sequence: i64_to_u64(sequence)?,
+            at_unix_ms: i64_to_u64(at_unix_ms)?,
+            scope,
+            kind,
+            payload,
+        });
+    }
+    Ok(projected)
 }
 
 fn validate_sequences(events: &[EventEnvelope]) -> Result<(), ProjectionError> {
@@ -344,6 +395,30 @@ mod tests {
         projection.rebuild(&events).expect("rebuild");
         assert_eq!(projection.events().unwrap(), events);
         assert!(projection.is_current_with(&events).unwrap());
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn projection_queries_by_scope_and_kind() {
+        let path = temp_path("queries");
+        let events = sample_events();
+        let mut projection = SqliteProjection::open(&path).expect("open projection");
+        projection.rebuild(&events).expect("rebuild");
+
+        assert_eq!(
+            projection
+                .events_for_scope("conversation:local-a")
+                .expect("scope query"),
+            events
+        );
+        assert_eq!(
+            projection
+                .events_of_kind(EventKind::UserMessageCommitted)
+                .expect("kind query"),
+            vec![events[1].clone()]
+        );
+
         drop(projection);
         let _ = fs::remove_file(path);
     }
