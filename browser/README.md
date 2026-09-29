@@ -14,7 +14,7 @@ This directory contains Chatarium's **P0 emergency durability layer** for the of
 
 The userscript runs only on `chatgpt.com`.
 
-## What version 0.5 protects
+## What version 0.5.1 protects
 
 - **Per-conversation draft WAL.** Composer text is synchronously copied into `localStorage` and then archived into IndexedDB. Navigating to another chat does not intentionally overwrite another conversation's synchronous draft record.
 - **Separate send-intent WAL.** A send attempt is synchronously journaled *before* the site's normal bubbling send handler runs. Later draft mutations cannot erase this record.
@@ -96,9 +96,9 @@ A timeout, disconnect, page crash, or frontend exception between the middle stat
 
 This remains a browser flight recorder rather than a complete network-protocol recorder. DOM selectors can change when ChatGPT changes. Assistant text is observational and may miss content that never reached/rendered in the page. A DOM transcript is not treated as canonical remote state.
 
-Version 0.5 adds one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. It does not capture arbitrary fetches, request bodies, request headers, authentication material, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; exceeding that limit is recorded explicitly and the recorder cancels only its cloned branch.
+Version 0.5.1 adds one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. It does not capture arbitrary fetches, request bodies, request headers, authentication material, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; exceeding that limit is recorded explicitly and the recorder cancels only its cloned branch. For SSE responses, `data: [DONE]` is treated as a clean local terminal condition and is recorded as `network-stream-end` with `terminal = "sse-done"`.
 
-Version 0.5 intentionally **does not auto-inject recovered text into the composer**. Copying recovered text is safe; mutating a React-controlled editor without a verified adapter can create a second class of data-loss bugs. Automatic restore belongs behind a tested site adapter.
+Version 0.5.1 intentionally **does not auto-inject recovered text into the composer**. Copying recovered text is safe; mutating a React-controlled editor without a verified adapter can create a second class of data-loss bugs. Automatic restore belongs behind a tested site adapter.
 
 Likewise, "confirmed" currently means *observed in the rendered user transcript*. It does not yet mean a protocol acknowledgement was captured. The protocol observatory will refine this distinction.
 
@@ -106,6 +106,6 @@ Visible-error capture is intentionally conservative: it observes `role="alert"` 
 
 ## Privacy
 
-The local archive contains conversation text. Version 0.5 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
+The local archive contains conversation text. Version 0.5.1 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
 
 Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed.
