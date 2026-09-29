@@ -69,10 +69,7 @@ pub fn record_controller_worker_bound(
 ) -> std::io::Result<u64> {
     append_typed(
         store,
-        controller_worker_scope(
-            binding.controller_session_id(),
-            binding.worker_session_id(),
-        ),
+        controller_worker_scope(binding.controller_session_id(), binding.worker_session_id()),
         EventKind::ControllerWorkerBound,
         json!({
             "schema": SUPERVISION_AUDIT_SCHEMA,
@@ -146,8 +143,7 @@ pub fn replay_supervision_audit(events: &[EventEnvelope]) -> Result<SupervisionA
 
                 let controller =
                     registered_before(&sessions_by_id, controller_session_id, event.sequence)?;
-                let worker =
-                    registered_before(&sessions_by_id, worker_session_id, event.sequence)?;
+                let worker = registered_before(&sessions_by_id, worker_session_id, event.sequence)?;
 
                 if controller.worker_binding.is_some() {
                     return Err(format!(
@@ -351,9 +347,7 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 mod tests {
     use super::*;
     use crate::projection::SqliteProjection;
-    use crate::session_audit::{
-        record_local_session_registered, record_worker_session_bound,
-    };
+    use crate::session_audit::{record_local_session_registered, record_worker_session_bound};
     use crate::worker_audit::replay_worker_audit;
     use crate::{JsonlEventStore, MemoryEventStore};
     use chatarium_core::orchestration::WorkerId;
@@ -385,27 +379,17 @@ mod tests {
         record_local_session_registered(store, session_id).unwrap();
     }
 
-    fn bind_worker(
-        store: &mut impl EventStore,
-        worker_id: WorkerId,
-        session_id: SessionId,
-    ) {
-        record_worker_session_bound(
-            store,
-            WorkerSessionBinding::new(worker_id, session_id),
-        )
-        .unwrap();
+    fn bind_worker(store: &mut impl EventStore, worker_id: WorkerId, session_id: SessionId) {
+        record_worker_session_bound(store, WorkerSessionBinding::new(worker_id, session_id))
+            .unwrap();
     }
 
     fn designate(store: &mut impl EventStore, session_id: SessionId) {
-        record_controller_session_designated(store, ControllerDesignation::new(session_id)).unwrap();
+        record_controller_session_designated(store, ControllerDesignation::new(session_id))
+            .unwrap();
     }
 
-    fn supervise(
-        store: &mut impl EventStore,
-        controller: SessionId,
-        worker: SessionId,
-    ) {
+    fn supervise(store: &mut impl EventStore, controller: SessionId, worker: SessionId) {
         let binding = ControllerWorkerBinding::new(controller, worker).unwrap();
         record_controller_worker_bound(store, binding).unwrap();
     }
