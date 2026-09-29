@@ -1148,7 +1148,7 @@ data: [DONE]
 
         assert_eq!(
             derived.pointer("/inventory/streams/0/frame_count"),
-            Some(&json!(7))
+            Some(&json!(8))
         );
         assert_eq!(
             derived.pointer("/inventory/streams/0/delta_encodings/0"),
