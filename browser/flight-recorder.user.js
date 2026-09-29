@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.4.0
+// @version      0.5.0
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -15,7 +15,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -26,6 +26,7 @@
   const MAX_SEND_INTENTS = 50;
   const MAX_ASSISTANT_WAL_CHARS = 500_000;
   const MAX_ERROR_WAL_CHARS = 5_000;
+  const MAX_NETWORK_STREAM_BYTES = 8_000_000;
   const COMPOSER_POLL_MS = 250;
   const EXPORT_HOTKEY = { ctrlKey: true, shiftKey: true, altKey: true, code: 'KeyE' };
 
@@ -132,6 +133,160 @@
     };
     void tx('events', 'readwrite', (store) => store.add(event)).catch((error) => {
       console.error('[chatarium] event write failed', error);
+    });
+  }
+
+  function networkRequestInfo(input, init) {
+    try {
+      const requestUrl = input instanceof Request
+        ? input.url
+        : input instanceof URL
+          ? input.href
+          : String(input);
+      const url = new URL(requestUrl, location.href);
+      const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      return {
+        url,
+        method,
+        capture: method === 'POST'
+          && url.origin === location.origin
+          && url.pathname === '/backend-api/f/conversation',
+      };
+    } catch {
+      return { url: null, method: null, capture: false };
+    }
+  }
+
+  async function captureNetworkResponseStream(response, requestInfo) {
+    const streamId = makeId('network-stream');
+    const contentType = response.headers.get('content-type') ?? '';
+    const endpoint = requestInfo.url?.pathname ?? '/backend-api/f/conversation';
+    let totalBytes = 0;
+    let chunkIndex = 0;
+    let truncated = false;
+
+    appendEvent('network-stream-start', {
+      streamId,
+      endpoint,
+      method: requestInfo.method,
+      status: response.status,
+      contentType,
+      privateEvidence: true,
+    });
+
+    try {
+      if (!response.body) {
+        appendEvent('network-stream-unavailable', {
+          streamId,
+          endpoint,
+          reason: 'response-body-unavailable',
+        });
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+
+        if (totalBytes + value.byteLength > MAX_NETWORK_STREAM_BYTES) {
+          truncated = true;
+          appendEvent('network-stream-truncated', {
+            streamId,
+            endpoint,
+            capturedBytes: totalBytes,
+            limitBytes: MAX_NETWORK_STREAM_BYTES,
+          });
+          try {
+            await reader.cancel('Chatarium network stream capture limit reached');
+          } catch {
+            // The original response branch belongs to ChatGPT. Failure to cancel our clone is
+            // diagnostic-only and must never affect the page's response consumption.
+          }
+          break;
+        }
+
+        totalBytes += value.byteLength;
+        const text = decoder.decode(value, { stream: true });
+        appendEvent('network-stream-chunk', {
+          streamId,
+          endpoint,
+          chunkIndex,
+          bytes: value.byteLength,
+          text,
+          privateEvidence: true,
+        });
+        chunkIndex += 1;
+      }
+
+      if (!truncated) {
+        const tail = decoder.decode();
+        if (tail) {
+          appendEvent('network-stream-chunk', {
+            streamId,
+            endpoint,
+            chunkIndex,
+            bytes: 0,
+            text: tail,
+            privateEvidence: true,
+          });
+          chunkIndex += 1;
+        }
+        appendEvent('network-stream-end', {
+          streamId,
+          endpoint,
+          chunks: chunkIndex,
+          capturedBytes: totalBytes,
+          privateEvidence: true,
+        });
+      }
+    } catch (error) {
+      appendEvent('network-stream-error', {
+        streamId,
+        endpoint,
+        capturedBytes: totalBytes,
+        message: String(error?.message ?? error),
+      });
+    }
+  }
+
+  function installNetworkStreamCapture() {
+    if (typeof window.fetch !== 'function') return;
+
+    const originalFetch = window.fetch;
+    window.fetch = new Proxy(originalFetch, {
+      apply(target, thisArg, args) {
+        const requestInfo = networkRequestInfo(args[0], args[1]);
+        const result = Reflect.apply(target, thisArg, args);
+        if (!requestInfo.capture) return result;
+
+        return Promise.resolve(result).then(
+          (response) => {
+            try {
+              const clone = response.clone();
+              void captureNetworkResponseStream(clone, requestInfo);
+            } catch (error) {
+              appendEvent('network-stream-error', {
+                endpoint: requestInfo.url?.pathname ?? '/backend-api/f/conversation',
+                capturedBytes: 0,
+                message: `clone response: ${String(error?.message ?? error)}`,
+              });
+            }
+            return response;
+          },
+          (error) => {
+            appendEvent('network-fetch-error', {
+              endpoint: requestInfo.url?.pathname ?? '/backend-api/f/conversation',
+              method: requestInfo.method,
+              message: String(error?.message ?? error),
+            });
+            throw error;
+          },
+        );
+      },
     });
   }
 
@@ -774,6 +929,7 @@
     }),
   });
 
+  installNetworkStreamCapture();
   migrateLegacyWal();
   installEventCapture();
   installMutationCapture();
