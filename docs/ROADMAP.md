@@ -20,9 +20,11 @@ Exit criterion: a browser/network failure may interrupt a turn, but it cannot er
 
 ## P0.5 — establish the protocol baseline
 
-Create the first controlled observation set of the official ChatGPT web client **without turning the user into a manual DevTools operator**.
+Create controlled observation sets of the official ChatGPT web client while minimizing human QA.
 
-The first deliverable is the one-command CDP capture harness described in `docs/CAPTURE_HARNESS.md`:
+The first empirical snapshot now exists: `protocol/snapshots/2026-09-29.001`, derived from a manual Edge/Linux HAR of a completed text turn. Manual HAR is acceptable bootstrap evidence when it produces useful protocol knowledge faster than finishing capture automation first.
+
+The automation target remains the one-command capture harness described in `docs/CAPTURE_HARNESS.md`:
 
 - dedicated Chatarium Edge profile with one-time normal login;
 - read-only diagnostics (`chatarium-capture doctor`);
@@ -50,7 +52,9 @@ Canonical experiments:
 
 The first machine-executable experiment definitions live under `protocol/experiments/`. Each experiment should produce its own capture or clearly delimited action log. Human QA is reserved for observations the harness genuinely cannot obtain itself.
 
-Exit criterion: snapshot `2026-09-17.001` (or the actual first observation ID) documents enough of the request/event lifecycle to explain a basic text turn without guessing, and equivalent future captures can be reproduced with a single harness command after one-time profile setup.
+Current state: snapshot `2026-09-29.001` documents the prepare/send/persisted-completion path for a basic text turn without guessing about the observed surfaces. Its HAR did not preserve the SSE body, so stream-event grammar remains an explicit gap.
+
+Exit criterion: repeated equivalent captures can be produced reproducibly, including streaming evidence, without requiring a Windows-specific bootstrap path.
 
 ## P1 — recorder and diff tooling
 
