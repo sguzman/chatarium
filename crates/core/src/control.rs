@@ -227,7 +227,10 @@ impl fmt::Display for ControlAdmissionError {
                 "stale worker control: current goal is {expected}, received {received}"
             ),
             Self::InvalidPhase { control, phase } => {
-                write!(formatter, "{control:?} is not admissible while worker is {phase:?}")
+                write!(
+                    formatter,
+                    "{control:?} is not admissible while worker is {phase:?}"
+                )
             }
         }
     }
@@ -285,10 +288,7 @@ mod tests {
         let mut lifecycle = working();
         match phase {
             WorkerPhase::Completed => {
-                assert_eq!(
-                    lifecycle.complete(G1),
-                    Ok(TransitionOutcome::Changed)
-                );
+                assert_eq!(lifecycle.complete(G1), Ok(TransitionOutcome::Changed));
             }
             WorkerPhase::Failed => {
                 assert_eq!(lifecycle.fail(G1), Ok(TransitionOutcome::Changed));
