@@ -150,6 +150,8 @@ Chatarium now treats worker lifecycle as a machine-readable domain concept separ
 
 This is not live multi-session routing yet. It is the pure domain contract that later master/worker routing, GUI supervision, and durable orchestration must preserve.
 
+Worker identity and lifecycle are now also restart-safe through the authoritative journal. Each local worker's current goal and machine-readable phase can be reconstructed independently after a crash/restart, including attention-required and terminal states. Durable replay does not recreate continuation leases; any new continuation authority after restart must come from a fresh explicit decision.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.

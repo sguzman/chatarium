@@ -247,7 +247,9 @@ impl TurnEvidence {
             | EventKind::RouteProposed
             | EventKind::RouteUserDecisionRecorded
             | EventKind::RouteDispatched
-            | EventKind::RouteResultObserved => {}
+            | EventKind::RouteResultObserved
+            | EventKind::WorkerGoalAssigned
+            | EventKind::WorkerLifecycleTransitionRecorded => {}
         }
         Ok(())
     }
@@ -309,6 +311,10 @@ pub enum EventKind {
     RouteDispatched,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
+    /// A worker received a new typed goal assignment.
+    WorkerGoalAssigned,
+    /// A typed worker lifecycle transition was recorded.
+    WorkerLifecycleTransitionRecorded,
 }
 
 impl EventKind {
@@ -337,6 +343,8 @@ impl EventKind {
             Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
             Self::RouteDispatched => "route_dispatched",
             Self::RouteResultObserved => "route_result_observed",
+            Self::WorkerGoalAssigned => "worker_goal_assigned",
+            Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
         }
     }
 
@@ -365,6 +373,8 @@ impl EventKind {
             "route_user_decision_recorded" => Some(Self::RouteUserDecisionRecorded),
             "route_dispatched" => Some(Self::RouteDispatched),
             "route_result_observed" => Some(Self::RouteResultObserved),
+            "worker_goal_assigned" => Some(Self::WorkerGoalAssigned),
+            "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
             _ => None,
         }
     }

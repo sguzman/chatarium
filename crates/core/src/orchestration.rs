@@ -6,6 +6,32 @@
 
 use std::fmt;
 
+/// Opaque local identity for one orchestration worker.
+///
+/// This is not a ChatGPT conversation/session identifier and carries no transport semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkerId(u64);
+
+impl WorkerId {
+    /// Construct a worker identity from a caller-owned local value.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Return the opaque local value for persistence/diagnostics.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for WorkerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// Opaque correlation identity for one worker goal lifecycle.
 ///
 /// Callers allocate identities; the core only requires that a replacement goal
