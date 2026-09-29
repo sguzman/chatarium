@@ -1,0 +1,154 @@
+{
+  "schema": "chatarium-field-classification",
+  "version": 1,
+  "evidence_revisions": [
+    "2026-09-29.001",
+    "2026-09-29.002"
+  ],
+  "caveat": "These classes describe how Chatarium should compare currently observed evidence. structural_candidate is not a claim that a field is required, stable across future deployments, or part of a supported API.",
+  "classes": {
+    "structural_candidate": "Observed protocol vocabulary or shape currently interpreted by Chatarium; a compatibility candidate, not a stability promise.",
+    "ephemeral_instance": "Per-run, per-message, per-conversation, timestamp, or other instance identity that should not be used as a cross-capture equality key.",
+    "delivery_noise": "Local/browser transport delivery detail that is not a protocol frame boundary or remote semantic field.",
+    "observation_count": "A count worth recording and comparing, but whose numeric value may vary across otherwise equivalent observations.",
+    "diagnostic": "Recorder, parser, provenance, or warning metadata used to explain an observation rather than describe the remote protocol contract.",
+    "controlled_fixture": "Exact controlled experiment content intentionally retained because the experiment definition makes it safe and reproducible.",
+    "unknown": "Observed data for which the current evidence does not justify a stronger comparison class."
+  },
+  "flight_inventory": {
+    "excluded_context": {
+      "recorder_version": {
+        "class": "diagnostic",
+        "rationale": "Local Flight Recorder implementation version is provenance, not remote protocol structure."
+      },
+      "selected_run": {
+        "class": "ephemeral_instance",
+        "rationale": "Recorder start sequence, timestamp, and selected-run event count identify one local observation."
+      },
+      "event_kind_counts.network-stream-chunk": {
+        "class": "delivery_noise",
+        "rationale": "Browser response chunks are explicitly observed not to be SSE frame boundaries."
+      }
+    },
+    "sections": {
+      "event_kind_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Recorder event families are structural observation vocabulary; occurrence counts can vary by run."
+      },
+      "send_state_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Send reconciliation states are meaningful observed lifecycle vocabulary; counts are run-specific."
+      },
+      "confirmation_evidence_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Confirmation evidence kinds describe observed reconciliation surfaces; counts are run-specific."
+      },
+      "message_role_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Message roles are protocol-shaped vocabulary; their counts depend on the controlled run."
+      },
+      "message_source_counts": {
+        "key_class": "diagnostic",
+        "value_class": "observation_count",
+        "rationale": "Message source labels identify Chatarium observation surfaces rather than remote protocol fields."
+      },
+      "assistant_wal": {
+        "class": "diagnostic",
+        "rationale": "The assistant WAL is a local durability projection; selected protocol-backed subfields are classified separately."
+      },
+      "warning_count": {
+        "class": "diagnostic",
+        "rationale": "Warning count describes local ingestion/parsing diagnostics."
+      }
+    },
+    "assistant_wal_fields": {
+      "present": {
+        "class": "diagnostic",
+        "rationale": "Presence describes whether the local durability projection was populated."
+      },
+      "source": {
+        "class": "diagnostic",
+        "rationale": "Source names the local observation surface."
+      },
+      "evidence_sources": {
+        "class": "diagnostic",
+        "rationale": "Evidence sources are local provenance labels."
+      },
+      "protocol_evidence": {
+        "class": "diagnostic",
+        "rationale": "Protocol evidence is Chatarium's provenance label for the observed frame class."
+      },
+      "protocol_status": {
+        "class": "structural_candidate",
+        "rationale": "Assistant status is directly observed remote message-state vocabulary."
+      },
+      "protocol_end_turn": {
+        "class": "structural_candidate",
+        "rationale": "end_turn is directly observed in final assistant message completion state."
+      },
+      "protocol_is_complete": {
+        "class": "structural_candidate",
+        "rationale": "is_complete is directly observed in the final message metadata patch."
+      },
+      "text_is_experiment_allowed": {
+        "class": "controlled_fixture",
+        "rationale": "This boolean only records whether text equals content explicitly allowed by the canonical experiment."
+      }
+    },
+    "stream_fields": {
+      "status": {
+        "class": "structural_candidate",
+        "rationale": "HTTP response status is part of the observed transport result for the controlled endpoint."
+      },
+      "content_type": {
+        "class": "structural_candidate",
+        "rationale": "text/event-stream content type is part of the observed response transport shape."
+      },
+      "frame_count": {
+        "class": "observation_count",
+        "rationale": "Parsed SSE frame count is meaningful evidence but can vary if optional/control frames vary."
+      },
+      "named_event_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Named SSE event vocabulary is structural; occurrence counts can vary."
+      },
+      "control_type_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Typed control-frame names are structural candidates; occurrence counts can vary."
+      },
+      "delta_operation_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Delta operation names are structural candidates; occurrence counts can vary."
+      },
+      "delta_path_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Observed patch/append paths are structural candidates; occurrence counts can vary."
+      },
+      "marker_counts": {
+        "key_class": "structural_candidate",
+        "value_class": "observation_count",
+        "rationale": "Message-marker vocabulary is structural; occurrence counts can vary."
+      },
+      "delta_encodings": {
+        "class": "structural_candidate",
+        "rationale": "The declared delta encoding identifies the observed stream grammar revision."
+      },
+      "completion": {
+        "class": "structural_candidate",
+        "rationale": "message_stream_complete, terminal DONE, and terminal classification are directly observed completion signals."
+      },
+      "parse_warning_count": {
+        "class": "diagnostic",
+        "rationale": "Parse warnings describe local interpreter coverage/failure, not remote semantic state."
+      }
+    }
+  }
+}
