@@ -103,5 +103,70 @@ fn documented_cli_commands_remain_operational() {
         serde_json::from_slice::<serde_json::Value>(&fs::read(diff).unwrap()).unwrap()["summary"]["unchanged_endpoints"],
         1
     );
+
+    let flight_before = dir.join("flight-before.json");
+    let flight_after = dir.join("flight-after.json");
+    let flight_diff = dir.join("flight-diff.json");
+    let base_flight = serde_json::json!({
+        "format": "chatarium-flight-inventory",
+        "version": 1,
+        "experiment_id": "C03-send-text",
+        "recorder_version": "0.6.0",
+        "selected_run": {
+            "started_seq": 10,
+            "started_at": "2026-09-29T11:00:00Z",
+            "event_count": 5
+        },
+        "event_kind_counts": {"network-stream-chunk": 2},
+        "send_state_counts": {"confirmed": 1},
+        "confirmation_evidence_counts": {"protocol-input-message": 1},
+        "message_role_counts": {"assistant": 1, "user": 1},
+        "message_source_counts": {"protocol-sse": 2},
+        "assistant_wal": {"present": true, "protocol_is_complete": true},
+        "streams": [{
+            "stream": "stream-1",
+            "endpoint": "/backend-api/f/conversation",
+            "method": "POST",
+            "status": 200,
+            "content_type": "text/event-stream; charset=utf-8",
+            "frame_count": 2,
+            "named_event_counts": {"delta": 1},
+            "control_type_counts": {"message_stream_complete": 1},
+            "delta_operation_counts": {"append": 1},
+            "delta_path_counts": {"/message/content/parts/0": 1},
+            "marker_counts": {},
+            "delta_encodings": ["v1"],
+            "completion": {"message_stream_complete": true, "done": true, "terminal": "sse-done"},
+            "parse_warning_count": 0
+        }],
+        "warning_count": 0
+    });
+    let mut changed_flight = base_flight.clone();
+    changed_flight["streams"][0]["control_type_counts"]["conversation_detail_metadata"] =
+        serde_json::json!(1);
+    fs::write(&flight_before, serde_json::to_vec_pretty(&base_flight).unwrap()).unwrap();
+    fs::write(
+        &flight_after,
+        serde_json::to_vec_pretty(&changed_flight).unwrap(),
+    )
+    .unwrap();
+
+    let flight_diff_run = Command::new(env!("CARGO_BIN_EXE_chatarium-inventory-diff"))
+        .args([
+            flight_before.to_str().unwrap(),
+            flight_after.to_str().unwrap(),
+            flight_diff.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(flight_diff_run.status.success());
+    let flight_diff_value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&flight_diff).unwrap()).unwrap();
+    assert_eq!(
+        flight_diff_value["format"],
+        "chatarium-flight-inventory-diff"
+    );
+    assert_eq!(flight_diff_value["summary"]["added_paths"], 1);
+
     let _ = fs::remove_dir_all(dir);
 }
