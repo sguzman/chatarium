@@ -195,6 +195,8 @@ Local session identity is now explicit rather than implicit in routing endpoints
 
 Controller/worker supervision is now a separate durable relationship layer above those identities. A controller session is explicitly designated, may supervise multiple worker sessions, and each worker session may have at most one controller. Controller and worker roles are intentionally disjoint in this first model to prevent accidental controller chains/cycles. Supervision does not alter route policy, issue continuation/dispatch permits, create controls, or mutate worker lifecycle; the user remains the authority above the controller.
 
+Worker-control issuer provenance is now explicit as either direct user action or a designated controller session. Controller-issued controls are compositionally validated against the durable supervision topology before they are treated as correctly routed: the target WorkerId must resolve to its worker SessionId, the issuer must be that session's designated controller, both sessions must already have routing endpoints, and the route source/destination must match those endpoints. User-issued controls intentionally do not invent a user routing endpoint. This provenance/topology validation still grants no route-policy bypass or dispatch authority.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
