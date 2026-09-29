@@ -189,6 +189,8 @@ Typed worker controls sit above that lifecycle state and below future transport.
 
 Admitted worker controls are now also journaled as their own typed audit facts. Control identity, worker/goal correlation, semantic kind, and continuation permit ordinal survive restart, but control replay does not mutate worker lifecycle or imply dispatch, delivery, or execution. Those facts remain separate evidence layers. SQLite carries admitted-control events generically without a dedicated schema/materialization.
 
+Control-to-route correlation is a separate durable provenance layer. A typed `ControlRouteBinding` permits only `OrchestrationControl` routes, and replay requires both the control admission and route proposal to predate the binding. The audit enforces one-control-to-one-route cardinality in both directions. It intentionally does not define `WorkerId` to `RouteEndpointId` mapping, session identity, transport, or dispatch semantics.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
