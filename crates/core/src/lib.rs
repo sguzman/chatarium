@@ -1,6 +1,7 @@
 //! Domain model for Chatarium reliability state.
 
 pub mod control;
+pub mod control_provenance;
 pub mod control_route;
 pub mod orchestration;
 pub mod routing;
@@ -260,7 +261,8 @@ impl TurnEvidence {
             | EventKind::SessionEndpointBound
             | EventKind::WorkerSessionBound
             | EventKind::ControllerSessionDesignated
-            | EventKind::ControllerWorkerBound => {}
+            | EventKind::ControllerWorkerBound
+            | EventKind::WorkerControlIssuerBound => {}
         }
         Ok(())
     }
@@ -340,6 +342,8 @@ pub enum EventKind {
     ControllerSessionDesignated,
     /// A controller session was correlated to one worker session.
     ControllerWorkerBound,
+    /// Explicit issuer provenance was correlated to one admitted worker control.
+    WorkerControlIssuerBound,
 }
 
 impl EventKind {
@@ -377,6 +381,7 @@ impl EventKind {
             Self::WorkerSessionBound => "worker_session_bound",
             Self::ControllerSessionDesignated => "controller_session_designated",
             Self::ControllerWorkerBound => "controller_worker_bound",
+            Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
         }
     }
 
@@ -414,6 +419,7 @@ impl EventKind {
             "worker_session_bound" => Some(Self::WorkerSessionBound),
             "controller_session_designated" => Some(Self::ControllerSessionDesignated),
             "controller_worker_bound" => Some(Self::ControllerWorkerBound),
+            "worker_control_issuer_bound" => Some(Self::WorkerControlIssuerBound),
             _ => None,
         }
     }
