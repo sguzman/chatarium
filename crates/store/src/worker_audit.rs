@@ -91,9 +91,7 @@ pub fn replay_worker_audit(events: &[EventEnvelope]) -> Result<Vec<WorkerAuditRe
     for event in events {
         match event.kind {
             EventKind::WorkerGoalAssigned => replay_assignment(&mut workers, event)?,
-            EventKind::WorkerLifecycleTransitionRecorded => {
-                replay_transition(&mut workers, event)?
-            }
+            EventKind::WorkerLifecycleTransitionRecorded => replay_transition(&mut workers, event)?,
             _ => {}
         }
     }
@@ -453,7 +451,11 @@ mod tests {
     #[test]
     fn attention_states_survive_reopen() {
         for (label, action, expected) in [
-            ("needs-input", WorkerAction::RequestInput, WorkerPhase::NeedsInput),
+            (
+                "needs-input",
+                WorkerAction::RequestInput,
+                WorkerPhase::NeedsInput,
+            ),
             ("blocked", WorkerAction::MarkBlocked, WorkerPhase::Blocked),
         ] {
             let path = temp_path(label, "jsonl");
@@ -695,7 +697,9 @@ mod tests {
         let mut projection = SqliteProjection::open(&path).unwrap();
         projection.rebuild(store.events()).unwrap();
 
-        let assignments = projection.events_of_kind(EventKind::WorkerGoalAssigned).unwrap();
+        let assignments = projection
+            .events_of_kind(EventKind::WorkerGoalAssigned)
+            .unwrap();
         let transitions = projection
             .events_of_kind(EventKind::WorkerLifecycleTransitionRecorded)
             .unwrap();
