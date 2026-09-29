@@ -60,3 +60,14 @@ The baseline experiment set is defined in [`CAPTURE_PLAYBOOK.md`](CAPTURE_PLAYBO
 ## Implementation relationship
 
 `crates/protocol` may encode interpretations derived from this corpus. It must identify the newest observation revision against which it was validated. The Rust implementation is never retroactive evidence that the remote service behaved a certain way.
+
+
+## Corpus validation
+
+The committed corpus is validated in CI with:
+
+```text
+cargo run -p chatarium-recorder -- validate-corpus protocol
+```
+
+The validator checks snapshot identity and required notes, fixture-to-snapshot provenance, obvious credential-bearing object values, and executable canonical C03 SSE semantics. The C03 fixture is replayed through the same typed parser used by `crates/protocol`, keeping evidence and interpretation coupled by tests without treating the implementation as evidence.
