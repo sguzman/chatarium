@@ -297,7 +297,7 @@ fn require_before(label: &str, sequence: Option<u64>, binding_sequence: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MemoryEventStore;
+    use crate::{EventStore, MemoryEventStore};
     use crate::control_audit::record_worker_control_admitted;
     use crate::control_provenance_audit::record_worker_control_issuer_bound;
     use crate::control_route_audit::record_control_route_bound;
