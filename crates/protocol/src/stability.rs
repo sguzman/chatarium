@@ -129,7 +129,11 @@ pub fn validate_registry(value: &Value) -> Result<(), String> {
         FieldClass::ControlledFixture,
         FieldClass::Unknown,
     ] {
-        if classes.get(class.as_str()).and_then(Value::as_str).is_none() {
+        if classes
+            .get(class.as_str())
+            .and_then(Value::as_str)
+            .is_none()
+        {
             return Err(format!(
                 "field classification registry is missing class definition '{}'",
                 class.as_str()
