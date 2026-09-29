@@ -1,5 +1,7 @@
 //! Offline protocol-capture ingestion, sanitization, and structural inventory tool.
 
+pub mod flight;
+
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -34,6 +36,14 @@ pub fn run_cli(args: &[String]) -> Result<(), String> {
         [command, input] if command == "inspect-har" => inspect_har(Path::new(input)),
         [command, input, snapshot_dir, capture_id] if command == "snapshot-har" => {
             snapshot_har(Path::new(input), Path::new(snapshot_dir), capture_id)
+        }
+        [command, input, experiment, snapshot_dir, capture_id] if command == "snapshot-flight" => {
+            flight::snapshot_flight(
+                Path::new(input),
+                Path::new(experiment),
+                Path::new(snapshot_dir),
+                capture_id,
+            )
         }
         [command, input] if command == "fingerprint" => {
             println!("{}  {}", fingerprint_file(Path::new(input))?, input);
