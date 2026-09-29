@@ -1,0 +1,87 @@
+{
+  "snapshot": "2026-09-29.001",
+  "source": {
+    "kind": "manual_har",
+    "entry_index": 298
+  },
+  "request": {
+    "method": "POST",
+    "path": "/backend-api/f/conversation",
+    "headers_present": [
+      "chatgpt-account-id",
+      "oai-did",
+      "openai-sentinel-chat-requirements-token",
+      "openai-sentinel-proof-token",
+      "openai-sentinel-turnstile-token",
+      "x-conduit-token",
+      "x-oai-turn-trace-id",
+      "x-openai-web-frontend",
+      "x-openai-web-sse-compression"
+    ],
+    "json": {
+      "turn_attribution": {
+        "turn_trigger": "composer"
+      },
+      "action": "next",
+      "is_do_not_remember": false,
+      "model": "gpt-5-6-thinking",
+      "parent_message_id": "client-created-root",
+      "thinking_effort": "extended",
+      "timezone": "<TIMEZONE>",
+      "timezone_offset_min": "<OFFSET_MINUTES>",
+      "client_contextual_info": {
+        "app_name": "chatgpt.com",
+        "app_surface": "codex_browser",
+        "has_web_push_capabilities": true,
+        "web_push_notification_permission": "default"
+      },
+      "local_function_names": [
+        "local.continue_in_work"
+      ],
+      "messages": [
+        {
+          "author": {
+            "role": "user",
+            "name": null,
+            "metadata": {}
+          },
+          "channel": null,
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "`respond with exactly CHATARIUM_PROTOCOL_TEST_001`"
+            ]
+          },
+          "create_time": "<TIMESTAMP>",
+          "end_turn": null,
+          "id": "<USER_MESSAGE_ID>",
+          "metadata": {
+            "serialization_metadata": {
+              "render_format": "plain"
+            }
+          },
+          "recipient": "all",
+          "status": "finished_successfully",
+          "update_time": null,
+          "weight": 1
+        }
+      ],
+      "supported_encodings": [
+        "v1"
+      ],
+      "client_prepare_state": "success"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "text/event-stream; charset=utf-8",
+    "body_capture": "unavailable_in_exported_har",
+    "headers_present": [
+      "x-build",
+      "x-conduit-token",
+      "x-oai-is-update",
+      "x-oai-request-id"
+    ]
+  },
+  "redactions": "all header values and reusable/identity-bearing values omitted"
+}
