@@ -199,6 +199,14 @@ A master session is a coordinator, not an authority above the user.
 
 The GUI must provide a way to interrupt, inspect, and override orchestration.
 
+## Second executable orchestration invariant
+
+Cross-session/tool dispatch is now modeled as a one-shot policy gate before any transport exists. A route begins under one of three explicit policy requirements: automatic allow, automatic deny, or require user approval. No dispatch permit can be produced while approval is pending or the route is denied, and a permit can be consumed only once.
+
+The user may approve a pending route, deny a pending route, veto an automatically allowed route, or explicitly override an automatic denial before dispatch. A master/controller session has no special authority to bypass that gate. After dispatch, later policy changes do not rewrite history into "never dispatched"; the dispatched state remains observable.
+
+This remains pure domain state. The future egui supervisor, MCP/tool adapters, and master/worker transport must use this gate rather than inventing a hidden bypass.
+
 ## 7. Message bus, not hidden automation
 
 The preferred architecture is an explicit local message/control bus.
