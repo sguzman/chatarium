@@ -150,7 +150,7 @@ Chatarium now treats worker lifecycle as a machine-readable domain concept separ
 
 This is not live multi-session routing yet. It is the pure domain contract that later master/worker routing, GUI supervision, and durable orchestration must preserve.
 
-Worker identity and lifecycle are now also restart-safe through the authoritative journal. Each local worker's current goal and machine-readable phase can be reconstructed independently after a crash/restart, including attention-required and terminal states. Durable replay does not recreate continuation leases; any new continuation authority after restart must come from a fresh explicit decision.
+Worker identity and lifecycle are now also restart-safe through the authoritative journal. Each local worker's current goal and machine-readable phase can be reconstructed independently after a crash/restart, including attention-required and terminal states. Durable replay also reconstructs continuation lease/permit history and remaining unissued allowance, but it does not recreate a fresh live move-only permit or silently replenish authority.
 
 Orchestration controls are now also modeled as typed semantic commands separate from ordinary prose. Start/resume, continue, stop, and goal-correlated status requests are admitted against a worker lifecycle snapshot before any future transport is involved. A continue command consumes one opaque bounded continuation permit, so that authority cannot be trivially copied/reused. Command admission itself never mutates worker state: Chatarium changes lifecycle only when later evidence explicitly records the transition.
 
