@@ -409,6 +409,7 @@ fn derive_sanitized_run(
     allowed_texts: &BTreeSet<String>,
 ) -> Result<Value, String> {
     let mut ids = IdentityMap::default();
+    let mut stats = FlightSanitizationStats::default();
     let mut warnings = Vec::<String>::new();
     let mut event_kind_counts = BTreeMap::<String, u64>::new();
     let mut event_timeline = Vec::new();
@@ -477,6 +478,7 @@ fn derive_sanitized_run(
                         &mut ids,
                         &mut streams[index].inventory,
                         &mut warnings,
+                        &mut stats,
                     );
                     streams[index].frames.push(sanitized);
                 }
@@ -510,6 +512,8 @@ fn derive_sanitized_run(
 
     for stream in &streams {
         if !stream.decoder.pending().trim().is_empty() {
+            stats.unterminated_sse_tails_redacted =
+                stats.unterminated_sse_tails_redacted.saturating_add(1);
             warnings.push(format!(
                 "{}: unterminated SSE tail was redacted",
                 stream.public_id
@@ -517,9 +521,11 @@ fn derive_sanitized_run(
         }
     }
 
-    let send_intents = sanitize_send_intents(export, selected, allowed_texts, &mut ids);
-    let assistant_wal = sanitize_assistant_wal(export, selected, allowed_texts, &mut ids);
-    let messages = sanitize_messages(export, selected, allowed_texts, &mut ids);
+    let send_intents =
+        sanitize_send_intents(export, selected, allowed_texts, &mut ids, &mut stats);
+    let assistant_wal =
+        sanitize_assistant_wal(export, selected, allowed_texts, &mut ids, &mut stats);
+    let messages = sanitize_messages(export, selected, allowed_texts, &mut ids, &mut stats);
 
     let sanitized_streams = streams
         .iter()
@@ -613,6 +619,7 @@ fn derive_sanitized_run(
     Ok(json!({
         "sanitized": sanitized,
         "inventory": inventory,
+        "sanitization_report": stats.report(),
     }))
 }
 
