@@ -1,5 +1,6 @@
 //! Offline protocol-capture ingestion, sanitization, and structural inventory tool.
 
+pub mod corpus;
 pub mod flight;
 
 use serde_json::{Value, json};
@@ -34,6 +35,14 @@ pub fn run_cli(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         [command, input] if command == "inspect-har" => inspect_har(Path::new(input)),
+        [command, protocol_dir] if command == "validate-corpus" => {
+            let report = corpus::validate_corpus(Path::new(protocol_dir))?;
+            println!(
+                "snapshots={} fixtures={} c03_sse_replays={}",
+                report.snapshots, report.fixtures, report.c03_sse_replays
+            );
+            Ok(())
+        }
         [command, input, snapshot_dir, capture_id] if command == "snapshot-har" => {
             snapshot_har(Path::new(input), Path::new(snapshot_dir), capture_id)
         }
@@ -58,7 +67,7 @@ pub fn run_cli(args: &[String]) -> Result<(), String> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  chatarium-recorder sanitize-har <input.har> <output.har>\n  chatarium-recorder inventory-har <input.har> <output.json>\n  chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>\n  chatarium-recorder snapshot-flight <input.json> <experiment.toml> <snapshot-dir> <capture-id>\n  chatarium-recorder inspect-har <input.har>\n  chatarium-recorder fingerprint <file>"
+        "Usage:\n  chatarium-recorder sanitize-har <input.har> <output.har>\n  chatarium-recorder inventory-har <input.har> <output.json>\n  chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>\n  chatarium-recorder snapshot-flight <input.json> <experiment.toml> <snapshot-dir> <capture-id>\n  chatarium-recorder inspect-har <input.har>\n  chatarium-recorder validate-corpus <protocol-dir>\n  chatarium-recorder fingerprint <file>"
     );
 }
 
