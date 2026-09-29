@@ -211,23 +211,32 @@ pub fn interpret_v1_frame(frame: &SseFrame) -> Result<TextTurnEvent, SseInterpre
                 });
             }
             Ok(TextTurnEvent::UserInput {
-                message_id: message.get("id").and_then(Value::as_str).map(ToOwned::to_owned),
+                message_id: message
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
                 conversation_id,
                 text: text_parts(message),
             })
         }
         Some("message_marker") => Ok(TextTurnEvent::MessageMarker {
-            marker: payload.get("marker").and_then(Value::as_str).map(ToOwned::to_owned),
-            marker_event: payload.get("event").and_then(Value::as_str).map(ToOwned::to_owned),
+            marker: payload
+                .get("marker")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            marker_event: payload
+                .get("event")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             message_id: payload
                 .get("message_id")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             conversation_id,
         }),
-        Some("message_stream_complete") => Ok(TextTurnEvent::MessageStreamComplete {
-            conversation_id,
-        }),
+        Some("message_stream_complete") => {
+            Ok(TextTurnEvent::MessageStreamComplete { conversation_id })
+        }
         Some(
             kind @ ("resume_conversation_token"
             | "title_generation"
@@ -248,7 +257,10 @@ fn interpret_delta(payload: &Value) -> Result<TextTurnEvent, SseInterpretationEr
     if let Some(message) = payload.pointer("/v/message")
         && message.pointer("/author/role").and_then(Value::as_str) == Some("assistant")
         && message.get("channel").and_then(Value::as_str) == Some("final")
-        && message.pointer("/content/content_type").and_then(Value::as_str) == Some("text")
+        && message
+            .pointer("/content/content_type")
+            .and_then(Value::as_str)
+            == Some("text")
     {
         let Some(message_id) = message.get("id").and_then(Value::as_str) else {
             return Err(SseInterpretationError {
@@ -393,17 +405,13 @@ impl TextTurnProjection {
                     }
                     match operation.path.as_deref() {
                         Some("/message/status") => {
-                            self.assistant_status =
-                                operation.value.as_str().map(ToOwned::to_owned);
+                            self.assistant_status = operation.value.as_str().map(ToOwned::to_owned);
                         }
                         Some("/message/end_turn") => {
                             self.assistant_end_turn = operation.value.as_bool();
                         }
                         Some("/message/metadata") => {
-                            if operation
-                                .value
-                                .get("is_complete")
-                                .and_then(Value::as_bool)
+                            if operation.value.get("is_complete").and_then(Value::as_bool)
                                 == Some(true)
                             {
                                 self.assistant_is_complete = true;
