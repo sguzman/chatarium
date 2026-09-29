@@ -775,6 +775,125 @@ mod tests {
         }"#
     }
 
+    fn asset_har() -> &'static [u8] {
+        br#"{
+          "log": {
+            "entries": [
+              {
+                "_resourceType": "script",
+                "request": {
+                  "method": "GET",
+                  "url": "https://cdn.example.test/assets/app.js?build=123&access_token=asset-secret",
+                  "headers": [],
+                  "cookies": [],
+                  "queryString": []
+                },
+                "response": {
+                  "status": 200,
+                  "headers": [],
+                  "content": {
+                    "mimeType": "application/javascript; charset=utf-8",
+                    "text": "console.log('asset');"
+                  }
+                }
+              },
+              {
+                "_resourceType": "stylesheet",
+                "request": {
+                  "method": "GET",
+                  "url": "https://cdn.example.test/assets/app.css?v=456",
+                  "headers": [],
+                  "cookies": [],
+                  "queryString": []
+                },
+                "response": {
+                  "status": 200,
+                  "headers": [],
+                  "content": {
+                    "mimeType": "text/css",
+                    "encoding": "base64",
+                    "text": "Ym9keXtjb2xvcjpyZWR9"
+                  }
+                }
+              },
+              {
+                "_resourceType": "fetch",
+                "request": {
+                  "method": "GET",
+                  "url": "https://chatgpt.com/backend-api/config",
+                  "headers": [],
+                  "cookies": [],
+                  "queryString": []
+                },
+                "response": {
+                  "status": 200,
+                  "headers": [],
+                  "content": {
+                    "mimeType": "application/json",
+                    "text": "{\"feature\":true}"
+                  }
+                }
+              },
+              {
+                "_resourceType": "image",
+                "request": {
+                  "method": "GET",
+                  "url": "https://cdn.example.test/assets/logo.png",
+                  "headers": [],
+                  "cookies": [],
+                  "queryString": []
+                },
+                "response": {
+                  "status": 200,
+                  "headers": [],
+                  "content": {
+                    "mimeType": "image/png",
+                    "encoding": "base64",
+                    "text": "iVBORw0KGgo="
+                  }
+                }
+              },
+              {
+                "_resourceType": "script",
+                "request": {
+                  "method": "GET",
+                  "url": "https://cdn.example.test/assets/lazy.js",
+                  "headers": [],
+                  "cookies": [],
+                  "queryString": []
+                },
+                "response": {
+                  "status": 304,
+                  "headers": [],
+                  "content": {
+                    "mimeType": "application/javascript"
+                  }
+                }
+              },
+              {
+                "_resourceType": "script",
+                "request": {
+                  "method": "GET",
+                  "url": "https://cdn.example.test/assets/broken.js",
+                  "headers": [],
+                  "cookies": [],
+                  "queryString": []
+                },
+                "response": {
+                  "status": 200,
+                  "headers": [],
+                  "content": {
+                    "mimeType": "application/javascript",
+                    "encoding": "base64",
+                    "text": "%%%PRIVATE_MALFORMED_BASE64%%%"
+                  }
+                }
+              }
+            ]
+          }
+        }"#
+    }
+
     #[test]
     fn sanitizer_removes_common_credentials_but_keeps_shape() {
         let output = sanitize_har_bytes(sample_har()).expect("sanitize");
@@ -852,6 +971,80 @@ mod tests {
         assert!(!text.contains("header-secret"));
         assert!(!text.contains("01234567-89ab-cdef-0123-456789abcdef"));
         assert!(!text.contains("TEST123"));
+    }
+
+    #[test]
+    fn frontend_asset_manifest_includes_only_code_assets_and_hashes_decoded_bodies() {
+        let sanitized = sanitize_har_bytes(asset_har()).expect("sanitize assets");
+        let value = parse_har(&sanitized).expect("parse assets");
+        let manifest = frontend_asset_manifest(&value).expect("asset manifest");
+        let assets = manifest["assets"].as_array().expect("assets array");
+
+        assert_eq!(manifest["format"], "chatarium-frontend-asset-manifest");
+        assert_eq!(manifest["version"], 1);
+        assert_eq!(manifest["asset_count"], 4);
+        assert_eq!(manifest["hashed_asset_count"], 2);
+        assert_eq!(manifest["warning_count"], 1);
+
+        let script = assets
+            .iter()
+            .find(|asset| asset["path"] == "/assets/app.js")
+            .expect("plain script asset");
+        assert_eq!(script["kind"], "script");
+        assert_eq!(script["host"], "cdn.example.test");
+        assert_eq!(script["body_available"], true);
+        assert_eq!(
+            script["body_sha256"],
+            sha256_hex(b"console.log('asset');")
+        );
+        assert_eq!(
+            script["decoded_body_bytes"],
+            json!(b"console.log('asset');".len())
+        );
+
+        let css = assets
+            .iter()
+            .find(|asset| asset["path"] == "/assets/app.css")
+            .expect("base64 stylesheet asset");
+        assert_eq!(css["kind"], "stylesheet");
+        assert_eq!(css["content_encoding"], "base64");
+        assert_eq!(css["body_available"], true);
+        assert_eq!(css["body_sha256"], sha256_hex(b"body{color:red}"));
+        assert_eq!(css["decoded_body_bytes"], json!(b"body{color:red}".len()));
+
+        let missing = assets
+            .iter()
+            .find(|asset| asset["path"] == "/assets/lazy.js")
+            .expect("missing body asset");
+        assert_eq!(missing["body_available"], false);
+        assert!(missing["body_sha256"].is_null());
+        assert!(missing["body_warning"].is_null());
+
+        let broken = assets
+            .iter()
+            .find(|asset| asset["path"] == "/assets/broken.js")
+            .expect("malformed base64 asset");
+        assert_eq!(broken["body_available"], false);
+        assert!(broken["body_sha256"].is_null());
+        assert_eq!(broken["body_warning"], "invalid-base64-content");
+
+        let text = serde_json::to_string_pretty(&manifest).unwrap();
+        assert!(!text.contains("backend-api/config"));
+        assert!(!text.contains("logo.png"));
+        assert!(!text.contains("asset-secret"));
+        assert!(!text.contains("PRIVATE_MALFORMED_BASE64"));
+        assert!(!text.contains("?build="));
+        assert!(!text.contains("?v="));
+    }
+
+    #[test]
+    fn frontend_asset_manifest_is_deterministic() {
+        let sanitized = sanitize_har_bytes(asset_har()).unwrap();
+        let value = parse_har(&sanitized).unwrap();
+        assert_eq!(
+            frontend_asset_manifest(&value).unwrap(),
+            frontend_asset_manifest(&value).unwrap()
+        );
     }
 
     #[test]
