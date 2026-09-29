@@ -85,6 +85,8 @@ fn documented_cli_commands_remain_operational() {
     assert!(snapshot_run.status.success());
     assert!(snapshot_dir.join("evidence/C01.har.json").exists());
     assert!(snapshot_dir.join("derived/C01.requests.json").exists());
+    assert!(snapshot_dir.join("derived/C01.sanitization.json").exists());
+    assert!(snapshot_dir.join("derived/C01.frontend-assets.json").exists());
     assert!(snapshot_dir.join("derived/C01.meta.json").exists());
 
     let after_inventory = dir.join("inventory-after.json");
@@ -171,6 +173,58 @@ fn documented_cli_commands_remain_operational() {
         "chatarium-flight-inventory-diff"
     );
     assert_eq!(flight_diff_value["summary"]["added_paths"], 1);
+
+    let asset_before = dir.join("asset-before.json");
+    let asset_after = dir.join("asset-after.json");
+    let asset_diff = dir.join("asset-diff.json");
+    let base_assets = serde_json::json!({
+        "format": "chatarium-frontend-asset-manifest",
+        "version": 1,
+        "asset_count": 1,
+        "hashed_asset_count": 1,
+        "warning_count": 0,
+        "assets": [{
+            "kind": "script",
+            "host": "cdn.example.test",
+            "path": "/assets/app.js",
+            "status": 200,
+            "mime_type": "application/javascript",
+            "content_encoding": null,
+            "body_available": true,
+            "decoded_body_bytes": 10,
+            "body_sha256": "aaaaaaaa",
+            "body_warning": null
+        }]
+    });
+    let mut changed_assets = base_assets.clone();
+    changed_assets["assets"][0]["body_sha256"] = serde_json::json!("bbbbbbbb");
+    fs::write(
+        &asset_before,
+        serde_json::to_vec_pretty(&base_assets).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &asset_after,
+        serde_json::to_vec_pretty(&changed_assets).unwrap(),
+    )
+    .unwrap();
+
+    let asset_diff_run = Command::new(env!("CARGO_BIN_EXE_chatarium-inventory-diff"))
+        .args([
+            asset_before.to_str().unwrap(),
+            asset_after.to_str().unwrap(),
+            asset_diff.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(asset_diff_run.status.success());
+    let asset_diff_value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&asset_diff).unwrap()).unwrap();
+    assert_eq!(
+        asset_diff_value["format"],
+        "chatarium-frontend-asset-manifest-diff"
+    );
+    assert_eq!(asset_diff_value["summary"]["changed_paths"], 1);
 
     let _ = fs::remove_dir_all(dir);
 }
