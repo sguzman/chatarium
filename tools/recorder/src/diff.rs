@@ -1,8 +1,7 @@
 //! Structural diffing for sanitized Chatarium protocol inventories.
 
 use chatarium_protocol::stability::{
-    ChangeKind, FieldAnnotation, classify_excluded_flight_context,
-    classify_flight_inventory_change,
+    ChangeKind, FieldAnnotation, classify_excluded_flight_context, classify_flight_inventory_change,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -655,9 +654,7 @@ mod tests {
             Some(&json!("ephemeral_instance"))
         );
         assert_eq!(
-            report.pointer(
-                "/context/classifications/network_stream_chunk_count/field_class"
-            ),
+            report.pointer("/context/classifications/network_stream_chunk_count/field_class"),
             Some(&json!("delivery_noise"))
         );
     }
