@@ -700,6 +700,5 @@ mod tests {
                     | EventKind::WorkerControlAdmitted
             )
         }));
-
     }
 }
