@@ -199,6 +199,14 @@ pub fn snapshot_flight(
             .ok_or_else(|| "internal flight derivation omitted inventory output".to_owned())?,
     )
     .map_err(|error| format!("serialize Flight Recorder inventory: {error}"))?;
+    let sanitization_report = serde_json::to_vec_pretty(
+        derived
+            .get("sanitization_report")
+            .ok_or_else(|| {
+                "internal flight derivation omitted sanitization report output".to_owned()
+            })?,
+    )
+    .map_err(|error| format!("serialize Flight Recorder sanitization report: {error}"))?;
 
     let evidence_dir = snapshot_dir.join("evidence");
     let derived_dir = snapshot_dir.join("derived");
@@ -216,6 +224,11 @@ pub fn snapshot_flight(
     let inventory_path = derived_dir.join(format!("{capture_id}.flight.inventory.json"));
     fs::write(&inventory_path, &inventory)
         .map_err(|error| format!("write {}: {error}", inventory_path.display()))?;
+
+    let sanitization_relative = format!("derived/{capture_id}.flight.sanitization.json");
+    let sanitization_path = derived_dir.join(format!("{capture_id}.flight.sanitization.json"));
+    fs::write(&sanitization_path, &sanitization_report)
+        .map_err(|error| format!("write {}: {error}", sanitization_path.display()))?;
 
     let warning_count = derived
         .pointer("/inventory/warning_count")
@@ -244,6 +257,9 @@ pub fn snapshot_flight(
         "inventory_file": inventory_relative,
         "inventory_sha256": sha256_hex(&inventory),
         "inventory_bytes": inventory.len(),
+        "sanitization_report_file": sanitization_relative,
+        "sanitization_report_sha256": sha256_hex(&sanitization_report),
+        "sanitization_report_bytes": sanitization_report.len(),
         "warning_count": warning_count,
         "recorder_tool_version": env!("CARGO_PKG_VERSION"),
     });
@@ -255,6 +271,7 @@ pub fn snapshot_flight(
 
     println!("capture: {}", evidence_path.display());
     println!("inventory: {}", inventory_path.display());
+    println!("sanitization: {}", sanitization_path.display());
     println!("metadata: {}", metadata_path.display());
     println!("raw-sha256: {}", sha256_hex(&source));
     println!("sanitized-sha256: {}", sha256_hex(&sanitized));
