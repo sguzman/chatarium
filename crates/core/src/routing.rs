@@ -160,7 +160,7 @@ pub enum RouteGateError {
 }
 
 /// One-shot authorization to dispatch a specific route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DispatchPermit {
     route: RouteRequest,
     authorized_by: DecisionAuthority,
@@ -169,31 +169,31 @@ pub struct DispatchPermit {
 impl DispatchPermit {
     /// Route identity authorized by this permit.
     #[must_use]
-    pub const fn route_id(self) -> RouteId {
+    pub const fn route_id(&self) -> RouteId {
         self.route.id
     }
 
     /// Source endpoint.
     #[must_use]
-    pub const fn source(self) -> RouteEndpointId {
+    pub const fn source(&self) -> RouteEndpointId {
         self.route.source
     }
 
     /// Destination endpoint.
     #[must_use]
-    pub const fn destination(self) -> RouteEndpointId {
+    pub const fn destination(&self) -> RouteEndpointId {
         self.route.destination
     }
 
     /// Routed action class.
     #[must_use]
-    pub const fn class(self) -> RouteClass {
+    pub const fn class(&self) -> RouteClass {
         self.route.class
     }
 
     /// Authority that permitted dispatch.
     #[must_use]
-    pub const fn authorized_by(self) -> DecisionAuthority {
+    pub const fn authorized_by(&self) -> DecisionAuthority {
         self.authorized_by
     }
 }
