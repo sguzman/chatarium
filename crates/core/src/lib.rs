@@ -5,6 +5,7 @@ pub mod control_route;
 pub mod orchestration;
 pub mod routing;
 pub mod session;
+pub mod supervision;
 
 use std::fmt;
 use std::str::FromStr;
@@ -257,7 +258,9 @@ impl TurnEvidence {
             | EventKind::ControlRouteBound
             | EventKind::LocalSessionRegistered
             | EventKind::SessionEndpointBound
-            | EventKind::WorkerSessionBound => {}
+            | EventKind::WorkerSessionBound
+            | EventKind::ControllerSessionDesignated
+            | EventKind::ControllerWorkerBound => {}
         }
         Ok(())
     }
@@ -333,6 +336,10 @@ pub enum EventKind {
     SessionEndpointBound,
     /// An orchestration worker was correlated to one local session.
     WorkerSessionBound,
+    /// A local session was explicitly designated as a controller/coordinator.
+    ControllerSessionDesignated,
+    /// A controller session was correlated to one worker session.
+    ControllerWorkerBound,
 }
 
 impl EventKind {
@@ -368,6 +375,8 @@ impl EventKind {
             Self::LocalSessionRegistered => "local_session_registered",
             Self::SessionEndpointBound => "session_endpoint_bound",
             Self::WorkerSessionBound => "worker_session_bound",
+            Self::ControllerSessionDesignated => "controller_session_designated",
+            Self::ControllerWorkerBound => "controller_worker_bound",
         }
     }
 
@@ -403,6 +412,8 @@ impl EventKind {
             "local_session_registered" => Some(Self::LocalSessionRegistered),
             "session_endpoint_bound" => Some(Self::SessionEndpointBound),
             "worker_session_bound" => Some(Self::WorkerSessionBound),
+            "controller_session_designated" => Some(Self::ControllerSessionDesignated),
+            "controller_worker_bound" => Some(Self::ControllerWorkerBound),
             _ => None,
         }
     }
