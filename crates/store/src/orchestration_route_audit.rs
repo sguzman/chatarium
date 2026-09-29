@@ -313,6 +313,9 @@ fn require_before(label: &str, sequence: Option<u64>, binding_sequence: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continuation_audit::{
+        record_continuation_lease_created, record_continuation_permit_issued,
+    };
     use crate::control_audit::record_worker_control_admitted;
     use crate::control_provenance_audit::record_worker_control_issuer_bound;
     use crate::control_route_audit::record_control_route_bound;
@@ -329,7 +332,8 @@ mod tests {
     use chatarium_core::control_provenance::ControlProvenance;
     use chatarium_core::control_route::ControlRouteBinding;
     use chatarium_core::orchestration::{
-        ContinuationLease, WorkerAction, WorkerGoalId, WorkerLifecycle, WorkerPhase,
+        ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerLifecycle,
+        WorkerPhase,
     };
     use chatarium_core::routing::{RouteEndpointId, RoutePolicy, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, WorkerSessionBinding};
@@ -339,6 +343,7 @@ mod tests {
     const OTHER_CONTROLLER_SESSION: SessionId = SessionId::new(2);
     const WORKER_SESSION: SessionId = SessionId::new(10);
     const WORKER: WorkerId = WorkerId::new(100);
+    const LEASE: ContinuationLeaseId = ContinuationLeaseId::new(900);
     const GOAL: WorkerGoalId = WorkerGoalId::new(1000);
     const NEXT_GOAL: WorkerGoalId = WorkerGoalId::new(2000);
     const CONTROLLER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(11);
@@ -676,8 +681,10 @@ mod tests {
         record_working_lifecycle(&mut store);
 
         let lifecycle = working_lifecycle();
-        let mut lease = ContinuationLease::new(GOAL, 1);
+        let mut lease = ContinuationLease::new(LEASE, WORKER, GOAL, 1);
+        record_continuation_lease_created(&mut store, &lease).unwrap();
         let permit = lease.authorize(&lifecycle).unwrap();
+        record_continuation_permit_issued(&mut store, &permit).unwrap();
         let control =
             WorkerControl::continue_work(ControlId::new(1), WORKER, &lifecycle, permit).unwrap();
         record_worker_control_admitted(&mut store, &control).unwrap();
