@@ -723,6 +723,11 @@
       text: storedText,
       originalChars: text.length,
       truncatedPrefix: truncated,
+      source: record.source ?? 'dom-transcript',
+      protocolEvidence: record.protocolEvidence ?? null,
+      protocolStatus: record.protocolStatus ?? null,
+      protocolEndTurn: record.protocolEndTurn ?? null,
+      protocolIsComplete: record.protocolIsComplete ?? null,
     };
     writeLocalJson(ASSISTANT_WAL_KEY, wal, 'assistant WAL');
     return wal;
