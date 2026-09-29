@@ -86,7 +86,11 @@ fn documented_cli_commands_remain_operational() {
     assert!(snapshot_dir.join("evidence/C01.har.json").exists());
     assert!(snapshot_dir.join("derived/C01.requests.json").exists());
     assert!(snapshot_dir.join("derived/C01.sanitization.json").exists());
-    assert!(snapshot_dir.join("derived/C01.frontend-assets.json").exists());
+    assert!(
+        snapshot_dir
+            .join("derived/C01.frontend-assets.json")
+            .exists()
+    );
     assert!(snapshot_dir.join("derived/C01.meta.json").exists());
 
     let after_inventory = dir.join("inventory-after.json");
