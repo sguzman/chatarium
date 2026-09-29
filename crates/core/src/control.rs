@@ -6,8 +6,7 @@
 //! lifecycle snapshot.
 
 use crate::orchestration::{
-    ContinuationPermit, ContinuationPermitRef, WorkerGoalId, WorkerId, WorkerLifecycle,
-    WorkerPhase,
+    ContinuationPermit, ContinuationPermitRef, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
 use std::fmt;
 
@@ -316,9 +315,7 @@ fn matching_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orchestration::{
-        ContinuationLease, ContinuationLeaseId, TransitionOutcome,
-    };
+    use crate::orchestration::{ContinuationLease, ContinuationLeaseId, TransitionOutcome};
 
     const W1: WorkerId = WorkerId::new(10);
     const W2: WorkerId = WorkerId::new(20);
