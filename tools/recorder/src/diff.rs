@@ -17,18 +17,7 @@ pub(crate) fn diff_inventory_files(
     let before = read_inventory(before_path)?;
     let after = read_inventory(after_path)?;
     let before_format = inventory_format(&before)?;
-    let after_format = inventory_format(&after)?;
-    if before_format != after_format {
-        return Err(format!(
-            "cannot compare inventory formats '{before_format}' and '{after_format}'"
-        ));
-    }
-
-    let report = match before_format {
-        "chatarium-request-inventory" => diff_request_inventories(&before, &after)?,
-        "chatarium-flight-inventory" => diff_flight_inventories(&before, &after)?,
-        other => return Err(format!("unsupported inventory format '{other}'")),
-    };
+    let report = diff_inventory_values(&before, &after)?;
     let bytes = serde_json::to_vec_pretty(&report)
         .map_err(|error| format!("serialize inventory diff: {error}"))?;
     fs::write(output_path, bytes)
@@ -138,6 +127,22 @@ fn diff_request_inventories(before: &Value, after: &Value) -> Result<Value, Stri
         "removed": removed,
         "changed": changed,
     }))
+}
+
+fn diff_inventory_values(before: &Value, after: &Value) -> Result<Value, String> {
+    let before_format = inventory_format(before)?;
+    let after_format = inventory_format(after)?;
+    if before_format != after_format {
+        return Err(format!(
+            "cannot compare inventory formats '{before_format}' and '{after_format}'"
+        ));
+    }
+
+    match before_format {
+        "chatarium-request-inventory" => diff_request_inventories(before, after),
+        "chatarium-flight-inventory" => diff_flight_inventories(before, after),
+        other => Err(format!("unsupported inventory format '{other}'")),
+    }
 }
 
 fn inventory_format(inventory: &Value) -> Result<&str, String> {
@@ -259,9 +264,16 @@ fn normalize_flight_inventory(inventory: &Value) -> Result<Value, String> {
         );
     }
 
+    let mut event_kind_counts = inventory
+        .get("event_kind_counts")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    event_kind_counts.remove("network-stream-chunk");
+
     Ok(json!({
         "experiment_id": inventory.get("experiment_id").cloned().unwrap_or(Value::Null),
-        "event_kind_counts": inventory.get("event_kind_counts").cloned().unwrap_or_else(|| json!({})),
+        "event_kind_counts": Value::Object(event_kind_counts),
         "send_state_counts": inventory.get("send_state_counts").cloned().unwrap_or_else(|| json!({})),
         "confirmation_evidence_counts": inventory.get("confirmation_evidence_counts").cloned().unwrap_or_else(|| json!({})),
         "message_role_counts": inventory.get("message_role_counts").cloned().unwrap_or_else(|| json!({})),
@@ -579,6 +591,24 @@ mod tests {
         after["experiment_id"] = json!("C04-stop-generation");
         let error = diff_flight_inventories(&before, &after).unwrap_err();
         assert!(error.contains("different experiments"));
+    }
+
+    #[test]
+    fn mixed_inventory_formats_are_rejected() {
+        let request = inventory(vec![entry("GET", "/backend-api/example", 200)]);
+        let flight = flight_inventory();
+        let error = diff_inventory_values(&request, &flight).unwrap_err();
+        assert!(error.contains("cannot compare inventory formats"));
+    }
+
+    #[test]
+    fn browser_chunk_count_does_not_create_flight_protocol_diff() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        after["event_kind_counts"]["network-stream-chunk"] = json!(99);
+
+        let report = diff_flight_inventories(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/total_changes"), Some(&json!(0)));
     }
 
     #[test]
