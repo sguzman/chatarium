@@ -26,8 +26,7 @@ pub struct FieldAnnotation {
     pub rationale: String,
 }
 
-const REGISTRY_TEXT: &str =
-    include_str!("../../../protocol/schemas/field-classification.v1.json");
+const REGISTRY_TEXT: &str = include_str!("../../../protocol/schemas/field-classification.v1.json");
 const ALLOWED_CLASSES: &[&str] = &[
     "structural_candidate",
     "ephemeral_instance",
@@ -91,7 +90,9 @@ pub fn validate_registry(value: &Value) -> Result<(), String> {
     }
     for class in classes.keys() {
         if !ALLOWED_CLASSES.contains(&class.as_str()) {
-            return Err(format!("field classification registry has unknown class '{class}'"));
+            return Err(format!(
+                "field classification registry has unknown class '{class}'"
+            ));
         }
     }
 
@@ -315,15 +316,13 @@ mod tests {
 
     #[test]
     fn excluded_browser_chunk_count_is_delivery_noise() {
-        let annotation =
-            classify_excluded_flight_context("event_kind_counts.network-stream-chunk");
+        let annotation = classify_excluded_flight_context("event_kind_counts.network-stream-chunk");
         assert_eq!(annotation.field_class, "delivery_noise");
     }
 
     #[test]
     fn unknown_path_remains_unknown() {
-        let annotation =
-            classify_flight_inventory_change("/future/new_field", ChangeKind::Added);
+        let annotation = classify_flight_inventory_change("/future/new_field", ChangeKind::Added);
         assert_eq!(annotation.field_class, "unknown");
     }
 }
