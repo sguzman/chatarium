@@ -2,7 +2,7 @@
 
 This document accumulates endpoint observations for the basic text-send path.
 
-Current evidence: `2026-09-29.001` only.
+Current evidence: `2026-09-29.001`, `2026-09-29.002`.
 
 Nothing here is a supported-API claim.
 
@@ -44,9 +44,11 @@ Observed response:
 - MIME: `text/event-stream; charset=utf-8`
 - response header names included `x-conduit-token`, `x-oai-is-update`, `x-oai-request-id`, and `x-build`
 
-The exported HAR did not contain the SSE body, so event names and chunk schema remain unknown.
+Snapshot `2026-09-29.002` captured the SSE body directly. It declared delta encoding `v1`, used named `delta` events for message/state mutations, used data-only control frames for lifecycle metadata, emitted `message_stream_complete`, and terminated with `[DONE]`.
 
-The response `x-conduit-token` value differed from the token used on the request. No semantic interpretation is assigned yet.
+Observed delta operations included `add`, `append`, `patch`, and `replace`. The final answer text was appended to `/message/content/parts/0`.
+
+The response `x-conduit-token` value observed in snapshot `2026-09-29.001` differed from the token used on the request. No semantic interpretation is assigned yet.
 
 ## POST /backend-api/conversation/init
 
