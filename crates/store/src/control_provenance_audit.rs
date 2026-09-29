@@ -336,9 +336,7 @@ mod tests {
     use super::*;
     use crate::control_audit::record_worker_control_admitted;
     use crate::projection::SqliteProjection;
-    use crate::session_audit::{
-        record_local_session_registered, record_worker_session_bound,
-    };
+    use crate::session_audit::{record_local_session_registered, record_worker_session_bound};
     use crate::supervision_audit::{
         record_controller_session_designated, record_controller_worker_bound,
     };
