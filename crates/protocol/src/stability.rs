@@ -68,6 +68,16 @@ pub fn validate_registry(value: &Value) -> Result<(), String> {
         );
     }
 
+    let caveat = value
+        .get("caveat")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "field classification registry is missing caveat".to_owned())?;
+    if !caveat.contains("not a claim") {
+        return Err(
+            "field classification caveat must explicitly deny a stability/API claim".to_owned(),
+        );
+    }
+
     let classes = value
         .get("classes")
         .and_then(Value::as_object)
@@ -93,9 +103,11 @@ pub fn validate_registry(value: &Value) -> Result<(), String> {
         "excluded_context",
         "sections",
         "assistant_wal_fields",
+        "stream_presence",
         "stream_fields",
     ] {
-        if flight.get(required).and_then(Value::as_object).is_none() {
+        let valid = flight.get(required).and_then(Value::as_object).is_some();
+        if !valid {
             return Err(format!(
                 "field classification registry flight_inventory is missing '{required}'"
             ));
@@ -146,9 +158,16 @@ pub fn classify_flight_inventory_change(path: &str, kind: ChangeKind) -> FieldAn
     }
 
     if segments[0] == "streams" {
+        if segments.len() == 2 {
+            return classify_entry(
+                registry().pointer("/flight_inventory/stream_presence"),
+                kind,
+                false,
+            );
+        }
         if segments.len() < 3 {
             return unknown(
-                "The change addresses a stream container rather than a classified field.",
+                "The change addresses the stream collection rather than a classified stream.",
             );
         }
         return classify_entry(
@@ -265,6 +284,15 @@ mod tests {
             ChangeKind::Changed,
         );
         assert_eq!(annotation.field_class, "observation_count");
+    }
+
+    #[test]
+    fn added_stream_is_structural_candidate() {
+        let annotation = classify_flight_inventory_change(
+            "/streams/GET ~1backend-api~1f~1other",
+            ChangeKind::Added,
+        );
+        assert_eq!(annotation.field_class, "structural_candidate");
     }
 
     #[test]
