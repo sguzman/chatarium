@@ -1,4 +1,4 @@
-//! Structural diffing for sanitized request inventories.
+//! Structural diffing for sanitized Chatarium protocol inventories.
 
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,7 +16,19 @@ pub(crate) fn diff_inventory_files(
 ) -> Result<(), String> {
     let before = read_inventory(before_path)?;
     let after = read_inventory(after_path)?;
-    let report = diff_inventories(&before, &after)?;
+    let before_format = inventory_format(&before)?;
+    let after_format = inventory_format(&after)?;
+    if before_format != after_format {
+        return Err(format!(
+            "cannot compare inventory formats '{before_format}' and '{after_format}'"
+        ));
+    }
+
+    let report = match before_format {
+        "chatarium-request-inventory" => diff_request_inventories(&before, &after)?,
+        "chatarium-flight-inventory" => diff_flight_inventories(&before, &after)?,
+        other => return Err(format!("unsupported inventory format '{other}'")),
+    };
     let bytes = serde_json::to_vec_pretty(&report)
         .map_err(|error| format!("serialize inventory diff: {error}"))?;
     fs::write(output_path, bytes)
@@ -26,26 +38,45 @@ pub(crate) fn diff_inventory_files(
         .get("summary")
         .and_then(Value::as_object)
         .ok_or_else(|| "generated diff is missing summary".to_owned())?;
-    println!(
-        "added={} removed={} changed={} unchanged={}  {}",
-        summary
-            .get("added_endpoints")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        summary
-            .get("removed_endpoints")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        summary
-            .get("changed_endpoints")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        summary
-            .get("unchanged_endpoints")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        output_path.display()
-    );
+    if before_format == "chatarium-request-inventory" {
+        println!(
+            "added={} removed={} changed={} unchanged={}  {}",
+            summary
+                .get("added_endpoints")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("removed_endpoints")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("changed_endpoints")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("unchanged_endpoints")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            output_path.display()
+        );
+    } else {
+        println!(
+            "added={} removed={} changed={}  {}",
+            summary
+                .get("added_paths")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("removed_paths")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("changed_paths")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            output_path.display()
+        );
+    }
     Ok(())
 }
 
@@ -55,7 +86,7 @@ fn read_inventory(path: &Path) -> Result<Value, String> {
         .map_err(|error| format!("parse inventory {}: {error}", path.display()))
 }
 
-fn diff_inventories(before: &Value, after: &Value) -> Result<Value, String> {
+fn diff_request_inventories(before: &Value, after: &Value) -> Result<Value, String> {
     let before_index = index_inventory(before)?;
     let after_index = index_inventory(after)?;
     let keys = before_index
@@ -109,8 +140,189 @@ fn diff_inventories(before: &Value, after: &Value) -> Result<Value, String> {
     }))
 }
 
+fn inventory_format(inventory: &Value) -> Result<&str, String> {
+    inventory
+        .get("format")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "inventory is missing format".to_owned())
+}
+
+fn diff_flight_inventories(before: &Value, after: &Value) -> Result<Value, String> {
+    validate_flight_inventory(before)?;
+    validate_flight_inventory(after)?;
+
+    let before_experiment = required_string(before, "experiment_id")?;
+    let after_experiment = required_string(after, "experiment_id")?;
+    if before_experiment != after_experiment {
+        return Err(format!(
+            "cannot compare Flight Recorder inventories for different experiments '{before_experiment}' and '{after_experiment}'"
+        ));
+    }
+
+    let before_normalized = normalize_flight_inventory(before)?;
+    let after_normalized = normalize_flight_inventory(after)?;
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut changed = Vec::new();
+    diff_json_values(
+        "",
+        &before_normalized,
+        &after_normalized,
+        &mut added,
+        &mut removed,
+        &mut changed,
+    );
+
+    Ok(json!({
+        "format": "chatarium-flight-inventory-diff",
+        "version": 1,
+        "experiment_id": before_experiment,
+        "context": {
+            "before": flight_context(before),
+            "after": flight_context(after),
+        },
+        "summary": {
+            "added_paths": added.len(),
+            "removed_paths": removed.len(),
+            "changed_paths": changed.len(),
+            "total_changes": added.len() + removed.len() + changed.len(),
+        },
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+    }))
+}
+
+fn validate_flight_inventory(inventory: &Value) -> Result<(), String> {
+    let format = inventory_format(inventory)?;
+    if format != "chatarium-flight-inventory" {
+        return Err(format!("unsupported Flight Recorder inventory format '{format}'"));
+    }
+    let version = inventory
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Flight Recorder inventory is missing version".to_owned())?;
+    if version != 1 {
+        return Err(format!(
+            "unsupported Flight Recorder inventory version {version}"
+        ));
+    }
+    required_string(inventory, "experiment_id")?;
+    inventory
+        .get("streams")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Flight Recorder inventory is missing streams array".to_owned())?;
+    Ok(())
+}
+
+fn flight_context(inventory: &Value) -> Value {
+    json!({
+        "recorder_version": inventory.get("recorder_version").cloned().unwrap_or(Value::Null),
+        "selected_run": inventory.get("selected_run").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn normalize_flight_inventory(inventory: &Value) -> Result<Value, String> {
+    let streams = inventory
+        .get("streams")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Flight Recorder inventory is missing streams array".to_owned())?;
+    let mut stream_counts = BTreeMap::<String, u64>::new();
+    let mut normalized_streams = serde_json::Map::new();
+
+    for stream in streams {
+        let method = required_string(stream, "method")?;
+        let endpoint = required_string(stream, "endpoint")?;
+        let base = format!("{method} {endpoint}");
+        let ordinal = stream_counts.entry(base.clone()).or_default();
+        *ordinal = ordinal.saturating_add(1);
+        let key = if *ordinal == 1 {
+            base
+        } else {
+            format!("{base} #{}", *ordinal)
+        };
+        normalized_streams.insert(
+            key,
+            json!({
+                "status": stream.get("status").cloned().unwrap_or(Value::Null),
+                "content_type": stream.get("content_type").cloned().unwrap_or(Value::Null),
+                "frame_count": stream.get("frame_count").cloned().unwrap_or(Value::Null),
+                "named_event_counts": stream.get("named_event_counts").cloned().unwrap_or_else(|| json!({})),
+                "control_type_counts": stream.get("control_type_counts").cloned().unwrap_or_else(|| json!({})),
+                "delta_operation_counts": stream.get("delta_operation_counts").cloned().unwrap_or_else(|| json!({})),
+                "delta_path_counts": stream.get("delta_path_counts").cloned().unwrap_or_else(|| json!({})),
+                "marker_counts": stream.get("marker_counts").cloned().unwrap_or_else(|| json!({})),
+                "delta_encodings": stream.get("delta_encodings").cloned().unwrap_or_else(|| json!([])),
+                "completion": stream.get("completion").cloned().unwrap_or_else(|| json!({})),
+                "parse_warning_count": stream.get("parse_warning_count").cloned().unwrap_or(Value::Null),
+            }),
+        );
+    }
+
+    Ok(json!({
+        "experiment_id": inventory.get("experiment_id").cloned().unwrap_or(Value::Null),
+        "event_kind_counts": inventory.get("event_kind_counts").cloned().unwrap_or_else(|| json!({})),
+        "send_state_counts": inventory.get("send_state_counts").cloned().unwrap_or_else(|| json!({})),
+        "confirmation_evidence_counts": inventory.get("confirmation_evidence_counts").cloned().unwrap_or_else(|| json!({})),
+        "message_role_counts": inventory.get("message_role_counts").cloned().unwrap_or_else(|| json!({})),
+        "message_source_counts": inventory.get("message_source_counts").cloned().unwrap_or_else(|| json!({})),
+        "assistant_wal": inventory.get("assistant_wal").cloned().unwrap_or(Value::Null),
+        "streams": Value::Object(normalized_streams),
+        "warning_count": inventory.get("warning_count").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn diff_json_values(
+    path: &str,
+    before: &Value,
+    after: &Value,
+    added: &mut Vec<Value>,
+    removed: &mut Vec<Value>,
+    changed: &mut Vec<Value>,
+) {
+    match (before, after) {
+        (Value::Object(before_map), Value::Object(after_map)) => {
+            let keys = before_map
+                .keys()
+                .chain(after_map.keys())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for key in keys {
+                let child_path = format!("{}/{}", path, escape_pointer_segment(&key));
+                match (before_map.get(&key), after_map.get(&key)) {
+                    (None, Some(value)) => {
+                        added.push(json!({"path": child_path, "after": value}));
+                    }
+                    (Some(value), None) => {
+                        removed.push(json!({"path": child_path, "before": value}));
+                    }
+                    (Some(before_value), Some(after_value)) => diff_json_values(
+                        &child_path,
+                        before_value,
+                        after_value,
+                        added,
+                        removed,
+                        changed,
+                    ),
+                    (None, None) => unreachable!("key came from one of the objects"),
+                }
+            }
+        }
+        _ if before != after => changed.push(json!({
+            "path": if path.is_empty() { "/" } else { path },
+            "before": before,
+            "after": after,
+        })),
+        _ => {}
+    }
+}
+
+fn escape_pointer_segment(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
+}
+
 fn index_inventory(inventory: &Value) -> Result<EndpointIndex, String> {
-    validate_inventory(inventory)?;
+    validate_request_inventory(inventory)?;
     let entries = inventory
         .get("entries")
         .and_then(Value::as_array)
@@ -135,7 +347,7 @@ fn index_inventory(inventory: &Value) -> Result<EndpointIndex, String> {
     Ok(index)
 }
 
-fn validate_inventory(inventory: &Value) -> Result<(), String> {
+fn validate_request_inventory(inventory: &Value) -> Result<(), String> {
     let format = inventory
         .get("format")
         .and_then(Value::as_str)
@@ -233,10 +445,146 @@ mod tests {
         })
     }
 
+    fn flight_inventory() -> Value {
+        json!({
+            "format": "chatarium-flight-inventory",
+            "version": 1,
+            "experiment_id": "C03-send-text",
+            "recorder_version": "0.6.0",
+            "selected_run": {
+                "started_seq": 25,
+                "started_at": "2026-09-29T11:33:42Z",
+                "event_count": 37
+            },
+            "event_kind_counts": {
+                "network-stream-start": 1,
+                "network-stream-chunk": 15,
+                "network-stream-end": 1
+            },
+            "send_state_counts": {"confirmed": 1},
+            "confirmation_evidence_counts": {"protocol-input-message": 1},
+            "message_role_counts": {"assistant": 1, "user": 1},
+            "message_source_counts": {"protocol-sse": 2},
+            "assistant_wal": {
+                "present": true,
+                "source": "protocol-sse",
+                "protocol_status": "finished_successfully",
+                "protocol_end_turn": true,
+                "protocol_is_complete": true,
+                "text_is_experiment_allowed": true
+            },
+            "streams": [{
+                "stream": "stream-1",
+                "endpoint": "/backend-api/f/conversation",
+                "method": "POST",
+                "status": 200,
+                "content_type": "text/event-stream; charset=utf-8",
+                "frame_count": 29,
+                "named_event_counts": {"delta": 16, "delta_encoding": 1},
+                "control_type_counts": {"message_stream_complete": 1},
+                "delta_operation_counts": {"append": 2, "patch": 1, "replace": 4},
+                "delta_path_counts": {"/message/content/parts/0": 1},
+                "marker_counts": {"last_token:last": 1},
+                "delta_encodings": ["v1"],
+                "completion": {
+                    "message_stream_complete": true,
+                    "done": true,
+                    "terminal": "sse-done"
+                },
+                "parse_warning_count": 0
+            }],
+            "warning_count": 0
+        })
+    }
+
+    #[test]
+    fn identical_flight_inventories_have_no_changes() {
+        let value = flight_inventory();
+        let report = diff_flight_inventories(&value, &value).expect("diff");
+        assert_eq!(report.pointer("/summary/total_changes"), Some(&json!(0)));
+    }
+
+    #[test]
+    fn volatile_flight_context_does_not_count_as_protocol_change() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        after["recorder_version"] = json!("0.7.0");
+        after["selected_run"]["started_seq"] = json!(900);
+        after["selected_run"]["started_at"] = json!("2026-10-01T00:00:00Z");
+        after["selected_run"]["event_count"] = json!(99);
+
+        let report = diff_flight_inventories(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/total_changes"), Some(&json!(0)));
+        assert_eq!(
+            report.pointer("/context/after/recorder_version"),
+            Some(&json!("0.7.0"))
+        );
+    }
+
+    #[test]
+    fn flight_control_type_addition_is_reported() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        after["streams"][0]["control_type_counts"]["new_control"] = json!(1);
+
+        let report = diff_flight_inventories(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/added_paths"), Some(&json!(1)));
+        assert_eq!(
+            report.pointer("/added/0/path"),
+            Some(&json!("/streams/POST ~1backend-api~1f~1conversation/control_type_counts/new_control"))
+        );
+    }
+
+    #[test]
+    fn flight_operation_count_and_completion_changes_are_reported() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        after["streams"][0]["delta_operation_counts"]["append"] = json!(3);
+        after["streams"][0]["completion"]["done"] = json!(false);
+
+        let report = diff_flight_inventories(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/changed_paths"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn flight_stream_addition_is_reported() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        let second = json!({
+            "stream": "stream-2",
+            "endpoint": "/backend-api/f/other",
+            "method": "GET",
+            "status": 200,
+            "content_type": "application/json",
+            "frame_count": 0,
+            "named_event_counts": {},
+            "control_type_counts": {},
+            "delta_operation_counts": {},
+            "delta_path_counts": {},
+            "marker_counts": {},
+            "delta_encodings": [],
+            "completion": {},
+            "parse_warning_count": 0
+        });
+        after["streams"].as_array_mut().unwrap().push(second);
+
+        let report = diff_flight_inventories(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/added_paths"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn different_flight_experiments_are_rejected() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        after["experiment_id"] = json!("C04-stop-generation");
+        let error = diff_flight_inventories(&before, &after).unwrap_err();
+        assert!(error.contains("different experiments"));
+    }
+
     #[test]
     fn identical_inventories_are_unchanged() {
         let value = inventory(vec![entry("GET", "/backend-api/example", 200)]);
-        let report = diff_inventories(&value, &value).expect("diff");
+        let report = diff_request_inventories(&value, &value).expect("diff");
         assert_eq!(
             report.pointer("/summary/unchanged_endpoints"),
             Some(&json!(1))
@@ -251,7 +599,7 @@ mod tests {
     fn status_change_is_structural_change_not_add_remove() {
         let before = inventory(vec![entry("GET", "/backend-api/example", 200)]);
         let after = inventory(vec![entry("GET", "/backend-api/example", 429)]);
-        let report = diff_inventories(&before, &after).expect("diff");
+        let report = diff_request_inventories(&before, &after).expect("diff");
         assert_eq!(
             report.pointer("/summary/changed_endpoints"),
             Some(&json!(1))
@@ -270,7 +618,7 @@ mod tests {
             entry("GET", "/backend-api/one", 200),
             entry("POST", "/backend-api/two", 200),
         ]);
-        let report = diff_inventories(&before, &after).expect("diff");
+        let report = diff_request_inventories(&before, &after).expect("diff");
         assert_eq!(report.pointer("/summary/added_endpoints"), Some(&json!(1)));
         assert_eq!(
             report.pointer("/summary/unchanged_endpoints"),
@@ -283,7 +631,7 @@ mod tests {
         let single = entry("GET", "/backend-api/repeated", 200);
         let before = inventory(vec![single.clone()]);
         let after = inventory(vec![single.clone(), single]);
-        let report = diff_inventories(&before, &after).expect("diff");
+        let report = diff_request_inventories(&before, &after).expect("diff");
         assert_eq!(
             report.pointer("/summary/changed_endpoints"),
             Some(&json!(1))
