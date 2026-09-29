@@ -167,7 +167,9 @@ Flight changes are emitted as stable JSON-pointer-like paths with added, removed
 
 Each Flight change also carries `field_class` and `classification_rationale` from the committed evidence-scoped registry in `protocol/schemas/field-classification.v1.json`. Added/removed vocabulary inside structural count maps can therefore be distinguished from mere numeric count drift. Volatile context excluded from protocol-change counts is still annotated in the diff report as diagnostic, ephemeral instance state, or delivery noise.
 
-Mixed HAR/Flight comparisons and Flight inventories from different experiment IDs fail explicitly.
+For `chatarium-frontend-asset-manifest` v1, assets are keyed structurally by kind + host + path (with deterministic ordinals for duplicates). The diff compares status, MIME/encoding observations, body availability, decoded byte length, body SHA-256, and body warnings. A body-hash change is therefore a first-class deployment-maintenance signal without storing or diffing source code.
+
+Mixed inventory families fail explicitly. Flight inventories from different experiment IDs also fail explicitly.
 
 The report contains only data already present in the sanitized/value-minimized inventory layer. A structural diff is a maintenance signal to inspect the corresponding evidence; it is not by itself proof of a breaking semantic change.
 
