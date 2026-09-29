@@ -31,7 +31,8 @@ For HAR-backed captures produced by `chatarium-recorder snapshot-har`, the mecha
 │   └── <capture-id>.har.json
 └── derived/
     ├── <capture-id>.meta.json
-    └── <capture-id>.requests.json
+    ├── <capture-id>.requests.json
+    └── <capture-id>.sanitization.json
 ```
 
 `evidence/*.har.json` is sanitized HAR source evidence. `derived/*.requests.json` is a value-free structural comparison surface generated from that sanitized evidence. Derived output must never silently replace the evidence it came from.
@@ -44,7 +45,8 @@ For Flight Recorder captures produced by `chatarium-recorder snapshot-flight`, t
 │   └── <capture-id>.flight.json
 └── derived/
     ├── <capture-id>.flight.meta.json
-    └── <capture-id>.flight.inventory.json
+    ├── <capture-id>.flight.inventory.json
+    └── <capture-id>.flight.sanitization.json
 ```
 
 `evidence/*.flight.json` is selected-run, sanitized protocol evidence reconstructed from the private cumulative browser export. It never contains the raw `network-stream-chunk.payload.text` strings. `derived/*.flight.inventory.json` is the value-minimized structural comparison surface for that selected run. The private raw Flight Recorder export remains outside Git and is referenced by SHA-256/byte count only.
@@ -137,6 +139,8 @@ A Flight Recorder export may contain multiple recorder sessions because browser 
 The sanitizer reconstructs complete SSE frames across browser delivery chunks before applying protocol-aware redaction. Only exact text declared by the canonical experiment definition may survive as literal conversation content. Signed/reusable values, concrete remote identifiers, hidden/private message bodies, generated titles, unexpected server-controlled scalar values, and unparseable SSE are removed or replaced with explicit placeholders.
 
 The structural inventory records counts and validated vocabulary such as SSE event families, control-frame types, delta operations/paths, message markers, encoding observations, and completion signals. Unknown server-controlled structural strings fail closed rather than being copied verbatim.
+
+Each mechanically generated HAR or Flight snapshot also includes a deterministic sanitization report under `derived/`. The report records transformation counts and policy/version identifiers only: it never contains removed secret/content/identity values. Snapshot metadata hashes and references the report. A report is an audit surface for what the sanitizer did, not proof that arbitrary source material is safe to publish.
 
 ## Derived request inventories
 
