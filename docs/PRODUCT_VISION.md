@@ -158,6 +158,8 @@ Those admitted commands are now restart-safe audit facts as well. Chatarium can 
 
 An admitted worker control can now also be explicitly correlated to exactly one `OrchestrationControl` route, with the reciprocal rule that one route carries at most one admitted control. That binding is durable provenance only: it does not mean the route was approved, dispatched, delivered, executed, or reflected in worker lifecycle. Worker-to-session/endpoint identity remains a separate future layer.
 
+That identity layer now exists locally. `SessionId` is a first-class Chatarium identity distinct from `WorkerId`, `RouteEndpointId`, and any future remote ChatGPT conversation/session identifier. Local sessions can be durably registered, bound one-to-one to routing endpoints, and optionally bound one-to-one to worker identities. These bindings establish local provenance only; they do not imply remote authentication, connectivity, goal assignment, controller/master role, or dispatch.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.
