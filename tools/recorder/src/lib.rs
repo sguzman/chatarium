@@ -584,6 +584,9 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
     let inventory = request_inventory(&sanitized_value)?;
     let inventory_bytes = serde_json::to_vec_pretty(&inventory)
         .map_err(|error| format!("serialize request inventory: {error}"))?;
+    let frontend_assets = frontend_asset_manifest(&sanitized_value)?;
+    let frontend_asset_bytes = serde_json::to_vec_pretty(&frontend_assets)
+        .map_err(|error| format!("serialize frontend asset manifest: {error}"))?;
 
     let evidence_dir = snapshot_dir.join("evidence");
     let derived_dir = snapshot_dir.join("derived");
@@ -607,9 +610,26 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
     fs::write(&sanitization_path, &sanitization_bytes)
         .map_err(|error| format!("write {}: {error}", sanitization_path.display()))?;
 
+    let relative_frontend_assets_path = format!("derived/{capture_id}.frontend-assets.json");
+    let frontend_assets_path = derived_dir.join(format!("{capture_id}.frontend-assets.json"));
+    fs::write(&frontend_assets_path, &frontend_asset_bytes)
+        .map_err(|error| format!("write {}: {error}", frontend_assets_path.display()))?;
+
     let metadata_path = derived_dir.join(format!("{capture_id}.meta.json"));
     let entry_count = inventory
         .get("entry_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let asset_count = frontend_assets
+        .get("asset_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let hashed_asset_count = frontend_assets
+        .get("hashed_asset_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let asset_warning_count = frontend_assets
+        .get("warning_count")
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let metadata = json!({
@@ -624,6 +644,12 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
         "sanitization_report_file": relative_sanitization_path,
         "sanitization_report_sha256": sha256_hex(&sanitization_bytes),
         "sanitization_report_bytes": sanitization_bytes.len(),
+        "frontend_asset_manifest_file": relative_frontend_assets_path,
+        "frontend_asset_manifest_sha256": sha256_hex(&frontend_asset_bytes),
+        "frontend_asset_manifest_bytes": frontend_asset_bytes.len(),
+        "frontend_asset_count": asset_count,
+        "frontend_asset_hashed_count": hashed_asset_count,
+        "frontend_asset_warning_count": asset_warning_count,
         "entry_count": entry_count,
         "created_unix_ms": unix_ms()?,
         "recorder_version": env!("CARGO_PKG_VERSION"),
@@ -638,6 +664,7 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
     println!("capture: {}", capture_path.display());
     println!("inventory: {}", inventory_path.display());
     println!("sanitization: {}", sanitization_path.display());
+    println!("frontend-assets: {}", frontend_assets_path.display());
     println!("metadata: {}", metadata_path.display());
     println!("sha256: {}", sha256_hex(&sanitized));
     Ok(())
