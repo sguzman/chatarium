@@ -4,6 +4,7 @@
 //! provenance and, for controller-issued controls, against the durable
 //! controller/worker session topology. It creates no new authority or transport.
 
+use crate::EventEnvelope;
 use crate::control_audit::{ControlAuditRecord, replay_control_audit};
 use crate::control_provenance_audit::{
     ControlProvenanceAuditRecord, replay_control_provenance_audit,
@@ -12,7 +13,6 @@ use crate::control_route_audit::{ControlRouteAuditRecord, replay_control_route_a
 use crate::routing_audit::{RouteAuditRecord, replay_routing_audit};
 use crate::session_audit::{SessionAuditRecord, replay_session_audit};
 use crate::supervision_audit::{ControllerWorkerAuditRecord, replay_supervision_audit};
-use crate::EventEnvelope;
 use chatarium_core::control::ControlId;
 use chatarium_core::control_provenance::ControlIssuer;
 use chatarium_core::orchestration::WorkerId;
@@ -241,14 +241,12 @@ fn validate_controller_route(
         binding_sequence,
     )?;
 
-    let supervision = supervision
-        .get(&worker_session.session_id)
-        .ok_or_else(|| {
-            format!(
-                "worker session {} has no controller supervision binding",
-                worker_session.session_id.get()
-            )
-        })?;
+    let supervision = supervision.get(&worker_session.session_id).ok_or_else(|| {
+        format!(
+            "worker session {} has no controller supervision binding",
+            worker_session.session_id.get()
+        )
+    })?;
     if supervision.binding.controller_session_id() != controller_session_id {
         return Err(format!(
             "controller issuer session {} does not supervise target worker session {}; supervisor is {}",
@@ -286,11 +284,7 @@ fn validate_controller_route(
     Ok(())
 }
 
-fn require_before(
-    label: &str,
-    sequence: Option<u64>,
-    binding_sequence: u64,
-) -> Result<(), String> {
+fn require_before(label: &str, sequence: Option<u64>, binding_sequence: u64) -> Result<(), String> {
     let sequence = sequence.ok_or_else(|| format!("{label} is missing"))?;
     if sequence >= binding_sequence {
         return Err(format!(
@@ -303,29 +297,24 @@ fn require_before(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MemoryEventStore;
     use crate::control_audit::record_worker_control_admitted;
     use crate::control_provenance_audit::record_worker_control_issuer_bound;
     use crate::control_route_audit::record_control_route_bound;
     use crate::routing_audit::record_route_proposed;
     use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound,
-        record_worker_session_bound,
+        record_local_session_registered, record_session_endpoint_bound, record_worker_session_bound,
     };
     use crate::supervision_audit::{
         record_controller_session_designated, record_controller_worker_bound,
     };
-    use crate::MemoryEventStore;
     use chatarium_core::control::WorkerControl;
     use chatarium_core::control_provenance::ControlProvenance;
     use chatarium_core::control_route::ControlRouteBinding;
     use chatarium_core::orchestration::{WorkerGoalId, WorkerLifecycle};
-    use chatarium_core::routing::{
-        RouteEndpointId, RoutePolicy, RouteRequest,
-    };
+    use chatarium_core::routing::{RouteEndpointId, RoutePolicy, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, WorkerSessionBinding};
-    use chatarium_core::supervision::{
-        ControllerDesignation, ControllerWorkerBinding,
-    };
+    use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
 
     const CONTROLLER_SESSION: SessionId = SessionId::new(1);
     const OTHER_CONTROLLER_SESSION: SessionId = SessionId::new(2);
@@ -364,25 +353,17 @@ mod tests {
         endpoint_id: Option<RouteEndpointId>,
     ) {
         register_session(store, session_id, endpoint_id);
-        record_controller_session_designated(store, ControllerDesignation::new(session_id)).unwrap();
+        record_controller_session_designated(store, ControllerDesignation::new(session_id))
+            .unwrap();
     }
 
-    fn register_worker(
-        store: &mut impl crate::EventStore,
-        endpoint_id: Option<RouteEndpointId>,
-    ) {
+    fn register_worker(store: &mut impl crate::EventStore, endpoint_id: Option<RouteEndpointId>) {
         register_session(store, WORKER_SESSION, endpoint_id);
-        record_worker_session_bound(
-            store,
-            WorkerSessionBinding::new(WORKER, WORKER_SESSION),
-        )
-        .unwrap();
+        record_worker_session_bound(store, WorkerSessionBinding::new(WORKER, WORKER_SESSION))
+            .unwrap();
     }
 
-    fn supervise(
-        store: &mut impl crate::EventStore,
-        controller_session_id: SessionId,
-    ) {
+    fn supervise(store: &mut impl crate::EventStore, controller_session_id: SessionId) {
         record_controller_worker_bound(
             store,
             ControllerWorkerBinding::new(controller_session_id, WORKER_SESSION).unwrap(),
@@ -397,19 +378,12 @@ mod tests {
     ) -> WorkerControl {
         let control = control(control_id);
         record_worker_control_admitted(store, &control).unwrap();
-        record_worker_control_issuer_bound(
-            store,
-            ControlProvenance::new(control.id(), issuer),
-        )
-        .unwrap();
+        record_worker_control_issuer_bound(store, ControlProvenance::new(control.id(), issuer))
+            .unwrap();
         control
     }
 
-    fn route(
-        id: u64,
-        source: RouteEndpointId,
-        destination: RouteEndpointId,
-    ) -> RouteRequest {
+    fn route(id: u64, source: RouteEndpointId, destination: RouteEndpointId) -> RouteRequest {
         RouteRequest {
             id: RouteId::new(id),
             source,
@@ -434,11 +408,7 @@ mod tests {
     #[test]
     fn controller_route_validates_against_supervision_topology() {
         let mut store = MemoryEventStore::default();
-        register_controller(
-            &mut store,
-            CONTROLLER_SESSION,
-            Some(CONTROLLER_ENDPOINT),
-        );
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
         register_worker(&mut store, Some(WORKER_ENDPOINT));
         supervise(&mut store, CONTROLLER_SESSION);
         let control = admit_with_issuer(
@@ -515,11 +485,7 @@ mod tests {
     #[test]
     fn non_supervising_controller_issuer_is_rejected() {
         let mut store = MemoryEventStore::default();
-        register_controller(
-            &mut store,
-            CONTROLLER_SESSION,
-            Some(CONTROLLER_ENDPOINT),
-        );
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
         register_controller(
             &mut store,
             OTHER_CONTROLLER_SESSION,
@@ -655,11 +621,7 @@ mod tests {
         propose_and_bind(
             &mut store,
             &control,
-            route(
-                1,
-                RouteEndpointId::new(500),
-                RouteEndpointId::new(600),
-            ),
+            route(1, RouteEndpointId::new(500), RouteEndpointId::new(600)),
         );
 
         let records = replay_validated_orchestration_routes(store.events()).unwrap();
