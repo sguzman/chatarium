@@ -384,30 +384,32 @@ mod tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!("chatarium-corpus-test-{nonce}"));
-        fs::create_dir_all(root.join("snapshots/2026-09-29.002")).unwrap();
+        write_test_snapshot(&root, "2026-09-29.001");
+        write_test_snapshot(&root, "2026-09-29.002");
         fs::create_dir_all(root.join("fixtures/2026-09-29.002")).unwrap();
+        write_test_classification_registry(&root);
+        root
+    }
+
+    fn write_test_snapshot(root: &Path, revision: &str) {
+        let dir = root.join("snapshots").join(revision);
+        fs::create_dir_all(&dir).unwrap();
         fs::write(
-            root.join("snapshots/2026-09-29.002/manifest.json"),
+            dir.join("manifest.json"),
             serde_json::to_vec_pretty(&json!({
                 "schema": SNAPSHOT_SCHEMA,
                 "version": SNAPSHOT_VERSION,
-                "revision": "2026-09-29.002"
+                "revision": revision
             }))
             .unwrap(),
         )
         .unwrap();
+        fs::write(dir.join("observations.md"), "# Observations\nObserved.").unwrap();
         fs::write(
-            root.join("snapshots/2026-09-29.002/observations.md"),
-            "# Observations\nObserved.",
-        )
-        .unwrap();
-        fs::write(
-            root.join("snapshots/2026-09-29.002/sanitization.md"),
+            dir.join("sanitization.md"),
             "# Sanitization\nControlled.",
         )
         .unwrap();
-        write_test_classification_registry(&root);
-        root
     }
 
     fn c03_fixture() -> Value {
@@ -493,7 +495,7 @@ mod tests {
         assert_eq!(
             report,
             CorpusValidationReport {
-                snapshots: 1,
+                snapshots: 2,
                 fixtures: 1,
                 c03_sse_replays: 1,
             }
