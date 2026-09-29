@@ -374,9 +374,7 @@ impl EventKind {
             "route_dispatched" => Some(Self::RouteDispatched),
             "route_result_observed" => Some(Self::RouteResultObserved),
             "worker_goal_assigned" => Some(Self::WorkerGoalAssigned),
-            "worker_lifecycle_transition_recorded" => {
-                Some(Self::WorkerLifecycleTransitionRecorded)
-            }
+            "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
             _ => None,
         }
     }
