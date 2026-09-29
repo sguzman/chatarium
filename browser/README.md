@@ -14,7 +14,7 @@ This directory contains Chatarium's **P0 emergency durability layer** for the of
 
 The userscript runs only on `chatgpt.com`.
 
-## What version 0.3 protects
+## What version 0.5 protects
 
 - **Per-conversation draft WAL.** Composer text is synchronously copied into `localStorage` and then archived into IndexedDB. Navigating to another chat does not intentionally overwrite another conversation's synchronous draft record.
 - **Separate send-intent WAL.** A send attempt is synchronously journaled *before* the site's normal bubbling send handler runs. Later draft mutations cannot erase this record.
@@ -24,6 +24,7 @@ The userscript runs only on `chatgpt.com`.
 - **Incremental transcript snapshots.** Rendered user and assistant message text is archived into IndexedDB. A streaming assistant message updates one stable observed record when a message ID or stable transcript position is available.
 - **Connectivity and navigation events.** Browser online/offline transitions and route changes are journaled.
 - **Recovery controls.** The status panel can copy the latest saved draft, copy the most recent send intent, copy the latest assistant snapshot, or export the complete local recorder state.
+- **Private text-turn stream capture.** At document start the recorder wraps the page's existing `fetch` function and observes only `POST /backend-api/f/conversation`. It clones the returned response and incrementally journals decoded response-stream chunks into IndexedDB without reading request headers, cookies, request bodies, Sentinel values, conduit tokens, or browser credential stores. The site's original response remains the branch consumed by ChatGPT.
 
 The separate safety records are intentional. An empty post-send composer must not destroy the attempted user message, and a later page mutation must not destroy the assistant text that already reached the machine.
 
@@ -45,7 +46,8 @@ Press **Ctrl+Shift+Alt+E** while ChatGPT is open to download a JSON export conta
 - latest visible-error record;
 - archived events;
 - per-conversation draft records;
-- observed transcript messages.
+- observed transcript messages;
+- private `network-stream-*` events for captured text-turn response streams, including ordered decoded chunks, status/content type, byte counts, truncation/error observations, and one local stream identifier.
 
 The status panel provides **Copy draft**, **Copy last send**, **Copy assistant**, and **Export** actions.
 
@@ -92,9 +94,11 @@ A timeout, disconnect, page crash, or frontend exception between the middle stat
 
 ## Important limitations
 
-This remains a browser flight recorder, not yet the direct network-protocol recorder. DOM selectors can change when ChatGPT changes. Assistant text is observational and may miss content that never reached/rendered in the page. A DOM transcript is not treated as canonical remote state.
+This remains a browser flight recorder rather than a complete network-protocol recorder. DOM selectors can change when ChatGPT changes. Assistant text is observational and may miss content that never reached/rendered in the page. A DOM transcript is not treated as canonical remote state.
 
-Version 0.3 intentionally **does not auto-inject recovered text into the composer**. Copying recovered text is safe; mutating a React-controlled editor without a verified adapter can create a second class of data-loss bugs. Automatic restore belongs behind a tested site adapter.
+Version 0.5 adds one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. It does not capture arbitrary fetches, request bodies, request headers, authentication material, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; exceeding that limit is recorded explicitly and the recorder cancels only its cloned branch.
+
+Version 0.5 intentionally **does not auto-inject recovered text into the composer**. Copying recovered text is safe; mutating a React-controlled editor without a verified adapter can create a second class of data-loss bugs. Automatic restore belongs behind a tested site adapter.
 
 Likewise, "confirmed" currently means *observed in the rendered user transcript*. It does not yet mean a protocol acknowledgement was captured. The protocol observatory will refine this distinction.
 
@@ -102,6 +106,6 @@ Visible-error capture is intentionally conservative: it observes `role="alert"` 
 
 ## Privacy
 
-The local archive contains conversation text. It remains in browser storage until the browser profile/site data is cleared. Exports contain that text too. Do not commit personal exports to this public repository.
+The local archive contains conversation text. Version 0.5 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
 
 Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed.
