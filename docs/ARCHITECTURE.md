@@ -80,6 +80,8 @@ A UI click is not a commitment. Queueing a disk write is not a commitment. Start
 
 The desktop shell already exercises this contract without networking. Composer edits are sent to a background persistence worker so render work never waits on disk. The UI visibly distinguishes `saving…` from `durable`; the local commit action waits for a journal acknowledgement before changing turn evidence.
 
+The store crash matrix independently verifies the same boundary through process-style reopen/rebuild tests: once a typed commit has returned, later torn-tail recovery or stale SQLite state cannot erase its exact text or local identities.
+
 ## Turn state is evidence, not optimism
 
 A turn is not modeled with a single `sent` boolean. Local and remote knowledge are separate.
