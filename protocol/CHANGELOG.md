@@ -9,3 +9,6 @@ This file records changes in **our observations** of the ChatGPT web client. It 
 - Observed `/backend-api/f/conversation/prepare` -> `/backend-api/f/conversation` conduit-token linkage, Sentinel material linkage, `text/event-stream` mutation response transport, conversation-topic websocket completion notifications, and persisted reconciliation through `/backend-api/conversations/batch`.
 - Recorded that exported HAR did not preserve the SSE body and that DevTools "sanitized" output still contained secret-bearing and private material; raw HAR remains outside Git.
 - Added a sanitized structural send-request fixture and cross-snapshot send-text flow document.
+- Added canonical C03 snapshot `2026-09-29.002` from Flight Recorder v0.5.0 with the full `/backend-api/f/conversation` response stream.
+- Observed SSE `delta_encoding = "v1"`, incremental delta operations, final-message completion patching, `message_stream_complete`, and terminal `[DONE]`.
+- Flight Recorder v0.5.1 now treats `[DONE]` as a clean local terminal condition instead of reading once more and reporting Chromium's post-terminal clone abort.
