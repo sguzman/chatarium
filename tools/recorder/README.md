@@ -32,7 +32,7 @@ chatarium-recorder snapshot-flight <input.json> <experiment.toml> <snapshot-dir>
 chatarium-recorder inspect-har <input.har>
 chatarium-recorder fingerprint <file>
 
-chatarium-inventory-diff <before.requests.json> <after.requests.json> <output.diff.json>
+chatarium-inventory-diff <before.inventory.json> <after.inventory.json> <output.diff.json>
 ```
 
 The package keeps `chatarium-recorder` as its default Cargo run target, so existing `cargo run -p chatarium-recorder -- ...` commands remain unambiguous even though the companion diff binary also exists.
@@ -135,27 +135,26 @@ This is useful for quickly identifying which requests belong to a controlled exp
 
 ### `chatarium-inventory-diff`
 
-Compares two generated request inventories structurally. Endpoint identity is the tuple `(method, host, normalized path)`. For each endpoint, the diff compares the multiset of observed structural variants, including status, MIME types, body presence, resource type, query-key names, and request/response-header names.
+Auto-detects and compares two inventories of the same supported format.
 
-That means all of these become explicit maintenance signals:
+For `chatarium-request-inventory` v1, endpoint identity remains the tuple `(method, host, normalized path)`. The diff compares the multiset of observed structural variants, including status, MIME types, body presence, resource type, query-key names, and request/response-header names.
 
-- a new or removed endpoint;
-- the same endpoint returning a new status/MIME shape;
-- request/header/query shape changes;
-- repeated occurrence-count changes for an otherwise identical shape.
+For `chatarium-flight-inventory` v1, the diff requires the same experiment ID and compares the selected run's value-minimized protocol structure: event kinds, send/reconciliation evidence, assistant state, parsed stream/frame/control/delta/marker structure, completion signals, and warnings. Recorder version and selected-run timestamps/sequence numbers are retained only as context and do not count as protocol changes. Browser `network-stream-chunk` occurrence count is ignored because browser delivery chunks are not SSE frame boundaries.
 
-The report deliberately contains no request/header/query values because it consumes the already value-free inventory layer.
+Flight changes are emitted as stable JSON-pointer-like paths with added, removed, or changed values. Stream identity is normalized from method + sanitized endpoint, plus a deterministic ordinal if the same endpoint appears more than once.
 
-Run it through Cargo as:
+Mixed HAR/Flight comparisons and Flight inventories from different experiment IDs fail explicitly.
 
-```powershell
-cargo run -p chatarium-recorder --bin chatarium-inventory-diff -- `
-  .\protocol\snapshots\2026-09-17.001\derived\C03-send-text.requests.json `
-  .\protocol\snapshots\2026-09-24.001\derived\C03-send-text.requests.json `
-  .\protocol\diffs\2026-09-17.001--2026-09-24.001.C03.json
+The report contains only data already present in the sanitized/value-minimized inventory layer. A structural diff is a maintenance signal to inspect the corresponding evidence; it is not by itself proof of a breaking semantic change.
+
+Example:
+
+```text
+cargo run -p chatarium-recorder --bin chatarium-inventory-diff -- \
+  protocol/snapshots/<before>/derived/C03.flight.inventory.json \
+  protocol/snapshots/<after>/derived/C03.flight.inventory.json \
+  protocol/diffs/<before>--<after>.C03.json
 ```
-
-The command prints a compact summary (`added`, `removed`, `changed`, `unchanged`) and writes the full machine-readable report. A structural diff is a signal to inspect the corresponding sanitized HAR evidence; it is not by itself proof of a semantic protocol change.
 
 ## Sanitization is not a publication oracle
 
