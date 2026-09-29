@@ -266,6 +266,9 @@ fn build_plan(
                 body.push(event);
             }
         }
+        if let Some(event) = assistant_wal_completion_event(assistant, sha256, &canonical_scopes)? {
+            body.push(event);
+        }
     }
 
     if let Some(error) = export
@@ -678,6 +681,50 @@ fn assistant_wal_event(
     }))
 }
 
+fn assistant_wal_completion_event(
+    assistant: &Value,
+    sha256: &str,
+    canonical_scopes: &HashMap<String, String>,
+) -> Result<Option<PlannedEvent>, String> {
+    if assistant.get("protocolIsComplete").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+
+    let observed_id = assistant.get("observedId").and_then(Value::as_str);
+    let fallback_scope = assistant.get("conversation").and_then(Value::as_str);
+    let scope = canonical_scope_for(observed_id, fallback_scope, canonical_scopes);
+    let event_key = format!(
+        "assistant-wal-completion:{}:{}",
+        scope.as_deref().unwrap_or("unscoped"),
+        observed_id.unwrap_or("no-id")
+    );
+
+    Ok(Some(PlannedEvent {
+        scope: scope.clone(),
+        kind: EventKind::AssistantCompletionObserved,
+        event_key: event_key.clone(),
+        payload: import_payload(
+            sha256,
+            &event_key,
+            assistant.get("text").and_then(Value::as_str),
+            scope.as_deref(),
+            assistant.get("at").and_then(Value::as_str),
+            assistant.get("href").and_then(Value::as_str),
+            json!({
+                "observed_id": observed_id,
+                "source": assistant
+                    .get("source")
+                    .cloned()
+                    .unwrap_or_else(|| Value::String("assistant-wal".to_owned())),
+                "protocol_evidence": assistant.get("protocolEvidence").cloned().unwrap_or(Value::Null),
+                "protocol_status": assistant.get("protocolStatus").cloned().unwrap_or(Value::Null),
+                "protocol_end_turn": assistant.get("protocolEndTurn").cloned().unwrap_or(Value::Null),
+                "protocol_is_complete": true,
+            }),
+        )?,
+    }))
+}
+
 fn visible_error_event(error: &Value, sha256: &str) -> Result<Option<PlannedEvent>, String> {
     let Some(text) = error.get("text").and_then(Value::as_str) else {
         return Ok(None);
@@ -968,6 +1015,22 @@ mod tests {
         );
         assert_eq!(
             assistant_payload.pointer("/details/protocol_is_complete"),
+            Some(&Value::Bool(true))
+        );
+
+        let completion_payload = plan
+            .iter()
+            .find(|event| event.kind == EventKind::AssistantCompletionObserved)
+            .map(|event| {
+                serde_json::from_str::<Value>(&event.payload).expect("completion payload JSON")
+            })
+            .expect("assistant completion event");
+        assert_eq!(
+            completion_payload.pointer("/details/source"),
+            Some(&Value::String("protocol-sse".to_owned()))
+        );
+        assert_eq!(
+            completion_payload.pointer("/details/protocol_is_complete"),
             Some(&Value::Bool(true))
         );
     }
