@@ -261,7 +261,19 @@ fn build_plan(
     }
 
     if let Some(assistant) = export.get("assistantWal").filter(|value| !value.is_null()) {
-        if !assistant_message_fingerprints.contains(&assistant_fingerprint(assistant)) {
+        let has_protocol_provenance = assistant
+            .get("evidenceSources")
+            .and_then(Value::as_array)
+            .is_some_and(|sources| {
+                sources
+                    .iter()
+                    .any(|source| source.as_str() == Some("protocol-sse"))
+            })
+            || assistant.get("protocolEvidence").is_some_and(|value| !value.is_null());
+
+        if has_protocol_provenance
+            || !assistant_message_fingerprints.contains(&assistant_fingerprint(assistant))
+        {
             if let Some(event) = assistant_wal_event(assistant, sha256, &canonical_scopes)? {
                 body.push(event);
             }
@@ -671,6 +683,7 @@ fn assistant_wal_event(
                     .get("source")
                     .cloned()
                     .unwrap_or_else(|| Value::String("assistant-wal".to_owned())),
+                "evidence_sources": assistant.get("evidenceSources").cloned().unwrap_or(Value::Null),
                 "protocol_evidence": assistant.get("protocolEvidence").cloned().unwrap_or(Value::Null),
                 "protocol_status": assistant.get("protocolStatus").cloned().unwrap_or(Value::Null),
                 "protocol_end_turn": assistant.get("protocolEndTurn").cloned().unwrap_or(Value::Null),
@@ -716,6 +729,7 @@ fn assistant_wal_completion_event(
                     .get("source")
                     .cloned()
                     .unwrap_or_else(|| Value::String("assistant-wal".to_owned())),
+                "evidence_sources": assistant.get("evidenceSources").cloned().unwrap_or(Value::Null),
                 "protocol_evidence": assistant.get("protocolEvidence").cloned().unwrap_or(Value::Null),
                 "protocol_status": assistant.get("protocolStatus").cloned().unwrap_or(Value::Null),
                 "protocol_end_turn": assistant.get("protocolEndTurn").cloned().unwrap_or(Value::Null),
@@ -863,7 +877,8 @@ mod tests {
                 "text": "world",
                 "originalChars": 5,
                 "truncatedPrefix": false,
-                "source": "protocol-sse",
+                "source": "dom-transcript",
+                "evidenceSources": ["protocol-sse", "dom-transcript"],
                 "protocolEvidence": "delta-append",
                 "protocolStatus": "finished_successfully",
                 "protocolEndTurn": true,
@@ -999,7 +1014,11 @@ mod tests {
             .expect("assistant WAL event");
         assert_eq!(
             assistant_payload.pointer("/details/source"),
-            Some(&Value::String("protocol-sse".to_owned()))
+            Some(&Value::String("dom-transcript".to_owned()))
+        );
+        assert_eq!(
+            assistant_payload.pointer("/details/evidence_sources"),
+            Some(&json!(["protocol-sse", "dom-transcript"]))
         );
         assert_eq!(
             assistant_payload.pointer("/details/protocol_evidence"),
@@ -1027,7 +1046,11 @@ mod tests {
             .expect("assistant completion event");
         assert_eq!(
             completion_payload.pointer("/details/source"),
-            Some(&Value::String("protocol-sse".to_owned()))
+            Some(&Value::String("dom-transcript".to_owned()))
+        );
+        assert_eq!(
+            completion_payload.pointer("/details/evidence_sources"),
+            Some(&json!(["protocol-sse", "dom-transcript"]))
         );
         assert_eq!(
             completion_payload.pointer("/details/protocol_is_complete"),
