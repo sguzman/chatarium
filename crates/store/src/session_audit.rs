@@ -513,16 +513,10 @@ mod tests {
     fn duplicate_bindings_are_rejected() {
         let mut endpoint_store = MemoryEventStore::default();
         register(&mut endpoint_store, S1);
-        record_session_endpoint_bound(
-            &mut endpoint_store,
-            SessionEndpointBinding::new(S1, E1),
-        )
-        .unwrap();
-        record_session_endpoint_bound(
-            &mut endpoint_store,
-            SessionEndpointBinding::new(S1, E1),
-        )
-        .unwrap();
+        record_session_endpoint_bound(&mut endpoint_store, SessionEndpointBinding::new(S1, E1))
+            .unwrap();
+        record_session_endpoint_bound(&mut endpoint_store, SessionEndpointBinding::new(S1, E1))
+            .unwrap();
         assert!(replay_session_audit(endpoint_store.events()).is_err());
 
         let mut worker_store = MemoryEventStore::default();
@@ -535,11 +529,8 @@ mod tests {
     #[test]
     fn bindings_before_registration_are_rejected() {
         let mut endpoint_store = MemoryEventStore::default();
-        record_session_endpoint_bound(
-            &mut endpoint_store,
-            SessionEndpointBinding::new(S1, E1),
-        )
-        .unwrap();
+        record_session_endpoint_bound(&mut endpoint_store, SessionEndpointBinding::new(S1, E1))
+            .unwrap();
         let endpoint_error = replay_session_audit(endpoint_store.events()).unwrap_err();
         assert!(endpoint_error.contains("unregistered session"));
 
@@ -671,9 +662,11 @@ mod tests {
         assert!(workers.is_empty());
 
         // No route proposal exists merely because an endpoint identity is bound.
-        assert!(!store
-            .events()
-            .iter()
-            .any(|event| event.kind == EventKind::RouteProposed));
+        assert!(
+            !store
+                .events()
+                .iter()
+                .any(|event| event.kind == EventKind::RouteProposed)
+        );
     }
 }
