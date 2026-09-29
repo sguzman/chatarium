@@ -272,10 +272,10 @@ mod tests {
         let mut lease = ContinuationLease::new(G1, 1);
         let permit = lease.authorize(&working_lifecycle).unwrap();
         let continue_control =
-            WorkerControl::continue_work(ControlId::new(2), W1, &working_lifecycle, permit).unwrap();
+            WorkerControl::continue_work(ControlId::new(2), W1, &working_lifecycle, permit)
+                .unwrap();
 
-        let stop =
-            WorkerControl::stop(ControlId::new(3), W1, G1, &working_lifecycle).unwrap();
+        let stop = WorkerControl::stop(ControlId::new(3), W1, G1, &working_lifecycle).unwrap();
 
         let status =
             WorkerControl::status_request(ControlId::new(4), W1, G1, &working_lifecycle).unwrap();
@@ -334,10 +334,8 @@ mod tests {
     fn duplicate_control_id_is_rejected() {
         let mut store = MemoryEventStore::default();
         let lifecycle = ready();
-        let first =
-            WorkerControl::start_or_resume(ControlId::new(1), W1, G1, &lifecycle).unwrap();
-        let second =
-            WorkerControl::start_or_resume(ControlId::new(1), W1, G1, &lifecycle).unwrap();
+        let first = WorkerControl::start_or_resume(ControlId::new(1), W1, G1, &lifecycle).unwrap();
+        let second = WorkerControl::start_or_resume(ControlId::new(1), W1, G1, &lifecycle).unwrap();
 
         record_worker_control_admitted(&mut store, &first).unwrap();
         record_worker_control_admitted(&mut store, &second).unwrap();
