@@ -105,7 +105,7 @@ Deliverables:
 - projection rebuild tests;
 - interrupted-turn recovery tests.
 
-Current state: the turn-evidence state machine and fsync-backed append-only JSONL journal already exist. P2 work is now adding typed local identities and a subordinate rebuildable SQLite projection before expanding crash-transition coverage.
+Current state: typed local identities, fsync-backed typed user-message commits, replayable turn evidence, the append-only JSONL journal, and SQLite projection schema v2 are implemented. SQLite now rebuilds both generic durable events and typed authored-turn state (exact text + local IDs + replayed evidence) transactionally from the journal, while legacy text-only commits remain event-only. P2's remaining work is concentrated on crash-transition/recovery coverage across the full local commit -> dispatch evidence -> streaming -> completion/reconciliation lifecycle.
 
 Exit criterion: simulated crashes at every transition do not lose committed authorship or corrupt the recoverable history.
 
