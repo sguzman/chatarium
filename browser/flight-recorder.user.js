@@ -5,6 +5,8 @@
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/sguzman/chatarium/main/browser/flight-recorder.user.js
+// @downloadURL  https://raw.githubusercontent.com/sguzman/chatarium/main/browser/flight-recorder.user.js
 // @grant        none
 // ==/UserScript==
 
