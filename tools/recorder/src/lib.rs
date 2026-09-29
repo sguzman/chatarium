@@ -1123,6 +1123,52 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_har_writes_and_hashes_frontend_asset_manifest() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("chatarium-asset-manifest-test-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("private-assets.har");
+        let output = root.join("snapshot");
+        fs::write(&input, asset_har()).unwrap();
+
+        snapshot_har(&input, &output, "C00").unwrap();
+
+        let asset_path = output.join("derived/C00.frontend-assets.json");
+        let asset_bytes = fs::read(&asset_path).unwrap();
+        let manifest: Value = serde_json::from_slice(&asset_bytes).unwrap();
+        let metadata: Value =
+            serde_json::from_slice(&fs::read(output.join("derived/C00.meta.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            metadata["frontend_asset_manifest_file"],
+            "derived/C00.frontend-assets.json"
+        );
+        assert_eq!(
+            metadata["frontend_asset_manifest_sha256"],
+            sha256_hex(&asset_bytes)
+        );
+        assert_eq!(
+            metadata["frontend_asset_manifest_bytes"],
+            json!(asset_bytes.len())
+        );
+        assert_eq!(metadata["frontend_asset_count"], 4);
+        assert_eq!(metadata["frontend_asset_hashed_count"], 2);
+        assert_eq!(metadata["frontend_asset_warning_count"], 1);
+        assert_eq!(manifest["asset_count"], 4);
+
+        let text = String::from_utf8(asset_bytes).unwrap();
+        assert!(!text.contains("asset-secret"));
+        assert!(!text.contains("PRIVATE_MALFORMED_BASE64"));
+        assert!(!text.contains("private-assets.har"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn value_sanitizer_is_schema_agnostic() {
         let mut value = json!({
             "metadata": {"access_token": "sensitive"},
