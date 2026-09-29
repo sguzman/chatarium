@@ -4,6 +4,7 @@
 //! This module composes that evidence with worker-control provenance so an
 //! orchestration control cannot dispatch after becoming stale while queued.
 
+use crate::EventEnvelope;
 use crate::control_admission_audit::{
     ValidatedControlAdmission, replay_validated_control_admissions,
     validate_control_freshness_before,
@@ -11,7 +12,6 @@ use crate::control_admission_audit::{
 use crate::orchestration_route_audit::{
     ValidatedOrchestrationRoute, replay_validated_orchestration_routes,
 };
-use crate::EventEnvelope;
 use crate::routing_audit::{RouteAuditRecord, replay_routing_audit};
 use chatarium_core::control::ControlId;
 use chatarium_core::control_provenance::ControlIssuer;
