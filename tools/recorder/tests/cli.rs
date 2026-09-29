@@ -144,7 +144,11 @@ fn documented_cli_commands_remain_operational() {
     let mut changed_flight = base_flight.clone();
     changed_flight["streams"][0]["control_type_counts"]["conversation_detail_metadata"] =
         serde_json::json!(1);
-    fs::write(&flight_before, serde_json::to_vec_pretty(&base_flight).unwrap()).unwrap();
+    fs::write(
+        &flight_before,
+        serde_json::to_vec_pretty(&base_flight).unwrap(),
+    )
+    .unwrap();
     fs::write(
         &flight_after,
         serde_json::to_vec_pretty(&changed_flight).unwrap(),
