@@ -145,7 +145,10 @@ impl fmt::Display for WorkerTransitionError {
                 "cannot replace active goal {current} while worker is {phase:?}"
             ),
             Self::InvalidTransition { phase, action } => {
-                write!(formatter, "cannot apply {action:?} while worker is {phase:?}")
+                write!(
+                    formatter,
+                    "cannot apply {action:?} while worker is {phase:?}"
+                )
             }
         }
     }
@@ -202,10 +205,7 @@ impl WorkerLifecycle {
     }
 
     /// Start a ready goal or explicitly resume after input/blocker resolution.
-    pub fn start_or_resume(
-        &mut self,
-        goal_id: WorkerGoalId,
-    ) -> Result<(), WorkerTransitionError> {
+    pub fn start_or_resume(&mut self, goal_id: WorkerGoalId) -> Result<(), WorkerTransitionError> {
         self.require_goal(goal_id)?;
         match self.phase {
             WorkerPhase::Ready | WorkerPhase::NeedsInput | WorkerPhase::Blocked => {
@@ -741,9 +741,7 @@ mod tests {
     fn bounded_continuation_lease_exhausts_instead_of_looping_forever() {
         let worker = working(G1);
         let mut lease = ContinuationLease::new(G1, 3);
-        let permits: Vec<_> = (0..3)
-            .map(|_| lease.authorize(&worker).unwrap())
-            .collect();
+        let permits: Vec<_> = (0..3).map(|_| lease.authorize(&worker).unwrap()).collect();
         assert_eq!(
             permits
                 .iter()
