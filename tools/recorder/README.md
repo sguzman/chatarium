@@ -158,6 +158,8 @@ For `chatarium-flight-inventory` v1, the diff requires the same experiment ID an
 
 Flight changes are emitted as stable JSON-pointer-like paths with added, removed, or changed values. Stream identity is normalized from method + sanitized endpoint, plus a deterministic ordinal if the same endpoint appears more than once.
 
+Each Flight change also carries `field_class` and `classification_rationale` from the committed evidence-scoped registry in `protocol/schemas/field-classification.v1.json`. Added/removed vocabulary inside structural count maps can therefore be distinguished from mere numeric count drift. Volatile context excluded from protocol-change counts is still annotated in the diff report as diagnostic, ephemeral instance state, or delivery noise.
+
 Mixed HAR/Flight comparisons and Flight inventories from different experiment IDs fail explicitly.
 
 The report contains only data already present in the sanitized/value-minimized inventory layer. A structural diff is a maintenance signal to inspect the corresponding evidence; it is not by itself proof of a breaking semantic change.
