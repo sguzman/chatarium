@@ -3,11 +3,11 @@
 //! SQLite is never authoritative in Chatarium. It exists only to make durable journal history
 //! queryable. A projection may be deleted and rebuilt without losing authorship or evidence.
 
-use crate::turn_projection::{
-    assistant_evidence_name, derive_authored_turns, local_evidence_name, parse_assistant_evidence,
-    parse_local_evidence, parse_remote_evidence, remote_evidence_name, AuthoredTurnRow,
-};
 use crate::EventEnvelope;
+use crate::turn_projection::{
+    AuthoredTurnRow, assistant_evidence_name, derive_authored_turns, local_evidence_name,
+    parse_assistant_evidence, parse_local_evidence, parse_remote_evidence, remote_evidence_name,
+};
 use chatarium_core::{EventKind, LocalConversationId, LocalMessageId, LocalTurnId, TurnEvidence};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::error::Error;
@@ -164,9 +164,11 @@ impl SqliteProjection {
         let expected_last = events.last().map(|event| event.sequence);
         let expected_count = u64::try_from(events.len())
             .map_err(|_| ProjectionError::NumericOverflow("event_count"))?;
-        Ok(self.materialized_schema_version()? == Some(PROJECTION_SCHEMA_VERSION)
-            && self.last_sequence()? == expected_last
-            && self.event_count()? == expected_count)
+        Ok(
+            self.materialized_schema_version()? == Some(PROJECTION_SCHEMA_VERSION)
+                && self.last_sequence()? == expected_last
+                && self.event_count()? == expected_count,
+        )
     }
 
     /// Rebuild the entire SQLite projection transactionally from authoritative journal events.
@@ -520,9 +522,7 @@ where
     T::Err: std::fmt::Display,
 {
     raw.parse::<T>().map_err(|error| {
-        ProjectionError::InvalidProjection(format!(
-            "invalid {field} value '{raw}': {error}"
-        ))
+        ProjectionError::InvalidProjection(format!("invalid {field} value '{raw}': {error}"))
     })
 }
 
