@@ -435,11 +435,7 @@ mod tests {
     #[test]
     fn wrong_controller_route_source_is_rejected() {
         let mut store = MemoryEventStore::default();
-        register_controller(
-            &mut store,
-            CONTROLLER_SESSION,
-            Some(CONTROLLER_ENDPOINT),
-        );
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
         register_worker(&mut store, Some(WORKER_ENDPOINT));
         supervise(&mut store, CONTROLLER_SESSION);
         let control = admit_with_issuer(
@@ -460,11 +456,7 @@ mod tests {
     #[test]
     fn wrong_worker_route_destination_is_rejected() {
         let mut store = MemoryEventStore::default();
-        register_controller(
-            &mut store,
-            CONTROLLER_SESSION,
-            Some(CONTROLLER_ENDPOINT),
-        );
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
         register_worker(&mut store, Some(WORKER_ENDPOINT));
         supervise(&mut store, CONTROLLER_SESSION);
         let control = admit_with_issuer(
@@ -511,11 +503,7 @@ mod tests {
     #[test]
     fn controller_route_requires_worker_session_binding() {
         let mut store = MemoryEventStore::default();
-        register_controller(
-            &mut store,
-            CONTROLLER_SESSION,
-            Some(CONTROLLER_ENDPOINT),
-        );
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
         let control = admit_with_issuer(
             &mut store,
             1,
@@ -555,11 +543,7 @@ mod tests {
     #[test]
     fn controller_route_requires_worker_endpoint() {
         let mut store = MemoryEventStore::default();
-        register_controller(
-            &mut store,
-            CONTROLLER_SESSION,
-            Some(CONTROLLER_ENDPOINT),
-        );
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
         register_worker(&mut store, None);
         supervise(&mut store, CONTROLLER_SESSION);
         let control = admit_with_issuer(
@@ -639,11 +623,7 @@ mod tests {
         propose_and_bind(
             &mut store,
             &control,
-            route(
-                1,
-                RouteEndpointId::new(500),
-                RouteEndpointId::new(600),
-            ),
+            route(1, RouteEndpointId::new(500), RouteEndpointId::new(600)),
         );
 
         let error = replay_validated_orchestration_routes(store.events()).unwrap_err();
