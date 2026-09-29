@@ -1,8 +1,8 @@
 //! Domain model for Chatarium reliability state.
 
 pub mod control;
-pub mod control_route;
 pub mod control_provenance;
+pub mod control_route;
 pub mod orchestration;
 pub mod routing;
 pub mod session;
