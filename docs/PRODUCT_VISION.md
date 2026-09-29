@@ -156,6 +156,8 @@ Orchestration controls are now also modeled as typed semantic commands separate 
 
 Those admitted commands are now restart-safe audit facts as well. Chatarium can reconstruct which control it admitted and its worker/goal/continuation correlation after a crash without confusing admission with dispatch or confusing dispatch with a worker transition.
 
+An admitted worker control can now also be explicitly correlated to exactly one `OrchestrationControl` route, with the reciprocal rule that one route carries at most one admitted control. That binding is durable provenance only: it does not mean the route was approved, dispatched, delivered, executed, or reflected in worker lifecycle. Worker-to-session/endpoint identity remains a separate future layer.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.
