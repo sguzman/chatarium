@@ -648,6 +648,7 @@ fn sanitize_send_intents(
     selected: &SelectedRun,
     allowed_texts: &BTreeSet<String>,
     ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
 ) -> Vec<Value> {
     export
         .get("sendIntents")
@@ -665,20 +666,32 @@ fn sanitize_send_intents(
                 "id": intent
                     .get("id")
                     .and_then(Value::as_str)
-                    .map(|raw| ids.map_send(raw)),
+                    .map(|raw| {
+                        stats.send_identities_placeholdered =
+                            stats.send_identities_placeholdered.saturating_add(1);
+                        ids.map_send(raw)
+                    }),
                 "at": intent.get("at"),
                 "reason": intent.get("reason"),
-                "text": safe_text(intent.get("text").and_then(Value::as_str), allowed_texts),
+                "text": safe_text(
+                    intent.get("text").and_then(Value::as_str),
+                    allowed_texts,
+                    stats,
+                ),
                 "state": intent.get("state"),
                 "confirmed_at": intent.get("confirmedAt"),
                 "observed_message_id": intent
                     .get("observedMessageId")
                     .and_then(Value::as_str)
-                    .map(|raw| ids.map_message(raw)),
+                    .map(|raw| {
+                        stats.message_identities_placeholdered =
+                            stats.message_identities_placeholdered.saturating_add(1);
+                        ids.map_message(raw)
+                    }),
                 "confirmed_conversation": intent
                     .get("confirmedConversation")
                     .and_then(Value::as_str)
-                    .map(|raw| sanitize_conversation_scope(raw, ids)),
+                    .map(|raw| sanitize_conversation_scope(raw, ids, stats)),
                 "confirmation_evidence": intent.get("confirmationEvidence"),
             })
         })
@@ -690,6 +703,7 @@ fn sanitize_assistant_wal(
     selected: &SelectedRun,
     allowed_texts: &BTreeSet<String>,
     ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
 ) -> Value {
     let Some(wal) = export.get("assistantWal").filter(|value| !value.is_null()) else {
         return Value::Null;
@@ -707,12 +721,20 @@ fn sanitize_assistant_wal(
         "conversation": wal
             .get("conversation")
             .and_then(Value::as_str)
-            .map(|raw| sanitize_conversation_scope(raw, ids)),
+            .map(|raw| sanitize_conversation_scope(raw, ids, stats)),
         "observed_id": wal
             .get("observedId")
             .and_then(Value::as_str)
-            .map(|raw| ids.map_message(raw)),
-        "text": safe_text(wal.get("text").and_then(Value::as_str), allowed_texts),
+            .map(|raw| {
+                stats.message_identities_placeholdered =
+                    stats.message_identities_placeholdered.saturating_add(1);
+                ids.map_message(raw)
+            }),
+        "text": safe_text(
+            wal.get("text").and_then(Value::as_str),
+            allowed_texts,
+            stats,
+        ),
         "source": wal.get("source"),
         "evidence_sources": wal.get("evidenceSources"),
         "protocol_evidence": wal.get("protocolEvidence"),
@@ -727,6 +749,7 @@ fn sanitize_messages(
     selected: &SelectedRun,
     allowed_texts: &BTreeSet<String>,
     ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
 ) -> Vec<Value> {
     export
         .get("messages")
@@ -745,13 +768,21 @@ fn sanitize_messages(
                 "observed_id": message
                     .get("observedId")
                     .and_then(Value::as_str)
-                    .map(|raw| ids.map_message(raw)),
+                    .map(|raw| {
+                        stats.message_identities_placeholdered =
+                            stats.message_identities_placeholdered.saturating_add(1);
+                        ids.map_message(raw)
+                    }),
                 "conversation": message
                     .get("conversation")
                     .and_then(Value::as_str)
-                    .map(|raw| sanitize_conversation_scope(raw, ids)),
+                    .map(|raw| sanitize_conversation_scope(raw, ids, stats)),
                 "role": message.get("role"),
-                "text": safe_text(message.get("text").and_then(Value::as_str), allowed_texts),
+                "text": safe_text(
+                    message.get("text").and_then(Value::as_str),
+                    allowed_texts,
+                    stats,
+                ),
                 "source": message.get("source"),
                 "protocol_status": message.get("protocolStatus"),
                 "protocol_end_turn": message.get("protocolEndTurn"),
@@ -791,21 +822,40 @@ fn assistant_inventory(
     })
 }
 
-fn safe_text(text: Option<&str>, allowed_texts: &BTreeSet<String>) -> Value {
+fn safe_text(
+    text: Option<&str>,
+    allowed_texts: &BTreeSet<String>,
+    stats: &mut FlightSanitizationStats,
+) -> Value {
     match text {
-        Some(text) if allowed_texts.contains(text) => Value::String(text.to_owned()),
-        Some(_) => Value::String(REDACTED_CONTENT.to_owned()),
+        Some(text) if allowed_texts.contains(text) => {
+            stats.canonical_experiment_literals_retained =
+                stats.canonical_experiment_literals_retained.saturating_add(1);
+            Value::String(text.to_owned())
+        }
+        Some(_) => {
+            stats.content_values_redacted = stats.content_values_redacted.saturating_add(1);
+            Value::String(REDACTED_CONTENT.to_owned())
+        }
         None => Value::Null,
     }
 }
 
-fn sanitize_conversation_scope(raw: &str, ids: &mut IdentityMap) -> String {
+fn sanitize_conversation_scope(
+    raw: &str,
+    ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
+) -> String {
     if let Some(value) = raw.strip_prefix("conversation:") {
+        stats.conversation_identities_placeholdered =
+            stats.conversation_identities_placeholdered.saturating_add(1);
         return format!("conversation:{}", ids.map_conversation(value));
     }
     if raw.starts_with("route:") {
         return raw.to_owned();
     }
+    stats.conversation_identities_placeholdered =
+        stats.conversation_identities_placeholdered.saturating_add(1);
     ids.map_conversation(raw)
 }
 
@@ -815,9 +865,17 @@ fn sanitize_sse_frame(
     ids: &mut IdentityMap,
     inventory: &mut StreamInventory,
     warnings: &mut Vec<String>,
+    stats: &mut FlightSanitizationStats,
 ) -> Value {
     inventory.frame_count += 1;
-    let public_event = frame.event.as_deref().map(safe_sse_event_name);
+    let public_event = frame.event.as_deref().map(|event| {
+        let sanitized = safe_sse_event_name(event);
+        if sanitized != event {
+            stats.unknown_event_names_redacted =
+                stats.unknown_event_names_redacted.saturating_add(1);
+        }
+        sanitized
+    });
     if let Some(event) = public_event.as_deref() {
         *inventory
             .named_event_counts
@@ -835,6 +893,8 @@ fn sanitize_sse_frame(
 
     let Ok(mut payload) = serde_json::from_str::<Value>(&frame.data) else {
         inventory.parse_warning_count += 1;
+        stats.malformed_sse_frames_fail_closed =
+            stats.malformed_sse_frames_fail_closed.saturating_add(1);
         warnings.push(format!(
             "SSE frame {} could not be parsed and was fail-closed",
             inventory.frame_count
@@ -848,10 +908,12 @@ fn sanitize_sse_frame(
     observe_frame_shape(frame, &payload, inventory);
     if frame.event.as_deref() == Some("delta_encoding") {
         if payload.as_str() != Some("v1") {
+            stats.unknown_encodings_redacted =
+                stats.unknown_encodings_redacted.saturating_add(1);
             payload = Value::String(REDACTED_VALUE.to_owned());
         }
     } else {
-        sanitize_protocol_json(&mut payload, None, allowed_texts, ids);
+        sanitize_protocol_json(&mut payload, None, allowed_texts, ids, stats);
     }
 
     json!({
