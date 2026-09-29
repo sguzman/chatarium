@@ -9,8 +9,11 @@ publish = false
 default-run = "chatarium-recorder"
 
 [dependencies]
+chatarium-protocol = { path = "../../crates/protocol" }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+toml = "0.8"
 url = "2.5"
 
 [lints]
