@@ -9,7 +9,7 @@ fn main() -> ExitCode {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let [before, after, output] = args.as_slice() else {
         eprintln!(
-            "Usage: chatarium-inventory-diff <before.requests.json> <after.requests.json> <output.diff.json>"
+            "Usage: chatarium-inventory-diff <before.inventory.json> <after.inventory.json> <output.diff.json>"
         );
         return ExitCode::from(2);
     };
