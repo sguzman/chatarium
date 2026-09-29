@@ -6,8 +6,8 @@
 pub mod authored;
 pub mod projection;
 pub mod routing_audit;
-pub mod worker_audit;
 mod turn_projection;
+pub mod worker_audit;
 
 pub use turn_projection::AuthoredTurnRow;
 
