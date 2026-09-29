@@ -1,6 +1,7 @@
 //! Domain model for Chatarium reliability state.
 
 pub mod orchestration;
+pub mod routing;
 
 use std::fmt;
 use std::str::FromStr;
