@@ -160,6 +160,8 @@ An admitted worker control can now also be explicitly correlated to exactly one 
 
 That identity layer now exists locally. `SessionId` is a first-class Chatarium identity distinct from `WorkerId`, `RouteEndpointId`, and any future remote ChatGPT conversation/session identifier. Local sessions can be durably registered, bound one-to-one to routing endpoints, and optionally bound one-to-one to worker identities. These bindings establish local provenance only; they do not imply remote authentication, connectivity, goal assignment, controller/master role, or dispatch.
 
+Controller/master designation now also exists as explicit durable local state. A designated controller session may coordinate multiple worker sessions, while each worker session has at most one controller. In this first model controller and worker roles are disjoint, intentionally preventing nested controller chains/cycles. The controller remains subordinate to user routing/policy: designation itself grants no dispatch bypass, no continuation authority, and no worker-state mutation.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.
