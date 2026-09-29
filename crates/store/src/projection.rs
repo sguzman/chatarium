@@ -3,15 +3,20 @@
 //! SQLite is never authoritative in Chatarium. It exists only to make durable journal history
 //! queryable. A projection may be deleted and rebuilt without losing authorship or evidence.
 
+use crate::turn_projection::{
+    assistant_evidence_name, derive_authored_turns, local_evidence_name, parse_assistant_evidence,
+    parse_local_evidence, parse_remote_evidence, remote_evidence_name, AuthoredTurnRow,
+};
 use crate::EventEnvelope;
-use chatarium_core::EventKind;
-use rusqlite::{Connection, Transaction, params};
+use chatarium_core::{EventKind, LocalConversationId, LocalMessageId, LocalTurnId, TurnEvidence};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
-const PROJECTION_SCHEMA_VERSION: u32 = 1;
+const PROJECTION_SCHEMA_VERSION: u32 = 2;
 
 /// One error produced by the SQLite projection layer.
 #[derive(Debug)]
@@ -22,6 +27,8 @@ pub enum ProjectionError {
     Sqlite(rusqlite::Error),
     /// Journal evidence was internally inconsistent and cannot be projected safely.
     InvalidJournal(String),
+    /// Derived SQLite projection contents are malformed or internally inconsistent.
+    InvalidProjection(String),
     /// The projection schema is newer than this build understands.
     UnsupportedSchema(u32),
     /// A numeric journal value cannot be represented by SQLite's signed integer type.
@@ -38,6 +45,9 @@ impl fmt::Display for ProjectionError {
             Self::Sqlite(error) => write!(formatter, "projection SQLite error: {error}"),
             Self::InvalidJournal(detail) => {
                 write!(formatter, "invalid journal for projection: {detail}")
+            }
+            Self::InvalidProjection(detail) => {
+                write!(formatter, "invalid SQLite projection: {detail}")
             }
             Self::UnsupportedSchema(version) => {
                 write!(formatter, "unsupported projection schema version {version}")
@@ -126,18 +136,89 @@ impl SqliteProjection {
         i64_to_u64(count)
     }
 
-    /// Whether the projection covers exactly the supplied durable event sequence.
+    /// Schema version against which the current materialized rows were last rebuilt.
+    pub fn materialized_schema_version(&self) -> Result<Option<u32>, ProjectionError> {
+        let value = self
+            .connection
+            .query_row(
+                "SELECT value FROM projection_meta WHERE key = 'last_rebuild_schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        value
+            .map(|raw| {
+                raw.parse::<u32>().map_err(|error| {
+                    ProjectionError::InvalidProjection(format!(
+                        "invalid last_rebuild_schema_version value '{raw}': {error}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    /// Whether the projection covers exactly the supplied durable event sequence and current
+    /// materialized schema.
     pub fn is_current_with(&self, events: &[EventEnvelope]) -> Result<bool, ProjectionError> {
         validate_sequences(events)?;
         let expected_last = events.last().map(|event| event.sequence);
         let expected_count = u64::try_from(events.len())
             .map_err(|_| ProjectionError::NumericOverflow("event_count"))?;
-        Ok(self.last_sequence()? == expected_last && self.event_count()? == expected_count)
+        Ok(self.materialized_schema_version()? == Some(PROJECTION_SCHEMA_VERSION)
+            && self.last_sequence()? == expected_last
+            && self.event_count()? == expected_count)
     }
 
     /// Rebuild the entire SQLite projection transactionally from authoritative journal events.
     pub fn rebuild(&mut self, events: &[EventEnvelope]) -> Result<(), ProjectionError> {
         self.rebuild_impl(events, None)
+    }
+
+    /// Read all typed authored turns in durable commit-sequence order.
+    pub fn authored_turns(&self) -> Result<Vec<AuthoredTurnRow>, ProjectionError> {
+        self.query_authored_turns(
+            "SELECT conversation_id, turn_id, message_id, exact_user_text,
+                    commit_sequence, last_sequence, local_evidence, remote_evidence,
+                    assistant_evidence
+             FROM projected_authored_turns
+             ORDER BY commit_sequence",
+            [],
+        )
+    }
+
+    /// Read one typed authored turn by local turn identity.
+    pub fn authored_turn(
+        &self,
+        turn_id: LocalTurnId,
+    ) -> Result<Option<AuthoredTurnRow>, ProjectionError> {
+        let raw = turn_id.to_string();
+        let mut rows = self.query_authored_turns(
+            "SELECT conversation_id, turn_id, message_id, exact_user_text,
+                    commit_sequence, last_sequence, local_evidence, remote_evidence,
+                    assistant_evidence
+             FROM projected_authored_turns
+             WHERE turn_id = ?1
+             ORDER BY commit_sequence",
+            [raw.as_str()],
+        )?;
+        Ok(rows.pop())
+    }
+
+    /// Read typed authored turns for one local conversation in commit-sequence order.
+    pub fn authored_turns_for_conversation(
+        &self,
+        conversation_id: LocalConversationId,
+    ) -> Result<Vec<AuthoredTurnRow>, ProjectionError> {
+        let raw = conversation_id.to_string();
+        self.query_authored_turns(
+            "SELECT conversation_id, turn_id, message_id, exact_user_text,
+                    commit_sequence, last_sequence, local_evidence, remote_evidence,
+                    assistant_evidence
+             FROM projected_authored_turns
+             WHERE conversation_id = ?1
+             ORDER BY commit_sequence",
+            [raw.as_str()],
+        )
     }
 
     /// Read every projected event in durable sequence order.
@@ -181,6 +262,71 @@ impl SqliteProjection {
         )
     }
 
+    fn query_authored_turns<const N: usize>(
+        &self,
+        sql: &str,
+        parameters: [&str; N],
+    ) -> Result<Vec<AuthoredTurnRow>, ProjectionError> {
+        let mut statement = self.connection.prepare(sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(parameters), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })?;
+
+        let mut projected = Vec::new();
+        for row in rows {
+            let (
+                conversation_id,
+                turn_id,
+                message_id,
+                exact_user_text,
+                commit_sequence,
+                last_sequence,
+                local_evidence,
+                remote_evidence,
+                assistant_evidence,
+            ) = row?;
+            projected.push(AuthoredTurnRow {
+                conversation_id: parse_projection_id::<LocalConversationId>(
+                    &conversation_id,
+                    "conversation_id",
+                )?,
+                turn_id: parse_projection_id::<LocalTurnId>(&turn_id, "turn_id")?,
+                message_id: parse_projection_id::<LocalMessageId>(&message_id, "message_id")?,
+                exact_user_text,
+                commit_sequence: i64_to_u64(commit_sequence)?,
+                last_sequence: i64_to_u64(last_sequence)?,
+                evidence: TurnEvidence {
+                    local: parse_local_evidence(&local_evidence).ok_or_else(|| {
+                        ProjectionError::InvalidProjection(format!(
+                            "unknown local evidence '{local_evidence}'"
+                        ))
+                    })?,
+                    remote: parse_remote_evidence(&remote_evidence).ok_or_else(|| {
+                        ProjectionError::InvalidProjection(format!(
+                            "unknown remote evidence '{remote_evidence}'"
+                        ))
+                    })?,
+                    assistant: parse_assistant_evidence(&assistant_evidence).ok_or_else(|| {
+                        ProjectionError::InvalidProjection(format!(
+                            "unknown assistant evidence '{assistant_evidence}'"
+                        ))
+                    })?,
+                },
+            });
+        }
+        Ok(projected)
+    }
+
     fn query_events<const N: usize>(
         &self,
         sql: &str,
@@ -219,9 +365,48 @@ impl SqliteProjection {
                         ON projected_events(scope, sequence);
                     CREATE INDEX projected_events_kind_sequence
                         ON projected_events(kind, sequence);
+                    CREATE TABLE projected_authored_turns (
+                        turn_id TEXT PRIMARY KEY NOT NULL,
+                        conversation_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL UNIQUE,
+                        exact_user_text TEXT NOT NULL,
+                        commit_sequence INTEGER NOT NULL UNIQUE,
+                        last_sequence INTEGER NOT NULL,
+                        local_evidence TEXT NOT NULL,
+                        remote_evidence TEXT NOT NULL,
+                        assistant_evidence TEXT NOT NULL
+                    );
+                    CREATE INDEX projected_authored_turns_conversation_commit
+                        ON projected_authored_turns(conversation_id, commit_sequence);
                     INSERT INTO projection_meta(key, value)
-                        VALUES ('schema_version', '1');
-                    PRAGMA user_version = 1;",
+                        VALUES ('schema_version', '2');
+                    PRAGMA user_version = 2;",
+                )?;
+                transaction.commit()?;
+                Ok(())
+            }
+            1 => {
+                let transaction = self.connection.transaction()?;
+                transaction.execute_batch(
+                    "CREATE TABLE projected_authored_turns (
+                        turn_id TEXT PRIMARY KEY NOT NULL,
+                        conversation_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL UNIQUE,
+                        exact_user_text TEXT NOT NULL,
+                        commit_sequence INTEGER NOT NULL UNIQUE,
+                        last_sequence INTEGER NOT NULL,
+                        local_evidence TEXT NOT NULL,
+                        remote_evidence TEXT NOT NULL,
+                        assistant_evidence TEXT NOT NULL
+                    );
+                    CREATE INDEX projected_authored_turns_conversation_commit
+                        ON projected_authored_turns(conversation_id, commit_sequence);
+                    INSERT INTO projection_meta(key, value)
+                        VALUES ('schema_version', '2')
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                    DELETE FROM projection_meta
+                        WHERE key = 'last_rebuild_schema_version';
+                    PRAGMA user_version = 2;",
                 )?;
                 transaction.commit()?;
                 Ok(())
@@ -237,14 +422,23 @@ impl SqliteProjection {
         fail_after: Option<usize>,
     ) -> Result<(), ProjectionError> {
         validate_sequences(events)?;
+        let authored_turns =
+            derive_authored_turns(events).map_err(ProjectionError::InvalidJournal)?;
 
         let transaction = self.connection.transaction()?;
         replace_projected_events(&transaction, events, fail_after)?;
+        replace_authored_turns(&transaction, &authored_turns)?;
         transaction.execute(
             "INSERT INTO projection_meta(key, value)
              VALUES ('last_rebuild_event_count', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [events.len().to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO projection_meta(key, value)
+             VALUES ('last_rebuild_schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [PROJECTION_SCHEMA_VERSION.to_string()],
         )?;
         transaction.commit()?;
         Ok(())
@@ -289,6 +483,47 @@ fn replace_projected_events(
         }
     }
     Ok(())
+}
+
+fn replace_authored_turns(
+    transaction: &Transaction<'_>,
+    rows: &[AuthoredTurnRow],
+) -> Result<(), ProjectionError> {
+    transaction.execute("DELETE FROM projected_authored_turns", [])?;
+    let mut statement = transaction.prepare(
+        "INSERT INTO projected_authored_turns(
+            turn_id, conversation_id, message_id, exact_user_text,
+            commit_sequence, last_sequence, local_evidence, remote_evidence,
+            assistant_evidence
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )?;
+
+    for row in rows {
+        statement.execute(params![
+            row.turn_id.to_string(),
+            row.conversation_id.to_string(),
+            row.message_id.to_string(),
+            row.exact_user_text.as_str(),
+            u64_to_i64(row.commit_sequence, "commit_sequence")?,
+            u64_to_i64(row.last_sequence, "last_sequence")?,
+            local_evidence_name(row.evidence.local),
+            remote_evidence_name(row.evidence.remote),
+            assistant_evidence_name(row.evidence.assistant),
+        ])?;
+    }
+    Ok(())
+}
+
+fn parse_projection_id<T>(raw: &str, field: &str) -> Result<T, ProjectionError>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    raw.parse::<T>().map_err(|error| {
+        ProjectionError::InvalidProjection(format!(
+            "invalid {field} value '{raw}': {error}"
+        ))
+    })
 }
 
 fn collect_projected_rows<T>(
