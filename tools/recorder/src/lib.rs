@@ -321,11 +321,19 @@ pub fn frontend_asset_manifest(har: &Value) -> Result<Value, String> {
 
     let hashed_asset_count = assets
         .iter()
-        .filter(|asset| asset.get("body_sha256").is_some_and(|value| !value.is_null()))
+        .filter(|asset| {
+            asset
+                .get("body_sha256")
+                .is_some_and(|value| !value.is_null())
+        })
         .count();
     let warning_count = assets
         .iter()
-        .filter(|asset| asset.get("body_warning").is_some_and(|value| !value.is_null()))
+        .filter(|asset| {
+            asset
+                .get("body_warning")
+                .is_some_and(|value| !value.is_null())
+        })
         .count();
 
     Ok(json!({
@@ -441,17 +449,10 @@ fn decode_asset_body(
             let bytes = text.as_bytes();
             (true, Some(bytes.len()), Some(sha256_hex(bytes)), None)
         }
-        Some(value) if value.eq_ignore_ascii_case("base64") => {
-            match decode_base64_standard(text) {
-                Ok(bytes) => (
-                    true,
-                    Some(bytes.len()),
-                    Some(sha256_hex(&bytes)),
-                    None,
-                ),
-                Err(()) => (false, None, None, Some("invalid-base64-content")),
-            }
-        }
+        Some(value) if value.eq_ignore_ascii_case("base64") => match decode_base64_standard(text) {
+            Ok(bytes) => (true, Some(bytes.len()), Some(sha256_hex(&bytes)), None),
+            Err(()) => (false, None, None, Some("invalid-base64-content")),
+        },
         Some(_) => (false, None, None, Some("unsupported-content-encoding")),
     }
 }
@@ -1058,10 +1059,7 @@ mod tests {
         assert_eq!(script["kind"], "script");
         assert_eq!(script["host"], "cdn.example.test");
         assert_eq!(script["body_available"], true);
-        assert_eq!(
-            script["body_sha256"],
-            sha256_hex(b"console.log('asset');")
-        );
+        assert_eq!(script["body_sha256"], sha256_hex(b"console.log('asset');"));
         assert_eq!(
             script["decoded_body_bytes"],
             json!(b"console.log('asset');".len())
