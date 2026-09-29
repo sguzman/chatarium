@@ -1,0 +1,97 @@
+{
+  "snapshot": "2026-09-29.002",
+  "experiment": "C03-send-text",
+  "transport": {
+    "status": 200,
+    "content_type": "text/event-stream; charset=utf-8",
+    "delta_encoding": "v1"
+  },
+  "representative_sequence": [
+    {
+      "event": "delta_encoding",
+      "data": "v1"
+    },
+    {
+      "event": null,
+      "data": {
+        "type": "input_message",
+        "input_message": {
+          "id": "<USER_MESSAGE_ID>",
+          "author": {"role": "user"},
+          "content": {
+            "content_type": "text",
+            "parts": ["respond with exactly CHATARIUM_PROTOCOL_TEST_001"]
+          },
+          "status": "finished_successfully",
+          "conversation_id": "<CONVERSATION_ID>"
+        }
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "v": {
+          "message": {
+            "id": "<ASSISTANT_MESSAGE_ID>",
+            "author": {"role": "assistant"},
+            "content": {"content_type": "text", "parts": [""]},
+            "status": "in_progress",
+            "channel": "final"
+          },
+          "conversation_id": "<CONVERSATION_ID>"
+        },
+        "c": "<SEQUENCE_NUMBER>"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "p": "/message/content/parts/0",
+        "o": "append",
+        "v": "CHATARIUM_PROTOCOL_TEST_001"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "p": "",
+        "o": "patch",
+        "v": [
+          {"p": "/message/status", "o": "replace", "v": "finished_successfully"},
+          {"p": "/message/end_turn", "o": "replace", "v": true},
+          {
+            "p": "/message/metadata",
+            "o": "append",
+            "v": {
+              "can_save": true,
+              "is_complete": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "type": "message_stream_complete",
+        "conversation_id": "<CONVERSATION_ID>"
+      }
+    },
+    {
+      "event": null,
+      "data": {
+        "type": "conversation_detail_metadata",
+        "conversation_id": "<CONVERSATION_ID>"
+      }
+    },
+    {
+      "event": null,
+      "data": "[DONE]"
+    }
+  ],
+  "notes": [
+    "Additional hidden/context and telemetry frames were present in the private source but are omitted here.",
+    "Browser response chunks are not SSE frame boundaries.",
+    "Concrete identifiers are placeholders."
+  ]
+}
