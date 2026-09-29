@@ -49,9 +49,11 @@ chatarium/
 
 ## Status
 
-Chatarium is in **P0 durability / P0.5 protocol-baseline** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; the recorder can sanitize/inventory/diff controlled captures; and the one-command capture harness is now scaffolded around a dedicated Edge profile plus versioned C00/C03 experiments.
+Chatarium is in **P0 durability / P0.5 protocol-baseline** work. The browser flight recorder protects drafts, send intents, assistant snapshots, and visible failures; the native client has a crash-recoverable append-only journal; the import bridge moves browser recovery evidence into scoped native events; and the recorder can sanitize/inventory/diff controlled captures.
 
-Live CDP capture is intentionally still disabled until its transport, incremental journal, sanitization boundary, and ambiguous-outcome semantics are implemented and reviewed. The current `chatarium-capture doctor` command is read-only; `init` and `run` fail explicitly without touching browser or remote state.
+The first empirical protocol snapshot is now committed as `2026-09-29.001`, derived from a manual Edge/Linux HAR of a completed text turn. The raw HAR remains private because it contains secret-bearing and unrelated private material even after browser-side sanitization.
+
+Automated capture remains a goal rather than a prerequisite for protocol discovery. The existing capture harness contains substantial Windows-specific bootstrap/CDP work, while current protocol work may use manual HAR on Linux when that is the shorter path. Canonical `C00`/`C03` experiment definitions remain the reproducibility target.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CAPTURE_HARNESS.md`](docs/CAPTURE_HARNESS.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), and [`protocol/README.md`](protocol/README.md).
 
