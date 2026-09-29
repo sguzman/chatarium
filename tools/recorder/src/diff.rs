@@ -1,5 +1,9 @@
 //! Structural diffing for sanitized Chatarium protocol inventories.
 
+use chatarium_protocol::stability::{
+    ChangeKind, FieldAnnotation, classify_excluded_flight_context,
+    classify_flight_inventory_change,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -185,6 +189,17 @@ fn diff_flight_inventories(before: &Value, after: &Value) -> Result<Value, Strin
         "context": {
             "before": flight_context(before),
             "after": flight_context(after),
+            "classifications": {
+                "recorder_version": annotation_json(
+                    classify_excluded_flight_context("recorder_version")
+                ),
+                "selected_run": annotation_json(
+                    classify_excluded_flight_context("selected_run")
+                ),
+                "network_stream_chunk_count": annotation_json(
+                    classify_excluded_flight_context("event_kind_counts.network-stream-chunk")
+                ),
+            },
         },
         "summary": {
             "added_paths": added.len(),
@@ -305,10 +320,20 @@ fn diff_json_values(
                 let child_path = format!("{}/{}", path, escape_pointer_segment(&key));
                 match (before_map.get(&key), after_map.get(&key)) {
                     (None, Some(value)) => {
-                        added.push(json!({"path": child_path, "after": value}));
+                        added.push(annotated_change(
+                            &child_path,
+                            ChangeKind::Added,
+                            None,
+                            Some(value),
+                        ));
                     }
                     (Some(value), None) => {
-                        removed.push(json!({"path": child_path, "before": value}));
+                        removed.push(annotated_change(
+                            &child_path,
+                            ChangeKind::Removed,
+                            Some(value),
+                            None,
+                        ));
                     }
                     (Some(before_value), Some(after_value)) => diff_json_values(
                         &child_path,
@@ -322,13 +347,50 @@ fn diff_json_values(
                 }
             }
         }
-        _ if before != after => changed.push(json!({
-            "path": if path.is_empty() { "/" } else { path },
-            "before": before,
-            "after": after,
-        })),
+        _ if before != after => {
+            let path = if path.is_empty() { "/" } else { path };
+            changed.push(annotated_change(
+                path,
+                ChangeKind::Changed,
+                Some(before),
+                Some(after),
+            ));
+        }
         _ => {}
     }
+}
+
+fn annotated_change(
+    path: &str,
+    kind: ChangeKind,
+    before: Option<&Value>,
+    after: Option<&Value>,
+) -> Value {
+    let annotation = classify_flight_inventory_change(path, kind);
+    let mut value = serde_json::Map::new();
+    value.insert("path".to_owned(), Value::String(path.to_owned()));
+    value.insert(
+        "field_class".to_owned(),
+        Value::String(annotation.field_class),
+    );
+    value.insert(
+        "classification_rationale".to_owned(),
+        Value::String(annotation.rationale),
+    );
+    if let Some(before) = before {
+        value.insert("before".to_owned(), before.clone());
+    }
+    if let Some(after) = after {
+        value.insert("after".to_owned(), after.clone());
+    }
+    Value::Object(value)
+}
+
+fn annotation_json(annotation: FieldAnnotation) -> Value {
+    json!({
+        "field_class": annotation.field_class,
+        "rationale": annotation.rationale,
+    })
 }
 
 fn escape_pointer_segment(value: &str) -> String {
@@ -549,6 +611,10 @@ mod tests {
                 "/streams/POST ~1backend-api~1f~1conversation/control_type_counts/new_control"
             ))
         );
+        assert_eq!(
+            report.pointer("/added/0/field_class"),
+            Some(&json!("structural_candidate"))
+        );
     }
 
     #[test]
@@ -560,6 +626,40 @@ mod tests {
 
         let report = diff_flight_inventories(&before, &after).expect("diff");
         assert_eq!(report.pointer("/summary/changed_paths"), Some(&json!(2)));
+        let classes = report["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|change| change["field_class"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert!(classes.contains("observation_count"));
+        assert!(classes.contains("structural_candidate"));
+    }
+
+    #[test]
+    fn excluded_flight_context_is_annotated_without_counting_as_change() {
+        let before = flight_inventory();
+        let mut after = before.clone();
+        after["recorder_version"] = json!("0.7.0");
+        after["selected_run"]["started_seq"] = json!(999);
+        after["event_kind_counts"]["network-stream-chunk"] = json!(999);
+
+        let report = diff_flight_inventories(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/total_changes"), Some(&json!(0)));
+        assert_eq!(
+            report.pointer("/context/classifications/recorder_version/field_class"),
+            Some(&json!("diagnostic"))
+        );
+        assert_eq!(
+            report.pointer("/context/classifications/selected_run/field_class"),
+            Some(&json!("ephemeral_instance"))
+        );
+        assert_eq!(
+            report.pointer(
+                "/context/classifications/network_stream_chunk_count/field_class"
+            ),
+            Some(&json!("delivery_noise"))
+        );
     }
 
     #[test]
