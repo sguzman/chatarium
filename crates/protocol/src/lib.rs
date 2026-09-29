@@ -2,11 +2,13 @@
 //!
 //! This crate must not invent a protocol before evidence exists in `protocol/`.
 
+pub mod sse;
+
 /// Newest protocol observation revision against which this crate has been validated.
 ///
-/// `None` is intentional during bootstrap: the first revision is created only after
-/// controlled capture evidence has been sanitized and committed.
-pub const LATEST_VALIDATED_OBSERVATION: Option<&str> = None;
+/// The current text-turn interpretation is validated against canonical C03 snapshot
+/// `2026-09-29.002`.
+pub const LATEST_VALIDATED_OBSERVATION: Option<&str> = Some("2026-09-29.002");
 
 /// Compatibility result when comparing runtime evidence to known observations.
 #[derive(Debug, Clone, PartialEq, Eq)]
