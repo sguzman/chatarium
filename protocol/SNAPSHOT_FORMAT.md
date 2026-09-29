@@ -30,12 +30,13 @@ For HAR-backed captures produced by `chatarium-recorder snapshot-har`, the mecha
 ├── evidence/
 │   └── <capture-id>.har.json
 └── derived/
+    ├── <capture-id>.frontend-assets.json
     ├── <capture-id>.meta.json
     ├── <capture-id>.requests.json
     └── <capture-id>.sanitization.json
 ```
 
-`evidence/*.har.json` is sanitized HAR source evidence. `derived/*.requests.json` is a value-free structural comparison surface generated from that sanitized evidence. Derived output must never silently replace the evidence it came from.
+`evidence/*.har.json` is sanitized HAR source evidence. `derived/*.requests.json` is a value-free structural comparison surface generated from that sanitized evidence. `derived/*.frontend-assets.json` records observed JavaScript/CSS asset identity and decoded-body hashes when bodies were actually captured; it contains no source code and never triggers network fetching. Missing or undecodable bodies remain explicit. Derived output must never silently replace the evidence it came from.
 
 For Flight Recorder captures produced by `chatarium-recorder snapshot-flight`, the mechanically generated portion is:
 
