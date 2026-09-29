@@ -83,12 +83,7 @@ pub fn replay_control_provenance_audit(
     let controller_designated_sequence = supervision
         .controllers
         .into_iter()
-        .map(|record| {
-            (
-                record.designation.session_id(),
-                record.designated_sequence,
-            )
-        })
+        .map(|record| (record.designation.session_id(), record.designated_sequence))
         .collect::<BTreeMap<_, _>>();
 
     let mut provenance_by_control = BTreeMap::<ControlId, ControlProvenanceAuditRecord>::new();
@@ -234,7 +229,8 @@ fn parse_issuer(value: &Value) -> Result<ControlIssuer, String> {
         "user" => {
             if value.get("controller_session_id").is_some() {
                 return Err(
-                    "user-issued control provenance must not include controller_session_id".to_owned(),
+                    "user-issued control provenance must not include controller_session_id"
+                        .to_owned(),
                 );
             }
             Ok(ControlIssuer::User)
@@ -259,17 +255,15 @@ fn validate_scope(event: &EventEnvelope, control_id: ControlId) -> Result<(), St
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed control provenance payload is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed control provenance payload is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed control provenance payload is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed control provenance payload is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -322,7 +316,8 @@ mod tests {
 
     fn register_controller(store: &mut impl EventStore, session_id: SessionId) {
         record_local_session_registered(store, session_id).unwrap();
-        record_controller_session_designated(store, ControllerDesignation::new(session_id)).unwrap();
+        record_controller_session_designated(store, ControllerDesignation::new(session_id))
+            .unwrap();
     }
 
     #[test]
