@@ -77,13 +77,27 @@ pub fn replay_control_provenance_audit(
         .map(|record| (record.control_id, record))
         .collect::<BTreeMap<_, _>>();
     let sessions_by_id = sessions
-        .into_iter()
+        .iter()
+        .copied()
         .map(|record| (record.session_id, record))
+        .collect::<BTreeMap<_, _>>();
+    let worker_session_by_worker = sessions
+        .iter()
+        .filter_map(|record| {
+            record
+                .worker_binding
+                .map(|binding| (binding.worker_id(), *record))
+        })
         .collect::<BTreeMap<_, _>>();
     let controller_designated_sequence = supervision
         .controllers
-        .into_iter()
+        .iter()
         .map(|record| (record.designation.session_id(), record.designated_sequence))
+        .collect::<BTreeMap<_, _>>();
+    let supervision_by_worker_session = supervision
+        .bindings
+        .iter()
+        .map(|record| (record.binding.worker_session_id(), *record))
         .collect::<BTreeMap<_, _>>();
 
     let mut provenance_by_control = BTreeMap::<ControlId, ControlProvenanceAuditRecord>::new();
@@ -159,6 +173,53 @@ pub fn replay_control_provenance_audit(
                 return Err(format!(
                     "controller issuer session {} is worker-bound",
                     session_id.get()
+                ));
+            }
+
+            let worker_session = worker_session_by_worker
+                .get(&control.worker_id)
+                .ok_or_else(|| {
+                    format!(
+                        "controller issuer provenance at sequence {} targets worker {} before any worker-session binding",
+                        event.sequence,
+                        control.worker_id.get()
+                    )
+                })?;
+            let worker_bound_sequence = worker_session.worker_bound_sequence.ok_or_else(|| {
+                format!(
+                    "target worker session {} is missing worker binding sequence",
+                    worker_session.session_id.get()
+                )
+            })?;
+            if worker_bound_sequence >= event.sequence {
+                return Err(format!(
+                    "control issuer provenance at sequence {} precedes target worker-session binding at sequence {}",
+                    event.sequence, worker_bound_sequence
+                ));
+            }
+
+            let supervision = supervision_by_worker_session
+                .get(&worker_session.session_id)
+                .ok_or_else(|| {
+                    format!(
+                        "controller issuer session {} did not supervise target worker session {} when control {} was issued",
+                        session_id.get(),
+                        worker_session.session_id.get(),
+                        control_id.get()
+                    )
+                })?;
+            if supervision.binding.controller_session_id() != session_id {
+                return Err(format!(
+                    "controller issuer session {} does not supervise target worker session {}; supervisor is {}",
+                    session_id.get(),
+                    worker_session.session_id.get(),
+                    supervision.binding.controller_session_id().get()
+                ));
+            }
+            if supervision.bound_sequence >= event.sequence {
+                return Err(format!(
+                    "control issuer provenance at sequence {} precedes controller-worker supervision at sequence {}",
+                    event.sequence, supervision.bound_sequence
                 ));
             }
         }
