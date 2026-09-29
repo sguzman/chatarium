@@ -30,6 +30,7 @@ chatarium-recorder inventory-har <input.har> <output.json>
 chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>
 chatarium-recorder snapshot-flight <input.json> <experiment.toml> <snapshot-dir> <capture-id>
 chatarium-recorder inspect-har <input.har>
+chatarium-recorder validate-corpus <protocol-dir>
 chatarium-recorder fingerprint <file>
 
 chatarium-inventory-diff <before.inventory.json> <after.inventory.json> <output.diff.json>
@@ -132,6 +133,20 @@ The raw recorder export remains private. The derived output is designed to be dr
 Sanitizes the HAR in memory and prints the same normalized structural endpoint view used by the request inventory: method, status, host/path, and MIME type. Query values are not printed and obvious instance-ID path segments appear as `<id>`.
 
 This is useful for quickly identifying which requests belong to a controlled experiment before deeper documentation.
+
+### `validate-corpus`
+
+Validates the committed `protocol/` corpus as an executable evidence set. Snapshot manifests must match their directory revision and include non-empty observation/sanitization notes. Fixture files must point to an existing matching snapshot and may not contain obvious credential-bearing object values unless those values are explicit redaction placeholders.
+
+Canonical C03 SSE fixtures are replayed through `crates/protocol` itself. CI therefore catches a drift where the committed evidence says one thing but the typed v1 interpreter can no longer reconstruct the canonical user text, assistant marker, explicit completion patch, `message_stream_complete`, and terminal `[DONE]`.
+
+Run locally with:
+
+```text
+cargo run -p chatarium-recorder -- validate-corpus protocol
+```
+
+This is a consistency/privacy guard for committed sanitized evidence, not proof that the live remote service still behaves the same way.
 
 ### `chatarium-inventory-diff`
 
