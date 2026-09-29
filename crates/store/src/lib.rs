@@ -5,6 +5,9 @@
 
 pub mod authored;
 pub mod projection;
+mod turn_projection;
+
+pub use turn_projection::AuthoredTurnRow;
 
 use chatarium_core::EventKind;
 use serde_json::{Value, json};
