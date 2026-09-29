@@ -327,8 +327,7 @@ fn replay_result(
     let route_id = route_id(&payload)?;
     validate_scope(event, route_id)?;
 
-    let observation =
-        parse_result_observation(required_string(&payload, "observation")?)?;
+    let observation = parse_result_observation(required_string(&payload, "observation")?)?;
     let route = routes.get_mut(&route_id).ok_or_else(|| {
         format!(
             "routing result for route {} at sequence {} appeared before proposal",
