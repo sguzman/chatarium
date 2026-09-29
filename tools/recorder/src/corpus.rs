@@ -278,8 +278,8 @@ fn read_json(path: &Path) -> Result<Value, String> {
 }
 
 fn child_dirs(path: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries =
-        fs::read_dir(path).map_err(|error| format!("read directory {}: {error}", path.display()))?;
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("read directory {}: {error}", path.display()))?;
     let mut dirs = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("read directory entry: {error}"))?;
@@ -303,7 +303,9 @@ fn json_files(path: &Path) -> Result<Vec<PathBuf>, String> {
         let file_type = entry
             .file_type()
             .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
-        if file_type.is_file() && entry.path().extension().and_then(|value| value.to_str()) == Some("json") {
+        if file_type.is_file()
+            && entry.path().extension().and_then(|value| value.to_str()) == Some("json")
+        {
             files.push(entry.path());
         }
     }
