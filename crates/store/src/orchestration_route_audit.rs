@@ -5,7 +5,11 @@
 //! controller/worker session topology. It creates no new authority or transport.
 
 use crate::EventEnvelope;
-use crate::control_audit::{ControlAuditRecord, replay_control_audit};
+use crate::control_admission_audit::{
+    ValidatedControlAdmission, replay_validated_control_admissions,
+    validate_control_freshness_before,
+};
+use crate::control_audit::ControlAuditRecord;
 use crate::control_provenance_audit::{
     ControlProvenanceAuditRecord, replay_control_provenance_audit,
 };
@@ -15,7 +19,7 @@ use crate::session_audit::{SessionAuditRecord, replay_session_audit};
 use crate::supervision_audit::{ControllerWorkerAuditRecord, replay_supervision_audit};
 use chatarium_core::control::ControlId;
 use chatarium_core::control_provenance::ControlIssuer;
-use chatarium_core::orchestration::WorkerId;
+use chatarium_core::orchestration::{WorkerId, WorkerPhase};
 use chatarium_core::routing::{RouteClass, RouteId, RouteRequest};
 use chatarium_core::session::SessionId;
 use std::collections::BTreeMap;
@@ -31,6 +35,10 @@ pub struct ValidatedOrchestrationRoute {
     pub route: RouteRequest,
     /// Explicit durable issuer provenance.
     pub issuer: ControlIssuer,
+    /// Worker phase that justified durable admission.
+    pub admitted_phase: WorkerPhase,
+    /// Worker phase that still justified the control at route binding.
+    pub bound_phase: WorkerPhase,
     /// Resolved controller session for controller-issued controls.
     pub controller_session_id: Option<SessionId>,
     /// Resolved target worker session for controller-issued controls.
@@ -46,16 +54,16 @@ pub struct ValidatedOrchestrationRoute {
 pub fn replay_validated_orchestration_routes(
     events: &[EventEnvelope],
 ) -> Result<Vec<ValidatedOrchestrationRoute>, String> {
-    let controls = replay_control_audit(events)?;
+    let admissions = replay_validated_control_admissions(events)?;
     let provenance = replay_control_provenance_audit(events)?;
     let bindings = replay_control_route_audit(events)?;
     let sessions = replay_session_audit(events)?;
     let supervision = replay_supervision_audit(events)?;
     let routes = replay_routing_audit(events)?;
 
-    let controls_by_id = controls
+    let admissions_by_id = admissions
         .into_iter()
-        .map(|record| (record.control_id, record))
+        .map(|record| (record.control.control_id, record))
         .collect::<BTreeMap<_, _>>();
     let provenance_by_control = provenance
         .into_iter()
@@ -89,8 +97,9 @@ pub fn replay_validated_orchestration_routes(
         .into_iter()
         .map(|binding| {
             validate_binding(
+                events,
                 binding,
-                &controls_by_id,
+                &admissions_by_id,
                 &provenance_by_control,
                 &sessions_by_id,
                 &worker_session_by_worker,
@@ -102,8 +111,9 @@ pub fn replay_validated_orchestration_routes(
 }
 
 fn validate_binding(
+    events: &[EventEnvelope],
     binding: ControlRouteAuditRecord,
-    controls: &BTreeMap<ControlId, ControlAuditRecord>,
+    admissions: &BTreeMap<ControlId, ValidatedControlAdmission>,
     provenance: &BTreeMap<ControlId, ControlProvenanceAuditRecord>,
     sessions: &BTreeMap<SessionId, SessionAuditRecord>,
     worker_sessions: &BTreeMap<WorkerId, SessionAuditRecord>,
@@ -113,12 +123,15 @@ fn validate_binding(
     let control_id = binding.binding.control_id();
     let route_id = binding.binding.route_id();
 
-    let control = controls.get(&control_id).ok_or_else(|| {
+    let admission = admissions.get(&control_id).ok_or_else(|| {
         format!(
-            "validated orchestration route references missing control {}",
+            "validated orchestration route references missing validated control admission {}",
             control_id.get()
         )
     })?;
+    let control = &admission.control;
+    let bound_phase =
+        validate_control_freshness_before(events, control, binding.bound_sequence)?;
     let provenance = provenance.get(&control_id).ok_or_else(|| {
         format!(
             "bound control {} has no explicit issuer provenance",
@@ -154,6 +167,8 @@ fn validate_binding(
             worker_id: control.worker_id,
             route: route.request,
             issuer: ControlIssuer::User,
+            admitted_phase: admission.admitted_phase,
+            bound_phase,
             controller_session_id: None,
             worker_session_id: None,
             bound_sequence: binding.bound_sequence,
@@ -178,6 +193,8 @@ fn validate_binding(
                 worker_id: control.worker_id,
                 route: route.request,
                 issuer: ControlIssuer::ControllerSession(controller_session_id),
+                admitted_phase: admission.admitted_phase,
+                bound_phase,
                 controller_session_id: Some(controller_session_id),
                 worker_session_id: Some(worker_session.session_id),
                 bound_sequence: binding.bound_sequence,
