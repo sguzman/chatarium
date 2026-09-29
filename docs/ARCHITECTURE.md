@@ -191,6 +191,8 @@ Admitted worker controls are now also journaled as their own typed audit facts. 
 
 Control-to-route correlation is a separate durable provenance layer. A typed `ControlRouteBinding` permits only `OrchestrationControl` routes, and replay requires both the control admission and route proposal to predate the binding. The audit enforces one-control-to-one-route cardinality in both directions. It intentionally does not define `WorkerId` to `RouteEndpointId` mapping, session identity, transport, or dispatch semantics.
 
+Local session identity is now explicit rather than implicit in routing endpoints. `SessionId`, `WorkerId`, and `RouteEndpointId` are separate local identity domains. The authoritative journal can register sessions, bind a session one-to-one to a routing endpoint, and bind a worker one-to-one to a session. These records remain independent of remote ChatGPT identity and do not create route proposals or worker lifecycle state merely by existing. Master/controller designation remains a later relationship layer.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
