@@ -249,7 +249,9 @@ fn diff_frontend_asset_manifests(before: &Value, after: &Value) -> Result<Value,
 fn validate_frontend_asset_manifest(manifest: &Value) -> Result<(), String> {
     let format = inventory_format(manifest)?;
     if format != "chatarium-frontend-asset-manifest" {
-        return Err(format!("unsupported frontend asset manifest format '{format}'"));
+        return Err(format!(
+            "unsupported frontend asset manifest format '{format}'"
+        ));
     }
     let version = manifest
         .get("version")
