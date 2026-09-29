@@ -3,6 +3,7 @@
 //! The authoritative persistent substrate is an append-only JSON-lines journal. SQLite is a
 //! disposable, rebuildable projection and never becomes authoritative over the event history.
 
+pub mod authored;
 pub mod projection;
 
 use chatarium_core::EventKind;
