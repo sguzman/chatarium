@@ -185,6 +185,8 @@ The first durable routing audit now uses the same append-only JSONL authority as
 
 Worker orchestration state now follows the same authority rule. Typed worker identity, goal assignment, and lifecycle transitions are journaled and replayed through the existing `WorkerLifecycle` state machine, so `Working`, `NeedsInput`, `Blocked`, and terminal states survive restart without inferring state from prose. Continuation leases are intentionally not recreated by replay: restart does not mint fresh continuation authority. SQLite again carries these facts generically without a dedicated worker materialization or schema bump.
 
+Typed worker controls sit above that lifecycle state and below future transport. Admission validates start/resume, continue, stop, and status requests against the current goal/phase without changing lifecycle optimistically. Continue additionally consumes a move-only `ContinuationPermit`; routing consumes a move-only `DispatchPermit`. Session/endpoint binding and the eventual XML representation remain separate future layers.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
