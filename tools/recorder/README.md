@@ -2,7 +2,7 @@
 
 `chatarium-recorder` is the offline ingestion boundary between browser captures and Chatarium's public protocol corpus.
 
-It is deliberately **offline-first**: give it a HAR you exported yourself and it produces sanitized, fingerprinted evidence plus structural derived data. It does not log into ChatGPT, obtain credentials, or bypass browser/session controls.
+It is deliberately **offline-first**: give it a HAR or Chatarium Flight Recorder export you produced locally and it creates sanitized, fingerprinted evidence plus structural derived data. It does not log into ChatGPT, obtain credentials, or bypass browser/session controls.
 
 The package also exposes a reusable Rust library (`chatarium_recorder`) for schema-
 agnostic JSON value and HAR sanitization, structural inventory generation, SHA-256
@@ -28,6 +28,7 @@ schema-agnostic `sanitize_value` primitive to apply the shared redaction rules t
 chatarium-recorder sanitize-har <input.har> <output.har>
 chatarium-recorder inventory-har <input.har> <output.json>
 chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>
+chatarium-recorder snapshot-flight <input.json> <experiment.toml> <snapshot-dir> <capture-id>
 chatarium-recorder inspect-har <input.har>
 chatarium-recorder fingerprint <file>
 
@@ -85,6 +86,46 @@ cargo run -p chatarium-recorder -- snapshot-har `
   .\protocol\snapshots\2026-09-17.001 `
   C03-send-text
 ```
+
+### `snapshot-flight`
+
+Ingests a private Chatarium Flight Recorder export and a versioned experiment definition.
+
+Unlike the schema-agnostic JSON sanitizer, this command understands that Flight Recorder exports can contain sensitive material **inside SSE text blobs**. It therefore never copies raw `network-stream-chunk.payload.text` into the public artifact.
+
+The command:
+
+- selects the latest run beginning at the latest `recorder-started` event, so cumulative browser storage does not mix old QA runs into the new snapshot;
+- reconstructs SSE frames incrementally across browser chunk boundaries using `crates/protocol`;
+- preserves only the experiment's exact canonical request/expected text as literal message content;
+- replaces concrete conversation/message/send identities with stable per-artifact placeholders;
+- redacts signed token values, unknown scalar metadata, arbitrary message bodies, generated titles, and private hidden context;
+- fails closed for an SSE frame it cannot parse instead of copying the raw frame text;
+- writes a structural inventory with event-kind counts, SSE event/control types, delta operations/paths, marker counts, encodings, and completion signals;
+- records the raw source SHA-256 and byte count for provenance without copying the raw file or source path into the snapshot.
+
+Output:
+
+```text
+<snapshot-dir>/
+├── evidence/
+│   └── <capture-id>.flight.json
+└── derived/
+    ├── <capture-id>.flight.inventory.json
+    └── <capture-id>.flight.meta.json
+```
+
+Example:
+
+```text
+cargo run -p chatarium-recorder -- snapshot-flight \
+  ~/Downloads/chatarium-flight-recorder-....json \
+  protocol/experiments/C03-send-text.toml \
+  protocol/snapshots/2026-09-29.003 \
+  C03-send-text
+```
+
+The raw recorder export remains private. The derived output is designed to be dramatically safer and less noisy, but it is still evidence that should be reviewed before publication; the tool does not claim to be a universal privacy oracle.
 
 ### `inspect-har`
 
