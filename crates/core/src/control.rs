@@ -6,7 +6,8 @@
 //! lifecycle snapshot.
 
 use crate::orchestration::{
-    ContinuationPermit, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
+    ContinuationPermit, ContinuationPermitRef, WorkerGoalId, WorkerId, WorkerLifecycle,
+    WorkerPhase,
 };
 use std::fmt;
 
@@ -60,6 +61,7 @@ pub struct WorkerControl {
     worker_id: WorkerId,
     goal_id: WorkerGoalId,
     kind: WorkerControlKind,
+    continuation_permit: Option<ContinuationPermitRef>,
 }
 
 impl WorkerControl {
@@ -78,6 +80,7 @@ impl WorkerControl {
             worker_id,
             goal_id,
             kind,
+            continuation_permit: None,
         })
     }
 
@@ -91,7 +94,15 @@ impl WorkerControl {
         lifecycle: &WorkerLifecycle,
         permit: ContinuationPermit,
     ) -> Result<Self, ControlAdmissionError> {
+        if permit.worker_id() != worker_id {
+            return Err(ControlAdmissionError::ContinuationPermitWorkerMismatch {
+                expected: worker_id,
+                received: permit.worker_id(),
+            });
+        }
+
         let goal_id = permit.goal_id();
+        let continuation_permit = permit.reference();
         let kind = WorkerControlKind::Continue {
             permit_ordinal: permit.ordinal(),
         };
@@ -102,6 +113,7 @@ impl WorkerControl {
             worker_id,
             goal_id,
             kind,
+            continuation_permit: Some(continuation_permit),
         })
     }
 
@@ -120,6 +132,7 @@ impl WorkerControl {
             worker_id,
             goal_id,
             kind,
+            continuation_permit: None,
         })
     }
 
@@ -137,6 +150,7 @@ impl WorkerControl {
             worker_id,
             goal_id,
             kind,
+            continuation_permit: None,
         })
     }
 
@@ -162,6 +176,12 @@ impl WorkerControl {
     #[must_use]
     pub const fn kind(&self) -> WorkerControlKind {
         self.kind
+    }
+
+    /// Originating continuation permit reference, only for Continue.
+    #[must_use]
+    pub const fn continuation_permit(&self) -> Option<ContinuationPermitRef> {
+        self.continuation_permit
     }
 }
 
@@ -190,6 +210,13 @@ pub enum ControlAdmissionError {
         /// Goal referenced by the proposed control/permit.
         received: WorkerGoalId,
     },
+    /// A continuation permit belongs to a different worker.
+    ContinuationPermitWorkerMismatch {
+        /// Worker targeted by the proposed control.
+        expected: WorkerId,
+        /// Worker identity carried by the permit.
+        received: WorkerId,
+    },
     /// A replayed/supplied continuation kind carried an impossible zero ordinal.
     InvalidContinuationPermitOrdinal,
     /// The control is incompatible with the current worker phase.
@@ -208,6 +235,10 @@ impl fmt::Display for ControlAdmissionError {
             Self::GoalMismatch { expected, received } => write!(
                 formatter,
                 "stale worker control: current goal is {expected}, received {received}"
+            ),
+            Self::ContinuationPermitWorkerMismatch { expected, received } => write!(
+                formatter,
+                "continuation permit belongs to worker {received}, control targets worker {expected}"
             ),
             Self::InvalidContinuationPermitOrdinal => {
                 write!(
@@ -285,9 +316,13 @@ fn matching_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orchestration::{ContinuationLease, TransitionOutcome};
+    use crate::orchestration::{
+        ContinuationLease, ContinuationLeaseId, TransitionOutcome,
+    };
 
     const W1: WorkerId = WorkerId::new(10);
+    const W2: WorkerId = WorkerId::new(20);
+    const L1: ContinuationLeaseId = ContinuationLeaseId::new(30);
     const G1: WorkerGoalId = WorkerGoalId::new(100);
     const G2: WorkerGoalId = WorkerGoalId::new(200);
 
@@ -378,7 +413,7 @@ mod tests {
     #[test]
     fn continue_is_admitted_while_working_with_matching_move_only_permit() {
         let lifecycle = working();
-        let mut lease = ContinuationLease::new(G1, 2);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 2);
         let permit = lease.authorize(&lifecycle).unwrap();
 
         let command =
@@ -397,7 +432,7 @@ mod tests {
     #[test]
     fn stale_continue_permit_is_rejected() {
         let old_lifecycle = working();
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         let permit = lease.authorize(&old_lifecycle).unwrap();
 
         let mut current = old_lifecycle;
@@ -427,7 +462,7 @@ mod tests {
 
         for lifecycle in cases {
             let mut working_snapshot = working();
-            let mut lease = ContinuationLease::new(G1, 1);
+            let mut lease = ContinuationLease::new(L1, W1, G1, 1);
             let permit = lease.authorize(&working_snapshot).unwrap();
             let expected_phase = lifecycle.phase();
 
@@ -559,7 +594,7 @@ mod tests {
         let _ = WorkerControl::stop(ControlId::new(1), W1, G1, &lifecycle).unwrap();
         let _ = WorkerControl::status_request(ControlId::new(2), W1, G1, &lifecycle).unwrap();
 
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         let permit = lease.authorize(&lifecycle).unwrap();
         let _ = WorkerControl::continue_work(ControlId::new(3), W1, &lifecycle, permit).unwrap();
 
