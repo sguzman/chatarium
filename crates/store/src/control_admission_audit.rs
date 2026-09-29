@@ -4,9 +4,9 @@
 //! that existed immediately before admission. This prevents restart replay from
 //! treating a stale or phase-invalid control as semantically admitted.
 
+use crate::EventEnvelope;
 use crate::control_audit::{ControlAuditRecord, replay_control_audit};
 use crate::worker_audit::replay_worker_audit;
-use crate::EventEnvelope;
 use chatarium_core::control::validate_control_admission;
 use chatarium_core::orchestration::{WorkerId, WorkerPhase};
 
@@ -199,8 +199,7 @@ mod tests {
 
         let mut lifecycle = working(G1);
         lifecycle.complete(G1).unwrap();
-        let control =
-            WorkerControl::status_request(ControlId::new(1), W1, G1, &lifecycle).unwrap();
+        let control = WorkerControl::status_request(ControlId::new(1), W1, G1, &lifecycle).unwrap();
         record_worker_control_admitted(&mut store, &control).unwrap();
 
         let record = replay_validated_control_admissions(store.events())
