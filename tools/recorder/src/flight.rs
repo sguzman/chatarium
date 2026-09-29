@@ -1003,31 +1003,62 @@ fn sanitize_protocol_json(
     key: Option<&str>,
     allowed_texts: &BTreeSet<String>,
     ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
 ) {
     match value {
         Value::Null | Value::Bool(_) => {}
         Value::Number(_) => {
+            stats.numeric_values_generalized =
+                stats.numeric_values_generalized.saturating_add(1);
             *value = Value::String(NUMBER.to_owned());
         }
         Value::String(text) => {
             let field = key.unwrap_or_default();
             if sensitive_field(field) {
+                stats.sensitive_values_redacted =
+                    stats.sensitive_values_redacted.saturating_add(1);
                 *text = REDACTED.to_owned();
             } else if conversation_identity_field(field) {
+                stats.conversation_identities_placeholdered =
+                    stats.conversation_identities_placeholdered.saturating_add(1);
                 *text = ids.map_conversation(text);
             } else if message_identity_field(field) {
+                stats.message_identities_placeholdered =
+                    stats.message_identities_placeholdered.saturating_add(1);
                 *text = ids.map_message(text);
             } else if generic_identity_field(field) {
+                stats.generic_identities_placeholdered =
+                    stats.generic_identities_placeholdered.saturating_add(1);
                 *text = "<id>".to_owned();
             } else if content_field(field) {
-                if !allowed_texts.contains(text) {
+                if allowed_texts.contains(text) {
+                    stats.canonical_experiment_literals_retained =
+                        stats.canonical_experiment_literals_retained.saturating_add(1);
+                } else {
+                    stats.content_values_redacted =
+                        stats.content_values_redacted.saturating_add(1);
                     *text = REDACTED_CONTENT.to_owned();
                 }
             } else if field == "p" {
-                *text = safe_protocol_path(text);
+                let sanitized = safe_protocol_path(text);
+                if sanitized != *text {
+                    stats.unknown_paths_redacted =
+                        stats.unknown_paths_redacted.saturating_add(1);
+                    *text = sanitized;
+                }
             } else if structural_string_field(field) {
-                *text = safe_structural_value(field, text);
-            } else if !allowed_texts.contains(text) {
+                let sanitized = safe_structural_value(field, text);
+                if sanitized != *text {
+                    stats.unknown_structural_values_redacted =
+                        stats.unknown_structural_values_redacted.saturating_add(1);
+                    *text = sanitized;
+                }
+            } else if allowed_texts.contains(text) {
+                stats.canonical_experiment_literals_retained =
+                    stats.canonical_experiment_literals_retained.saturating_add(1);
+            } else {
+                stats.unknown_scalar_values_redacted =
+                    stats.unknown_scalar_values_redacted.saturating_add(1);
                 *text = REDACTED_VALUE.to_owned();
             }
         }
@@ -1036,12 +1067,21 @@ fn sanitize_protocol_json(
             for item in items {
                 if content_array {
                     match item {
-                        Value::String(text) if allowed_texts.contains(text) => {}
-                        Value::String(text) => *text = REDACTED_CONTENT.to_owned(),
-                        nested => sanitize_protocol_json(nested, key, allowed_texts, ids),
+                        Value::String(text) if allowed_texts.contains(text) => {
+                            stats.canonical_experiment_literals_retained =
+                                stats.canonical_experiment_literals_retained.saturating_add(1);
+                        }
+                        Value::String(text) => {
+                            stats.content_values_redacted =
+                                stats.content_values_redacted.saturating_add(1);
+                            *text = REDACTED_CONTENT.to_owned();
+                        }
+                        nested => {
+                            sanitize_protocol_json(nested, key, allowed_texts, ids, stats);
+                        }
                     }
                 } else {
-                    sanitize_protocol_json(item, key, allowed_texts, ids);
+                    sanitize_protocol_json(item, key, allowed_texts, ids, stats);
                 }
             }
         }
@@ -1049,7 +1089,7 @@ fn sanitize_protocol_json(
             let keys = map.keys().cloned().collect::<Vec<_>>();
             for child_key in keys {
                 if let Some(nested) = map.get_mut(&child_key) {
-                    sanitize_protocol_json(nested, Some(&child_key), allowed_texts, ids);
+                    sanitize_protocol_json(nested, Some(&child_key), allowed_texts, ids, stats);
                 }
             }
         }
