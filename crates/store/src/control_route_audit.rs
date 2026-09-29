@@ -284,11 +284,7 @@ mod tests {
         }
     }
 
-    fn append_raw_binding(
-        store: &mut impl EventStore,
-        control_id: ControlId,
-        route_id: RouteId,
-    ) {
+    fn append_raw_binding(store: &mut impl EventStore, control_id: ControlId, route_id: RouteId) {
         store
             .append_scoped(
                 Some(control_route_scope(control_id, route_id)),
@@ -463,7 +459,11 @@ mod tests {
         }
 
         let reopened = JsonlEventStore::open(&path).unwrap();
-        assert!(replay_control_route_audit(reopened.events()).unwrap().is_empty());
+        assert!(
+            replay_control_route_audit(reopened.events())
+                .unwrap()
+                .is_empty()
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -533,7 +533,11 @@ mod tests {
         store
             .append(EventKind::DraftChanged, "unrelated".to_owned())
             .unwrap();
-        assert!(replay_control_route_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_control_route_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -545,7 +549,9 @@ mod tests {
         let mut projection = SqliteProjection::open(&path).unwrap();
         projection.rebuild(store.events()).unwrap();
 
-        let projected = projection.events_of_kind(EventKind::ControlRouteBound).unwrap();
+        let projected = projection
+            .events_of_kind(EventKind::ControlRouteBound)
+            .unwrap();
         assert_eq!(projected.len(), 1);
 
         drop(projection);
