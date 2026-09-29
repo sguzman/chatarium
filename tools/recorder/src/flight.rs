@@ -125,6 +125,7 @@ pub fn snapshot_flight(
         .map_err(|error| format!("parse Flight Recorder JSON: {error}"))?;
     validate_export(&export)?;
     let selected = select_latest_run(&export)?;
+    validate_run_matches_experiment(&export, &selected, &experiment)?;
 
     let mut allowed_texts = BTreeSet::new();
     if let Some(text) = experiment.action.text.as_deref() {
@@ -246,6 +247,42 @@ fn validate_export(export: &Value) -> Result<(), String> {
     }
     if export.get("events").and_then(Value::as_array).is_none() {
         return Err("Flight Recorder export is missing events".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_run_matches_experiment(
+    export: &Value,
+    selected: &SelectedRun,
+    experiment: &ExperimentDefinition,
+) -> Result<(), String> {
+    if experiment.action.kind != "send_text" {
+        return Ok(());
+    }
+
+    let expected = experiment
+        .action
+        .text
+        .as_deref()
+        .ok_or_else(|| "send_text experiment is missing action.text".to_owned())?;
+    let matched = export
+        .get("sendIntents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|intent| {
+            intent
+                .get("at")
+                .and_then(Value::as_str)
+                .is_some_and(|at| at >= selected.started_at.as_str())
+                && intent.get("text").and_then(Value::as_str) == Some(expected)
+        });
+
+    if !matched {
+        return Err(format!(
+            "latest recorder run does not contain the exact action text for experiment {}",
+            experiment.id
+        ));
     }
     Ok(())
 }
@@ -1083,6 +1120,17 @@ data: [DONE]
                 }
             ]
         })
+    }
+
+    #[test]
+    fn mismatched_experiment_action_is_rejected() {
+        let mut export = cumulative_export();
+        export["sendIntents"][1]["text"] = json!("different prompt");
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = sample_experiment();
+
+        let error = validate_run_matches_experiment(&export, &selected, &experiment).unwrap_err();
+        assert!(error.contains("exact action text"));
     }
 
     #[test]
