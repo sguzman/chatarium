@@ -656,6 +656,13 @@ mod tests {
     }
 
     #[test]
+    fn har_sanitization_report_is_deterministic() {
+        let (_, first) = sanitize_har_bytes_with_report(sample_har()).unwrap();
+        let (_, second) = sanitize_har_bytes_with_report(sample_har()).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
     fn inventory_keeps_structure_without_values_or_instance_ids() {
         let sanitized = sanitize_har_bytes(sample_har()).expect("sanitize");
         let value = parse_har(&sanitized).expect("parse");
