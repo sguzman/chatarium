@@ -18,6 +18,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check
         run: cargo check --workspace
+      - name: Lockfile unchanged
+        run: git diff --exit-code -- Cargo.lock
       - name: Protocol corpus validation
         run: cargo run -p chatarium-recorder -- validate-corpus protocol
       - name: Test
