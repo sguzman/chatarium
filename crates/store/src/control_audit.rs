@@ -6,12 +6,14 @@
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::EventKind;
 use chatarium_core::control::{ControlId, WorkerControl, WorkerControlKind};
-use chatarium_core::orchestration::{WorkerGoalId, WorkerId};
+use chatarium_core::orchestration::{
+    ContinuationLeaseId, ContinuationPermitRef, WorkerGoalId, WorkerId,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 const CONTROL_AUDIT_SCHEMA: &str = "chatarium-control-audit";
-const CONTROL_AUDIT_VERSION: u64 = 1;
+const CONTROL_AUDIT_VERSION: u64 = 2;
 
 /// Restart-replayable fact that one typed worker control was admitted locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +26,8 @@ pub struct ControlAuditRecord {
     pub goal_id: WorkerGoalId,
     /// Admitted semantic control kind.
     pub kind: WorkerControlKind,
+    /// Durable continuation permit provenance for Continue, when recorded.
+    pub continuation_permit: Option<ContinuationPermitRef>,
     /// Durable sequence of the admission record.
     pub admitted_sequence: u64,
 }
@@ -48,10 +52,14 @@ pub fn record_worker_control_admitted(
     });
 
     if let Some(ordinal) = permit_ordinal {
-        payload
+        let object = payload
             .as_object_mut()
-            .expect("control audit payload is an object")
-            .insert("permit_ordinal".to_owned(), json!(ordinal));
+            .expect("control audit payload is an object");
+        object.insert("permit_ordinal".to_owned(), json!(ordinal));
+        let permit = control
+            .continuation_permit()
+            .expect("Continue control must retain its consumed permit provenance");
+        object.insert("lease_id".to_owned(), json!(permit.lease_id.get()));
     }
 
     let encoded = serde_json::to_string(&payload).map_err(invalid_data)?;
@@ -74,7 +82,7 @@ pub fn replay_control_audit(events: &[EventEnvelope]) -> Result<Vec<ControlAudit
             continue;
         }
 
-        let payload = typed_payload(event)?;
+        let (payload, version) = typed_payload(event)?;
         let control_id = ControlId::new(required_u64(&payload, "control_id")?);
         validate_scope(event, control_id)?;
 
@@ -89,6 +97,7 @@ pub fn replay_control_audit(events: &[EventEnvelope]) -> Result<Vec<ControlAudit
         let worker_id = WorkerId::new(required_u64(&payload, "worker_id")?);
         let goal_id = WorkerGoalId::new(required_u64(&payload, "goal_id")?);
         let kind = decode_kind(&payload)?;
+        let continuation_permit = decode_permit_ref(&payload, version, kind)?;
 
         controls.insert(
             control_id,
@@ -97,6 +106,7 @@ pub fn replay_control_audit(events: &[EventEnvelope]) -> Result<Vec<ControlAudit
                 worker_id,
                 goal_id,
                 kind,
+                continuation_permit,
                 admitted_sequence: event.sequence,
             },
         );
@@ -113,7 +123,7 @@ pub fn control_scope(control_id: ControlId) -> String {
     format!("control:{}", control_id.get())
 }
 
-fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
+fn typed_payload(event: &EventEnvelope) -> Result<(Value, u64), String> {
     let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
         format!(
             "malformed typed control payload at sequence {}: {error}",
@@ -137,7 +147,7 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
                 event.sequence
             )
         })?;
-    if version != CONTROL_AUDIT_VERSION {
+    if !matches!(version, 1 | CONTROL_AUDIT_VERSION) {
         return Err(format!(
             "unsupported control audit payload version {version} at sequence {}",
             event.sequence
@@ -151,7 +161,7 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
         ));
     }
 
-    Ok(value)
+    Ok((value, version))
 }
 
 fn encode_kind(kind: WorkerControlKind) -> (&'static str, Option<u32>) {
@@ -196,6 +206,41 @@ fn decode_kind(value: &Value) -> Result<WorkerControlKind, String> {
     }
 }
 
+fn decode_permit_ref(
+    value: &Value,
+    version: u64,
+    kind: WorkerControlKind,
+) -> Result<Option<ContinuationPermitRef>, String> {
+    let lease_id = value.get("lease_id");
+
+    match kind {
+        WorkerControlKind::Continue { permit_ordinal } => {
+            if version == 1 {
+                if lease_id.is_some() {
+                    return Err("legacy v1 Continue must not carry lease_id".to_owned());
+                }
+                return Ok(None);
+            }
+
+            let lease_id = ContinuationLeaseId::new(
+                lease_id
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "Continue control is missing integer lease_id".to_owned())?,
+            );
+            Ok(Some(ContinuationPermitRef {
+                lease_id,
+                ordinal: permit_ordinal,
+            }))
+        }
+        _ => {
+            if lease_id.is_some() {
+                return Err("non-Continue control must not carry lease_id".to_owned());
+            }
+            Ok(None)
+        }
+    }
+}
+
 fn validate_scope(event: &EventEnvelope, control_id: ControlId) -> Result<(), String> {
     let expected = control_scope(control_id);
     if event.scope.as_deref() != Some(expected.as_str()) {
@@ -230,13 +275,16 @@ mod tests {
     use super::*;
     use crate::{JsonlEventStore, MemoryEventStore, projection::SqliteProjection};
     use chatarium_core::control::WorkerControl;
-    use chatarium_core::orchestration::{ContinuationLease, WorkerLifecycle, WorkerPhase};
+    use chatarium_core::orchestration::{
+        ContinuationLease, ContinuationLeaseId, WorkerLifecycle, WorkerPhase,
+    };
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const W1: WorkerId = WorkerId::new(10);
+    const L1: ContinuationLeaseId = ContinuationLeaseId::new(50);
     const G1: WorkerGoalId = WorkerGoalId::new(100);
 
     fn temp_path(label: &str, extension: &str) -> PathBuf {
@@ -269,7 +317,7 @@ mod tests {
         let start =
             WorkerControl::start_or_resume(ControlId::new(1), W1, G1, &ready_lifecycle).unwrap();
 
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
         let permit = lease.authorize(&working_lifecycle).unwrap();
         let continue_control =
             WorkerControl::continue_work(ControlId::new(2), W1, &working_lifecycle, permit)
@@ -305,6 +353,13 @@ mod tests {
         assert_eq!(
             records[1].kind,
             WorkerControlKind::Continue { permit_ordinal: 1 }
+        );
+        assert_eq!(
+            records[1].continuation_permit,
+            Some(ContinuationPermitRef {
+                lease_id: L1,
+                ordinal: 1,
+            })
         );
         assert_eq!(records[2].kind, WorkerControlKind::Stop);
         assert_eq!(records[3].kind, WorkerControlKind::StatusRequest);
@@ -452,6 +507,35 @@ mod tests {
                 .unwrap();
             assert!(replay_control_audit(store.events()).is_err());
         }
+    }
+
+    #[test]
+    fn legacy_v1_continue_remains_shape_readable_without_lease_provenance() {
+        let mut store = MemoryEventStore::default();
+        store
+            .append_scoped(
+                Some(control_scope(ControlId::new(1))),
+                EventKind::WorkerControlAdmitted,
+                json!({
+                    "schema": CONTROL_AUDIT_SCHEMA,
+                    "version": 1,
+                    "record": "control_admitted",
+                    "control_id": 1,
+                    "worker_id": W1.get(),
+                    "goal_id": G1.get(),
+                    "kind": "continue",
+                    "permit_ordinal": 1,
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        let record = replay_control_audit(store.events()).unwrap().remove(0);
+        assert_eq!(
+            record.kind,
+            WorkerControlKind::Continue { permit_ordinal: 1 }
+        );
+        assert_eq!(record.continuation_permit, None);
     }
 
     #[test]
