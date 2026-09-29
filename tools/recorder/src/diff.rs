@@ -201,7 +201,9 @@ fn diff_flight_inventories(before: &Value, after: &Value) -> Result<Value, Strin
 fn validate_flight_inventory(inventory: &Value) -> Result<(), String> {
     let format = inventory_format(inventory)?;
     if format != "chatarium-flight-inventory" {
-        return Err(format!("unsupported Flight Recorder inventory format '{format}'"));
+        return Err(format!(
+            "unsupported Flight Recorder inventory format '{format}'"
+        ));
     }
     let version = inventory
         .get("version")
@@ -543,7 +545,9 @@ mod tests {
         assert_eq!(report.pointer("/summary/added_paths"), Some(&json!(1)));
         assert_eq!(
             report.pointer("/added/0/path"),
-            Some(&json!("/streams/POST ~1backend-api~1f~1conversation/control_type_counts/new_control"))
+            Some(&json!(
+                "/streams/POST ~1backend-api~1f~1conversation/control_type_counts/new_control"
+            ))
         );
     }
 
