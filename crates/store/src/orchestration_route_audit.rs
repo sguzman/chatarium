@@ -130,8 +130,7 @@ fn validate_binding(
         )
     })?;
     let control = &admission.control;
-    let bound_phase =
-        validate_control_freshness_before(events, control, binding.bound_sequence)?;
+    let bound_phase = validate_control_freshness_before(events, control, binding.bound_sequence)?;
     let provenance = provenance.get(&control_id).ok_or_else(|| {
         format!(
             "bound control {} has no explicit issuer provenance",
@@ -658,13 +657,8 @@ mod tests {
 
         record_worker_transition(&mut store, WORKER, GOAL, WorkerAction::Complete).unwrap();
         record_worker_goal_assigned(&mut store, WORKER, NEXT_GOAL).unwrap();
-        record_worker_transition(
-            &mut store,
-            WORKER,
-            NEXT_GOAL,
-            WorkerAction::StartOrResume,
-        )
-        .unwrap();
+        record_worker_transition(&mut store, WORKER, NEXT_GOAL, WorkerAction::StartOrResume)
+            .unwrap();
 
         propose_and_bind(
             &mut store,
