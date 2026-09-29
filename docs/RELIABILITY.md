@@ -34,6 +34,8 @@ Crash tests should cover at least:
 
 Each test must have an unambiguous expected local result.
 
+This contract is exercised by the persistent store crash matrix in `crates/store/tests/crash_recovery.rs`. The test repeatedly drops/reopens the real JSONL journal and schema-v2 SQLite projection across the turn lifecycle, including the boundary where a completion event is durable in JSONL but SQLite has not yet been rebuilt. It also verifies that an unterminated would-be next event is truncated without losing or altering the preceding typed user-message commit.
+
 ## R6 — identity is explicit
 
 Local IDs exist independently from remote IDs. Remote identifiers are evidence used for mapping/reconciliation; they are not primary keys for local authorship.
