@@ -3,8 +3,6 @@
 pub mod corpus;
 pub mod flight;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -444,17 +442,84 @@ fn decode_asset_body(
             (true, Some(bytes.len()), Some(sha256_hex(bytes)), None)
         }
         Some(value) if value.eq_ignore_ascii_case("base64") => {
-            match BASE64_STANDARD.decode(text.as_bytes()) {
+            match decode_base64_standard(text) {
                 Ok(bytes) => (
                     true,
                     Some(bytes.len()),
                     Some(sha256_hex(&bytes)),
                     None,
                 ),
-                Err(_) => (false, None, None, Some("invalid-base64-content")),
+                Err(()) => (false, None, None, Some("invalid-base64-content")),
             }
         }
         Some(_) => (false, None, None, Some("unsupported-content-encoding")),
+    }
+}
+
+fn decode_base64_standard(text: &str) -> Result<Vec<u8>, ()> {
+    let input = text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+    if input.len() % 4 != 0 {
+        return Err(());
+    }
+
+    let mut output = Vec::with_capacity(input.len() / 4 * 3);
+    for (chunk_index, chunk) in input.chunks_exact(4).enumerate() {
+        let last_chunk = chunk_index + 1 == input.len() / 4;
+        let padding = match (chunk[2] == b'=', chunk[3] == b'=') {
+            (true, true) => 2,
+            (false, true) => 1,
+            (false, false) => 0,
+            (true, false) => return Err(()),
+        };
+        if padding > 0 && !last_chunk {
+            return Err(());
+        }
+
+        let a = base64_value(chunk[0]).ok_or(())?;
+        let b = base64_value(chunk[1]).ok_or(())?;
+        let c = if chunk[2] == b'=' {
+            0
+        } else {
+            base64_value(chunk[2]).ok_or(())?
+        };
+        let d = if chunk[3] == b'=' {
+            0
+        } else {
+            base64_value(chunk[3]).ok_or(())?
+        };
+
+        if padding == 2 && (b & 0x0f) != 0 {
+            return Err(());
+        }
+        if padding == 1 && (c & 0x03) != 0 {
+            return Err(());
+        }
+
+        output.push((a << 2) | (b >> 4));
+        if padding < 2 {
+            output.push((b << 4) | (c >> 2));
+        }
+        if padding == 0 {
+            output.push((c << 6) | d);
+        }
+    }
+    Ok(output)
+}
+
+fn base64_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
     }
 }
 
