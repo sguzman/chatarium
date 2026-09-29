@@ -274,17 +274,14 @@ fn replay_permit_issued(
         )
     })?;
 
-    let expected = state
-        .lease
-        .authorize(&worker.lifecycle)
-        .map_err(|error| {
-            format!(
-                "continuation permit {}:{} is not issuable at sequence {}: {error:?}",
-                lease_id.get(),
-                ordinal,
-                event.sequence
-            )
-        })?;
+    let expected = state.lease.authorize(&worker.lifecycle).map_err(|error| {
+        format!(
+            "continuation permit {}:{} is not issuable at sequence {}: {error:?}",
+            lease_id.get(),
+            ordinal,
+            event.sequence
+        )
+    })?;
 
     if expected.ordinal() != ordinal {
         return Err(format!(
@@ -555,10 +552,7 @@ mod tests {
         record_worker_transition(store, worker, goal, WorkerAction::StartOrResume).unwrap();
     }
 
-    fn create_lease(
-        store: &mut impl EventStore,
-        allowance: u32,
-    ) -> ContinuationLease {
+    fn create_lease(store: &mut impl EventStore, allowance: u32) -> ContinuationLease {
         let lease = ContinuationLease::new(L1, W1, G1, allowance);
         record_continuation_lease_created(store, &lease).unwrap();
         lease
@@ -833,7 +827,9 @@ mod tests {
         }
 
         let reopened = JsonlEventStore::open(&path).unwrap();
-        let record = replay_continuation_audit(reopened.events()).unwrap().remove(0);
+        let record = replay_continuation_audit(reopened.events())
+            .unwrap()
+            .remove(0);
         assert_eq!(record.issued, 0);
         assert_eq!(record.remaining, 2);
         let _ = fs::remove_file(path);
