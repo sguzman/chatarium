@@ -112,7 +112,9 @@ fn persistent_turn_lifecycle_survives_restart_matrix() {
         assert_eq!(journal.events()[0].payload, message.text);
 
         let mut projection = SqliteProjection::open(&projection_path).expect("open projection");
-        projection.rebuild(journal.events()).expect("rebuild pre-commit");
+        projection
+            .rebuild(journal.events())
+            .expect("rebuild pre-commit");
         assert!(projection.authored_turns().unwrap().is_empty());
     }
 
@@ -349,7 +351,9 @@ fn typed_commit_survives_unterminated_next_event_tail() {
     assert_eq!(recovered.events()[0].sequence, 1);
 
     let mut projection = SqliteProjection::open(&projection_path).expect("open projection");
-    projection.rebuild(recovered.events()).expect("rebuild recovered");
+    projection
+        .rebuild(recovered.events())
+        .expect("rebuild recovered");
     let row = projection
         .authored_turn(message.turn_id)
         .unwrap()
