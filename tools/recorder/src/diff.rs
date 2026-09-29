@@ -370,7 +370,7 @@ fn annotated_change(
     value.insert("path".to_owned(), Value::String(path.to_owned()));
     value.insert(
         "field_class".to_owned(),
-        Value::String(annotation.field_class),
+        Value::String(annotation.field_class.as_str().to_owned()),
     );
     value.insert(
         "classification_rationale".to_owned(),
@@ -387,7 +387,7 @@ fn annotated_change(
 
 fn annotation_json(annotation: FieldAnnotation) -> Value {
     json!({
-        "field_class": annotation.field_class,
+        "field_class": annotation.field_class.as_str(),
         "rationale": annotation.rationale,
     })
 }
