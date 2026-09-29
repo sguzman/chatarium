@@ -3,6 +3,8 @@
 pub mod corpus;
 pub mod flight;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -308,6 +310,152 @@ pub fn request_inventory(har: &Value) -> Result<Value, String> {
         "entry_count": rows.len(),
         "entries": rows,
     }))
+}
+
+/// Derive a deterministic frontend script/stylesheet identity manifest from sanitized HAR evidence.
+pub fn frontend_asset_manifest(har: &Value) -> Result<Value, String> {
+    let entries = har_entries(har)?;
+    let mut assets = entries
+        .iter()
+        .filter_map(frontend_asset_row)
+        .collect::<Vec<_>>();
+    assets.sort_by_cached_key(|value| serde_json::to_string(value).unwrap_or_default());
+
+    let hashed_asset_count = assets
+        .iter()
+        .filter(|asset| asset.get("body_sha256").is_some_and(|value| !value.is_null()))
+        .count();
+    let warning_count = assets
+        .iter()
+        .filter(|asset| asset.get("body_warning").is_some_and(|value| !value.is_null()))
+        .count();
+
+    Ok(json!({
+        "format": "chatarium-frontend-asset-manifest",
+        "version": 1,
+        "asset_count": assets.len(),
+        "hashed_asset_count": hashed_asset_count,
+        "warning_count": warning_count,
+        "assets": assets,
+    }))
+}
+
+fn frontend_asset_row(entry: &Value) -> Option<Value> {
+    let resource_type = entry
+        .get("_resourceType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mime = entry
+        .pointer("/response/content/mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let kind = frontend_asset_kind(resource_type, mime)?;
+
+    let raw_url = entry.pointer("/request/url").and_then(Value::as_str)?;
+    let (host, path) = asset_url_shape(raw_url);
+    let status = entry
+        .pointer("/response/status")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+
+    let content = entry.pointer("/response/content");
+    let text = content
+        .and_then(|value| value.get("text"))
+        .and_then(Value::as_str);
+    let raw_encoding = content
+        .and_then(|value| value.get("encoding"))
+        .and_then(Value::as_str);
+    let public_encoding = raw_encoding.map(|value| {
+        if value.eq_ignore_ascii_case("base64") {
+            "base64"
+        } else {
+            "<unsupported>"
+        }
+    });
+
+    let (body_available, decoded_body_bytes, body_sha256, body_warning) =
+        decode_asset_body(text, raw_encoding);
+
+    Some(json!({
+        "kind": kind,
+        "host": host,
+        "path": path,
+        "status": status,
+        "mime_type": mime,
+        "content_encoding": public_encoding,
+        "body_available": body_available,
+        "decoded_body_bytes": decoded_body_bytes,
+        "body_sha256": body_sha256,
+        "body_warning": body_warning,
+    }))
+}
+
+fn frontend_asset_kind(resource_type: &str, mime: &str) -> Option<&'static str> {
+    let resource_type = resource_type.to_ascii_lowercase();
+    let mime = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+
+    if resource_type == "script"
+        || matches!(
+            mime.as_str(),
+            "application/javascript"
+                | "text/javascript"
+                | "application/x-javascript"
+                | "application/ecmascript"
+                | "text/ecmascript"
+        )
+    {
+        return Some("script");
+    }
+    if resource_type == "stylesheet" || mime == "text/css" {
+        return Some("stylesheet");
+    }
+    None
+}
+
+fn asset_url_shape(raw_url: &str) -> (String, String) {
+    let Ok(url) = Url::parse(raw_url) else {
+        return (
+            "?".to_owned(),
+            normalize_path(raw_url.split('?').next().unwrap_or(raw_url)),
+        );
+    };
+    (
+        url.host_str().unwrap_or("?").to_owned(),
+        normalize_path(url.path()),
+    )
+}
+
+fn decode_asset_body(
+    text: Option<&str>,
+    encoding: Option<&str>,
+) -> (bool, Option<usize>, Option<String>, Option<&'static str>) {
+    let Some(text) = text else {
+        return (false, None, None, None);
+    };
+
+    match encoding {
+        None => {
+            let bytes = text.as_bytes();
+            (true, Some(bytes.len()), Some(sha256_hex(bytes)), None)
+        }
+        Some(value) if value.eq_ignore_ascii_case("base64") => {
+            match BASE64_STANDARD.decode(text.as_bytes()) {
+                Ok(bytes) => (
+                    true,
+                    Some(bytes.len()),
+                    Some(sha256_hex(&bytes)),
+                    None,
+                ),
+                Err(_) => (false, None, None, Some("invalid-base64-content")),
+            }
+        }
+        Some(_) => (false, None, None, Some("unsupported-content-encoding")),
+    }
 }
 
 fn inventory_row(index: usize, entry: &Value) -> Value {
