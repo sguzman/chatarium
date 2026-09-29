@@ -207,6 +207,8 @@ The user may approve a pending route, deny a pending route, veto an automaticall
 
 This remains pure domain state. The future egui supervisor, MCP/tool adapters, and master/worker transport must use this gate rather than inventing a hidden bypass.
 
+Routing audit facts are now also designed to survive restart through the authoritative append-only journal. A proposed route, explicit user decision, consumed dispatch authorization, and a generic post-dispatch result/error observation can be reconstructed without treating SQLite as authority. The audit layer intentionally records no arbitrary chat/tool payload and does not equate transport/result observations with worker-goal completion.
+
 ## 7. Message bus, not hidden automation
 
 The preferred architecture is an explicit local message/control bus.
