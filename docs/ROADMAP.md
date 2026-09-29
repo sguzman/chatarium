@@ -22,9 +22,28 @@ Exit criterion: a browser/network failure may interrupt a turn, but it cannot er
 
 Create controlled observation sets of the official ChatGPT web client while minimizing human QA.
 
-The first empirical snapshot now exists: `protocol/snapshots/2026-09-29.001`, derived from a manual Edge/Linux HAR of a completed text turn. Manual HAR is acceptable bootstrap evidence when it produces useful protocol knowledge faster than finishing capture automation first.
+The protocol baseline now has two complementary empirical snapshots:
 
-The automation target remains the one-command capture harness described in `docs/CAPTURE_HARNESS.md`:
+- `2026-09-29.001`: manual Edge/Linux HAR of a completed text turn, establishing prepare/send/token-linkage/persisted-state and websocket completion surfaces;
+- `2026-09-29.002`: canonical C03 captured by Flight Recorder, establishing the actual `text/event-stream` body, `delta_encoding = "v1"`, incremental message operations, explicit completion patching, `message_stream_complete`, and terminal `[DONE]`.
+
+Flight Recorder v0.6.0 then passed live protocol-backed reconciliation: a parsed user `input_message` confirmed the pending send under the canonical conversation identity and the final-channel assistant stream populated durable assistant state without depending on current DOM selectors.
+
+Manual/browser-local evidence remains acceptable when it produces protocol knowledge faster and more safely than finishing legacy capture automation first.
+
+The legacy Windows CDP harness remains documented in `docs/CAPTURE_HARNESS.md`, but it is no longer a prerequisite for protocol progress. The active cross-platform path is:
+
+```text
+Flight Recorder export
+        ↓
+chatarium-recorder snapshot-flight
+        ↓
+sanitized selected-run evidence + structural inventory
+        ↓
+protocol snapshot / diff / typed interpretation
+```
+
+Longer-term automation should preserve the useful harness properties:
 
 - dedicated Chatarium Edge profile with one-time normal login;
 - read-only diagnostics (`chatarium-capture doctor`);
@@ -52,9 +71,9 @@ Canonical experiments:
 
 The first machine-executable experiment definitions live under `protocol/experiments/`. Each experiment should produce its own capture or clearly delimited action log. Human QA is reserved for observations the harness genuinely cannot obtain itself.
 
-Current state: snapshot `2026-09-29.001` documents the prepare/send/persisted-completion path for a basic text turn without guessing about the observed surfaces. Its HAR did not preserve the SSE body, so stream-event grammar remains an explicit gap.
+Current state: the basic canonical text-turn stream is directly observed and typed in `crates/protocol`; browser-local capture and protocol-backed reconciliation work on Linux. P1 work is now automating private Flight Recorder export ingestion, fail-closed sanitization, structural inventory, and future diffs.
 
-Exit criterion: repeated equivalent captures can be produced reproducibly, including streaming evidence, without requiring a Windows-specific bootstrap path.
+P0.5 exit criterion: equivalent controlled captures can be repeated and transformed into deterministic sanitized evidence/inventory without Windows-specific bootstrap machinery or manual protocol archaeology from zero.
 
 ## P1 — recorder and diff tooling
 
@@ -62,8 +81,8 @@ Build reproducible tooling for turning captures into protocol evidence.
 
 Deliverables:
 
-- HAR/capture ingestion;
-- secret scanner and sanitization report;
+- HAR and Flight Recorder capture ingestion;
+- fail-closed secret/content sanitization and sanitization report;
 - frontend asset manifest/hashes;
 - request/response/event shape extraction;
 - stable-vs-ephemeral field annotations;
