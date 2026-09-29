@@ -356,7 +356,7 @@ mod tests {
     };
     use crate::worker_audit::replay_worker_audit;
     use crate::{JsonlEventStore, MemoryEventStore};
-    use chatarium_core::orchestration::{WorkerId, WorkerPhase};
+    use chatarium_core::orchestration::WorkerId;
     use chatarium_core::session::WorkerSessionBinding;
     use std::fs::{self, OpenOptions};
     use std::io::Write;
@@ -717,6 +717,5 @@ mod tests {
             )
         }));
 
-        let _unused_phase_guard = WorkerPhase::Unassigned;
     }
 }
