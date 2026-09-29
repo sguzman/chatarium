@@ -360,7 +360,11 @@ mod tests {
         let scope = local_turn_scope(message.turn_id);
         let mut store = MemoryEventStore::default();
         store
-            .append_scoped(Some(scope.clone()), EventKind::DispatchAttempted, String::new())
+            .append_scoped(
+                Some(scope.clone()),
+                EventKind::DispatchAttempted,
+                String::new(),
+            )
             .unwrap();
         commit_user_message(&mut store, &message).unwrap();
 
