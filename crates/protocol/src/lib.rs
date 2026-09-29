@@ -3,6 +3,7 @@
 //! This crate must not invent a protocol before evidence exists in `protocol/`.
 
 pub mod sse;
+pub mod stability;
 
 /// Newest protocol observation revision against which this crate has been validated.
 ///
