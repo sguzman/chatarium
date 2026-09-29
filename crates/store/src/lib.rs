@@ -6,6 +6,7 @@
 pub mod authored;
 pub mod control_admission_audit;
 pub mod control_audit;
+pub mod control_dispatch_audit;
 pub mod control_provenance_audit;
 pub mod control_route_audit;
 pub mod orchestration_route_audit;
