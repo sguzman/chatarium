@@ -733,7 +733,9 @@ fn sanitize_sse_frame(
     };
 
     observe_frame_shape(frame, &payload, inventory);
-    sanitize_protocol_json(&mut payload, None, allowed_texts, ids);
+    if frame.event.as_deref() != Some("delta_encoding") {
+        sanitize_protocol_json(&mut payload, None, allowed_texts, ids);
+    }
 
     json!({
         "event": frame.event,
@@ -827,12 +829,12 @@ fn sanitize_protocol_json(
             let field = key.unwrap_or_default();
             if sensitive_field(field) {
                 *text = REDACTED.to_owned();
-            } else if identity_field(field) {
-                *text = if field.contains("conversation") {
-                    ids.map_conversation(text)
-                } else {
-                    ids.map_message(text)
-                };
+            } else if conversation_identity_field(field) {
+                *text = ids.map_conversation(text);
+            } else if message_identity_field(field) {
+                *text = ids.map_message(text);
+            } else if generic_identity_field(field) {
+                *text = "<id>".to_owned();
             } else if content_field(field) {
                 if !allowed_texts.contains(text) {
                     *text = REDACTED_CONTENT.to_owned();
@@ -876,20 +878,20 @@ fn sensitive_field(key: &str) -> bool {
         || normalized.contains("sentinel")
 }
 
-fn identity_field(key: &str) -> bool {
+fn conversation_identity_field(key: &str) -> bool {
+    key.eq_ignore_ascii_case("conversation_id")
+}
+
+fn message_identity_field(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "id" | "message_id" | "parent_id"
+    )
+}
+
+fn generic_identity_field(key: &str) -> bool {
     let normalized = key.to_ascii_lowercase();
-    normalized == "id"
-        || normalized.ends_with("_id")
-        || matches!(
-            normalized.as_str(),
-            "message_id"
-                | "conversation_id"
-                | "request_id"
-                | "turn_exchange_id"
-                | "working_turn_id"
-                | "turn_trace_id"
-                | "parent_id"
-        )
+    normalized.ends_with("_id")
 }
 
 fn content_field(key: &str) -> bool {
@@ -902,7 +904,6 @@ fn structural_string_field(key: &str) -> bool {
         "type"
             | "kind"
             | "role"
-            | "name"
             | "content_type"
             | "status"
             | "channel"
@@ -1133,6 +1134,8 @@ data: [DONE]
         assert!(text.contains("<redacted-value>"));
         assert!(text.contains("<conversation:1>"));
         assert!(text.contains("<message:"));
+        assert!(text.contains("\"data\": \"v1\""));
+        assert!(text.contains("\"request_id\": \"<id>\""));
     }
 
     #[test]
