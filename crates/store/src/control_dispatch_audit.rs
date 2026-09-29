@@ -11,8 +11,8 @@ use crate::control_admission_audit::{
 use crate::orchestration_route_audit::{
     ValidatedOrchestrationRoute, replay_validated_orchestration_routes,
 };
-use crate::routing_audit::{RouteAuditRecord, replay_routing_audit};
 use crate::EventEnvelope;
+use crate::routing_audit::{RouteAuditRecord, replay_routing_audit};
 use chatarium_core::control::ControlId;
 use chatarium_core::control_provenance::ControlIssuer;
 use chatarium_core::orchestration::{WorkerId, WorkerPhase};
@@ -80,9 +80,7 @@ pub fn replay_validated_control_dispatches(
             route.request.class == RouteClass::OrchestrationControl
                 && route.dispatch_sequence.is_some()
         })
-        .map(|route| {
-            validate_dispatch(events, route, &admissions_by_id, &validated_by_route)
-        })
+        .map(|route| validate_dispatch(events, route, &admissions_by_id, &validated_by_route))
         .collect()
 }
 
@@ -170,9 +168,7 @@ mod tests {
     use chatarium_core::orchestration::{
         ContinuationLease, WorkerAction, WorkerGoalId, WorkerLifecycle,
     };
-    use chatarium_core::routing::{
-        RouteEndpointId, RouteGate, RoutePolicy,
-    };
+    use chatarium_core::routing::{RouteEndpointId, RouteGate, RoutePolicy};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -215,10 +211,7 @@ mod tests {
         }
     }
 
-    fn admit_user_control(
-        store: &mut impl EventStore,
-        control: &WorkerControl,
-    ) {
+    fn admit_user_control(store: &mut impl EventStore, control: &WorkerControl) {
         record_worker_control_admitted(store, control).unwrap();
         record_worker_control_issuer_bound(
             store,
@@ -286,18 +279,8 @@ mod tests {
         let control = admitted_stop(1, G1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
-        bind_route(
-            &mut store,
-            &control,
-            request,
-            RoutePolicy::RequireApproval,
-        );
-        dispatch(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-            true,
-        );
+        bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
+        dispatch(&mut store, request, RoutePolicy::RequireApproval, true);
 
         let record = replay_validated_control_dispatches(store.events())
             .unwrap()
@@ -313,23 +296,13 @@ mod tests {
         let control = admitted_stop(1, G1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
-        bind_route(
-            &mut store,
-            &control,
-            request,
-            RoutePolicy::RequireApproval,
-        );
+        bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
 
         record_worker_transition(&mut store, W1, G1, WorkerAction::Complete).unwrap();
         record_worker_goal_assigned(&mut store, W1, G2).unwrap();
         record_worker_transition(&mut store, W1, G2, WorkerAction::StartOrResume).unwrap();
 
-        dispatch(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-            true,
-        );
+        dispatch(&mut store, request, RoutePolicy::RequireApproval, true);
 
         let error = replay_validated_control_dispatches(store.events()).unwrap_err();
         assert!(error.contains("stale worker control"));
@@ -349,19 +322,9 @@ mod tests {
         let control = continue_control(1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
-        bind_route(
-            &mut store,
-            &control,
-            request,
-            RoutePolicy::RequireApproval,
-        );
+        bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
         record_worker_transition(&mut store, W1, G1, WorkerAction::RequestInput).unwrap();
-        dispatch(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-            true,
-        );
+        dispatch(&mut store, request, RoutePolicy::RequireApproval, true);
 
         let error = replay_validated_control_dispatches(store.events()).unwrap_err();
         assert!(error.contains("Continue"));
@@ -375,19 +338,9 @@ mod tests {
         let control = continue_control(1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
-        bind_route(
-            &mut store,
-            &control,
-            request,
-            RoutePolicy::RequireApproval,
-        );
+        bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
         record_worker_transition(&mut store, W1, G1, WorkerAction::MarkBlocked).unwrap();
-        dispatch(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-            true,
-        );
+        dispatch(&mut store, request, RoutePolicy::RequireApproval, true);
 
         let error = replay_validated_control_dispatches(store.events()).unwrap_err();
         assert!(error.contains("Continue"));
@@ -401,19 +354,9 @@ mod tests {
         let control = admitted_stop(1, G1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
-        bind_route(
-            &mut store,
-            &control,
-            request,
-            RoutePolicy::RequireApproval,
-        );
+        bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
         record_worker_transition(&mut store, W1, G1, WorkerAction::Complete).unwrap();
-        dispatch(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-            true,
-        );
+        dispatch(&mut store, request, RoutePolicy::RequireApproval, true);
 
         let error = replay_validated_control_dispatches(store.events()).unwrap_err();
         assert!(error.contains("Stop"));
@@ -425,23 +368,12 @@ mod tests {
         let mut store = MemoryEventStore::default();
         record_working(&mut store, G1);
         let lifecycle = working_lifecycle(G1);
-        let control =
-            WorkerControl::status_request(ControlId::new(1), W1, G1, &lifecycle).unwrap();
+        let control = WorkerControl::status_request(ControlId::new(1), W1, G1, &lifecycle).unwrap();
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
-        bind_route(
-            &mut store,
-            &control,
-            request,
-            RoutePolicy::RequireApproval,
-        );
+        bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
         record_worker_transition(&mut store, W1, G1, WorkerAction::Complete).unwrap();
-        dispatch(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-            true,
-        );
+        dispatch(&mut store, request, RoutePolicy::RequireApproval, true);
 
         let record = replay_validated_control_dispatches(store.events())
             .unwrap()
@@ -501,12 +433,7 @@ mod tests {
     fn pending_approval_dispatch_remains_rejected_by_generic_routing_replay() {
         let mut store = MemoryEventStore::default();
         let request = route(1, RouteClass::OrchestrationControl);
-        record_route_proposed(
-            &mut store,
-            request,
-            RoutePolicy::RequireApproval,
-        )
-        .unwrap();
+        record_route_proposed(&mut store, request, RoutePolicy::RequireApproval).unwrap();
 
         let mut gate = RouteGate::new(request, RoutePolicy::Allow);
         let permit = gate.authorize_dispatch(request.id).unwrap();
