@@ -58,7 +58,7 @@ pub fn run_cli(args: &[String]) -> Result<(), String> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  chatarium-recorder sanitize-har <input.har> <output.har>\n  chatarium-recorder inventory-har <input.har> <output.json>\n  chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>\n  chatarium-recorder inspect-har <input.har>\n  chatarium-recorder fingerprint <file>"
+        "Usage:\n  chatarium-recorder sanitize-har <input.har> <output.har>\n  chatarium-recorder inventory-har <input.har> <output.json>\n  chatarium-recorder snapshot-har <input.har> <snapshot-dir> <capture-id>\n  chatarium-recorder snapshot-flight <input.json> <experiment.toml> <snapshot-dir> <capture-id>\n  chatarium-recorder inspect-har <input.har>\n  chatarium-recorder fingerprint <file>"
     );
 }
 
