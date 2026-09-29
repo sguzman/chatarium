@@ -1,6 +1,7 @@
 //! Domain model for Chatarium reliability state.
 
 pub mod control;
+pub mod control_route;
 pub mod orchestration;
 pub mod routing;
 
@@ -251,7 +252,8 @@ impl TurnEvidence {
             | EventKind::RouteResultObserved
             | EventKind::WorkerGoalAssigned
             | EventKind::WorkerLifecycleTransitionRecorded
-            | EventKind::WorkerControlAdmitted => {}
+            | EventKind::WorkerControlAdmitted
+            | EventKind::ControlRouteBound => {}
         }
         Ok(())
     }
@@ -319,6 +321,8 @@ pub enum EventKind {
     WorkerLifecycleTransitionRecorded,
     /// A typed orchestration control command was admitted locally.
     WorkerControlAdmitted,
+    /// An admitted worker control was correlated to its orchestration route.
+    ControlRouteBound,
 }
 
 impl EventKind {
@@ -350,6 +354,7 @@ impl EventKind {
             Self::WorkerGoalAssigned => "worker_goal_assigned",
             Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
             Self::WorkerControlAdmitted => "worker_control_admitted",
+            Self::ControlRouteBound => "control_route_bound",
         }
     }
 
@@ -381,6 +386,7 @@ impl EventKind {
             "worker_goal_assigned" => Some(Self::WorkerGoalAssigned),
             "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
             "worker_control_admitted" => Some(Self::WorkerControlAdmitted),
+            "control_route_bound" => Some(Self::ControlRouteBound),
             _ => None,
         }
     }
