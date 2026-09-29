@@ -40,6 +40,8 @@ Startup treats only an **unterminated final fragment** as a torn last write and 
 
 SQLite now exists as a rebuildable projection/index layer in `crates/store`. It does not replace the append journal as the evidence history. The projection database is versioned independently, can be deleted and rebuilt entirely from durable journal events, and is updated/rebuilt transactionally so a failed rebuild cannot replace a previously valid projection.
 
+Projection schema v2 also materializes typed locally authored turns derived from typed `UserMessageCommitted` events plus same-turn durable evidence. Each row preserves local conversation/turn/message identities, exact committed user text, commit/last-applied sequences, and replayed local/remote/assistant evidence. Legacy text-only commits remain in the event projection but are intentionally absent from the typed turn table because Chatarium does not invent local IDs retroactively. After a projection-schema migration, the projection is not considered current until a full journal rebuild materializes the new schema.
+
 The minimum event vocabulary includes:
 
 - draft changed;
@@ -121,7 +123,7 @@ Owns typed interpretations of empirically observed ChatGPT request/response/even
 
 ### `crates/store`
 
-Owns durable persistence, migrations, event append, projection rebuild, and transactional guarantees. The authoritative implementation is the crash-recoverable JSONL journal. SQLite is a subordinate query projection with explicit schema migration, sequence validation, scope/kind indexes, and transactionally safe rebuild semantics. No network logic belongs here.
+Owns durable persistence, migrations, event append, projection rebuild, and transactional guarantees. The authoritative implementation is the crash-recoverable JSONL journal. SQLite is a subordinate query projection with explicit schema migration, sequence validation, scope/kind indexes, a typed authored-turn materialization, and transactionally safe rebuild semantics. No network logic belongs here.
 
 ### `tools/recorder`
 
