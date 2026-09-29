@@ -812,7 +812,10 @@ mod tests {
 
         commit_user_message(&mut store, &first).unwrap();
         let first_scope = local_turn_scope(first.turn_id);
-        for kind in [EventKind::DispatchAttempted, EventKind::TransportInterrupted] {
+        for kind in [
+            EventKind::DispatchAttempted,
+            EventKind::TransportInterrupted,
+        ] {
             store
                 .append_scoped(Some(first_scope.clone()), kind, String::new())
                 .unwrap();
@@ -990,7 +993,11 @@ mod tests {
         let scope = local_turn_scope(broken_message.turn_id);
         let mut broken_store = MemoryEventStore::default();
         broken_store
-            .append_scoped(Some(scope.clone()), EventKind::DispatchAttempted, String::new())
+            .append_scoped(
+                Some(scope.clone()),
+                EventKind::DispatchAttempted,
+                String::new(),
+            )
             .unwrap();
         commit_user_message(&mut broken_store, &broken_message).unwrap();
 
