@@ -505,6 +505,7 @@ fn send_intent_events(
         "canonical_conversation": scope.clone(),
         "confirmed_at": intent.get("confirmedAt").cloned().unwrap_or(Value::Null),
         "observed_message_id": intent.get("observedMessageId").cloned().unwrap_or(Value::Null),
+        "confirmation_evidence": intent.get("confirmationEvidence").cloned().unwrap_or(Value::Null),
     });
 
     let commit_key = format!("send:{id}:commit");
@@ -663,7 +664,14 @@ fn assistant_wal_event(
                 "observed_id": observed_id,
                 "original_chars": assistant.get("originalChars").cloned().unwrap_or(Value::Null),
                 "truncated_prefix": assistant.get("truncatedPrefix").cloned().unwrap_or(Value::Null),
-                "source": "assistant-wal",
+                "source": assistant
+                    .get("source")
+                    .cloned()
+                    .unwrap_or_else(|| Value::String("assistant-wal".to_owned())),
+                "protocol_evidence": assistant.get("protocolEvidence").cloned().unwrap_or(Value::Null),
+                "protocol_status": assistant.get("protocolStatus").cloned().unwrap_or(Value::Null),
+                "protocol_end_turn": assistant.get("protocolEndTurn").cloned().unwrap_or(Value::Null),
+                "protocol_is_complete": assistant.get("protocolIsComplete").cloned().unwrap_or(Value::Null),
                 "transient_placeholder": is_placeholder,
             }),
         )?,
