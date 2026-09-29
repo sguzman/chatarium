@@ -1257,7 +1257,7 @@ data: {"p":"/message/content/parts/0","o":"append","v":"CHATARIUM_PROTOCOL_"#;
 
         let second_chunk = r#"TEST_001"}
 
-data: {"type":"server_ste_metadata","metadata":{"plan_type":"plus","cluster_region":"secret-region","request_id":"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"},"conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+data: {"type":"server_ste_metadata","metadata":{"plan_type":"plus","cluster_region":"secret-region","request_id":"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee","latency_ms":123},"conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
 
 data: {"type":"message_stream_complete","conversation_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
 
@@ -1436,6 +1436,100 @@ data: [DONE]
         assert!(text.contains("<message:"));
         assert!(text.contains("\"data\": \"v1\""));
         assert!(text.contains("\"request_id\": \"<id>\""));
+    }
+
+    #[test]
+    fn flight_sanitization_report_counts_transformations_without_leaking_values() {
+        let export = cumulative_export();
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = sample_experiment();
+        let allowed = BTreeSet::from([
+            experiment.action.text.clone().unwrap(),
+            experiment.success.text.clone().unwrap(),
+        ]);
+        let derived = derive_sanitized_run(&export, &selected, &experiment, &allowed).unwrap();
+        let report = derived
+            .get("sanitization_report")
+            .expect("sanitization report");
+        let report_text = serde_json::to_string(report).unwrap();
+
+        assert!(
+            report
+                .pointer("/counts/sensitive_values_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/unknown_scalar_values_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/numeric_values_generalized")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/conversation_identities_placeholdered")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/message_identities_placeholdered")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/send_identities_placeholdered")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/generic_identities_placeholdered")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
+                .pointer("/counts/canonical_experiment_literals_retained")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 2
+        );
+        assert_eq!(
+            report.pointer("/counts/raw_network_stream_chunks_copied"),
+            Some(&json!(0))
+        );
+        assert_eq!(
+            report.get("publication_safety_proven"),
+            Some(&Value::Bool(false))
+        );
+
+        for secret in [
+            "signed-secret",
+            "do not leak me",
+            "secret-region",
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        ] {
+            assert!(!report_text.contains(secret), "report leaked {secret}");
+        }
     }
 
     #[test]
