@@ -30,11 +30,19 @@ Purpose: identify conversation retrieval and any lazy secondary requests.
 
 ### C03 — new text turn, complete
 
-Use a deterministic harmless prompt such as:
+Use the exact canonical prompt:
 
 ```text
-respond with exactly TEST123
+respond with exactly CHATARIUM_PROTOCOL_TEST_001
 ```
+
+Expected assistant marker:
+
+```text
+CHATARIUM_PROTOCOL_TEST_001
+```
+
+Do not add Markdown backticks or otherwise rewrite this text in a canonical C03 run.
 
 Purpose: identify create/send/stream/completion behavior with minimal semantic noise.
 
@@ -83,7 +91,13 @@ Purpose: understand what can and cannot be reconciled after ambiguous disconnect
 
 ## Export strategy
 
-HAR with response content is useful for initial manual work. It may not preserve every streaming detail perfectly, so later recorder work should use Chromium DevTools Protocol instrumentation to record request, response, SSE/fetch streaming, WebSocket activity where applicable, and loaded asset identities directly.
+HAR is acceptable bootstrap evidence for initial protocol archaeology and can be collected manually when doing so is faster than finishing the automated harness first.
+
+A raw HAR must still be treated as private evidence. Browser "sanitized" export is not sufficient proof that the file contains no reusable tokens, account/device identifiers, signed websocket parameters, or private conversation/context bodies.
+
+HAR may also omit streaming response bodies. Snapshot `2026-09-29.001` observed a `text/event-stream` response whose SSE body was absent from the export.
+
+Therefore HAR is useful for endpoint/request/order discovery, while later recorder work should preserve SSE/fetch streaming, WebSocket activity, and loaded asset identities directly.
 
 ## Sanitization gate
 
