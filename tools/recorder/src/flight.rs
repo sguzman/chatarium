@@ -1462,6 +1462,13 @@ data: [DONE]
         );
         assert!(
             report
+                .pointer("/counts/content_values_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            report
                 .pointer("/counts/unknown_scalar_values_redacted")
                 .and_then(Value::as_u64)
                 .unwrap_or_default()
@@ -1576,6 +1583,27 @@ data: [DONE]
         assert!(text.contains("<redacted-event-name>"));
         assert!(text.contains("<redacted-path>"));
         assert!(text.contains("<redacted-value>"));
+        assert!(
+            derived
+                .pointer("/sanitization_report/counts/unknown_event_names_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            derived
+                .pointer("/sanitization_report/counts/unknown_structural_values_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+        assert!(
+            derived
+                .pointer("/sanitization_report/counts/unknown_paths_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
     }
 
     #[test]
@@ -1611,6 +1639,10 @@ data: [DONE]
 
         assert!(!text.contains("PRIVATE_ENCODING_SECRET"));
         assert!(text.contains("<redacted-value>"));
+        assert_eq!(
+            derived.pointer("/sanitization_report/counts/unknown_encodings_redacted"),
+            Some(&json!(1))
+        );
     }
 
     #[test]
@@ -1682,6 +1714,43 @@ data: [DONE]
                 .unwrap_or_default()
                 >= 1
         );
+        assert_eq!(
+            derived.pointer("/sanitization_report/counts/malformed_sse_frames_fail_closed"),
+            Some(&json!(1))
+        );
+    }
+
+    #[test]
+    fn unterminated_sse_tail_is_counted_and_not_copied() {
+        let mut export = cumulative_export();
+        {
+            let events = export["events"].as_array_mut().expect("events array");
+            let chunk = events
+                .iter_mut()
+                .filter(|event| {
+                    event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
+                })
+                .last()
+                .expect("last stream chunk");
+            let text = chunk["payload"]["text"].as_str().unwrap().to_owned()
+                + "data: {PRIVATE_UNTERMINATED_SECRET";
+            chunk["payload"]["text"] = json!(text);
+        }
+
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = sample_experiment();
+        let allowed = BTreeSet::from([
+            experiment.action.text.clone().unwrap(),
+            experiment.success.text.clone().unwrap(),
+        ]);
+        let derived = derive_sanitized_run(&export, &selected, &experiment, &allowed).unwrap();
+        let text = serde_json::to_string_pretty(&derived).unwrap();
+
+        assert!(!text.contains("PRIVATE_UNTERMINATED_SECRET"));
+        assert_eq!(
+            derived.pointer("/sanitization_report/counts/unterminated_sse_tails_redacted"),
+            Some(&json!(1))
+        );
     }
 
     #[test]
@@ -1731,10 +1800,30 @@ text = "CHATARIUM_PROTOCOL_TEST_001"
 
         snapshot_flight(&input, &experiment, &output, "C03").unwrap();
 
-        let metadata = fs::read_to_string(output.join("derived/C03.flight.meta.json")).unwrap();
-        assert!(metadata.contains(&sha256_hex(&raw)));
-        assert!(!metadata.contains("PRIVATE-user-export.json"));
+        let metadata_path = output.join("derived/C03.flight.meta.json");
+        let metadata: Value =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        assert_eq!(metadata["raw_source_sha256"], sha256_hex(&raw));
+        assert!(!serde_json::to_string(&metadata).unwrap().contains("PRIVATE-user-export.json"));
         assert!(!output.join("PRIVATE-user-export.json").exists());
+
+        let report_path = output.join("derived/C03.flight.sanitization.json");
+        let report_bytes = fs::read(&report_path).unwrap();
+        assert_eq!(
+            metadata["sanitization_report_file"],
+            "derived/C03.flight.sanitization.json"
+        );
+        assert_eq!(
+            metadata["sanitization_report_sha256"],
+            sha256_hex(&report_bytes)
+        );
+        assert_eq!(
+            metadata["sanitization_report_bytes"],
+            json!(report_bytes.len())
+        );
+        let report_text = String::from_utf8(report_bytes).unwrap();
+        assert!(!report_text.contains("signed-secret"));
+        assert!(!report_text.contains("PRIVATE-user-export.json"));
 
         let public = fs::read_to_string(output.join("evidence/C03.flight.json")).unwrap();
         assert!(!public.contains("signed-secret"));
