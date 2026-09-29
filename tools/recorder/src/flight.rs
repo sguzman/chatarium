@@ -112,18 +112,17 @@ pub fn snapshot_flight(
 ) -> Result<(), String> {
     crate::validate_capture_id(capture_id)?;
 
-    let source =
-        fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
+    let source = fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
     let experiment_bytes = fs::read(experiment_path)
         .map_err(|error| format!("read {}: {error}", experiment_path.display()))?;
     let experiment_text = std::str::from_utf8(&experiment_bytes)
         .map_err(|error| format!("experiment TOML is not UTF-8: {error}"))?;
-    let experiment: ExperimentDefinition =
-        toml::from_str(experiment_text).map_err(|error| format!("parse experiment TOML: {error}"))?;
+    let experiment: ExperimentDefinition = toml::from_str(experiment_text)
+        .map_err(|error| format!("parse experiment TOML: {error}"))?;
     validate_experiment(&experiment)?;
 
-    let export: Value =
-        serde_json::from_slice(&source).map_err(|error| format!("parse Flight Recorder JSON: {error}"))?;
+    let export: Value = serde_json::from_slice(&source)
+        .map_err(|error| format!("parse Flight Recorder JSON: {error}"))?;
     validate_export(&export)?;
     let selected = select_latest_run(&export)?;
 
@@ -220,7 +219,9 @@ fn validate_experiment(experiment: &ExperimentDefinition) -> Result<(), String> 
     if experiment.id.trim().is_empty() {
         return Err("experiment id is empty".to_owned());
     }
-    if experiment.action.kind == "send_text" && experiment.action.text.as_deref().unwrap_or("").is_empty() {
+    if experiment.action.kind == "send_text"
+        && experiment.action.text.as_deref().unwrap_or("").is_empty()
+    {
         return Err("send_text experiment is missing action.text".to_owned());
     }
     if experiment.success.kind == "assistant_text_contains"
@@ -349,7 +350,8 @@ fn derive_sanitized_run(
                     .map(ToOwned::to_owned);
             }
             "network-stream-chunk" => {
-                let Some(raw_stream) = event.pointer("/payload/streamId").and_then(Value::as_str) else {
+                let Some(raw_stream) = event.pointer("/payload/streamId").and_then(Value::as_str)
+                else {
                     warnings.push(format!("seq {seq}: network-stream-chunk missing streamId"));
                     continue;
                 };
@@ -389,8 +391,9 @@ fn derive_sanitized_run(
                     .pointer("/payload/terminal")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned);
-                streams[index].captured_bytes =
-                    event.pointer("/payload/capturedBytes").and_then(Value::as_u64);
+                streams[index].captured_bytes = event
+                    .pointer("/payload/capturedBytes")
+                    .and_then(Value::as_u64);
             }
             "network-stream-error" => warnings.push(format!(
                 "seq {seq}: source recorder reported network-stream-error"
@@ -783,7 +786,10 @@ fn observe_delta_shape(payload: &Value, inventory: &mut StreamInventory) {
             .or_default() += 1;
     }
     if let Some(path) = payload.get("p").and_then(Value::as_str) {
-        *inventory.delta_path_counts.entry(path.to_owned()).or_default() += 1;
+        *inventory
+            .delta_path_counts
+            .entry(path.to_owned())
+            .or_default() += 1;
     }
     if payload.get("o").and_then(Value::as_str) == Some("patch") {
         if let Some(operations) = payload.get("v").and_then(Value::as_array) {
@@ -795,7 +801,10 @@ fn observe_delta_shape(payload: &Value, inventory: &mut StreamInventory) {
                         .or_default() += 1;
                 }
                 if let Some(path) = operation.get("p").and_then(Value::as_str) {
-                    *inventory.delta_path_counts.entry(path.to_owned()).or_default() += 1;
+                    *inventory
+                        .delta_path_counts
+                        .entry(path.to_owned())
+                        .or_default() += 1;
                 }
             }
         }
@@ -1160,10 +1169,7 @@ data: [DONE]
             derived.pointer("/inventory/streams/0/delta_path_counts/~1message~1content~1parts~10"),
             None
         );
-        assert_eq!(
-            derived.pointer("/inventory/warning_count"),
-            Some(&json!(0))
-        );
+        assert_eq!(derived.pointer("/inventory/warning_count"), Some(&json!(0)));
     }
 
     #[test]
