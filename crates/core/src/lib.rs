@@ -262,7 +262,9 @@ impl TurnEvidence {
             | EventKind::WorkerSessionBound
             | EventKind::ControllerSessionDesignated
             | EventKind::ControllerWorkerBound
-            | EventKind::WorkerControlIssuerBound => {}
+            | EventKind::WorkerControlIssuerBound
+            | EventKind::ContinuationLeaseCreated
+            | EventKind::ContinuationPermitIssued => {}
         }
         Ok(())
     }
@@ -344,6 +346,10 @@ pub enum EventKind {
     ControllerWorkerBound,
     /// Explicit issuer provenance was correlated to one admitted worker control.
     WorkerControlIssuerBound,
+    /// A bounded continuation lease was durably created.
+    ContinuationLeaseCreated,
+    /// One continuation permit ordinal was durably issued from a lease.
+    ContinuationPermitIssued,
 }
 
 impl EventKind {
@@ -382,6 +388,8 @@ impl EventKind {
             Self::ControllerSessionDesignated => "controller_session_designated",
             Self::ControllerWorkerBound => "controller_worker_bound",
             Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
+            Self::ContinuationLeaseCreated => "continuation_lease_created",
+            Self::ContinuationPermitIssued => "continuation_permit_issued",
         }
     }
 
@@ -420,6 +428,8 @@ impl EventKind {
             "controller_session_designated" => Some(Self::ControllerSessionDesignated),
             "controller_worker_bound" => Some(Self::ControllerWorkerBound),
             "worker_control_issuer_bound" => Some(Self::WorkerControlIssuerBound),
+            "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
+            "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
             _ => None,
         }
     }

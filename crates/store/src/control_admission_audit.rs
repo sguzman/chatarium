@@ -5,6 +5,7 @@
 //! treating a stale or phase-invalid control as semantically admitted.
 
 use crate::EventEnvelope;
+use crate::continuation_audit::replay_continuation_audit;
 use crate::control_audit::{ControlAuditRecord, replay_control_audit};
 use crate::worker_audit::replay_worker_audit;
 use chatarium_core::control::validate_control_admission;
@@ -25,6 +26,7 @@ pub fn replay_validated_control_admissions(
     events: &[EventEnvelope],
 ) -> Result<Vec<ValidatedControlAdmission>, String> {
     replay_worker_audit(events)?;
+    replay_continuation_audit(events)?;
 
     replay_control_audit(events)?
         .into_iter()
@@ -97,18 +99,22 @@ pub fn worker_phase_before(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continuation_audit::{
+        record_continuation_lease_created, record_continuation_permit_issued,
+    };
     use crate::control_audit::record_worker_control_admitted;
     use crate::worker_audit::{record_worker_goal_assigned, record_worker_transition};
     use crate::{EventStore, JsonlEventStore, MemoryEventStore};
     use chatarium_core::control::{ControlId, WorkerControl, WorkerControlKind};
     use chatarium_core::orchestration::{
-        ContinuationLease, WorkerAction, WorkerGoalId, WorkerLifecycle,
+        ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerLifecycle,
     };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const W1: WorkerId = WorkerId::new(10);
+    const L1: ContinuationLeaseId = ContinuationLeaseId::new(50);
     const G1: WorkerGoalId = WorkerGoalId::new(100);
     const G2: WorkerGoalId = WorkerGoalId::new(200);
 
@@ -165,8 +171,10 @@ mod tests {
         let mut store = MemoryEventStore::default();
         record_working(&mut store, G1);
         let lifecycle = working(G1);
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
+        record_continuation_lease_created(&mut store, &lease).unwrap();
         let permit = lease.authorize(&lifecycle).unwrap();
+        record_continuation_permit_issued(&mut store, &permit).unwrap();
         let control =
             WorkerControl::continue_work(ControlId::new(1), W1, &lifecycle, permit).unwrap();
         record_worker_control_admitted(&mut store, &control).unwrap();

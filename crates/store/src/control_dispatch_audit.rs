@@ -153,6 +153,9 @@ fn validate_dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continuation_audit::{
+        record_continuation_lease_created, record_continuation_permit_issued,
+    };
     use crate::control_audit::record_worker_control_admitted;
     use crate::control_provenance_audit::record_worker_control_issuer_bound;
     use crate::control_route_audit::record_control_route_bound;
@@ -166,7 +169,7 @@ mod tests {
     use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
     use chatarium_core::control_route::ControlRouteBinding;
     use chatarium_core::orchestration::{
-        ContinuationLease, WorkerAction, WorkerGoalId, WorkerLifecycle,
+        ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerLifecycle,
     };
     use chatarium_core::routing::{RouteEndpointId, RouteGate, RoutePolicy};
     use std::fs;
@@ -174,6 +177,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const W1: WorkerId = WorkerId::new(10);
+    const L1: ContinuationLeaseId = ContinuationLeaseId::new(50);
     const G1: WorkerGoalId = WorkerGoalId::new(100);
     const G2: WorkerGoalId = WorkerGoalId::new(200);
     const SOURCE: RouteEndpointId = RouteEndpointId::new(20);
@@ -308,10 +312,12 @@ mod tests {
         assert!(error.contains("stale worker control"));
     }
 
-    fn continue_control(id: u64) -> WorkerControl {
+    fn continue_control(store: &mut impl EventStore, id: u64) -> WorkerControl {
         let lifecycle = working_lifecycle(G1);
-        let mut lease = ContinuationLease::new(G1, 1);
+        let mut lease = ContinuationLease::new(L1, W1, G1, 1);
+        record_continuation_lease_created(store, &lease).unwrap();
         let permit = lease.authorize(&lifecycle).unwrap();
+        record_continuation_permit_issued(store, &permit).unwrap();
         WorkerControl::continue_work(ControlId::new(id), W1, &lifecycle, permit).unwrap()
     }
 
@@ -319,7 +325,7 @@ mod tests {
     fn continue_entering_needs_input_before_dispatch_is_rejected() {
         let mut store = MemoryEventStore::default();
         record_working(&mut store, G1);
-        let control = continue_control(1);
+        let control = continue_control(&mut store, 1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
         bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
@@ -335,7 +341,7 @@ mod tests {
     fn continue_entering_blocked_before_dispatch_is_rejected() {
         let mut store = MemoryEventStore::default();
         record_working(&mut store, G1);
-        let control = continue_control(1);
+        let control = continue_control(&mut store, 1);
         admit_user_control(&mut store, &control);
         let request = route(1, RouteClass::OrchestrationControl);
         bind_route(&mut store, &control, request, RoutePolicy::RequireApproval);
