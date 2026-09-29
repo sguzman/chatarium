@@ -805,7 +805,8 @@ mod tests {
                 "text": "hello",
                 "state": "confirmed",
                 "confirmedAt": "2026-09-17T17:58:01.000Z",
-                "observedMessageId": "user-message-1"
+                "observedMessageId": "user-message-1",
+                "confirmationEvidence": "protocol-input-message"
             }],
             "assistantWal": {
                 "at": "2026-09-17T17:58:02.000Z",
@@ -814,7 +815,12 @@ mod tests {
                 "observedId": "assistant-message-1",
                 "text": "world",
                 "originalChars": 5,
-                "truncatedPrefix": false
+                "truncatedPrefix": false,
+                "source": "protocol-sse",
+                "protocolEvidence": "delta-append",
+                "protocolStatus": "finished_successfully",
+                "protocolEndTurn": true,
+                "protocolIsComplete": true
             },
             "lastVisibleError": null,
             "events": [],
@@ -912,6 +918,58 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn protocol_reconciliation_provenance_survives_import() {
+        let mut export: Value = serde_json::from_slice(&sample_export()).expect("parse sample");
+        export["messages"] = Value::Array(Vec::new());
+
+        let plan = build_plan(
+            &export,
+            "test-sha",
+            Path::new("data/archive/test-sha.json"),
+            Path::new("data"),
+        )
+        .expect("build plan");
+
+        let send_payload = plan
+            .iter()
+            .find(|event| event.event_key == "send:send:test:commit")
+            .map(|event| serde_json::from_str::<Value>(&event.payload).expect("send payload JSON"))
+            .expect("send event");
+        assert_eq!(
+            send_payload.pointer("/details/confirmation_evidence"),
+            Some(&Value::String("protocol-input-message".to_owned()))
+        );
+
+        let assistant_payload = plan
+            .iter()
+            .find(|event| event.event_key.starts_with("assistant-wal:"))
+            .map(|event| {
+                serde_json::from_str::<Value>(&event.payload).expect("assistant payload JSON")
+            })
+            .expect("assistant WAL event");
+        assert_eq!(
+            assistant_payload.pointer("/details/source"),
+            Some(&Value::String("protocol-sse".to_owned()))
+        );
+        assert_eq!(
+            assistant_payload.pointer("/details/protocol_evidence"),
+            Some(&Value::String("delta-append".to_owned()))
+        );
+        assert_eq!(
+            assistant_payload.pointer("/details/protocol_status"),
+            Some(&Value::String("finished_successfully".to_owned()))
+        );
+        assert_eq!(
+            assistant_payload.pointer("/details/protocol_end_turn"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            assistant_payload.pointer("/details/protocol_is_complete"),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]
