@@ -71,11 +71,11 @@ Canonical experiments:
 
 The first machine-executable experiment definitions live under `protocol/experiments/`. Each experiment should produce its own capture or clearly delimited action log. Human QA is reserved for observations the harness genuinely cannot obtain itself.
 
-Current state: the basic canonical text-turn stream is directly observed and typed in `crates/protocol`; browser-local capture and protocol-backed reconciliation work on Linux. Flight Recorder export ingestion, fail-closed selected-run sanitization, structural inventory, Flight/HAR inventory diffs, committed-corpus validation, and evidence-scoped field classification are automated. P1's remaining gaps are chiefly sanitization reporting polish and frontend asset identity where the observation surface can provide it.
+Current state: the basic canonical text-turn stream is directly observed and typed in `crates/protocol`; browser-local capture and protocol-backed reconciliation work on Linux. Flight Recorder export ingestion, fail-closed selected-run sanitization, deterministic sanitization reports, HAR/Flight structural inventories and diffs, evidence-scoped field classification, committed-corpus validation, frontend asset identity manifests, and frontend asset manifest diffs are automated.
 
 P0.5 exit criterion: equivalent controlled captures can be repeated and transformed into deterministic sanitized evidence/inventory without Windows-specific bootstrap machinery or manual protocol archaeology from zero.
 
-## P1 — recorder and diff tooling
+## P1 — recorder and diff tooling — COMPLETE
 
 Build reproducible tooling for turning captures into protocol evidence.
 
@@ -89,7 +89,7 @@ Deliverables:
 - structural diff between protocol snapshots;
 - fixture validation in CI.
 
-Exit criterion: a new ChatGPT deployment can be captured and compared with the last working observation without manual archaeology from zero.
+Exit criterion met: a new ChatGPT deployment can be captured, sanitized, inventoried, classified, fixture-validated, and structurally compared with the last working observation without manual archaeology from zero.
 
 ## P2 — durable application core
 
@@ -104,6 +104,8 @@ Deliverables:
 - SQLite projections and migrations;
 - projection rebuild tests;
 - interrupted-turn recovery tests.
+
+Current state: the turn-evidence state machine and fsync-backed append-only JSONL journal already exist. P2 work is now adding typed local identities and a subordinate rebuildable SQLite projection before expanding crash-transition coverage.
 
 Exit criterion: simulated crashes at every transition do not lose committed authorship or corrupt the recoverable history.
 
