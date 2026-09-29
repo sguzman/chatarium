@@ -970,6 +970,14 @@ mod tests {
                 .iter()
                 .filter(|event| event.kind == EventKind::AssistantSnapshotObserved)
                 .count(),
+            2
+        );
+        assert_eq!(
+            store
+                .events()
+                .iter()
+                .filter(|event| event.kind == EventKind::AssistantCompletionObserved)
+                .count(),
             1
         );
         assert_eq!(
