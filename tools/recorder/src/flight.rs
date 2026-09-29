@@ -808,14 +808,14 @@ fn observe_frame_shape(frame: &SseFrame, payload: &Value, inventory: &mut Stream
             inventory.message_stream_complete = true;
         }
         if kind == "message_marker" {
-            let marker = payload
-                .get("marker")
-                .and_then(Value::as_str)
-                .map_or_else(|| "<missing>".to_owned(), |value| safe_structural_value("marker", value));
-            let event = payload
-                .get("event")
-                .and_then(Value::as_str)
-                .map_or_else(|| "<missing>".to_owned(), |value| safe_structural_value("event", value));
+            let marker = payload.get("marker").and_then(Value::as_str).map_or_else(
+                || "<missing>".to_owned(),
+                |value| safe_structural_value("marker", value),
+            );
+            let event = payload.get("event").and_then(Value::as_str).map_or_else(
+                || "<missing>".to_owned(),
+                |value| safe_structural_value("event", value),
+            );
             *inventory
                 .marker_counts
                 .entry(format!("{marker}:{event}"))
@@ -988,7 +988,10 @@ fn safe_structural_value(field: &str, value: &str) -> String {
                 | "stop"
         ),
         "kind" => matches!(value, "topic"),
-        "role" => matches!(value, "user" | "assistant" | "system" | "developer" | "tool"),
+        "role" => matches!(
+            value,
+            "user" | "assistant" | "system" | "developer" | "tool"
+        ),
         "content_type" => matches!(value, "text" | "reasoning_recap" | "model_editable_context"),
         "status" => matches!(value, "finished_successfully" | "in_progress"),
         "channel" => matches!(value, "final"),
@@ -1263,9 +1266,10 @@ data: [DONE]
                 .iter_mut()
                 .find(|event| {
                     event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
-                        && event.pointer("/payload/text").and_then(Value::as_str).is_some_and(|text| {
-                            text.contains("server_ste_metadata")
-                        })
+                        && event
+                            .pointer("/payload/text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains("server_ste_metadata"))
                 })
                 .expect("server metadata chunk");
             chunk["payload"]["text"] = json!(
@@ -1289,7 +1293,10 @@ data: [DONE]
             "PRIVATE_OP_SECRET",
             "PRIVATE_VALUE_SECRET",
         ] {
-            assert!(!text.contains(secret), "unknown structural value survived: {secret}");
+            assert!(
+                !text.contains(secret),
+                "unknown structural value survived: {secret}"
+            );
         }
         assert!(text.contains("<redacted-event-name>"));
         assert!(text.contains("<redacted-path>"));
@@ -1305,9 +1312,10 @@ data: [DONE]
                 .iter_mut()
                 .find(|event| {
                     event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
-                        && event.pointer("/payload/text").and_then(Value::as_str).is_some_and(|text| {
-                            text.contains("delta_encoding")
-                        })
+                        && event
+                            .pointer("/payload/text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains("delta_encoding"))
                 })
                 .expect("delta encoding chunk");
             let text = chunk["payload"]["text"].as_str().unwrap().replace(
