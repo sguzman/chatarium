@@ -358,10 +358,7 @@ mod tests {
 
     #[test]
     fn auto_deny_cannot_dispatch() {
-        let mut gate = RouteGate::new(
-            request(R1, TOOL, RouteClass::ToolCall),
-            RoutePolicy::Deny,
-        );
+        let mut gate = RouteGate::new(request(R1, TOOL, RouteClass::ToolCall), RoutePolicy::Deny);
         assert_eq!(
             gate.authorize_dispatch(R1),
             Err(RouteGateError::Denied {
