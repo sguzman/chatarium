@@ -59,6 +59,56 @@ local_id_type!(
     "Opaque local message identity independent of any remote message identifier."
 );
 
+/// One locally authored user message with identities independent of the remote service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoredUserMessage {
+    /// Local conversation containing the message.
+    pub conversation_id: LocalConversationId,
+    /// Local turn containing the message.
+    pub turn_id: LocalTurnId,
+    /// Local message identity.
+    pub message_id: LocalMessageId,
+    /// Exact user-authored text committed before any remote mutation.
+    pub text: String,
+}
+
+impl AuthoredUserMessage {
+    /// Construct one typed authored user message without contacting any remote service.
+    #[must_use]
+    pub fn new(
+        conversation_id: LocalConversationId,
+        turn_id: LocalTurnId,
+        message_id: LocalMessageId,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            turn_id,
+            message_id,
+            text: text.into(),
+        }
+    }
+}
+
+/// Error encountered while replaying durable event kinds into turn evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnReplayError {
+    /// A durable dispatch event appeared before a durable local message commit.
+    DispatchBeforeCommit,
+}
+
+impl fmt::Display for TurnReplayError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DispatchBeforeCommit => {
+                write!(formatter, "dispatch evidence appeared before local message commit")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TurnReplayError {}
+
 /// Durable evidence Chatarium has about the locally authored side of a turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalEvidence {
@@ -151,12 +201,56 @@ impl TurnEvidence {
 
     /// Record the first observed assistant output.
     pub fn observe_assistant_output(&mut self) {
-        self.assistant = AssistantEvidence::Streaming;
+        if self.assistant != AssistantEvidence::CompletedObserved {
+            self.assistant = AssistantEvidence::Streaming;
+        }
     }
 
     /// Record positive evidence that assistant generation completed.
     pub fn observe_completion(&mut self) {
         self.assistant = AssistantEvidence::CompletedObserved;
+    }
+
+    /// Apply one durable semantic event kind to this evidence projection.
+    ///
+    /// Payload-dependent reconciliation events are intentionally ignored here; this method only
+    /// derives facts that are positively encoded by the event kind itself.
+    pub fn apply_event_kind(&mut self, kind: EventKind) -> Result<(), TurnReplayError> {
+        match kind {
+            EventKind::UserMessageCommitted => self.commit_local_message(),
+            EventKind::DispatchAttempted => {
+                if !self.begin_dispatch() {
+                    return Err(TurnReplayError::DispatchBeforeCommit);
+                }
+            }
+            EventKind::RemoteAcceptanceObserved => self.observe_acceptance(),
+            EventKind::RemoteFailureObserved => self.observe_remote_failure(),
+            EventKind::AssistantStreamStarted
+            | EventKind::AssistantDeltaObserved
+            | EventKind::AssistantSnapshotObserved => self.observe_assistant_output(),
+            EventKind::AssistantCompletionObserved => self.observe_completion(),
+            EventKind::TransportInterrupted => self.mark_transport_ambiguous(),
+            EventKind::DraftChanged
+            | EventKind::AssistantStatusObserved
+            | EventKind::TranscriptUserMessageObserved
+            | EventKind::ClientErrorObserved
+            | EventKind::ReconciliationAttempted
+            | EventKind::ReconciliationObserved
+            | EventKind::ImportStarted
+            | EventKind::ImportCompleted => {}
+        }
+        Ok(())
+    }
+
+    /// Replay durable semantic event kinds in sequence to reconstruct current turn evidence.
+    pub fn replay_event_kinds(
+        kinds: impl IntoIterator<Item = EventKind>,
+    ) -> Result<Self, TurnReplayError> {
+        let mut evidence = Self::default();
+        for kind in kinds {
+            evidence.apply_event_kind(kind)?;
+        }
+        Ok(evidence)
     }
 }
 
@@ -253,8 +347,8 @@ impl EventKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        AssistantEvidence, EventKind, LocalConversationId, LocalEvidence, LocalMessageId,
-        LocalTurnId, RemoteEvidence, TurnEvidence,
+        AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalEvidence,
+        LocalMessageId, LocalTurnId, RemoteEvidence, TurnEvidence, TurnReplayError,
     };
     use std::str::FromStr;
 
@@ -283,6 +377,91 @@ mod tests {
     fn local_ids_are_uuid_v7_but_not_used_as_order_authority() {
         let conversation = LocalConversationId::new();
         assert_eq!(conversation.as_uuid().get_version_num(), 7);
+    }
+
+    #[test]
+    fn authored_user_message_preserves_typed_identity_and_exact_text() {
+        let conversation_id = LocalConversationId::new();
+        let turn_id = LocalTurnId::new();
+        let message_id = LocalMessageId::new();
+        let text = " exact text\nwith spacing ";
+        let authored = AuthoredUserMessage::new(
+            conversation_id,
+            turn_id,
+            message_id,
+            text,
+        );
+
+        assert_eq!(authored.conversation_id, conversation_id);
+        assert_eq!(authored.turn_id, turn_id);
+        assert_eq!(authored.message_id, message_id);
+        assert_eq!(authored.text, text);
+    }
+
+    #[test]
+    fn replay_rejects_dispatch_before_commit() {
+        let error = TurnEvidence::replay_event_kinds([EventKind::DispatchAttempted])
+            .expect_err("dispatch before commit must fail");
+        assert_eq!(error, TurnReplayError::DispatchBeforeCommit);
+    }
+
+    #[test]
+    fn replay_preserves_ambiguous_remote_outcome() {
+        let evidence = TurnEvidence::replay_event_kinds([
+            EventKind::UserMessageCommitted,
+            EventKind::DispatchAttempted,
+            EventKind::TransportInterrupted,
+        ])
+        .expect("replay");
+
+        assert_eq!(evidence.local, LocalEvidence::MessageCommitted);
+        assert_eq!(evidence.remote, RemoteEvidence::OutcomeUnknown);
+        assert_eq!(evidence.assistant, AssistantEvidence::None);
+    }
+
+    #[test]
+    fn replay_preserves_acceptance_and_partial_output_across_interruption() {
+        let evidence = TurnEvidence::replay_event_kinds([
+            EventKind::UserMessageCommitted,
+            EventKind::DispatchAttempted,
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::AssistantDeltaObserved,
+            EventKind::TransportInterrupted,
+        ])
+        .expect("replay");
+
+        assert_eq!(evidence.remote, RemoteEvidence::AcceptedObserved);
+        assert_eq!(evidence.assistant, AssistantEvidence::PartialInterrupted);
+    }
+
+    #[test]
+    fn later_completion_advances_interrupted_assistant_without_remote_inference() {
+        let evidence = TurnEvidence::replay_event_kinds([
+            EventKind::UserMessageCommitted,
+            EventKind::DispatchAttempted,
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::TransportInterrupted,
+            EventKind::AssistantCompletionObserved,
+            EventKind::AssistantSnapshotObserved,
+        ])
+        .expect("replay");
+
+        assert_eq!(evidence.remote, RemoteEvidence::AcceptedObserved);
+        assert_eq!(evidence.assistant, AssistantEvidence::CompletedObserved);
+    }
+
+    #[test]
+    fn replay_does_not_invent_remote_acceptance_or_failure() {
+        let evidence = TurnEvidence::replay_event_kinds([
+            EventKind::UserMessageCommitted,
+            EventKind::AssistantSnapshotObserved,
+        ])
+        .expect("replay");
+
+        assert_eq!(evidence.remote, RemoteEvidence::NotAttempted);
+        assert_eq!(evidence.assistant, AssistantEvidence::Streaming);
     }
 
     #[test]
