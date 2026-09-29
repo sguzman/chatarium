@@ -101,7 +101,10 @@ impl fmt::Display for TurnReplayError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DispatchBeforeCommit => {
-                write!(formatter, "dispatch evidence appeared before local message commit")
+                write!(
+                    formatter,
+                    "dispatch evidence appeared before local message commit"
+                )
             }
         }
     }
@@ -385,12 +388,7 @@ mod tests {
         let turn_id = LocalTurnId::new();
         let message_id = LocalMessageId::new();
         let text = " exact text\nwith spacing ";
-        let authored = AuthoredUserMessage::new(
-            conversation_id,
-            turn_id,
-            message_id,
-            text,
-        );
+        let authored = AuthoredUserMessage::new(conversation_id, turn_id, message_id, text);
 
         assert_eq!(authored.conversation_id, conversation_id);
         assert_eq!(authored.turn_id, turn_id);
