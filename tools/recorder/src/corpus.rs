@@ -295,8 +295,8 @@ fn child_dirs(path: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn json_files(path: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries =
-        fs::read_dir(path).map_err(|error| format!("read directory {}: {error}", path.display()))?;
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("read directory {}: {error}", path.display()))?;
     let mut files = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("read directory entry: {error}"))?;
