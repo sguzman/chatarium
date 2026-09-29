@@ -210,7 +210,10 @@ impl fmt::Display for ControlAdmissionError {
                 "stale worker control: current goal is {expected}, received {received}"
             ),
             Self::InvalidContinuationPermitOrdinal => {
-                write!(formatter, "continue control permit ordinal must be greater than zero")
+                write!(
+                    formatter,
+                    "continue control permit ordinal must be greater than zero"
+                )
             }
             Self::InvalidPhase { control, phase } => {
                 write!(
