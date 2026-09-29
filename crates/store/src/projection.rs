@@ -582,7 +582,12 @@ fn i64_to_u64(value: i64) -> Result<u64, ProjectionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authored::{commit_user_message, local_turn_scope};
     use crate::{EventStore, MemoryEventStore};
+    use chatarium_core::{
+        AssistantEvidence, AuthoredUserMessage, LocalConversationId, LocalEvidence, LocalMessageId,
+        LocalTurnId, RemoteEvidence,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(label: &str) -> PathBuf {
@@ -613,6 +618,71 @@ mod tests {
             )
             .expect("append message");
         store.events().to_vec()
+    }
+
+    fn authored_message(text: &str) -> AuthoredUserMessage {
+        AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            text,
+        )
+    }
+
+    fn typed_turn_events(
+        message: &AuthoredUserMessage,
+        following: &[EventKind],
+    ) -> Vec<EventEnvelope> {
+        let mut store = MemoryEventStore::default();
+        commit_user_message(&mut store, message).expect("commit typed message");
+        let scope = local_turn_scope(message.turn_id);
+        for kind in following {
+            store
+                .append_scoped(Some(scope.clone()), *kind, String::new())
+                .expect("append turn event");
+        }
+        store.events().to_vec()
+    }
+
+    fn create_v1_projection(path: &Path, events: &[EventEnvelope]) {
+        let connection = Connection::open(path).expect("open v1 fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE projection_meta (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE projected_events (
+                    sequence INTEGER PRIMARY KEY NOT NULL,
+                    at_unix_ms INTEGER NOT NULL,
+                    scope TEXT,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX projected_events_scope_sequence
+                    ON projected_events(scope, sequence);
+                CREATE INDEX projected_events_kind_sequence
+                    ON projected_events(kind, sequence);
+                INSERT INTO projection_meta(key, value)
+                    VALUES ('schema_version', '1');
+                PRAGMA user_version = 1;",
+            )
+            .expect("create v1 schema");
+        for event in events {
+            connection
+                .execute(
+                    "INSERT INTO projected_events(sequence, at_unix_ms, scope, kind, payload)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        i64::try_from(event.sequence).unwrap(),
+                        i64::try_from(event.at_unix_ms).unwrap(),
+                        event.scope.as_deref(),
+                        event.kind.stable_name(),
+                        event.payload.as_str(),
+                    ],
+                )
+                .expect("insert v1 projected event");
+        }
     }
 
     #[test]
@@ -694,6 +764,243 @@ mod tests {
         let first = projection.events().unwrap();
         projection.rebuild(&events).expect("second rebuild");
         assert_eq!(projection.events().unwrap(), first);
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn authored_turn_projection_preserves_exact_typed_commit_and_queries() {
+        let path = temp_path("authored-turn");
+        let message = authored_message(" exact text\nwith spacing ");
+        let events = typed_turn_events(&message, &[]);
+        let mut projection = SqliteProjection::open(&path).expect("open projection");
+        projection.rebuild(&events).expect("rebuild");
+
+        let rows = projection.authored_turns().expect("authored turns");
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.conversation_id, message.conversation_id);
+        assert_eq!(row.turn_id, message.turn_id);
+        assert_eq!(row.message_id, message.message_id);
+        assert_eq!(row.exact_user_text, message.text);
+        assert_eq!(row.commit_sequence, 1);
+        assert_eq!(row.last_sequence, 1);
+        assert_eq!(row.evidence.local, LocalEvidence::MessageCommitted);
+        assert_eq!(row.evidence.remote, RemoteEvidence::NotAttempted);
+        assert_eq!(row.evidence.assistant, AssistantEvidence::None);
+        assert_eq!(
+            projection.authored_turn(message.turn_id).unwrap(),
+            Some(row.clone())
+        );
+        assert_eq!(
+            projection
+                .authored_turns_for_conversation(message.conversation_id)
+                .unwrap(),
+            rows
+        );
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn authored_turn_projection_replays_ambiguous_and_partial_states() {
+        let path = temp_path("authored-evidence");
+        let first = authored_message("first");
+        let second = authored_message("second");
+        let mut store = MemoryEventStore::default();
+
+        commit_user_message(&mut store, &first).unwrap();
+        let first_scope = local_turn_scope(first.turn_id);
+        for kind in [EventKind::DispatchAttempted, EventKind::TransportInterrupted] {
+            store
+                .append_scoped(Some(first_scope.clone()), kind, String::new())
+                .unwrap();
+        }
+
+        commit_user_message(&mut store, &second).unwrap();
+        let second_scope = local_turn_scope(second.turn_id);
+        for kind in [
+            EventKind::DispatchAttempted,
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::AssistantDeltaObserved,
+            EventKind::TransportInterrupted,
+        ] {
+            store
+                .append_scoped(Some(second_scope.clone()), kind, String::new())
+                .unwrap();
+        }
+
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(store.events()).unwrap();
+        let rows = projection.authored_turns().unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].evidence.remote, RemoteEvidence::OutcomeUnknown);
+        assert_eq!(rows[0].evidence.assistant, AssistantEvidence::None);
+        assert_eq!(rows[0].last_sequence, 3);
+        assert_eq!(rows[1].evidence.remote, RemoteEvidence::AcceptedObserved);
+        assert_eq!(
+            rows[1].evidence.assistant,
+            AssistantEvidence::PartialInterrupted
+        );
+        assert_eq!(rows[1].last_sequence, 9);
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn authored_turn_projection_observes_later_completion() {
+        let path = temp_path("authored-complete");
+        let message = authored_message("turn");
+        let events = typed_turn_events(
+            &message,
+            &[
+                EventKind::DispatchAttempted,
+                EventKind::RemoteAcceptanceObserved,
+                EventKind::AssistantStreamStarted,
+                EventKind::TransportInterrupted,
+                EventKind::AssistantCompletionObserved,
+            ],
+        );
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&events).unwrap();
+
+        let row = projection.authored_turn(message.turn_id).unwrap().unwrap();
+        assert_eq!(row.evidence.remote, RemoteEvidence::AcceptedObserved);
+        assert_eq!(row.evidence.assistant, AssistantEvidence::CompletedObserved);
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_commit_remains_event_only() {
+        let path = temp_path("legacy-authored");
+        let events = sample_events();
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&events).unwrap();
+
+        assert_eq!(projection.events().unwrap(), events);
+        assert!(projection.authored_turns().unwrap().is_empty());
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn deleting_projection_rebuilds_identical_authored_turns() {
+        let path = temp_path("authored-delete-rebuild");
+        let message = authored_message("durable");
+        let events = typed_turn_events(
+            &message,
+            &[
+                EventKind::DispatchAttempted,
+                EventKind::RemoteAcceptanceObserved,
+                EventKind::AssistantCompletionObserved,
+            ],
+        );
+
+        let first = {
+            let mut projection = SqliteProjection::open(&path).unwrap();
+            projection.rebuild(&events).unwrap();
+            projection.authored_turns().unwrap()
+        };
+        fs::remove_file(&path).unwrap();
+
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&events).unwrap();
+        assert_eq!(projection.authored_turns().unwrap(), first);
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn v1_projection_migration_requires_materialized_rebuild() {
+        let path = temp_path("v1-migrate");
+        let message = authored_message("migrate");
+        let events = typed_turn_events(&message, &[]);
+        create_v1_projection(&path, &events);
+
+        let mut projection = SqliteProjection::open(&path).expect("migrate projection");
+        assert_eq!(projection.schema_version().unwrap(), 2);
+        assert_eq!(projection.materialized_schema_version().unwrap(), None);
+        assert!(!projection.is_current_with(&events).unwrap());
+        assert!(projection.authored_turns().unwrap().is_empty());
+
+        projection.rebuild(&events).unwrap();
+        assert_eq!(projection.materialized_schema_version().unwrap(), Some(2));
+        assert!(projection.is_current_with(&events).unwrap());
+        assert_eq!(projection.authored_turns().unwrap().len(), 1);
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn malformed_typed_commit_rebuild_preserves_previous_projection() {
+        let path = temp_path("authored-rollback");
+        let original_message = authored_message("original");
+        let original = typed_turn_events(&original_message, &[]);
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&original).unwrap();
+        let original_rows = projection.authored_turns().unwrap();
+        let original_events = projection.events().unwrap();
+
+        let malformed_message = authored_message("malformed");
+        let mut changed = original.clone();
+        changed.push(EventEnvelope {
+            sequence: 2,
+            at_unix_ms: 2,
+            scope: Some(local_turn_scope(malformed_message.turn_id)),
+            kind: EventKind::UserMessageCommitted,
+            payload: serde_json::json!({
+                "schema": "chatarium-user-message-commit",
+                "version": 1,
+                "conversation_id": "not-a-uuid",
+                "turn_id": malformed_message.turn_id.to_string(),
+                "message_id": malformed_message.message_id.to_string(),
+                "text": malformed_message.text,
+            })
+            .to_string(),
+        });
+
+        let error = projection.rebuild(&changed).expect_err("malformed rebuild");
+        assert!(matches!(error, ProjectionError::InvalidJournal(_)));
+        assert_eq!(projection.events().unwrap(), original_events);
+        assert_eq!(projection.authored_turns().unwrap(), original_rows);
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn replay_invariant_failure_preserves_previous_projection() {
+        let path = temp_path("authored-replay-rollback");
+        let original_message = authored_message("original");
+        let original = typed_turn_events(&original_message, &[]);
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&original).unwrap();
+        let original_rows = projection.authored_turns().unwrap();
+
+        let broken_message = authored_message("broken");
+        let scope = local_turn_scope(broken_message.turn_id);
+        let mut broken_store = MemoryEventStore::default();
+        broken_store
+            .append_scoped(Some(scope.clone()), EventKind::DispatchAttempted, String::new())
+            .unwrap();
+        commit_user_message(&mut broken_store, &broken_message).unwrap();
+
+        let error = projection
+            .rebuild(broken_store.events())
+            .expect_err("dispatch before commit");
+        assert!(matches!(error, ProjectionError::InvalidJournal(_)));
+        assert_eq!(projection.authored_turns().unwrap(), original_rows);
+        assert_eq!(projection.events().unwrap(), original);
+
         drop(projection);
         let _ = fs::remove_file(path);
     }
