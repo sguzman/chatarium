@@ -162,6 +162,8 @@ That identity layer now exists locally. `SessionId` is a first-class Chatarium i
 
 Controller/master designation now also exists as explicit durable local state. A designated controller session may coordinate multiple worker sessions, while each worker session has at most one controller. In this first model controller and worker roles are disjoint, intentionally preventing nested controller chains/cycles. The controller remains subordinate to user routing/policy: designation itself grants no dispatch bypass, no continuation authority, and no worker-state mutation.
 
+Control provenance now distinguishes direct user-issued commands from controller-session-issued commands. For controller-issued controls, Chatarium can validate that the control's target worker resolves through WorkerId -> worker SessionId, that the issuer is the worker session's actual designated controller, and that the bound orchestration route travels from the controller session's endpoint to the worker session's endpoint. Direct user controls remain distinct and do not fabricate a user endpoint. Provenance and topology validation never bypass route policy or user veto.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.
