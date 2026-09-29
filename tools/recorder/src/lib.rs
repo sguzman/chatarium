@@ -13,6 +13,35 @@ use url::Url;
 
 const REDACTED: &str = "<redacted>";
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct HarSanitizationStats {
+    sensitive_values_redacted: u64,
+    url_query_values_redacted: u64,
+    url_credentials_redacted: u64,
+    urls_rewritten: u64,
+    embedded_json_documents_rewritten: u64,
+}
+
+impl HarSanitizationStats {
+    fn report(self) -> Value {
+        json!({
+            "format": "chatarium-har-sanitization-report",
+            "version": 1,
+            "policy": "har-defense-in-depth-v1",
+            "counts": {
+                "sensitive_values_redacted": self.sensitive_values_redacted,
+                "url_query_values_redacted": self.url_query_values_redacted,
+                "url_credentials_redacted": self.url_credentials_redacted,
+                "urls_rewritten": self.urls_rewritten,
+                "embedded_json_documents_rewritten": self.embedded_json_documents_rewritten,
+            },
+            "raw_sensitive_values_retained": false,
+            "publication_safety_proven": false,
+            "warning": "This report counts sanitizer transformations; it does not prove arbitrary source material safe to publish."
+        })
+    }
+}
+
 /// Run the existing recorder command line interface with arguments excluding argv[0].
 pub fn run_cli(args: &[String]) -> Result<(), String> {
     match args {
@@ -84,42 +113,62 @@ fn har_entries(value: &Value) -> Result<&Vec<Value>, String> {
 
 /// Parse and sanitize HAR JSON bytes, returning pretty-printed sanitized JSON.
 pub fn sanitize_har_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
+    sanitize_har_bytes_with_report(input).map(|(bytes, _)| bytes)
+}
+
+fn sanitize_har_bytes_with_report(input: &[u8]) -> Result<(Vec<u8>, Value), String> {
     let mut value = parse_har(input)?;
-    sanitize_value(&mut value);
-    serde_json::to_vec_pretty(&value).map_err(|error| format!("serialize sanitized HAR: {error}"))
+    let mut stats = HarSanitizationStats::default();
+    sanitize_value_with_stats(&mut value, &mut stats);
+    let bytes = serde_json::to_vec_pretty(&value)
+        .map_err(|error| format!("serialize sanitized HAR: {error}"))?;
+    Ok((bytes, stats.report()))
 }
 
 /// Sanitize sensitive values in a JSON structure using the recorder's shared rules.
 pub fn sanitize_value(value: &mut Value) {
+    let mut stats = HarSanitizationStats::default();
+    sanitize_value_with_stats(value, &mut stats);
+}
+
+fn sanitize_value_with_stats(value: &mut Value, stats: &mut HarSanitizationStats) {
     match value {
         Value::Array(items) => {
             for item in items {
-                sanitize_value(item);
+                sanitize_value_with_stats(item, stats);
             }
         }
         Value::Object(map) => {
             if let Some(value) = map.get_mut("cookies") {
-                sanitize_name_value_array(value, true);
+                sanitize_name_value_array(value, true, stats);
             }
             for field in ["headers", "queryString", "params"] {
                 if let Some(value) = map.get_mut(field) {
-                    sanitize_name_value_array(value, false);
+                    sanitize_name_value_array(value, false, stats);
                 }
             }
 
             if let Some(Value::String(url)) = map.get_mut("url") {
-                *url = sanitize_url(url);
+                let sanitized = sanitize_url(url, stats);
+                if sanitized != *url {
+                    stats.urls_rewritten = stats.urls_rewritten.saturating_add(1);
+                    *url = sanitized;
+                }
             }
 
             if let Some(Value::String(text)) = map.get_mut("text") {
-                sanitize_embedded_json(text);
+                sanitize_embedded_json(text, stats);
             }
 
             for (key, nested) in map.iter_mut() {
                 if sensitive_name(key) {
+                    if !is_redacted_value(nested) {
+                        stats.sensitive_values_redacted =
+                            stats.sensitive_values_redacted.saturating_add(1);
+                    }
                     *nested = Value::String(REDACTED.to_owned());
                 } else {
-                    sanitize_value(nested);
+                    sanitize_value_with_stats(nested, stats);
                 }
             }
         }
@@ -127,7 +176,11 @@ pub fn sanitize_value(value: &mut Value) {
     }
 }
 
-fn sanitize_name_value_array(value: &mut Value, redact_all: bool) {
+fn sanitize_name_value_array(
+    value: &mut Value,
+    redact_all: bool,
+    stats: &mut HarSanitizationStats,
+) {
     let Some(items) = value.as_array_mut() else {
         return;
     };
@@ -141,6 +194,12 @@ fn sanitize_name_value_array(value: &mut Value, redact_all: bool) {
             .and_then(Value::as_str)
             .unwrap_or_default();
         if redact_all || sensitive_name(name) {
+            if let Some(current) = object.get("value") {
+                if !is_redacted_value(current) {
+                    stats.sensitive_values_redacted =
+                        stats.sensitive_values_redacted.saturating_add(1);
+                }
+            }
             if object.contains_key("value") {
                 object.insert("value".to_owned(), Value::String(REDACTED.to_owned()));
             }
@@ -148,17 +207,22 @@ fn sanitize_name_value_array(value: &mut Value, redact_all: bool) {
     }
 }
 
-fn sanitize_embedded_json(text: &mut String) {
+fn sanitize_embedded_json(text: &mut String, stats: &mut HarSanitizationStats) {
     let Ok(mut nested) = serde_json::from_str::<Value>(text) else {
         return;
     };
-    sanitize_value(&mut nested);
+    let before = nested.clone();
+    sanitize_value_with_stats(&mut nested, stats);
+    if nested != before {
+        stats.embedded_json_documents_rewritten =
+            stats.embedded_json_documents_rewritten.saturating_add(1);
+    }
     if let Ok(serialized) = serde_json::to_string(&nested) {
         *text = serialized;
     }
 }
 
-fn sanitize_url(raw: &str) -> String {
+fn sanitize_url(raw: &str, stats: &mut HarSanitizationStats) -> String {
     let Ok(mut url) = Url::parse(raw) else {
         return raw.to_owned();
     };
@@ -167,6 +231,8 @@ fn sanitize_url(raw: &str) -> String {
         .query_pairs()
         .map(|(name, value)| {
             let value = if sensitive_name(&name) {
+                stats.url_query_values_redacted =
+                    stats.url_query_values_redacted.saturating_add(1);
                 REDACTED.to_owned()
             } else {
                 value.into_owned()
@@ -181,13 +247,19 @@ fn sanitize_url(raw: &str) -> String {
     }
 
     if !url.username().is_empty() {
+        stats.url_credentials_redacted = stats.url_credentials_redacted.saturating_add(1);
         let _ = url.set_username(REDACTED);
     }
     if url.password().is_some() {
+        stats.url_credentials_redacted = stats.url_credentials_redacted.saturating_add(1);
         let _ = url.set_password(Some(REDACTED));
     }
 
     url.to_string()
+}
+
+fn is_redacted_value(value: &Value) -> bool {
+    value.as_str() == Some(REDACTED)
 }
 
 fn sensitive_name(name: &str) -> bool {
@@ -358,7 +430,9 @@ fn looks_like_instance_id(segment: &str) -> bool {
 pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Result<(), String> {
     validate_capture_id(capture_id)?;
     let source = fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
-    let sanitized = sanitize_har_bytes(&source)?;
+    let (sanitized, sanitization_report) = sanitize_har_bytes_with_report(&source)?;
+    let sanitization_bytes = serde_json::to_vec_pretty(&sanitization_report)
+        .map_err(|error| format!("serialize HAR sanitization report: {error}"))?;
     let sanitized_value = parse_har(&sanitized)?;
     let inventory = request_inventory(&sanitized_value)?;
     let inventory_bytes = serde_json::to_vec_pretty(&inventory)
@@ -381,6 +455,11 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
     fs::write(&inventory_path, &inventory_bytes)
         .map_err(|error| format!("write {}: {error}", inventory_path.display()))?;
 
+    let relative_sanitization_path = format!("derived/{capture_id}.sanitization.json");
+    let sanitization_path = derived_dir.join(format!("{capture_id}.sanitization.json"));
+    fs::write(&sanitization_path, &sanitization_bytes)
+        .map_err(|error| format!("write {}: {error}", sanitization_path.display()))?;
+
     let metadata_path = derived_dir.join(format!("{capture_id}.meta.json"));
     let entry_count = inventory
         .get("entry_count")
@@ -395,6 +474,9 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
         "sanitized_bytes": sanitized.len(),
         "request_inventory_file": relative_inventory_path,
         "request_inventory_sha256": sha256_hex(&inventory_bytes),
+        "sanitization_report_file": relative_sanitization_path,
+        "sanitization_report_sha256": sha256_hex(&sanitization_bytes),
+        "sanitization_report_bytes": sanitization_bytes.len(),
         "entry_count": entry_count,
         "created_unix_ms": unix_ms()?,
         "recorder_version": env!("CARGO_PKG_VERSION"),
@@ -408,6 +490,7 @@ pub fn snapshot_har(input: &Path, snapshot_dir: &Path, capture_id: &str) -> Resu
 
     println!("capture: {}", capture_path.display());
     println!("inventory: {}", inventory_path.display());
+    println!("sanitization: {}", sanitization_path.display());
     println!("metadata: {}", metadata_path.display());
     println!("sha256: {}", sha256_hex(&sanitized));
     Ok(())
@@ -536,6 +619,44 @@ mod tests {
     }
 
     #[test]
+    fn har_sanitization_report_counts_transformations_without_leaking_values() {
+        let (_sanitized, report) = sanitize_har_bytes_with_report(sample_har()).unwrap();
+        let report_text = serde_json::to_string(&report).unwrap();
+
+        assert!(
+            report
+                .pointer("/counts/sensitive_values_redacted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 6
+        );
+        assert_eq!(
+            report.pointer("/counts/url_query_values_redacted"),
+            Some(&json!(1))
+        );
+        assert_eq!(report.pointer("/counts/urls_rewritten"), Some(&json!(1)));
+        assert_eq!(
+            report.pointer("/counts/embedded_json_documents_rewritten"),
+            Some(&json!(1))
+        );
+        for secret in [
+            "header-secret",
+            "cookie-secret",
+            "query-secret",
+            "url-secret",
+            "body-secret",
+            "nested-secret",
+            "response-secret",
+        ] {
+            assert!(!report_text.contains(secret));
+        }
+        assert_eq!(
+            report.get("publication_safety_proven"),
+            Some(&Value::Bool(false))
+        );
+    }
+
+    #[test]
     fn inventory_keeps_structure_without_values_or_instance_ids() {
         let sanitized = sanitize_har_bytes(sample_har()).expect("sanitize");
         let value = parse_har(&sanitized).expect("parse");
@@ -591,6 +712,40 @@ mod tests {
         sanitize_value(&mut value);
         let from_value = serde_json::to_vec_pretty(&value).unwrap();
         assert_eq!(sanitize_har_bytes(sample_har()).unwrap(), from_value);
+    }
+
+    #[test]
+    fn snapshot_har_writes_and_hashes_sanitization_report() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("chatarium-har-report-test-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("private.har");
+        let output = root.join("snapshot");
+        fs::write(&input, sample_har()).unwrap();
+
+        snapshot_har(&input, &output, "C03").unwrap();
+
+        let report_path = output.join("derived/C03.sanitization.json");
+        let report_bytes = fs::read(&report_path).unwrap();
+        let metadata: Value =
+            serde_json::from_slice(&fs::read(output.join("derived/C03.meta.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            metadata["sanitization_report_file"],
+            "derived/C03.sanitization.json"
+        );
+        assert_eq!(
+            metadata["sanitization_report_sha256"],
+            sha256_hex(&report_bytes)
+        );
+        let report_text = String::from_utf8(report_bytes).unwrap();
+        assert!(!report_text.contains("header-secret"));
+        assert!(!report_text.contains("private.har"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
