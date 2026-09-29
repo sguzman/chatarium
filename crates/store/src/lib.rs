@@ -4,6 +4,7 @@
 //! disposable, rebuildable projection and never becomes authoritative over the event history.
 
 pub mod authored;
+pub mod control_admission_audit;
 pub mod control_audit;
 pub mod control_provenance_audit;
 pub mod control_route_audit;
