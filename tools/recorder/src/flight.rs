@@ -377,7 +377,8 @@ fn derive_sanitized_run(
                 }
             }
             "network-stream-end" => {
-                let Some(raw_stream) = event.pointer("/payload/streamId").and_then(Value::as_str) else {
+                let Some(raw_stream) = event.pointer("/payload/streamId").and_then(Value::as_str)
+                else {
                     warnings.push(format!("seq {seq}: network-stream-end missing streamId"));
                     continue;
                 };
