@@ -1,5 +1,64 @@
 //! Domain model for Chatarium reliability state.
 
+use std::fmt;
+use std::str::FromStr;
+use uuid::Uuid;
+
+macro_rules! local_id_type {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(Uuid);
+
+        impl $name {
+            /// Generate a new local identifier.
+            #[must_use]
+            pub fn new() -> Self {
+                Self(Uuid::now_v7())
+            }
+
+            /// Return the opaque UUID backing this local identifier.
+            #[must_use]
+            pub const fn as_uuid(self) -> Uuid {
+                self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(formatter)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
+    };
+}
+
+local_id_type!(
+    LocalConversationId,
+    "Opaque local conversation identity independent of any remote conversation identifier."
+);
+local_id_type!(
+    LocalTurnId,
+    "Opaque local turn identity independent of any remote turn or request identifier."
+);
+local_id_type!(
+    LocalMessageId,
+    "Opaque local message identity independent of any remote message identifier."
+);
+
 /// Durable evidence Chatarium has about the locally authored side of a turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalEvidence {
@@ -193,7 +252,38 @@ impl EventKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{AssistantEvidence, EventKind, LocalEvidence, RemoteEvidence, TurnEvidence};
+    use super::{
+        AssistantEvidence, EventKind, LocalConversationId, LocalEvidence, LocalMessageId,
+        LocalTurnId, RemoteEvidence, TurnEvidence,
+    };
+    use std::str::FromStr;
+
+    #[test]
+    fn local_ids_round_trip_without_cross_type_conflation() {
+        let conversation = LocalConversationId::new();
+        let turn = LocalTurnId::new();
+        let message = LocalMessageId::new();
+
+        assert_ne!(conversation.to_string(), turn.to_string());
+        assert_ne!(conversation.to_string(), message.to_string());
+        assert_ne!(turn.to_string(), message.to_string());
+
+        assert_eq!(
+            LocalConversationId::from_str(&conversation.to_string()).unwrap(),
+            conversation
+        );
+        assert_eq!(LocalTurnId::from_str(&turn.to_string()).unwrap(), turn);
+        assert_eq!(
+            LocalMessageId::from_str(&message.to_string()).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn local_ids_are_uuid_v7_but_not_used_as_order_authority() {
+        let conversation = LocalConversationId::new();
+        assert_eq!(conversation.as_uuid().get_version_num(), 7);
+    }
 
     #[test]
     fn dispatch_cannot_outrun_local_durability() {
