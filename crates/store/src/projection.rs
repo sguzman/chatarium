@@ -36,12 +36,17 @@ impl fmt::Display for ProjectionError {
         match self {
             Self::Io(error) => write!(formatter, "projection I/O error: {error}"),
             Self::Sqlite(error) => write!(formatter, "projection SQLite error: {error}"),
-            Self::InvalidJournal(detail) => write!(formatter, "invalid journal for projection: {detail}"),
+            Self::InvalidJournal(detail) => {
+                write!(formatter, "invalid journal for projection: {detail}")
+            }
             Self::UnsupportedSchema(version) => {
                 write!(formatter, "unsupported projection schema version {version}")
             }
             Self::NumericOverflow(field) => {
-                write!(formatter, "journal field '{field}' exceeds SQLite integer range")
+                write!(
+                    formatter,
+                    "journal field '{field}' exceeds SQLite integer range"
+                )
             }
             #[cfg(test)]
             Self::InjectedFailure => write!(formatter, "injected projection rebuild failure"),
@@ -74,7 +79,10 @@ impl SqliteProjection {
     /// Open or create a projection database and migrate it to the current schema.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ProjectionError> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)?;
         }
 
@@ -100,23 +108,21 @@ impl SqliteProjection {
 
     /// Highest journal sequence represented by the projection.
     pub fn last_sequence(&self) -> Result<Option<u64>, ProjectionError> {
-        let value = self
-            .connection
-            .query_row(
-                "SELECT MAX(sequence) FROM projected_events",
-                [],
-                |row| row.get::<_, Option<i64>>(0),
-            )?;
+        let value =
+            self.connection
+                .query_row("SELECT MAX(sequence) FROM projected_events", [], |row| {
+                    row.get::<_, Option<i64>>(0)
+                })?;
         value.map(i64_to_u64).transpose()
     }
 
     /// Number of projected event rows.
     pub fn event_count(&self) -> Result<u64, ProjectionError> {
-        let count = self
-            .connection
-            .query_row("SELECT COUNT(*) FROM projected_events", [], |row| {
-                row.get::<_, i64>(0)
-            })?;
+        let count =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM projected_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })?;
         i64_to_u64(count)
     }
 
@@ -378,7 +384,10 @@ mod tests {
     fn empty_projection_rebuilds_and_reports_schema() {
         let path = temp_path("empty");
         let mut projection = SqliteProjection::open(&path).expect("open projection");
-        assert_eq!(projection.schema_version().unwrap(), PROJECTION_SCHEMA_VERSION);
+        assert_eq!(
+            projection.schema_version().unwrap(),
+            PROJECTION_SCHEMA_VERSION
+        );
         projection.rebuild(&[]).expect("empty rebuild");
         assert_eq!(projection.event_count().unwrap(), 0);
         assert_eq!(projection.last_sequence().unwrap(), None);
