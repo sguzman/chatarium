@@ -14,6 +14,57 @@ const REDACTED_CONTENT: &str = "<redacted-content>";
 const REDACTED_VALUE: &str = "<redacted-value>";
 const NUMBER: &str = "<number>";
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct FlightSanitizationStats {
+    sensitive_values_redacted: u64,
+    content_values_redacted: u64,
+    unknown_scalar_values_redacted: u64,
+    numeric_values_generalized: u64,
+    conversation_identities_placeholdered: u64,
+    message_identities_placeholdered: u64,
+    send_identities_placeholdered: u64,
+    generic_identities_placeholdered: u64,
+    malformed_sse_frames_fail_closed: u64,
+    unterminated_sse_tails_redacted: u64,
+    unknown_event_names_redacted: u64,
+    unknown_structural_values_redacted: u64,
+    unknown_paths_redacted: u64,
+    unknown_encodings_redacted: u64,
+    canonical_experiment_literals_retained: u64,
+}
+
+impl FlightSanitizationStats {
+    fn report(self) -> Value {
+        json!({
+            "format": "chatarium-flight-sanitization-report",
+            "version": 1,
+            "policy": "flight-selected-run-fail-closed-v1",
+            "counts": {
+                "sensitive_values_redacted": self.sensitive_values_redacted,
+                "content_values_redacted": self.content_values_redacted,
+                "unknown_scalar_values_redacted": self.unknown_scalar_values_redacted,
+                "numeric_values_generalized": self.numeric_values_generalized,
+                "conversation_identities_placeholdered": self.conversation_identities_placeholdered,
+                "message_identities_placeholdered": self.message_identities_placeholdered,
+                "send_identities_placeholdered": self.send_identities_placeholdered,
+                "generic_identities_placeholdered": self.generic_identities_placeholdered,
+                "malformed_sse_frames_fail_closed": self.malformed_sse_frames_fail_closed,
+                "unterminated_sse_tails_redacted": self.unterminated_sse_tails_redacted,
+                "unknown_event_names_redacted": self.unknown_event_names_redacted,
+                "unknown_structural_values_redacted": self.unknown_structural_values_redacted,
+                "unknown_paths_redacted": self.unknown_paths_redacted,
+                "unknown_encodings_redacted": self.unknown_encodings_redacted,
+                "raw_network_stream_chunks_copied": 0,
+                "canonical_experiment_literals_retained": self.canonical_experiment_literals_retained,
+            },
+            "raw_sensitive_values_retained": false,
+            "raw_network_stream_chunks_copied": false,
+            "publication_safety_proven": false,
+            "warning": "This report counts selected-run sanitizer transformations; it does not prove arbitrary source material safe to publish."
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ExperimentDefinition {
     schema: String,
