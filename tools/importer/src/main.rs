@@ -269,7 +269,9 @@ fn build_plan(
                     .iter()
                     .any(|source| source.as_str() == Some("protocol-sse"))
             })
-            || assistant.get("protocolEvidence").is_some_and(|value| !value.is_null());
+            || assistant
+                .get("protocolEvidence")
+                .is_some_and(|value| !value.is_null());
 
         if has_protocol_provenance
             || !assistant_message_fingerprints.contains(&assistant_fingerprint(assistant))
