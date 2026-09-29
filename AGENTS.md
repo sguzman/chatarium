@@ -28,6 +28,14 @@ Chatarium is a reliability project first and a UI project second.
 - Recovery logic must be idempotent where possible and must not silently duplicate a user turn.
 - The event journal is append-oriented. Mutable projections may be rebuilt from durable events.
 
+## Product-scope guard
+
+- `docs/PRODUCT_VISION.md` records the intended long-term product shape. Do not silently narrow Chatarium to a single-chat API client merely because current milestones are focused on protocol reliability.
+- Preserve future architectural room for multiple ChatGPT sessions, a user-designated master/controller -> worker relationship, explicit lifecycle/control messages, MCP/tool routing, and an egui supervisory policy surface.
+- Cross-session/tool automation must remain visible, durable, attributable, and user-contestable; the user is above any master/controller session.
+- Prefer explicit machine-readable completion/blocked/input-needed states over prompt-text heuristics that could produce unbounded mutual continuation loops.
+- The existing XML-oriented MCP/tool envelope from the user's Braizen/ChatGPT-shim work is the preferred compatibility starting point when that schema is recovered. Until then, do not invent a replacement schema and attribute it to the user.
+
 ## Architecture
 
 - Keep the egui render path cheap. Network, disk I/O, parsing, capture processing, reconciliation, and expensive transforms stay off the UI thread.
