@@ -5,8 +5,9 @@ This flow describes the official ChatGPT web client's observed behavior for a si
 Current evidence:
 
 - `2026-09-29.001` — Microsoft Edge 153 on Linux, manual HAR, new conversation.
+- `2026-09-29.002` — canonical C03, Flight Recorder v0.5.0, full mutation response stream captured.
 
-One observation is not a stability claim.
+Two observations are still not a stability claim.
 
 ## Observed sequence in 2026-09-29.001
 
@@ -60,11 +61,17 @@ Do not interpret these as universally required fields from one capture.
 
 ### Streaming
 
-The mutation response used `text/event-stream`.
+Snapshot `2026-09-29.002` captured the response body directly.
 
-The manual HAR did not retain the stream body, so the transport is observed but its event grammar remains unknown.
+The first frame declared `delta_encoding = "v1"`. The stream then mixed `event: delta` frames with data-only control frames.
 
-This is a concrete reason the later automated recorder should preserve streaming bytes/events directly rather than relying exclusively on HAR export.
+Observed delta operations include `add`, `append`, `patch`, and `replace`. The final assistant text was appended at `/message/content/parts/0`, then the same message was patched to `finished_successfully`, `end_turn = true`, and metadata `is_complete = true`.
+
+Observed control-frame types include `input_message`, `title_generation`, `message_marker`, `server_ste_metadata`, `message_stream_complete`, and `conversation_detail_metadata`.
+
+The stream terminated with `data: [DONE]`.
+
+Browser response-chunk boundaries were not SSE frame boundaries.
 
 ### Independent completion evidence
 
