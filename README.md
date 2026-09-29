@@ -11,6 +11,16 @@ The project has two equal pillars:
 
 The protocol corpus is evidence about ChatGPT as observed. The Rust implementation is our interpretation of that evidence. They intentionally remain separate.
 
+## Long-term product direction
+
+Chatarium is intentionally broader than a single reliable chat window. Its long-term endpoint is a **user-controlled ChatGPT desktop workstation** with a visible local control plane: native conversation interaction, MCP/tool integration, multiple coordinated ChatGPT sessions, master/controller -> worker routing, explicit worker lifecycle/completion states, and an egui supervisory surface where routed actions can be inspected, allowed, blocked/forbidden, approved, redirected, or interrupted.
+
+The project should reuse/adapt the user's existing XML-oriented MCP/tool envelope from the Braizen/ChatGPT-shim work where practical rather than inventing an unrelated tool language by default. The exact XML schema is not yet imported into this repository and remains a future versioned design dependency.
+
+These capabilities are sequenced after the reliability/protocol foundations; they are not a reason to skip them, and they are not optional evidence that Chatarium should be narrowed back to “just a chat client.”
+
+See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product intent.
+
 ## Core invariants
 
 - **User-authored text must never exist only in transient UI state.**
