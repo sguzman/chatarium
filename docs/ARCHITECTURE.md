@@ -183,6 +183,8 @@ The durable event model should be extensible to this plane. Orchestration state 
 
 The first durable routing audit now uses the same append-only JSONL authority as ordinary turn evidence. Typed route proposal, explicit user decision, one-shot dispatch, and generic result/error observations replay after restart through the core route gate semantics. SQLite carries these routing events through its existing generic projected-events table; there is intentionally no dedicated routing materialization or schema bump yet. This is still local control-plane state only: no live master/worker or MCP transport is implied.
 
+Worker orchestration state now follows the same authority rule. Typed worker identity, goal assignment, and lifecycle transitions are journaled and replayed through the existing `WorkerLifecycle` state machine, so `Working`, `NeedsInput`, `Blocked`, and terminal states survive restart without inferring state from prose. Continuation leases are intentionally not recreated by replay: restart does not mint fresh continuation authority. SQLite again carries these facts generically without a dedicated worker materialization or schema bump.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
