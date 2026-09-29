@@ -142,6 +142,14 @@ Likewise, absence of a completion marker must not automatically mean "keep loopi
 
 Future design should prefer explicit bounded state transitions and correlation IDs over prompt-text heuristics such as searching ordinary prose for the word "done."
 
+## First executable orchestration invariant
+
+Chatarium now treats worker lifecycle as a machine-readable domain concept separate from ordinary assistant prose. The first core invariant is intentionally small: automatic continuation is permitted only while a worker is actively `Working` and only while an explicit bounded continuation lease still has allowance.
+
+`NeedsInput` and `Blocked` halt automatic continuation until an explicit resume decision occurs. `Completed`, `Failed`, and `Stopped` are terminal for the current goal. Goal-correlated continuation authority cannot be reused against a replacement goal, so stale controls do not silently operate on a new lifecycle.
+
+This is not live multi-session routing yet. It is the pure domain contract that later master/worker routing, GUI supervision, and durable orchestration must preserve.
+
 ## 5. User-supervised routing plane
 
 Cross-session and tool communication must remain visible and contestable by the user.
