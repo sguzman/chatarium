@@ -6,6 +6,54 @@
 use serde_json::Value;
 use std::sync::OnceLock;
 
+/// Evidence-scoped comparison class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldClass {
+    /// Observed protocol vocabulary/shape currently interpreted by Chatarium.
+    StructuralCandidate,
+    /// Per-observation identity or time data.
+    EphemeralInstance,
+    /// Browser/local transport delivery detail.
+    DeliveryNoise,
+    /// Meaningful but run-variable numeric count.
+    ObservationCount,
+    /// Recorder/parser/provenance metadata.
+    Diagnostic,
+    /// Exact content authorized by a canonical experiment.
+    ControlledFixture,
+    /// Current evidence does not justify a stronger class.
+    Unknown,
+}
+
+impl FieldClass {
+    /// Stable serialized name used by the registry and diff artifacts.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StructuralCandidate => "structural_candidate",
+            Self::EphemeralInstance => "ephemeral_instance",
+            Self::DeliveryNoise => "delivery_noise",
+            Self::ObservationCount => "observation_count",
+            Self::Diagnostic => "diagnostic",
+            Self::ControlledFixture => "controlled_fixture",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "structural_candidate" => Some(Self::StructuralCandidate),
+            "ephemeral_instance" => Some(Self::EphemeralInstance),
+            "delivery_noise" => Some(Self::DeliveryNoise),
+            "observation_count" => Some(Self::ObservationCount),
+            "diagnostic" => Some(Self::Diagnostic),
+            "controlled_fixture" => Some(Self::ControlledFixture),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
 /// Classification of one inventory change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -21,21 +69,12 @@ pub enum ChangeKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldAnnotation {
     /// Registry class such as structural_candidate or diagnostic.
-    pub field_class: String,
+    pub field_class: FieldClass,
     /// Evidence-scoped rationale from the registry.
     pub rationale: String,
 }
 
 const REGISTRY_TEXT: &str = include_str!("../../../protocol/schemas/field-classification.v1.json");
-const ALLOWED_CLASSES: &[&str] = &[
-    "structural_candidate",
-    "ephemeral_instance",
-    "delivery_noise",
-    "observation_count",
-    "diagnostic",
-    "controlled_fixture",
-    "unknown",
-];
 
 static REGISTRY: OnceLock<Value> = OnceLock::new();
 
@@ -81,15 +120,24 @@ pub fn validate_registry(value: &Value) -> Result<(), String> {
         .get("classes")
         .and_then(Value::as_object)
         .ok_or_else(|| "field classification registry is missing classes".to_owned())?;
-    for class in ALLOWED_CLASSES {
-        if classes.get(*class).and_then(Value::as_str).is_none() {
+    for class in [
+        FieldClass::StructuralCandidate,
+        FieldClass::EphemeralInstance,
+        FieldClass::DeliveryNoise,
+        FieldClass::ObservationCount,
+        FieldClass::Diagnostic,
+        FieldClass::ControlledFixture,
+        FieldClass::Unknown,
+    ] {
+        if classes.get(class.as_str()).and_then(Value::as_str).is_none() {
             return Err(format!(
-                "field classification registry is missing class definition '{class}'"
+                "field classification registry is missing class definition '{}'",
+                class.as_str()
             ));
         }
     }
     for class in classes.keys() {
-        if !ALLOWED_CLASSES.contains(&class.as_str()) {
+        if FieldClass::parse(class).is_none() {
             return Err(format!(
                 "field classification registry has unknown class '{class}'"
             ));
@@ -128,7 +176,7 @@ fn validate_annotation_classes(value: &Value, path: &str) -> Result<(), String> 
                     let Some(class) = nested.as_str() else {
                         return Err(format!("{child} must be a string"));
                     };
-                    if !ALLOWED_CLASSES.contains(&class) {
+                    if FieldClass::parse(class).is_none() {
                         return Err(format!("{child} has unknown field class '{class}'"));
                     }
                 }
@@ -234,7 +282,7 @@ fn classify_entry(entry: Option<&Value>, kind: ChangeKind, nested: bool) -> Fiel
     };
 
     FieldAnnotation {
-        field_class: class.to_owned(),
+        field_class: FieldClass::parse(class).unwrap_or(FieldClass::Unknown),
         rationale: entry
             .get("rationale")
             .and_then(Value::as_str)
@@ -245,7 +293,7 @@ fn classify_entry(entry: Option<&Value>, kind: ChangeKind, nested: bool) -> Fiel
 
 fn unknown(rationale: &str) -> FieldAnnotation {
     FieldAnnotation {
-        field_class: "unknown".to_owned(),
+        field_class: FieldClass::Unknown,
         rationale: rationale.to_owned(),
     }
 }
@@ -275,7 +323,7 @@ mod tests {
             "/streams/POST ~1backend-api~1f~1conversation/control_type_counts/new_control",
             ChangeKind::Added,
         );
-        assert_eq!(annotation.field_class, "structural_candidate");
+        assert_eq!(annotation.field_class, FieldClass::StructuralCandidate);
     }
 
     #[test]
@@ -284,7 +332,7 @@ mod tests {
             "/streams/POST ~1backend-api~1f~1conversation/control_type_counts/message_stream_complete",
             ChangeKind::Changed,
         );
-        assert_eq!(annotation.field_class, "observation_count");
+        assert_eq!(annotation.field_class, FieldClass::ObservationCount);
     }
 
     #[test]
@@ -293,7 +341,7 @@ mod tests {
             "/streams/GET ~1backend-api~1f~1other",
             ChangeKind::Added,
         );
-        assert_eq!(annotation.field_class, "structural_candidate");
+        assert_eq!(annotation.field_class, FieldClass::StructuralCandidate);
     }
 
     #[test]
@@ -302,7 +350,7 @@ mod tests {
             "/streams/POST ~1backend-api~1f~1conversation/completion/done",
             ChangeKind::Changed,
         );
-        assert_eq!(annotation.field_class, "structural_candidate");
+        assert_eq!(annotation.field_class, FieldClass::StructuralCandidate);
     }
 
     #[test]
@@ -311,18 +359,18 @@ mod tests {
             "/streams/POST ~1backend-api~1f~1conversation/parse_warning_count",
             ChangeKind::Changed,
         );
-        assert_eq!(annotation.field_class, "diagnostic");
+        assert_eq!(annotation.field_class, FieldClass::Diagnostic);
     }
 
     #[test]
     fn excluded_browser_chunk_count_is_delivery_noise() {
         let annotation = classify_excluded_flight_context("event_kind_counts.network-stream-chunk");
-        assert_eq!(annotation.field_class, "delivery_noise");
+        assert_eq!(annotation.field_class, FieldClass::DeliveryNoise);
     }
 
     #[test]
     fn unknown_path_remains_unknown() {
         let annotation = classify_flight_inventory_change("/future/new_field", ChangeKind::Added);
-        assert_eq!(annotation.field_class, "unknown");
+        assert_eq!(annotation.field_class, FieldClass::Unknown);
     }
 }
