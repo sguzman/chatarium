@@ -73,12 +73,13 @@ Creates evidence in the same shape used by `protocol/SNAPSHOT_FORMAT.md`:
 ├── evidence/
 │   └── <capture-id>.har.json
 └── derived/
+    ├── <capture-id>.frontend-assets.json
     ├── <capture-id>.meta.json
     ├── <capture-id>.requests.json
     └── <capture-id>.sanitization.json
 ```
 
-The request inventory is derived from the sanitized HAR, not directly from raw input. A deterministic sanitization report records transformation counts such as sensitive-value redactions, URL/query rewrites, and embedded JSON rewrites without retaining the removed values. Metadata hashes/references the report. The metadata also records evidence/inventory fingerprints, entry count, sanitized size, recorder version, capture timestamp, and the fact that raw evidence is retained outside Git. It intentionally does **not** copy the raw HAR filename or raw byte size into the public snapshot metadata.
+The request inventory is derived from the sanitized HAR, not directly from raw input. The snapshot also derives a deterministic frontend asset manifest for observed JavaScript and CSS resources. It records host/path/status/MIME plus decoded response-body byte length and SHA-256 when the HAR actually contains a decodable body; it never copies source code into the manifest or fetches missing bodies. Query/fragment material is excluded from asset identity. A deterministic sanitization report records transformation counts such as sensitive-value redactions, URL/query rewrites, and embedded JSON rewrites without retaining the removed values. Metadata hashes/references both derived artifacts. The metadata also records evidence/inventory fingerprints, entry count, sanitized size, recorder version, capture timestamp, and the fact that raw evidence is retained outside Git. It intentionally does **not** copy the raw HAR filename or raw byte size into the public snapshot metadata.
 
 Example:
 
@@ -129,6 +130,8 @@ cargo run -p chatarium-recorder -- snapshot-flight \
   protocol/snapshots/2026-09-29.003 \
   C03-send-text
 ```
+
+The HAR frontend asset manifest is likewise an observation surface rather than a completeness claim: it covers only script/stylesheet entries present in that HAR, and a missing body remains explicitly unhashed instead of being fetched later.
 
 The raw recorder export remains private. Sanitization reports contain counts and policy names only; they do not preserve removed values and explicitly do not claim publication safety. The derived output is designed to be dramatically safer and less noisy, but it is still evidence that should be reviewed before publication; the tool does not claim to be a universal privacy oracle.
 
