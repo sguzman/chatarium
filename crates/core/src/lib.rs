@@ -4,6 +4,7 @@ pub mod control;
 pub mod control_route;
 pub mod orchestration;
 pub mod routing;
+pub mod session;
 
 use std::fmt;
 use std::str::FromStr;
@@ -253,7 +254,10 @@ impl TurnEvidence {
             | EventKind::WorkerGoalAssigned
             | EventKind::WorkerLifecycleTransitionRecorded
             | EventKind::WorkerControlAdmitted
-            | EventKind::ControlRouteBound => {}
+            | EventKind::ControlRouteBound
+            | EventKind::LocalSessionRegistered
+            | EventKind::SessionEndpointBound
+            | EventKind::WorkerSessionBound => {}
         }
         Ok(())
     }
@@ -323,6 +327,12 @@ pub enum EventKind {
     WorkerControlAdmitted,
     /// An admitted worker control was correlated to its orchestration route.
     ControlRouteBound,
+    /// A local Chatarium session identity was registered.
+    LocalSessionRegistered,
+    /// A local session was correlated to one routing endpoint.
+    SessionEndpointBound,
+    /// An orchestration worker was correlated to one local session.
+    WorkerSessionBound,
 }
 
 impl EventKind {
@@ -355,6 +365,9 @@ impl EventKind {
             Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
             Self::WorkerControlAdmitted => "worker_control_admitted",
             Self::ControlRouteBound => "control_route_bound",
+            Self::LocalSessionRegistered => "local_session_registered",
+            Self::SessionEndpointBound => "session_endpoint_bound",
+            Self::WorkerSessionBound => "worker_session_bound",
         }
     }
 
@@ -387,6 +400,9 @@ impl EventKind {
             "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
             "worker_control_admitted" => Some(Self::WorkerControlAdmitted),
             "control_route_bound" => Some(Self::ControlRouteBound),
+            "local_session_registered" => Some(Self::LocalSessionRegistered),
+            "session_endpoint_bound" => Some(Self::SessionEndpointBound),
+            "worker_session_bound" => Some(Self::WorkerSessionBound),
             _ => None,
         }
     }

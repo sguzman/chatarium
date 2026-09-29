@@ -8,6 +8,7 @@ pub mod control_audit;
 pub mod control_route_audit;
 pub mod projection;
 pub mod routing_audit;
+pub mod session_audit;
 mod turn_projection;
 pub mod worker_audit;
 
