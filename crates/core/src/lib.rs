@@ -243,7 +243,11 @@ impl TurnEvidence {
             | EventKind::ReconciliationAttempted
             | EventKind::ReconciliationObserved
             | EventKind::ImportStarted
-            | EventKind::ImportCompleted => {}
+            | EventKind::ImportCompleted
+            | EventKind::RouteProposed
+            | EventKind::RouteUserDecisionRecorded
+            | EventKind::RouteDispatched
+            | EventKind::RouteResultObserved => {}
         }
         Ok(())
     }
@@ -297,6 +301,14 @@ pub enum EventKind {
     ImportStarted,
     /// Import of an external/local capture completed.
     ImportCompleted,
+    /// A supervisory route was durably proposed.
+    RouteProposed,
+    /// An explicit user allow/deny decision for a supervisory route was recorded.
+    RouteUserDecisionRecorded,
+    /// A supervisory route consumed its one-shot dispatch authorization.
+    RouteDispatched,
+    /// A generic routing-layer result or error observation was recorded.
+    RouteResultObserved,
 }
 
 impl EventKind {
@@ -321,6 +333,10 @@ impl EventKind {
             Self::ReconciliationObserved => "reconciliation_observed",
             Self::ImportStarted => "import_started",
             Self::ImportCompleted => "import_completed",
+            Self::RouteProposed => "route_proposed",
+            Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
+            Self::RouteDispatched => "route_dispatched",
+            Self::RouteResultObserved => "route_result_observed",
         }
     }
 
@@ -345,6 +361,10 @@ impl EventKind {
             "reconciliation_observed" => Some(Self::ReconciliationObserved),
             "import_started" => Some(Self::ImportStarted),
             "import_completed" => Some(Self::ImportCompleted),
+            "route_proposed" => Some(Self::RouteProposed),
+            "route_user_decision_recorded" => Some(Self::RouteUserDecisionRecorded),
+            "route_dispatched" => Some(Self::RouteDispatched),
+            "route_result_observed" => Some(Self::RouteResultObserved),
             _ => None,
         }
     }
