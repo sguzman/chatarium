@@ -1,7 +1,9 @@
 //! Durable-storage boundary for Chatarium.
 //!
-//! The first persistent substrate is an append-only JSON-lines journal. SQLite projections can
-//! be added later without making mutable projection state authoritative over the event history.
+//! The authoritative persistent substrate is an append-only JSON-lines journal. SQLite is a
+//! disposable, rebuildable projection and never becomes authoritative over the event history.
+
+pub mod projection;
 
 use chatarium_core::EventKind;
 use serde_json::{Value, json};
