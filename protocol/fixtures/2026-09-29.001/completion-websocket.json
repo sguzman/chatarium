@@ -1,0 +1,26 @@
+{
+  "snapshot": "2026-09-29.001",
+  "source": {
+    "kind": "manual_har",
+    "channel": "websocket",
+    "topic": "conversations"
+  },
+  "events": [
+    {
+      "type": "conversation-created",
+      "payload": {
+        "conversation_id": "<CONVERSATION_ID>"
+      },
+      "metadata": null
+    },
+    {
+      "type": "conversation-turn-complete",
+      "payload": {
+        "conversation_id": "<CONVERSATION_ID>",
+        "current_message_id": "<ASSISTANT_MESSAGE_ID>"
+      },
+      "metadata": null
+    }
+  ],
+  "redactions": "identity-bearing websocket URL/query values and concrete IDs omitted"
+}
