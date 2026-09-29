@@ -1233,7 +1233,7 @@ data: [DONE]
                 event.get("kind").and_then(Value::as_str) == Some("network-stream-chunk")
             });
             chunks.next().expect("first stream chunk")["payload"]["text"] =
-                json!("event: delta\\ndata: {PRIVATE RAW BROKEN FRAME}\\n\\n");
+                json!("event: delta\ndata: {PRIVATE RAW BROKEN FRAME}\n\n");
             chunks.next().expect("second stream chunk")["payload"]["text"] = json!("");
         }
 
