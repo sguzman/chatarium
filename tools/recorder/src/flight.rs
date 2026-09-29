@@ -199,14 +199,11 @@ pub fn snapshot_flight(
             .ok_or_else(|| "internal flight derivation omitted inventory output".to_owned())?,
     )
     .map_err(|error| format!("serialize Flight Recorder inventory: {error}"))?;
-    let sanitization_report = serde_json::to_vec_pretty(
-        derived
-            .get("sanitization_report")
-            .ok_or_else(|| {
-                "internal flight derivation omitted sanitization report output".to_owned()
-            })?,
-    )
-    .map_err(|error| format!("serialize Flight Recorder sanitization report: {error}"))?;
+    let sanitization_report =
+        serde_json::to_vec_pretty(derived.get("sanitization_report").ok_or_else(|| {
+            "internal flight derivation omitted sanitization report output".to_owned()
+        })?)
+        .map_err(|error| format!("serialize Flight Recorder sanitization report: {error}"))?;
 
     let evidence_dir = snapshot_dir.join("evidence");
     let derived_dir = snapshot_dir.join("derived");
@@ -521,8 +518,7 @@ fn derive_sanitized_run(
         }
     }
 
-    let send_intents =
-        sanitize_send_intents(export, selected, allowed_texts, &mut ids, &mut stats);
+    let send_intents = sanitize_send_intents(export, selected, allowed_texts, &mut ids, &mut stats);
     let assistant_wal =
         sanitize_assistant_wal(export, selected, allowed_texts, &mut ids, &mut stats);
     let messages = sanitize_messages(export, selected, allowed_texts, &mut ids, &mut stats);
@@ -829,8 +825,9 @@ fn safe_text(
 ) -> Value {
     match text {
         Some(text) if allowed_texts.contains(text) => {
-            stats.canonical_experiment_literals_retained =
-                stats.canonical_experiment_literals_retained.saturating_add(1);
+            stats.canonical_experiment_literals_retained = stats
+                .canonical_experiment_literals_retained
+                .saturating_add(1);
             Value::String(text.to_owned())
         }
         Some(_) => {
@@ -847,15 +844,17 @@ fn sanitize_conversation_scope(
     stats: &mut FlightSanitizationStats,
 ) -> String {
     if let Some(value) = raw.strip_prefix("conversation:") {
-        stats.conversation_identities_placeholdered =
-            stats.conversation_identities_placeholdered.saturating_add(1);
+        stats.conversation_identities_placeholdered = stats
+            .conversation_identities_placeholdered
+            .saturating_add(1);
         return format!("conversation:{}", ids.map_conversation(value));
     }
     if raw.starts_with("route:") {
         return raw.to_owned();
     }
-    stats.conversation_identities_placeholdered =
-        stats.conversation_identities_placeholdered.saturating_add(1);
+    stats.conversation_identities_placeholdered = stats
+        .conversation_identities_placeholdered
+        .saturating_add(1);
     ids.map_conversation(raw)
 }
 
@@ -908,8 +907,7 @@ fn sanitize_sse_frame(
     observe_frame_shape(frame, &payload, inventory);
     if frame.event.as_deref() == Some("delta_encoding") {
         if payload.as_str() != Some("v1") {
-            stats.unknown_encodings_redacted =
-                stats.unknown_encodings_redacted.saturating_add(1);
+            stats.unknown_encodings_redacted = stats.unknown_encodings_redacted.saturating_add(1);
             payload = Value::String(REDACTED_VALUE.to_owned());
         }
     } else {
@@ -1008,19 +1006,18 @@ fn sanitize_protocol_json(
     match value {
         Value::Null | Value::Bool(_) => {}
         Value::Number(_) => {
-            stats.numeric_values_generalized =
-                stats.numeric_values_generalized.saturating_add(1);
+            stats.numeric_values_generalized = stats.numeric_values_generalized.saturating_add(1);
             *value = Value::String(NUMBER.to_owned());
         }
         Value::String(text) => {
             let field = key.unwrap_or_default();
             if sensitive_field(field) {
-                stats.sensitive_values_redacted =
-                    stats.sensitive_values_redacted.saturating_add(1);
+                stats.sensitive_values_redacted = stats.sensitive_values_redacted.saturating_add(1);
                 *text = REDACTED.to_owned();
             } else if conversation_identity_field(field) {
-                stats.conversation_identities_placeholdered =
-                    stats.conversation_identities_placeholdered.saturating_add(1);
+                stats.conversation_identities_placeholdered = stats
+                    .conversation_identities_placeholdered
+                    .saturating_add(1);
                 *text = ids.map_conversation(text);
             } else if message_identity_field(field) {
                 stats.message_identities_placeholdered =
@@ -1032,18 +1029,17 @@ fn sanitize_protocol_json(
                 *text = "<id>".to_owned();
             } else if content_field(field) {
                 if allowed_texts.contains(text) {
-                    stats.canonical_experiment_literals_retained =
-                        stats.canonical_experiment_literals_retained.saturating_add(1);
+                    stats.canonical_experiment_literals_retained = stats
+                        .canonical_experiment_literals_retained
+                        .saturating_add(1);
                 } else {
-                    stats.content_values_redacted =
-                        stats.content_values_redacted.saturating_add(1);
+                    stats.content_values_redacted = stats.content_values_redacted.saturating_add(1);
                     *text = REDACTED_CONTENT.to_owned();
                 }
             } else if field == "p" {
                 let sanitized = safe_protocol_path(text);
                 if sanitized != *text {
-                    stats.unknown_paths_redacted =
-                        stats.unknown_paths_redacted.saturating_add(1);
+                    stats.unknown_paths_redacted = stats.unknown_paths_redacted.saturating_add(1);
                     *text = sanitized;
                 }
             } else if structural_string_field(field) {
@@ -1054,8 +1050,9 @@ fn sanitize_protocol_json(
                     *text = sanitized;
                 }
             } else if allowed_texts.contains(text) {
-                stats.canonical_experiment_literals_retained =
-                    stats.canonical_experiment_literals_retained.saturating_add(1);
+                stats.canonical_experiment_literals_retained = stats
+                    .canonical_experiment_literals_retained
+                    .saturating_add(1);
             } else {
                 stats.unknown_scalar_values_redacted =
                     stats.unknown_scalar_values_redacted.saturating_add(1);
@@ -1068,8 +1065,9 @@ fn sanitize_protocol_json(
                 if content_array {
                     match item {
                         Value::String(text) if allowed_texts.contains(text) => {
-                            stats.canonical_experiment_literals_retained =
-                                stats.canonical_experiment_literals_retained.saturating_add(1);
+                            stats.canonical_experiment_literals_retained = stats
+                                .canonical_experiment_literals_retained
+                                .saturating_add(1);
                         }
                         Value::String(text) => {
                             stats.content_values_redacted =
@@ -1801,10 +1799,13 @@ text = "CHATARIUM_PROTOCOL_TEST_001"
         snapshot_flight(&input, &experiment, &output, "C03").unwrap();
 
         let metadata_path = output.join("derived/C03.flight.meta.json");
-        let metadata: Value =
-            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
         assert_eq!(metadata["raw_source_sha256"], sha256_hex(&raw));
-        assert!(!serde_json::to_string(&metadata).unwrap().contains("PRIVATE-user-export.json"));
+        assert!(
+            !serde_json::to_string(&metadata)
+                .unwrap()
+                .contains("PRIVATE-user-export.json")
+        );
         assert!(!output.join("PRIVATE-user-export.json").exists());
 
         let report_path = output.join("derived/C03.flight.sanitization.json");
