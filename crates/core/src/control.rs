@@ -70,22 +70,14 @@ impl WorkerControl {
         goal_id: WorkerGoalId,
         lifecycle: &WorkerLifecycle,
     ) -> Result<Self, ControlAdmissionError> {
-        let phase = matching_phase(lifecycle, goal_id)?;
-        if !matches!(
-            phase,
-            WorkerPhase::Ready | WorkerPhase::NeedsInput | WorkerPhase::Blocked
-        ) {
-            return Err(ControlAdmissionError::InvalidPhase {
-                control: ControlType::StartOrResume,
-                phase,
-            });
-        }
+        let kind = WorkerControlKind::StartOrResume;
+        validate_control_admission(goal_id, kind, lifecycle)?;
 
         Ok(Self {
             id,
             worker_id,
             goal_id,
-            kind: WorkerControlKind::StartOrResume,
+            kind,
         })
     }
 
@@ -100,23 +92,16 @@ impl WorkerControl {
         permit: ContinuationPermit,
     ) -> Result<Self, ControlAdmissionError> {
         let goal_id = permit.goal_id();
-        let ordinal = permit.ordinal();
-        let phase = matching_phase(lifecycle, goal_id)?;
-
-        if phase != WorkerPhase::Working {
-            return Err(ControlAdmissionError::InvalidPhase {
-                control: ControlType::Continue,
-                phase,
-            });
-        }
+        let kind = WorkerControlKind::Continue {
+            permit_ordinal: permit.ordinal(),
+        };
+        validate_control_admission(goal_id, kind, lifecycle)?;
 
         Ok(Self {
             id,
             worker_id,
             goal_id,
-            kind: WorkerControlKind::Continue {
-                permit_ordinal: ordinal,
-            },
+            kind,
         })
     }
 
@@ -127,19 +112,14 @@ impl WorkerControl {
         goal_id: WorkerGoalId,
         lifecycle: &WorkerLifecycle,
     ) -> Result<Self, ControlAdmissionError> {
-        let phase = matching_phase(lifecycle, goal_id)?;
-        if phase.is_terminal() {
-            return Err(ControlAdmissionError::InvalidPhase {
-                control: ControlType::Stop,
-                phase,
-            });
-        }
+        let kind = WorkerControlKind::Stop;
+        validate_control_admission(goal_id, kind, lifecycle)?;
 
         Ok(Self {
             id,
             worker_id,
             goal_id,
-            kind: WorkerControlKind::Stop,
+            kind,
         })
     }
 
@@ -150,12 +130,13 @@ impl WorkerControl {
         goal_id: WorkerGoalId,
         lifecycle: &WorkerLifecycle,
     ) -> Result<Self, ControlAdmissionError> {
-        matching_phase(lifecycle, goal_id)?;
+        let kind = WorkerControlKind::StatusRequest;
+        validate_control_admission(goal_id, kind, lifecycle)?;
         Ok(Self {
             id,
             worker_id,
             goal_id,
-            kind: WorkerControlKind::StatusRequest,
+            kind,
         })
     }
 
@@ -209,6 +190,8 @@ pub enum ControlAdmissionError {
         /// Goal referenced by the proposed control/permit.
         received: WorkerGoalId,
     },
+    /// A replayed/supplied continuation kind carried an impossible zero ordinal.
+    InvalidContinuationPermitOrdinal,
     /// The control is incompatible with the current worker phase.
     InvalidPhase {
         /// Proposed control class.
@@ -226,6 +209,12 @@ impl fmt::Display for ControlAdmissionError {
                 formatter,
                 "stale worker control: current goal is {expected}, received {received}"
             ),
+            Self::InvalidContinuationPermitOrdinal => {
+                write!(
+                    formatter,
+                    "continue control permit ordinal must be greater than zero"
+                )
+            }
             Self::InvalidPhase { control, phase } => {
                 write!(
                     formatter,
@@ -237,6 +226,48 @@ impl fmt::Display for ControlAdmissionError {
 }
 
 impl std::error::Error for ControlAdmissionError {}
+
+/// Validate a control kind against one immutable worker lifecycle snapshot.
+///
+/// This is shared by live control construction and durable replay so admission
+/// semantics cannot silently diverge. For Continue, this validates the persisted
+/// permit ordinal and worker phase, but it does not prove durable lease issuance.
+pub fn validate_control_admission(
+    goal_id: WorkerGoalId,
+    kind: WorkerControlKind,
+    lifecycle: &WorkerLifecycle,
+) -> Result<WorkerPhase, ControlAdmissionError> {
+    let phase = matching_phase(lifecycle, goal_id)?;
+    let control = match kind {
+        WorkerControlKind::StartOrResume => {
+            if matches!(
+                phase,
+                WorkerPhase::Ready | WorkerPhase::NeedsInput | WorkerPhase::Blocked
+            ) {
+                return Ok(phase);
+            }
+            ControlType::StartOrResume
+        }
+        WorkerControlKind::Continue { permit_ordinal } => {
+            if permit_ordinal == 0 {
+                return Err(ControlAdmissionError::InvalidContinuationPermitOrdinal);
+            }
+            if phase == WorkerPhase::Working {
+                return Ok(phase);
+            }
+            ControlType::Continue
+        }
+        WorkerControlKind::Stop => {
+            if !phase.is_terminal() {
+                return Ok(phase);
+            }
+            ControlType::Stop
+        }
+        WorkerControlKind::StatusRequest => return Ok(phase),
+    };
+
+    Err(ControlAdmissionError::InvalidPhase { control, phase })
+}
 
 fn matching_phase(
     lifecycle: &WorkerLifecycle,
@@ -504,6 +535,19 @@ mod tests {
         assert_eq!(
             WorkerControl::status_request(ControlId::new(3), W1, G1, &lifecycle),
             Err(ControlAdmissionError::NoGoal)
+        );
+    }
+
+    #[test]
+    fn replay_validation_rejects_zero_continue_ordinal() {
+        let lifecycle = working();
+        assert_eq!(
+            validate_control_admission(
+                G1,
+                WorkerControlKind::Continue { permit_ordinal: 0 },
+                &lifecycle,
+            ),
+            Err(ControlAdmissionError::InvalidContinuationPermitOrdinal)
         );
     }
 

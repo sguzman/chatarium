@@ -5,7 +5,11 @@
 //! controller/worker session topology. It creates no new authority or transport.
 
 use crate::EventEnvelope;
-use crate::control_audit::{ControlAuditRecord, replay_control_audit};
+use crate::control_admission_audit::{
+    ValidatedControlAdmission, replay_validated_control_admissions,
+    validate_control_freshness_before,
+};
+use crate::control_audit::ControlAuditRecord;
 use crate::control_provenance_audit::{
     ControlProvenanceAuditRecord, replay_control_provenance_audit,
 };
@@ -15,7 +19,7 @@ use crate::session_audit::{SessionAuditRecord, replay_session_audit};
 use crate::supervision_audit::{ControllerWorkerAuditRecord, replay_supervision_audit};
 use chatarium_core::control::ControlId;
 use chatarium_core::control_provenance::ControlIssuer;
-use chatarium_core::orchestration::WorkerId;
+use chatarium_core::orchestration::{WorkerId, WorkerPhase};
 use chatarium_core::routing::{RouteClass, RouteId, RouteRequest};
 use chatarium_core::session::SessionId;
 use std::collections::BTreeMap;
@@ -31,6 +35,10 @@ pub struct ValidatedOrchestrationRoute {
     pub route: RouteRequest,
     /// Explicit durable issuer provenance.
     pub issuer: ControlIssuer,
+    /// Worker phase that justified durable admission.
+    pub admitted_phase: WorkerPhase,
+    /// Worker phase that still justified the control at route binding.
+    pub bound_phase: WorkerPhase,
     /// Resolved controller session for controller-issued controls.
     pub controller_session_id: Option<SessionId>,
     /// Resolved target worker session for controller-issued controls.
@@ -46,16 +54,16 @@ pub struct ValidatedOrchestrationRoute {
 pub fn replay_validated_orchestration_routes(
     events: &[EventEnvelope],
 ) -> Result<Vec<ValidatedOrchestrationRoute>, String> {
-    let controls = replay_control_audit(events)?;
+    let admissions = replay_validated_control_admissions(events)?;
     let provenance = replay_control_provenance_audit(events)?;
     let bindings = replay_control_route_audit(events)?;
     let sessions = replay_session_audit(events)?;
     let supervision = replay_supervision_audit(events)?;
     let routes = replay_routing_audit(events)?;
 
-    let controls_by_id = controls
+    let admissions_by_id = admissions
         .into_iter()
-        .map(|record| (record.control_id, record))
+        .map(|record| (record.control.control_id, record))
         .collect::<BTreeMap<_, _>>();
     let provenance_by_control = provenance
         .into_iter()
@@ -89,8 +97,9 @@ pub fn replay_validated_orchestration_routes(
         .into_iter()
         .map(|binding| {
             validate_binding(
+                events,
                 binding,
-                &controls_by_id,
+                &admissions_by_id,
                 &provenance_by_control,
                 &sessions_by_id,
                 &worker_session_by_worker,
@@ -102,8 +111,9 @@ pub fn replay_validated_orchestration_routes(
 }
 
 fn validate_binding(
+    events: &[EventEnvelope],
     binding: ControlRouteAuditRecord,
-    controls: &BTreeMap<ControlId, ControlAuditRecord>,
+    admissions: &BTreeMap<ControlId, ValidatedControlAdmission>,
     provenance: &BTreeMap<ControlId, ControlProvenanceAuditRecord>,
     sessions: &BTreeMap<SessionId, SessionAuditRecord>,
     worker_sessions: &BTreeMap<WorkerId, SessionAuditRecord>,
@@ -113,12 +123,14 @@ fn validate_binding(
     let control_id = binding.binding.control_id();
     let route_id = binding.binding.route_id();
 
-    let control = controls.get(&control_id).ok_or_else(|| {
+    let admission = admissions.get(&control_id).ok_or_else(|| {
         format!(
-            "validated orchestration route references missing control {}",
+            "validated orchestration route references missing validated control admission {}",
             control_id.get()
         )
     })?;
+    let control = &admission.control;
+    let bound_phase = validate_control_freshness_before(events, control, binding.bound_sequence)?;
     let provenance = provenance.get(&control_id).ok_or_else(|| {
         format!(
             "bound control {} has no explicit issuer provenance",
@@ -154,6 +166,8 @@ fn validate_binding(
             worker_id: control.worker_id,
             route: route.request,
             issuer: ControlIssuer::User,
+            admitted_phase: admission.admitted_phase,
+            bound_phase,
             controller_session_id: None,
             worker_session_id: None,
             bound_sequence: binding.bound_sequence,
@@ -178,6 +192,8 @@ fn validate_binding(
                 worker_id: control.worker_id,
                 route: route.request,
                 issuer: ControlIssuer::ControllerSession(controller_session_id),
+                admitted_phase: admission.admitted_phase,
+                bound_phase,
                 controller_session_id: Some(controller_session_id),
                 worker_session_id: Some(worker_session.session_id),
                 bound_sequence: binding.bound_sequence,
@@ -307,11 +323,14 @@ mod tests {
     use crate::supervision_audit::{
         record_controller_session_designated, record_controller_worker_bound,
     };
+    use crate::worker_audit::{record_worker_goal_assigned, record_worker_transition};
     use crate::{EventStore, MemoryEventStore};
     use chatarium_core::control::WorkerControl;
     use chatarium_core::control_provenance::ControlProvenance;
     use chatarium_core::control_route::ControlRouteBinding;
-    use chatarium_core::orchestration::{WorkerGoalId, WorkerLifecycle};
+    use chatarium_core::orchestration::{
+        ContinuationLease, WorkerAction, WorkerGoalId, WorkerLifecycle, WorkerPhase,
+    };
     use chatarium_core::routing::{RouteEndpointId, RoutePolicy, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, WorkerSessionBinding};
     use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
@@ -321,6 +340,7 @@ mod tests {
     const WORKER_SESSION: SessionId = SessionId::new(10);
     const WORKER: WorkerId = WorkerId::new(100);
     const GOAL: WorkerGoalId = WorkerGoalId::new(1000);
+    const NEXT_GOAL: WorkerGoalId = WorkerGoalId::new(2000);
     const CONTROLLER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(11);
     const OTHER_CONTROLLER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(12);
     const WORKER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(21);
@@ -330,6 +350,18 @@ mod tests {
         lifecycle.assign_goal(GOAL).unwrap();
         lifecycle.start_or_resume(GOAL).unwrap();
         WorkerControl::stop(ControlId::new(id), WORKER, GOAL, &lifecycle).unwrap()
+    }
+
+    fn working_lifecycle() -> WorkerLifecycle {
+        let mut lifecycle = WorkerLifecycle::default();
+        lifecycle.assign_goal(GOAL).unwrap();
+        lifecycle.start_or_resume(GOAL).unwrap();
+        lifecycle
+    }
+
+    fn record_working_lifecycle(store: &mut impl crate::EventStore) {
+        record_worker_goal_assigned(store, WORKER, GOAL).unwrap();
+        record_worker_transition(store, WORKER, GOAL, WorkerAction::StartOrResume).unwrap();
     }
 
     fn register_session(
@@ -376,6 +408,7 @@ mod tests {
         control_id: u64,
         issuer: ControlIssuer,
     ) -> WorkerControl {
+        record_working_lifecycle(store);
         let control = control(control_id);
         record_worker_control_admitted(store, &control).unwrap();
         record_worker_control_issuer_bound(store, ControlProvenance::new(control.id(), issuer))
@@ -428,6 +461,8 @@ mod tests {
             records[0].issuer,
             ControlIssuer::ControllerSession(CONTROLLER_SESSION)
         );
+        assert_eq!(records[0].admitted_phase, WorkerPhase::Working);
+        assert_eq!(records[0].bound_phase, WorkerPhase::Working);
         assert_eq!(records[0].controller_session_id, Some(CONTROLLER_SESSION));
         assert_eq!(records[0].worker_session_id, Some(WORKER_SESSION));
     }
@@ -516,7 +551,7 @@ mod tests {
         );
 
         let error = replay_validated_orchestration_routes(store.events()).unwrap_err();
-        assert!(error.contains("no session binding"));
+        assert!(error.contains("before any worker-session binding"));
     }
 
     #[test]
@@ -563,15 +598,11 @@ mod tests {
     }
 
     #[test]
-    fn topology_recorded_after_control_route_binding_is_rejected() {
+    fn endpoint_topology_recorded_after_control_route_binding_is_rejected() {
         let mut store = MemoryEventStore::default();
-        register_session(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
-        record_controller_session_designated(
-            &mut store,
-            ControllerDesignation::new(CONTROLLER_SESSION),
-        )
-        .unwrap();
-        register_session(&mut store, WORKER_SESSION, Some(WORKER_ENDPOINT));
+        register_controller(&mut store, CONTROLLER_SESSION, None);
+        register_worker(&mut store, None);
+        supervise(&mut store, CONTROLLER_SESSION);
 
         let control = admit_with_issuer(
             &mut store,
@@ -584,17 +615,21 @@ mod tests {
             route(1, CONTROLLER_ENDPOINT, WORKER_ENDPOINT),
         );
 
-        record_worker_session_bound(
+        record_session_endpoint_bound(
             &mut store,
-            WorkerSessionBinding::new(WORKER, WORKER_SESSION),
+            SessionEndpointBinding::new(CONTROLLER_SESSION, CONTROLLER_ENDPOINT),
         )
         .unwrap();
-        supervise(&mut store, CONTROLLER_SESSION);
+        record_session_endpoint_bound(
+            &mut store,
+            SessionEndpointBinding::new(WORKER_SESSION, WORKER_ENDPOINT),
+        )
+        .unwrap();
 
         let error = replay_validated_orchestration_routes(store.events()).unwrap_err();
         assert!(
-            error.contains("precedes worker-session binding")
-                || error.contains("precedes supervision topology")
+            error.contains("precedes controller endpoint binding")
+                || error.contains("precedes worker endpoint binding")
         );
     }
 
@@ -616,8 +651,85 @@ mod tests {
     }
 
     #[test]
+    fn control_valid_at_admission_but_stale_after_goal_replacement_is_rejected() {
+        let mut store = MemoryEventStore::default();
+        let control = admit_with_issuer(&mut store, 1, ControlIssuer::User);
+
+        record_worker_transition(&mut store, WORKER, GOAL, WorkerAction::Complete).unwrap();
+        record_worker_goal_assigned(&mut store, WORKER, NEXT_GOAL).unwrap();
+        record_worker_transition(&mut store, WORKER, NEXT_GOAL, WorkerAction::StartOrResume)
+            .unwrap();
+
+        propose_and_bind(
+            &mut store,
+            &control,
+            route(1, RouteEndpointId::new(500), RouteEndpointId::new(600)),
+        );
+
+        let error = replay_validated_orchestration_routes(store.events()).unwrap_err();
+        assert!(error.contains("stale worker control"));
+    }
+
+    #[test]
+    fn continue_that_enters_needs_input_before_route_binding_is_rejected() {
+        let mut store = MemoryEventStore::default();
+        record_working_lifecycle(&mut store);
+
+        let lifecycle = working_lifecycle();
+        let mut lease = ContinuationLease::new(GOAL, 1);
+        let permit = lease.authorize(&lifecycle).unwrap();
+        let control =
+            WorkerControl::continue_work(ControlId::new(1), WORKER, &lifecycle, permit).unwrap();
+        record_worker_control_admitted(&mut store, &control).unwrap();
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(control.id(), ControlIssuer::User),
+        )
+        .unwrap();
+
+        record_worker_transition(&mut store, WORKER, GOAL, WorkerAction::RequestInput).unwrap();
+        propose_and_bind(
+            &mut store,
+            &control,
+            route(1, RouteEndpointId::new(500), RouteEndpointId::new(600)),
+        );
+
+        let error = replay_validated_orchestration_routes(store.events()).unwrap_err();
+        assert!(error.contains("Continue"));
+        assert!(error.contains("NeedsInput"));
+    }
+
+    #[test]
+    fn status_request_remains_fresh_when_same_goal_becomes_terminal() {
+        let mut store = MemoryEventStore::default();
+        record_working_lifecycle(&mut store);
+
+        let lifecycle = working_lifecycle();
+        let control =
+            WorkerControl::status_request(ControlId::new(1), WORKER, GOAL, &lifecycle).unwrap();
+        record_worker_control_admitted(&mut store, &control).unwrap();
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(control.id(), ControlIssuer::User),
+        )
+        .unwrap();
+
+        record_worker_transition(&mut store, WORKER, GOAL, WorkerAction::Complete).unwrap();
+        propose_and_bind(
+            &mut store,
+            &control,
+            route(1, RouteEndpointId::new(500), RouteEndpointId::new(600)),
+        );
+
+        let records = replay_validated_orchestration_routes(store.events()).unwrap();
+        assert_eq!(records[0].admitted_phase, WorkerPhase::Working);
+        assert_eq!(records[0].bound_phase, WorkerPhase::Completed);
+    }
+
+    #[test]
     fn bound_control_without_issuer_provenance_fails_closed() {
         let mut store = MemoryEventStore::default();
+        record_working_lifecycle(&mut store);
         let control = control(1);
         record_worker_control_admitted(&mut store, &control).unwrap();
         propose_and_bind(

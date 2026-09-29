@@ -77,13 +77,27 @@ pub fn replay_control_provenance_audit(
         .map(|record| (record.control_id, record))
         .collect::<BTreeMap<_, _>>();
     let sessions_by_id = sessions
-        .into_iter()
+        .iter()
+        .copied()
         .map(|record| (record.session_id, record))
+        .collect::<BTreeMap<_, _>>();
+    let worker_session_by_worker = sessions
+        .iter()
+        .filter_map(|record| {
+            record
+                .worker_binding
+                .map(|binding| (binding.worker_id(), *record))
+        })
         .collect::<BTreeMap<_, _>>();
     let controller_designated_sequence = supervision
         .controllers
-        .into_iter()
+        .iter()
         .map(|record| (record.designation.session_id(), record.designated_sequence))
+        .collect::<BTreeMap<_, _>>();
+    let supervision_by_worker_session = supervision
+        .bindings
+        .iter()
+        .map(|record| (record.binding.worker_session_id(), *record))
         .collect::<BTreeMap<_, _>>();
 
     let mut provenance_by_control = BTreeMap::<ControlId, ControlProvenanceAuditRecord>::new();
@@ -159,6 +173,53 @@ pub fn replay_control_provenance_audit(
                 return Err(format!(
                     "controller issuer session {} is worker-bound",
                     session_id.get()
+                ));
+            }
+
+            let worker_session = worker_session_by_worker
+                .get(&control.worker_id)
+                .ok_or_else(|| {
+                    format!(
+                        "controller issuer provenance at sequence {} targets worker {} before any worker-session binding",
+                        event.sequence,
+                        control.worker_id.get()
+                    )
+                })?;
+            let worker_bound_sequence = worker_session.worker_bound_sequence.ok_or_else(|| {
+                format!(
+                    "target worker session {} is missing worker binding sequence",
+                    worker_session.session_id.get()
+                )
+            })?;
+            if worker_bound_sequence >= event.sequence {
+                return Err(format!(
+                    "control issuer provenance at sequence {} precedes target worker-session binding at sequence {}",
+                    event.sequence, worker_bound_sequence
+                ));
+            }
+
+            let supervision = supervision_by_worker_session
+                .get(&worker_session.session_id)
+                .ok_or_else(|| {
+                    format!(
+                        "controller issuer session {} did not supervise target worker session {} when control {} was issued",
+                        session_id.get(),
+                        worker_session.session_id.get(),
+                        control_id.get()
+                    )
+                })?;
+            if supervision.binding.controller_session_id() != session_id {
+                return Err(format!(
+                    "controller issuer session {} does not supervise target worker session {}; supervisor is {}",
+                    session_id.get(),
+                    worker_session.session_id.get(),
+                    supervision.binding.controller_session_id().get()
+                ));
+            }
+            if supervision.bound_sequence >= event.sequence {
+                return Err(format!(
+                    "control issuer provenance at sequence {} precedes controller-worker supervision at sequence {}",
+                    event.sequence, supervision.bound_sequence
                 ));
             }
         }
@@ -275,12 +336,15 @@ mod tests {
     use super::*;
     use crate::control_audit::record_worker_control_admitted;
     use crate::projection::SqliteProjection;
-    use crate::session_audit::record_local_session_registered;
-    use crate::supervision_audit::record_controller_session_designated;
+    use crate::session_audit::{record_local_session_registered, record_worker_session_bound};
+    use crate::supervision_audit::{
+        record_controller_session_designated, record_controller_worker_bound,
+    };
     use crate::{JsonlEventStore, MemoryEventStore};
     use chatarium_core::control::WorkerControl;
     use chatarium_core::orchestration::{WorkerGoalId, WorkerId, WorkerLifecycle};
-    use chatarium_core::supervision::ControllerDesignation;
+    use chatarium_core::session::WorkerSessionBinding;
+    use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
@@ -289,6 +353,7 @@ mod tests {
     const W1: WorkerId = WorkerId::new(10);
     const G1: WorkerGoalId = WorkerGoalId::new(100);
     const C1: SessionId = SessionId::new(1);
+    const S1: SessionId = SessionId::new(10);
 
     fn temp_path(label: &str, extension: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -320,6 +385,24 @@ mod tests {
             .unwrap();
     }
 
+    fn register_worker_session(store: &mut impl EventStore) {
+        record_local_session_registered(store, S1).unwrap();
+        record_worker_session_bound(store, WorkerSessionBinding::new(W1, S1)).unwrap();
+    }
+
+    fn bind_supervision(store: &mut impl EventStore, controller: SessionId) {
+        record_controller_worker_bound(
+            store,
+            ControllerWorkerBinding::new(controller, S1).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn register_supervised_worker(store: &mut impl EventStore, controller: SessionId) {
+        register_worker_session(store);
+        bind_supervision(store, controller);
+    }
+
     #[test]
     fn user_and_controller_provenance_survive_reopen() {
         let path = temp_path("reopen", "jsonl");
@@ -333,6 +416,7 @@ mod tests {
             .unwrap();
 
             register_controller(&mut store, C1);
+            register_supervised_worker(&mut store, C1);
             let controller_control = record_control(&mut store, 2);
             record_worker_control_issuer_bound(
                 &mut store,
@@ -467,6 +551,56 @@ mod tests {
 
         let error = replay_control_provenance_audit(store.events()).unwrap_err();
         assert!(error.contains("not controller-designated"));
+    }
+
+    #[test]
+    fn controller_issuer_rejects_supervision_added_after_issuance() {
+        let mut store = MemoryEventStore::default();
+        register_controller(&mut store, C1);
+        register_worker_session(&mut store);
+        let control = record_control(&mut store, 1);
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(control.id(), ControlIssuer::ControllerSession(C1)),
+        )
+        .unwrap();
+        bind_supervision(&mut store, C1);
+
+        let error = replay_control_provenance_audit(store.events()).unwrap_err();
+        assert!(error.contains("precedes controller-worker supervision"));
+    }
+
+    #[test]
+    fn controller_issuer_rejects_worker_binding_added_after_issuance() {
+        let mut store = MemoryEventStore::default();
+        register_controller(&mut store, C1);
+        record_local_session_registered(&mut store, S1).unwrap();
+        let control = record_control(&mut store, 1);
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(control.id(), ControlIssuer::ControllerSession(C1)),
+        )
+        .unwrap();
+        record_worker_session_bound(&mut store, WorkerSessionBinding::new(W1, S1)).unwrap();
+        bind_supervision(&mut store, C1);
+
+        let error = replay_control_provenance_audit(store.events()).unwrap_err();
+        assert!(error.contains("precedes target worker-session binding"));
+    }
+
+    #[test]
+    fn direct_user_issuer_does_not_require_supervision() {
+        let mut store = MemoryEventStore::default();
+        let control = record_control(&mut store, 1);
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(control.id(), ControlIssuer::User),
+        )
+        .unwrap();
+
+        let records = replay_control_provenance_audit(store.events()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].provenance.issuer(), ControlIssuer::User);
     }
 
     #[test]
