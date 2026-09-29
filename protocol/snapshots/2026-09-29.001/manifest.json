@@ -1,0 +1,36 @@
+{
+  "schema": "chatarium-protocol-snapshot",
+  "version": 1,
+  "revision": "2026-09-29.001",
+  "observation_kind": "manual_har_send_text",
+  "canonical_experiment": null,
+  "canonical_experiment_relation": "C03-adjacent but noncanonical because the observed user text contained literal backticks",
+  "capture_start_utc": "2026-09-29T10:25:25.649Z",
+  "capture_end_utc": "2026-09-29T10:25:40.266Z",
+  "browser": {
+    "product": "Microsoft Edge",
+    "version_from_user_agent": "153.0.0.0",
+    "platform": "Linux x86_64"
+  },
+  "source": {
+    "kind": "HAR",
+    "creator": "WebInspector 537.36",
+    "raw_sha256": "bda0a642ca948788c0e083fbbe567ff9853effd4e00189f4732f5b10b32da166",
+    "raw_bytes": 35223925,
+    "entry_count": 322,
+    "committed_to_git": false
+  },
+  "controlled_action": {
+    "type": "send_text",
+    "exact_observed_text": "`respond with exactly CHATARIUM_PROTOCOL_TEST_001`"
+  },
+  "observed_result": {
+    "assistant_final_text": "CHATARIUM_PROTOCOL_TEST_001",
+    "completed": true
+  },
+  "limitations": [
+    "The exported HAR did not preserve the text/event-stream response body for the send request.",
+    "The raw HAR contains reusable or identity-bearing values and unrelated private conversation/context material, so it is not suitable for Git.",
+    "One observation cannot establish which observed fields are required, stable, or semantically authoritative."
+  ]
+}
