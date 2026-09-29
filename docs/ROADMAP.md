@@ -172,6 +172,28 @@ Only after the text path is reliable:
 - local full-text search and indexing;
 - optional interoperability with other local project-state systems.
 
+## P7 — supervisory orchestration and MCP workstation
+
+Build the multi-session/tool control plane described in `docs/PRODUCT_VISION.md`.
+
+This phase is intentionally sequenced after reliable direct session interaction. It is part of the intended product endpoint, not a redefinition of Chatarium into a generic browser.
+
+Deliverables:
+
+- first-class MCP/tool integration surface;
+- import/adaptation of the existing user-owned XML tool/message envelope into a versioned Chatarium contract;
+- multiple concurrent ChatGPT sessions with explicit local session identity;
+- user-designated master/controller and worker relationships;
+- durable goal assignment/update and continuation/stop messages;
+- explicit worker lifecycle states such as working, blocked, needs-input, completed, and failed;
+- correlation rules that prevent accidental unbounded master/worker `continue` loops;
+- local routing/message bus with source/destination/provenance;
+- egui supervisory console showing routed session/tool traffic;
+- user policy controls for allow, block/forbid, require approval, redirect, and interrupt;
+- durable/auditable orchestration and tool-call history.
+
+Exit criterion: the user can supervise several ChatGPT sessions and MCP/tools from one Chatarium surface, delegate/continue work without manual copy-paste, positively recognize worker completion, and inspect or veto cross-session/tool traffic before or after dispatch according to policy.
+
 ## Continuous work — protocol revision response
 
 Whenever the official client changes materially:
