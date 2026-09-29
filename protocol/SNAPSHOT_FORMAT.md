@@ -34,7 +34,20 @@ For HAR-backed captures produced by `chatarium-recorder snapshot-har`, the mecha
     └── <capture-id>.requests.json
 ```
 
-`evidence/*.har.json` is the sanitized source evidence. `derived/*.requests.json` is a value-free structural comparison surface generated from that sanitized evidence. Derived output must never silently replace the evidence it came from.
+`evidence/*.har.json` is sanitized HAR source evidence. `derived/*.requests.json` is a value-free structural comparison surface generated from that sanitized evidence. Derived output must never silently replace the evidence it came from.
+
+For Flight Recorder captures produced by `chatarium-recorder snapshot-flight`, the mechanically generated portion is:
+
+```text
+<revision>/
+├── evidence/
+│   └── <capture-id>.flight.json
+└── derived/
+    ├── <capture-id>.flight.meta.json
+    └── <capture-id>.flight.inventory.json
+```
+
+`evidence/*.flight.json` is selected-run, sanitized protocol evidence reconstructed from the private cumulative browser export. It never contains the raw `network-stream-chunk.payload.text` strings. `derived/*.flight.inventory.json` is the value-minimized structural comparison surface for that selected run. The private raw Flight Recorder export remains outside Git and is referenced by SHA-256/byte count only.
 
 ## `manifest.toml`
 
@@ -117,6 +130,14 @@ Record what classes of data were removed and how. Example:
 
 The point is to preserve structural usefulness without creating a credential archive.
 
+## Flight Recorder evidence
+
+A Flight Recorder export may contain multiple recorder sessions because browser storage is cumulative. Public evidence therefore represents one explicitly selected run beginning at the latest `recorder-started` event used for the snapshot.
+
+The sanitizer reconstructs complete SSE frames across browser delivery chunks before applying protocol-aware redaction. Only exact text declared by the canonical experiment definition may survive as literal conversation content. Signed/reusable values, concrete remote identifiers, hidden/private message bodies, generated titles, unexpected server-controlled scalar values, and unparseable SSE are removed or replaced with explicit placeholders.
+
+The structural inventory records counts and validated vocabulary such as SSE event families, control-frame types, delta operations/paths, message markers, encoding observations, and completion signals. Unknown server-controlled structural strings fail closed rather than being copied verbatim.
+
 ## Derived request inventories
 
 `derived/<capture-id>.requests.json` is generated from the sanitized HAR and intentionally omits request/header/query values. It records structural fields such as method, host, normalized path, status, MIME types, header names, query names, resource type, and whether a request body exists.
@@ -127,7 +148,7 @@ A diff in derived inventory is a signal to inspect the underlying evidence, not 
 
 ## Evidence files
 
-Prefer original wire representation after sanitization. Derived normalized JSON is useful but should not silently replace the source representation because ordering, framing, duplicate headers, or streaming delimiters may matter later.
+Prefer the strongest safely publishable representation. For HAR, that is generally the sanitized wire-oriented HAR. For Flight Recorder exports, raw stream text is private by construction, so the publishable evidence is the deterministic selected-run reconstruction produced by `snapshot-flight`; raw-source SHA-256 preserves provenance back to the private export. Derived normalized inventories never silently replace either evidence layer because ordering, framing, duplicate headers, or streaming delimiters may matter later.
 
 ## Snapshot amendments
 
