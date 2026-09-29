@@ -405,11 +405,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("observations.md"), "# Observations\nObserved.").unwrap();
-        fs::write(
-            dir.join("sanitization.md"),
-            "# Sanitization\nControlled.",
-        )
-        .unwrap();
+        fs::write(dir.join("sanitization.md"), "# Sanitization\nControlled.").unwrap();
     }
 
     fn c03_fixture() -> Value {
