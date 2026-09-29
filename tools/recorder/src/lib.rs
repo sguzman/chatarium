@@ -231,8 +231,7 @@ fn sanitize_url(raw: &str, stats: &mut HarSanitizationStats) -> String {
         .query_pairs()
         .map(|(name, value)| {
             let value = if sensitive_name(&name) {
-                stats.url_query_values_redacted =
-                    stats.url_query_values_redacted.saturating_add(1);
+                stats.url_query_values_redacted = stats.url_query_values_redacted.saturating_add(1);
                 REDACTED.to_owned()
             } else {
                 value.into_owned()
