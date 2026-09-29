@@ -144,6 +144,7 @@ fn diff_inventory_values(before: &Value, after: &Value) -> Result<Value, String>
     match before_format {
         "chatarium-request-inventory" => diff_request_inventories(before, after),
         "chatarium-flight-inventory" => diff_flight_inventories(before, after),
+        "chatarium-frontend-asset-manifest" => diff_frontend_asset_manifests(before, after),
         other => Err(format!("unsupported inventory format '{other}'")),
     }
 }
@@ -210,6 +211,142 @@ fn diff_flight_inventories(before: &Value, after: &Value) -> Result<Value, Strin
         "removed": removed,
         "changed": changed,
     }))
+}
+
+fn diff_frontend_asset_manifests(before: &Value, after: &Value) -> Result<Value, String> {
+    validate_frontend_asset_manifest(before)?;
+    validate_frontend_asset_manifest(after)?;
+
+    let before_normalized = normalize_frontend_asset_manifest(before)?;
+    let after_normalized = normalize_frontend_asset_manifest(after)?;
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut changed = Vec::new();
+    diff_plain_json_values(
+        "",
+        &before_normalized,
+        &after_normalized,
+        &mut added,
+        &mut removed,
+        &mut changed,
+    );
+
+    Ok(json!({
+        "format": "chatarium-frontend-asset-manifest-diff",
+        "version": 1,
+        "summary": {
+            "added_paths": added.len(),
+            "removed_paths": removed.len(),
+            "changed_paths": changed.len(),
+            "total_changes": added.len() + removed.len() + changed.len(),
+        },
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+    }))
+}
+
+fn validate_frontend_asset_manifest(manifest: &Value) -> Result<(), String> {
+    let format = inventory_format(manifest)?;
+    if format != "chatarium-frontend-asset-manifest" {
+        return Err(format!("unsupported frontend asset manifest format '{format}'"));
+    }
+    let version = manifest
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "frontend asset manifest is missing version".to_owned())?;
+    if version != 1 {
+        return Err(format!(
+            "unsupported frontend asset manifest version {version}"
+        ));
+    }
+    manifest
+        .get("assets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "frontend asset manifest is missing assets array".to_owned())?;
+    Ok(())
+}
+
+fn normalize_frontend_asset_manifest(manifest: &Value) -> Result<Value, String> {
+    let assets = manifest
+        .get("assets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "frontend asset manifest is missing assets array".to_owned())?;
+    let mut base_counts = BTreeMap::<String, u64>::new();
+    let mut normalized = serde_json::Map::new();
+
+    for asset in assets {
+        let kind = required_string(asset, "kind")?;
+        let host = required_string(asset, "host")?;
+        let path = required_string(asset, "path")?;
+        let base = format!("{kind} {host}{path}");
+        let ordinal = base_counts.entry(base.clone()).or_default();
+        *ordinal = ordinal.saturating_add(1);
+        let key = if *ordinal == 1 {
+            base
+        } else {
+            format!("{base} #{}", *ordinal)
+        };
+        normalized.insert(
+            key,
+            json!({
+                "status": asset.get("status").cloned().unwrap_or(Value::Null),
+                "mime_type": asset.get("mime_type").cloned().unwrap_or(Value::Null),
+                "content_encoding": asset.get("content_encoding").cloned().unwrap_or(Value::Null),
+                "body_available": asset.get("body_available").cloned().unwrap_or(Value::Null),
+                "decoded_body_bytes": asset.get("decoded_body_bytes").cloned().unwrap_or(Value::Null),
+                "body_sha256": asset.get("body_sha256").cloned().unwrap_or(Value::Null),
+                "body_warning": asset.get("body_warning").cloned().unwrap_or(Value::Null),
+            }),
+        );
+    }
+
+    Ok(json!({"assets": Value::Object(normalized)}))
+}
+
+fn diff_plain_json_values(
+    path: &str,
+    before: &Value,
+    after: &Value,
+    added: &mut Vec<Value>,
+    removed: &mut Vec<Value>,
+    changed: &mut Vec<Value>,
+) {
+    match (before, after) {
+        (Value::Object(before_map), Value::Object(after_map)) => {
+            let keys = before_map
+                .keys()
+                .chain(after_map.keys())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for key in keys {
+                let child_path = format!("{}/{}", path, escape_pointer_segment(&key));
+                match (before_map.get(&key), after_map.get(&key)) {
+                    (None, Some(value)) => {
+                        added.push(json!({"path": child_path, "after": value}));
+                    }
+                    (Some(value), None) => {
+                        removed.push(json!({"path": child_path, "before": value}));
+                    }
+                    (Some(before_value), Some(after_value)) => diff_plain_json_values(
+                        &child_path,
+                        before_value,
+                        after_value,
+                        added,
+                        removed,
+                        changed,
+                    ),
+                    (None, None) => unreachable!("key came from one of the objects"),
+                }
+            }
+        }
+        _ if before != after => changed.push(json!({
+            "path": if path.is_empty() { "/" } else { path },
+            "before": before,
+            "after": after,
+        })),
+        _ => {}
+    }
 }
 
 fn validate_flight_inventory(inventory: &Value) -> Result<(), String> {
@@ -570,6 +707,72 @@ mod tests {
             }],
             "warning_count": 0
         })
+    }
+
+    fn frontend_asset_manifest() -> Value {
+        json!({
+            "format": "chatarium-frontend-asset-manifest",
+            "version": 1,
+            "asset_count": 1,
+            "hashed_asset_count": 1,
+            "warning_count": 0,
+            "assets": [{
+                "kind": "script",
+                "host": "cdn.example.test",
+                "path": "/assets/app.js",
+                "status": 200,
+                "mime_type": "application/javascript",
+                "content_encoding": null,
+                "body_available": true,
+                "decoded_body_bytes": 10,
+                "body_sha256": "aaaaaaaa",
+                "body_warning": null
+            }]
+        })
+    }
+
+    #[test]
+    fn identical_frontend_asset_manifests_have_no_changes() {
+        let value = frontend_asset_manifest();
+        let report = diff_frontend_asset_manifests(&value, &value).expect("diff");
+        assert_eq!(report.pointer("/summary/total_changes"), Some(&json!(0)));
+    }
+
+    #[test]
+    fn frontend_asset_body_hash_change_is_reported() {
+        let before = frontend_asset_manifest();
+        let mut after = before.clone();
+        after["assets"][0]["body_sha256"] = json!("bbbbbbbb");
+
+        let report = diff_frontend_asset_manifests(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/changed_paths"), Some(&json!(1)));
+        assert_eq!(
+            report.pointer("/changed/0/path"),
+            Some(&json!(
+                "/assets/script cdn.example.test~1assets~1app.js/body_sha256"
+            ))
+        );
+    }
+
+    #[test]
+    fn frontend_asset_addition_is_reported_once() {
+        let before = frontend_asset_manifest();
+        let mut after = before.clone();
+        after["assets"].as_array_mut().unwrap().push(json!({
+            "kind": "stylesheet",
+            "host": "cdn.example.test",
+            "path": "/assets/app.css",
+            "status": 200,
+            "mime_type": "text/css",
+            "content_encoding": null,
+            "body_available": true,
+            "decoded_body_bytes": 8,
+            "body_sha256": "cccccccc",
+            "body_warning": null
+        }));
+
+        let report = diff_frontend_asset_manifests(&before, &after).expect("diff");
+        assert_eq!(report.pointer("/summary/added_paths"), Some(&json!(1)));
     }
 
     #[test]
