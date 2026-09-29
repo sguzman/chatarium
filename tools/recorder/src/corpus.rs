@@ -1,6 +1,7 @@
 //! Validation for committed protocol snapshots and sanitized fixtures.
 
 use chatarium_protocol::sse::{SseFrame, TextTurnProjection, interpret_v1_frame};
+use chatarium_protocol::stability::validate_registry;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
@@ -44,6 +45,8 @@ pub fn validate_corpus(protocol_dir: &Path) -> Result<CorpusValidationReport, St
         revisions.insert(revision.clone());
         validate_snapshot(snapshot_dir, &revision, &mut errors);
     }
+
+    validate_field_classification_registry(protocol_dir, &revisions, &mut errors);
 
     let fixture_dirs = child_dirs(&fixtures_dir)?;
     let mut fixture_count = 0_usize;
@@ -92,6 +95,39 @@ pub fn validate_corpus(protocol_dir: &Path) -> Result<CorpusValidationReport, St
         fixtures: fixture_count,
         c03_sse_replays,
     })
+}
+
+fn validate_field_classification_registry(
+    protocol_dir: &Path,
+    revisions: &BTreeSet<String>,
+    errors: &mut Vec<String>,
+) {
+    let path = protocol_dir
+        .join("schemas")
+        .join("field-classification.v1.json");
+    let registry = match read_json(&path) {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(error);
+            return;
+        }
+    };
+
+    if let Err(error) = validate_registry(&registry) {
+        errors.push(format!("{}: {error}", path.display()));
+        return;
+    }
+
+    if let Some(evidence) = registry.get("evidence_revisions").and_then(Value::as_array) {
+        for revision in evidence.iter().filter_map(Value::as_str) {
+            if !revisions.contains(revision) {
+                errors.push(format!(
+                    "{}: classification evidence revision {revision} has no committed snapshot",
+                    path.display()
+                ));
+            }
+        }
+    }
 }
 
 fn validate_snapshot(snapshot_dir: &Path, revision: &str, errors: &mut Vec<String>) {
@@ -370,6 +406,7 @@ mod tests {
             "# Sanitization\nControlled.",
         )
         .unwrap();
+        write_test_classification_registry(&root);
         root
     }
 
@@ -434,6 +471,15 @@ mod tests {
         })
     }
 
+    fn write_test_classification_registry(root: &Path) {
+        fs::create_dir_all(root.join("schemas")).unwrap();
+        fs::write(
+            root.join("schemas/field-classification.v1.json"),
+            serde_json::to_vec_pretty(chatarium_protocol::stability::registry()).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn valid_minimal_corpus_passes_and_replays_c03() {
         let root = temp_protocol();
@@ -452,6 +498,19 @@ mod tests {
                 c03_sse_replays: 1,
             }
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn classification_registry_missing_evidence_snapshot_fails() {
+        let root = temp_protocol();
+        let path = root.join("schemas/field-classification.v1.json");
+        let mut registry = read_json(&path).unwrap();
+        registry["evidence_revisions"] = json!(["2026-09-29.002", "2026-09-30.001"]);
+        fs::write(&path, serde_json::to_vec_pretty(&registry).unwrap()).unwrap();
+
+        let error = validate_corpus(&root).unwrap_err();
+        assert!(error.contains("classification evidence revision 2026-09-30.001"));
         let _ = fs::remove_dir_all(root);
     }
 
