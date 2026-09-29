@@ -408,7 +408,6 @@ mod tests {
         assert!(replay_control_provenance_audit(store.events()).is_err());
     }
 
-
     #[test]
     fn missing_controller_session_id_is_rejected() {
         let mut store = MemoryEventStore::default();
