@@ -250,7 +250,8 @@ impl TurnEvidence {
             | EventKind::RouteDispatched
             | EventKind::RouteResultObserved
             | EventKind::WorkerGoalAssigned
-            | EventKind::WorkerLifecycleTransitionRecorded => {}
+            | EventKind::WorkerLifecycleTransitionRecorded
+            | EventKind::WorkerControlAdmitted => {}
         }
         Ok(())
     }
@@ -316,6 +317,8 @@ pub enum EventKind {
     WorkerGoalAssigned,
     /// A typed worker lifecycle transition was recorded.
     WorkerLifecycleTransitionRecorded,
+    /// A typed orchestration control command was admitted locally.
+    WorkerControlAdmitted,
 }
 
 impl EventKind {
@@ -346,6 +349,7 @@ impl EventKind {
             Self::RouteResultObserved => "route_result_observed",
             Self::WorkerGoalAssigned => "worker_goal_assigned",
             Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
+            Self::WorkerControlAdmitted => "worker_control_admitted",
         }
     }
 
@@ -376,6 +380,7 @@ impl EventKind {
             "route_result_observed" => Some(Self::RouteResultObserved),
             "worker_goal_assigned" => Some(Self::WorkerGoalAssigned),
             "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
+            "worker_control_admitted" => Some(Self::WorkerControlAdmitted),
             _ => None,
         }
     }

@@ -187,6 +187,8 @@ Worker orchestration state now follows the same authority rule. Typed worker ide
 
 Typed worker controls sit above that lifecycle state and below future transport. Admission validates start/resume, continue, stop, and status requests against the current goal/phase without changing lifecycle optimistically. Continue additionally consumes a move-only `ContinuationPermit`; routing consumes a move-only `DispatchPermit`. Session/endpoint binding and the eventual XML representation remain separate future layers.
 
+Admitted worker controls are now also journaled as their own typed audit facts. Control identity, worker/goal correlation, semantic kind, and continuation permit ordinal survive restart, but control replay does not mutate worker lifecycle or imply dispatch, delivery, or execution. Those facts remain separate evidence layers. SQLite carries admitted-control events generically without a dedicated schema/materialization.
+
 ## Failure philosophy
 
 Chatarium prefers visible uncertainty over fabricated certainty. If a failure cannot be distinguished from a successful remote action whose acknowledgement was lost, the UI should say so and offer reconciliation instead of resending blindly.
