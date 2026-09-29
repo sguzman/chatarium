@@ -91,7 +91,7 @@ Deliverables:
 
 Exit criterion met: a new ChatGPT deployment can be captured, sanitized, inventoried, classified, fixture-validated, and structurally compared with the last working observation without manual archaeology from zero.
 
-## P2 — durable application core
+## P2 — durable application core — COMPLETE
 
 Implement the local event model and persistence substrate.
 
@@ -105,9 +105,11 @@ Deliverables:
 - projection rebuild tests;
 - interrupted-turn recovery tests.
 
-Current state: typed local identities, fsync-backed typed user-message commits, replayable turn evidence, the append-only JSONL journal, and SQLite projection schema v2 are implemented. SQLite now rebuilds both generic durable events and typed authored-turn state (exact text + local IDs + replayed evidence) transactionally from the journal, while legacy text-only commits remain event-only. P2's remaining work is concentrated on crash-transition/recovery coverage across the full local commit -> dispatch evidence -> streaming -> completion/reconciliation lifecycle.
+Current state: typed local identities, fsync-backed typed user-message commits, replayable turn evidence, the append-only JSONL journal, and SQLite projection schema v2 are implemented. SQLite rebuilds both generic durable events and typed authored-turn state (exact text + local IDs + replayed evidence) transactionally from the journal, while legacy text-only commits remain event-only.
 
-Exit criterion: simulated crashes at every transition do not lose committed authorship or corrupt the recoverable history.
+The persistent crash matrix now reopens the real JSONL journal and SQLite projection across pre-commit, committed, dispatching, ambiguous interruption, reconciliation, accepted, streaming, partial-interruption, completion-before-projection-update, and final rebuild boundaries. A typed commit also survives an fsynced unterminated next-record tail without fabricating dispatch evidence.
+
+Exit criterion met: simulated crashes across the durable turn lifecycle do not lose committed authorship, erase typed identity, fabricate remote certainty, or corrupt recoverable projection state.
 
 ## P3 — read-only remote integration
 
