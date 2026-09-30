@@ -437,12 +437,29 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
         .unwrap_or("?")
         .to_owned();
 
+    let legacy_disarm_seq = run_id
+        .is_none()
+        .then(|| {
+            events
+                .iter()
+                .filter(|event| {
+                    event.get("kind").and_then(Value::as_str)
+                        == Some("protocol-read-capture-disarmed")
+                        && event
+                            .get("seq")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|seq| seq >= started_seq)
+                })
+                .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+                .min()
+        })
+        .flatten();
+
     let matching_read_event = |event: &&Value| {
-        let seq_matches = event
-            .get("seq")
-            .and_then(Value::as_u64)
-            .is_some_and(|seq| seq >= started_seq);
-        if !seq_matches {
+        let Some(seq) = event.get("seq").and_then(Value::as_u64) else {
+            return false;
+        };
+        if seq < started_seq {
             return false;
         }
         let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -453,7 +470,7 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
             Some(expected) => {
                 event.pointer("/payload/runId").and_then(Value::as_str) == Some(expected)
             }
-            None => true,
+            None => legacy_disarm_seq.is_none_or(|disarm_seq| seq <= disarm_seq),
         }
     };
 
@@ -742,7 +759,7 @@ fn derive_sanitized_run(
         "assistant_wal": assistant_wal,
         "messages": messages,
         "streams": sanitized_streams,
-        "read_capture": sanitize_read_capture_metadata(export),
+        "read_capture": sanitize_read_capture_metadata(selected),
         "read_responses": read_responses,
         "warnings": warnings,
     });
@@ -769,7 +786,7 @@ fn derive_sanitized_run(
         "message_source_counts": message_source_counts,
         "assistant_wal": assistant_inventory(export, selected, allowed_texts),
         "streams": inventory_streams,
-        "read_capture": sanitize_read_capture_metadata(export),
+        "read_capture": sanitize_read_capture_metadata(selected),
         "read_responses": read_inventory,
         "warning_count": warning_count,
     });
@@ -781,36 +798,83 @@ fn derive_sanitized_run(
     }))
 }
 
-fn sanitize_read_capture_metadata(export: &Value) -> Value {
-    let Some(capture) = export.get("protocolReadCapture") else {
-        return json!({
-            "present": false,
-            "armed": false,
-        });
-    };
+fn sanitize_read_capture_metadata(selected: &SelectedRun) -> Value {
+    let arm = selected.events.iter().find(|event| {
+        event.get("kind").and_then(Value::as_str) == Some("protocol-read-capture-armed")
+    });
+    let disarm = selected.events.iter().find(|event| {
+        event.get("kind").and_then(Value::as_str) == Some("protocol-read-capture-disarmed")
+    });
 
-    let intervals = capture
-        .get("intervals")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(|interval| {
-            json!({
-                "armed_at": interval.get("armedAt"),
-                "disarmed_at": interval.get("disarmedAt"),
-                "reason": interval.get("reason"),
-            })
+    let response_count = selected
+        .events
+        .iter()
+        .filter(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-captured")
         })
-        .collect::<Vec<_>>();
+        .count() as u64;
+    let captured_bytes = selected
+        .events
+        .iter()
+        .filter(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-captured")
+        })
+        .filter_map(|event| {
+            event
+                .pointer("/payload/capturedBytes")
+                .and_then(Value::as_u64)
+        })
+        .sum::<u64>();
+    let request_count = selected
+        .events
+        .iter()
+        .filter(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-request-observed")
+        })
+        .count() as u64;
+    let skipped_count = selected
+        .events
+        .iter()
+        .filter(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-skipped")
+        })
+        .count() as u64;
+    let error_count = selected
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.get("kind").and_then(Value::as_str),
+                Some("protocol-read-response-error" | "protocol-read-fetch-error")
+            )
+        })
+        .count() as u64;
+
+    let intervals = arm
+        .map(|arm| {
+            vec![json!({
+                "armed_at": arm.get("at"),
+                "disarmed_at": disarm.and_then(|event| event.get("at")),
+                "reason": disarm.and_then(|event| event.pointer("/payload/reason")),
+            })]
+        })
+        .unwrap_or_default();
 
     json!({
-        "present": true,
-        "armed": capture.get("armed").and_then(Value::as_bool).unwrap_or(false),
-        "armed_at": capture.get("armedAt"),
-        "captured_bytes": capture.get("capturedBytes").and_then(Value::as_u64),
-        "response_count": capture.get("responseCount").and_then(Value::as_u64),
-        "response_limit_bytes": capture.get("responseLimitBytes").and_then(Value::as_u64),
-        "run_limit_bytes": capture.get("runLimitBytes").and_then(Value::as_u64),
+        "present": arm.is_some(),
+        "armed": arm.is_some() && disarm.is_none(),
+        "armed_at": arm.and_then(|event| event.get("at")),
+        "captured_bytes": captured_bytes,
+        "request_count": request_count,
+        "response_count": response_count,
+        "skipped_count": skipped_count,
+        "error_count": error_count,
+        "response_limit_bytes": arm
+            .and_then(|event| event.pointer("/payload/responseLimitBytes"))
+            .and_then(Value::as_u64),
+        "run_limit_bytes": arm
+            .and_then(|event| event.pointer("/payload/runLimitBytes"))
+            .and_then(Value::as_u64),
         "intervals": intervals,
     })
 }
@@ -1972,7 +2036,18 @@ type = "conversation_list_visible"
             .collect::<Vec<_>>();
 
         assert_eq!(selected.started_seq, 15);
-        assert_eq!(seqs, vec![15, 16, 17, 18]);
+        assert_eq!(seqs, vec![15, 16, 17]);
+
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            derived.pointer("/sanitized/read_capture/response_count"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            derived.pointer("/sanitized/read_capture/captured_bytes"),
+            Some(&json!(12))
+        );
     }
 
     fn cumulative_export() -> Value {
