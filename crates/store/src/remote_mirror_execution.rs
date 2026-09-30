@@ -107,9 +107,7 @@ mod tests {
     use chatarium_core::remote::{
         ProtocolObservationRevision, RemoteConversationBinding, RemoteConversationId,
     };
-    use chatarium_protocol::read::{
-        JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation,
-    };
+    use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
 
     struct FakeProvider {
         evidence: SessionAuthenticationEvidence,
