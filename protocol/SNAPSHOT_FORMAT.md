@@ -135,7 +135,7 @@ The point is to preserve structural usefulness without creating a credential arc
 
 ## Flight Recorder evidence
 
-A Flight Recorder export may contain multiple recorder sessions because browser storage is cumulative. Public evidence therefore represents one explicitly selected run beginning at the latest `recorder-started` event used for the snapshot.
+A Flight Recorder export may contain multiple recorder sessions because browser storage is cumulative. Text-turn evidence selects the latest relevant `recorder-started` session. Explicit read experiments instead select one Arm Reads interval: v0.7.1+ uses the run ID recorded at request start, while legacy v0.7.0 evidence is bounded from the selected Arm event through the first Disarm event so late completions cannot bleed into the public snapshot.
 
 The sanitizer reconstructs complete SSE frames across browser delivery chunks before applying protocol-aware redaction. Only exact text declared by the canonical experiment definition may survive as literal conversation content. Signed/reusable values, concrete remote identifiers, hidden/private message bodies, generated titles, unexpected server-controlled scalar values, and unparseable SSE are removed or replaced with explicit placeholders.
 
