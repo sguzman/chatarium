@@ -196,8 +196,8 @@ fn validate_fixture(path: &Path, revision: &str) -> Result<FixtureValidationKind
     scan_sensitive_object_values(&fixture, "")?;
 
     let experiment = fixture.get("experiment").and_then(Value::as_str);
-    let is_c03_sse = experiment == Some(C03_EXPERIMENT)
-        && fixture.get("representative_sequence").is_some();
+    let is_c03_sse =
+        experiment == Some(C03_EXPERIMENT) && fixture.get("representative_sequence").is_some();
     if is_c03_sse {
         validate_c03_sse_fixture(&fixture)?;
     }
@@ -228,7 +228,9 @@ fn validate_read_fixture(fixture: &Value) -> Result<(), String> {
             .and_then(Value::as_str)
             .ok_or_else(|| format!("read response {index} is missing method"))?;
         if !matches!(method, "GET" | "HEAD") {
-            return Err(format!("read response {index} has non-read method {method}"));
+            return Err(format!(
+                "read response {index} has non-read method {method}"
+            ));
         }
 
         let path = read
