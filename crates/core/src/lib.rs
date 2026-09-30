@@ -1,6 +1,7 @@
 //! Domain model for Chatarium reliability state.
 
 pub mod authenticated_session;
+pub mod chat_container;
 pub mod control;
 pub mod control_provenance;
 pub mod control_route;
@@ -273,7 +274,10 @@ impl TurnEvidence {
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
             | EventKind::RemoteReadObservationRecorded
-            | EventKind::RemoteMirrorSelectionChanged => {}
+            | EventKind::RemoteMirrorSelectionChanged
+            | EventKind::ChatContainerCreated
+            | EventKind::ChatSessionLifecycleTransitionRecorded
+            | EventKind::ChatSessionSuccessorBound => {}
         }
         Ok(())
     }
@@ -365,6 +369,12 @@ pub enum EventKind {
     RemoteReadObservationRecorded,
     /// User intent to include or exclude one bound conversation from future remote mirroring changed.
     RemoteMirrorSelectionChanged,
+    /// One logical chat container was created around an already-registered root session.
+    ChatContainerCreated,
+    /// One chat-container session advanced toward saturation.
+    ChatSessionLifecycleTransitionRecorded,
+    /// One saturated chat session was durably succeeded by a fresh session with handoff provenance.
+    ChatSessionSuccessorBound,
 }
 
 impl EventKind {
@@ -408,6 +418,11 @@ impl EventKind {
             Self::RemoteConversationBound => "remote_conversation_bound",
             Self::RemoteReadObservationRecorded => "remote_read_observation_recorded",
             Self::RemoteMirrorSelectionChanged => "remote_mirror_selection_changed",
+            Self::ChatContainerCreated => "chat_container_created",
+            Self::ChatSessionLifecycleTransitionRecorded => {
+                "chat_session_lifecycle_transition_recorded"
+            }
+            Self::ChatSessionSuccessorBound => "chat_session_successor_bound",
         }
     }
 
@@ -451,6 +466,11 @@ impl EventKind {
             "remote_conversation_bound" => Some(Self::RemoteConversationBound),
             "remote_read_observation_recorded" => Some(Self::RemoteReadObservationRecorded),
             "remote_mirror_selection_changed" => Some(Self::RemoteMirrorSelectionChanged),
+            "chat_container_created" => Some(Self::ChatContainerCreated),
+            "chat_session_lifecycle_transition_recorded" => {
+                Some(Self::ChatSessionLifecycleTransitionRecorded)
+            }
+            "chat_session_successor_bound" => Some(Self::ChatSessionSuccessorBound),
             _ => None,
         }
     }
