@@ -195,7 +195,7 @@ pub fn snapshot_flight(
     let export: Value = serde_json::from_slice(&source)
         .map_err(|error| format!("parse Flight Recorder JSON: {error}"))?;
     validate_export(&export)?;
-    let selected = select_latest_run(&export)?;
+    let selected = select_run_for_experiment(&export, &experiment)?;
     validate_run_matches_experiment(&export, &selected, &experiment)?;
 
     let mut allowed_texts = BTreeSet::new();
@@ -370,6 +370,115 @@ fn validate_run_matches_experiment(
         ));
     }
     Ok(())
+}
+
+fn is_read_experiment(experiment: &ExperimentDefinition) -> bool {
+    matches!(
+        experiment.action.kind.as_str(),
+        "observe_conversation_list" | "open_existing_conversation"
+    )
+}
+
+fn select_run_for_experiment(
+    export: &Value,
+    experiment: &ExperimentDefinition,
+) -> Result<SelectedRun, String> {
+    if is_read_experiment(experiment) {
+        select_latest_read_capture_run(export)
+    } else {
+        select_latest_run(export)
+    }
+}
+
+fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String> {
+    let events = export
+        .get("events")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Flight Recorder export is missing events".to_owned())?;
+
+    let recorder_start = events
+        .iter()
+        .filter(|event| event.get("kind").and_then(Value::as_str) == Some("recorder-started"))
+        .max_by_key(|event| event.get("seq").and_then(Value::as_u64).unwrap_or_default())
+        .ok_or_else(|| "Flight Recorder export contains no recorder-started event".to_owned())?;
+    let recorder_started_seq = recorder_start
+        .get("seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "latest recorder-started event has no numeric seq".to_owned())?;
+
+    let arm = events
+        .iter()
+        .filter(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-capture-armed")
+                && event
+                    .get("seq")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|seq| seq >= recorder_started_seq)
+        })
+        .max_by_key(|event| event.get("seq").and_then(Value::as_u64).unwrap_or_default())
+        .ok_or_else(|| "latest recorder run contains no protocol-read-capture-armed event".to_owned())?;
+
+    let started_seq = arm
+        .get("seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "latest protocol-read-capture-armed event has no numeric seq".to_owned())?;
+    let started_at = arm
+        .get("at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "latest protocol-read-capture-armed event has no timestamp".to_owned())?
+        .to_owned();
+    let run_id = arm.pointer("/payload/runId").and_then(Value::as_str);
+    let recorder_version = recorder_start
+        .pointer("/payload/version")
+        .and_then(Value::as_str)
+        .or_else(|| export.get("recorderVersion").and_then(Value::as_str))
+        .unwrap_or("?")
+        .to_owned();
+
+    let matching_read_event = |event: &&Value| {
+        let seq_matches = event
+            .get("seq")
+            .and_then(Value::as_u64)
+            .is_some_and(|seq| seq >= started_seq);
+        if !seq_matches {
+            return false;
+        }
+        let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
+        if !kind.starts_with("protocol-read-") {
+            return false;
+        }
+        match run_id {
+            Some(expected) => event.pointer("/payload/runId").and_then(Value::as_str) == Some(expected),
+            None => true,
+        }
+    };
+
+    let selected_events = events
+        .iter()
+        .filter(matching_read_event)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let has_disarm = selected_events.iter().any(|event| {
+        event.get("kind").and_then(Value::as_str) == Some("protocol-read-capture-disarmed")
+    });
+    if !has_disarm {
+        return Err("latest protocol-read capture run is not durably disarmed".to_owned());
+    }
+
+    let has_capture = selected_events.iter().any(|event| {
+        event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-captured")
+    });
+    if !has_capture {
+        return Err("latest protocol-read capture run contains no captured JSON response".to_owned());
+    }
+
+    Ok(SelectedRun {
+        started_seq,
+        started_at,
+        recorder_version,
+        events: selected_events,
+    })
 }
 
 fn select_latest_run(export: &Value) -> Result<SelectedRun, String> {
@@ -556,10 +665,15 @@ fn derive_sanitized_run(
         }
     }
 
-    let send_intents = sanitize_send_intents(export, selected, allowed_texts, &mut ids, &mut stats);
-    let assistant_wal =
-        sanitize_assistant_wal(export, selected, allowed_texts, &mut ids, &mut stats);
-    let messages = sanitize_messages(export, selected, allowed_texts, &mut ids, &mut stats);
+    let (send_intents, assistant_wal, messages) = if is_read_experiment(experiment) {
+        (Vec::new(), Value::Null, Vec::new())
+    } else {
+        (
+            sanitize_send_intents(export, selected, allowed_texts, &mut ids, &mut stats),
+            sanitize_assistant_wal(export, selected, allowed_texts, &mut ids, &mut stats),
+            sanitize_messages(export, selected, allowed_texts, &mut ids, &mut stats),
+        )
+    };
 
     let sanitized_streams = streams
         .iter()
