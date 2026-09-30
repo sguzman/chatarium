@@ -19,16 +19,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-const FORBIDDEN_READ_FIELDS: &[&str] = &[
-    "bodyText",
-    "body_text",
-    "raw_body",
-    "headers",
-    "request_headers",
-    "cookies",
-    "authorization",
-    "query_values",
-    "request_body",
+const ALLOWED_FIXTURE_FIELDS: &[&str] = &[
+    "snapshot",
+    "experiment",
+    "status",
+    "read_responses",
 ];
 
 const ALLOWED_READ_FIELDS: &[&str] = &[
@@ -174,8 +169,7 @@ fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<Re
             reads.len()
         )
     })?;
-    let read_object = read
-        .as_object()
+    read.as_object()
         .ok_or_else(|| format!("read response {selected_index} must be a JSON object"))?;
 
     let method_name = required_string(read, "method")?;
@@ -227,7 +221,14 @@ fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<Re
 }
 
 fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
-    reject_forbidden_fields(fixture, "")?;
+    let fixture_object = fixture
+        .as_object()
+        .ok_or_else(|| "sanitized read fixture must be a JSON object".to_owned())?;
+    for key in fixture_object.keys() {
+        if !ALLOWED_FIXTURE_FIELDS.contains(&key.as_str()) {
+            return Err(format!("sanitized read fixture contains unsupported top-level field {key:?}"));
+        }
+    }
 
     let reads = fixture
         .get("read_responses")
@@ -253,28 +254,6 @@ fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
         }
     }
 
-    Ok(())
-}
-
-fn reject_forbidden_fields(value: &Value, pointer: &str) -> Result<(), String> {
-    match value {
-        Value::Object(map) => {
-            for (key, nested) in map {
-                if FORBIDDEN_READ_FIELDS.contains(&key.as_str()) {
-                    return Err(format!(
-                        "sanitized read fixture contains forbidden private field at {pointer}/{key}"
-                    ));
-                }
-                reject_forbidden_fields(nested, &format!("{pointer}/{key}"))?;
-            }
-        }
-        Value::Array(items) => {
-            for (index, nested) in items.iter().enumerate() {
-                reject_forbidden_fields(nested, &format!("{pointer}/{index}"))?;
-            }
-        }
-        _ => {}
-    }
     Ok(())
 }
 
@@ -620,7 +599,7 @@ mod tests {
         let bytes = serde_json::to_vec(&fixture).unwrap();
 
         let error = import_bytes(&bytes, 0, &dir).unwrap_err();
-        assert!(error.contains("forbidden private field"));
+        assert!(error.contains("unsupported field"));
         assert!(!error.contains("PRIVATE CONVERSATION CONTENT"));
 
         let _ = fs::remove_dir_all(dir);
