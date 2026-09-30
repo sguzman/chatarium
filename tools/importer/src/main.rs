@@ -1,5 +1,7 @@
 //! Import browser flight-recorder evidence into Chatarium's durable native journal.
 
+mod read_fixture;
+
 use chatarium_core::EventKind;
 use chatarium_store::{EventStore, JsonlEventStore};
 use serde_json::{Value, json};
@@ -31,12 +33,34 @@ fn run() -> Result<(), String> {
         [command, export, data_dir] if command == "flight-recorder" => {
             import_file(Path::new(export), Path::new(data_dir))
         }
+        [command, fixture, read_index, data_dir] if command == "read-fixture" => {
+            let selected_index = read_index.parse::<usize>().map_err(|_| {
+                format!("read-fixture index must be a non-negative integer, got {read_index:?}")
+            })?;
+            let summary = read_fixture::import_file(
+                Path::new(fixture),
+                selected_index,
+                Path::new(data_dir),
+            )?;
+            println!("source sha256: {}", summary.source_sha256);
+            println!("archive: {}", summary.archive_path.display());
+            println!("journal: {}", summary.journal_path.display());
+            println!("selected read index: {}", summary.selected_index);
+            println!("observation id: {}", summary.observation_id);
+            println!(
+                "durable action: {}",
+                if summary.appended { "appended" } else { "already durable" }
+            );
+            Ok(())
+        }
         [command, _export] if command == "flight-recorder" => Err(
             "refusing to import without an explicit data directory; usage: chatarium-importer flight-recorder <export.json> <data-dir>"
                 .to_owned(),
         ),
         _ => {
-            eprintln!("Usage:\n  chatarium-importer flight-recorder <export.json> <data-dir>");
+            eprintln!(
+                "Usage:\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>"
+            );
             Err("invalid arguments".to_owned())
         }
     }

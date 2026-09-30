@@ -674,6 +674,7 @@ name = "chatarium-importer"
 version = "0.1.0"
 dependencies = [
  "chatarium-core",
+ "chatarium-protocol",
  "chatarium-store",
  "serde_json",
  "sha2",
