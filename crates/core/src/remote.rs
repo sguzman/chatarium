@@ -168,6 +168,15 @@ mod tests {
     }
 
     #[test]
+    fn remote_binding_event_does_not_mutate_turn_evidence() {
+        let mut evidence = crate::TurnEvidence::default();
+        evidence
+            .apply_event_kind(crate::EventKind::RemoteConversationBound)
+            .unwrap();
+        assert_eq!(evidence, crate::TurnEvidence::default());
+    }
+
+    #[test]
     fn binding_preserves_all_identity_domains() {
         let local = LocalConversationId::new();
         let remote = RemoteConversationId::new("remote-conversation").unwrap();
