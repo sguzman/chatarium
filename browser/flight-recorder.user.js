@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.7.0
+// @version      0.7.1
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -17,7 +17,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.7.0';
+  const VERSION = '0.7.1';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -42,11 +42,8 @@
   let panelHost = null;
   let panelRoot = null;
   let lastPolledComposerFingerprint = null;
-  let readCaptureArmed = false;
-  let readCaptureArmedAt = null;
-  let readCaptureBytes = 0;
-  let readCaptureResponses = 0;
-  const readCaptureIntervals = [];
+  let activeReadCaptureRun = null;
+  const readCaptureRuns = [];
   const observedErrors = new Set();
 
   const now = () => new Date().toISOString();
@@ -182,30 +179,62 @@
       || mime.endsWith('+json');
   }
 
-  function readCaptureStatus() {
+  function readCaptureRunSummary(run) {
+    if (!run) return null;
     return {
-      armed: readCaptureArmed,
-      armedAt: readCaptureArmedAt,
-      capturedBytes: readCaptureBytes,
-      responseCount: readCaptureResponses,
+      runId: run.runId,
+      armedAt: run.armedAt,
+      disarmedAt: run.disarmedAt,
+      reason: run.reason,
+      requestCount: run.requestCount,
+      responseCount: run.responseCount,
+      skippedCount: run.skippedCount,
+      errorCount: run.errorCount,
+      capturedBytes: run.capturedBytes,
+    };
+  }
+
+  function readCaptureStatus() {
+    const latestRun = activeReadCaptureRun ?? readCaptureRuns.at(-1) ?? null;
+    return {
+      armed: Boolean(activeReadCaptureRun),
+      runId: activeReadCaptureRun?.runId ?? null,
+      armedAt: activeReadCaptureRun?.armedAt ?? null,
+      requestCount: latestRun?.requestCount ?? 0,
+      responseCount: latestRun?.responseCount ?? 0,
+      skippedCount: latestRun?.skippedCount ?? 0,
+      errorCount: latestRun?.errorCount ?? 0,
+      capturedBytes: latestRun?.capturedBytes ?? 0,
       responseLimitBytes: MAX_READ_RESPONSE_BYTES,
       runLimitBytes: MAX_READ_RUN_BYTES,
-      intervals: readCaptureIntervals.map((interval) => ({ ...interval })),
+      latestRun: readCaptureRunSummary(latestRun),
+      runs: readCaptureRuns.map(readCaptureRunSummary),
+      // Backward-compatible interval view for existing private exports/tools.
+      intervals: readCaptureRuns.map((run) => ({
+        armedAt: run.armedAt,
+        disarmedAt: run.disarmedAt,
+        reason: run.reason,
+      })),
     };
   }
 
   function armReadCapture() {
-    if (readCaptureArmed) return readCaptureStatus();
-    readCaptureArmed = true;
-    readCaptureArmedAt = now();
-    readCaptureBytes = 0;
-    readCaptureResponses = 0;
-    readCaptureIntervals.push({
-      armedAt: readCaptureArmedAt,
+    if (activeReadCaptureRun) return readCaptureStatus();
+    const run = {
+      runId: makeId('protocol-read-run'),
+      armedAt: now(),
       disarmedAt: null,
       reason: null,
-    });
+      requestCount: 0,
+      responseCount: 0,
+      skippedCount: 0,
+      errorCount: 0,
+      capturedBytes: 0,
+    };
+    activeReadCaptureRun = run;
+    readCaptureRuns.push(run);
     appendEvent('protocol-read-capture-armed', {
+      runId: run.runId,
       responseLimitBytes: MAX_READ_RESPONSE_BYTES,
       runLimitBytes: MAX_READ_RUN_BYTES,
     });
@@ -213,23 +242,37 @@
     return readCaptureStatus();
   }
 
-  function disarmReadCapture(reason = 'operator') {
-    if (!readCaptureArmed) return readCaptureStatus();
-    readCaptureArmed = false;
-    const disarmedAt = now();
-    const interval = readCaptureIntervals.at(-1);
-    if (interval && interval.disarmedAt === null) {
-      interval.disarmedAt = disarmedAt;
-      interval.reason = reason;
-    }
+  function disarmReadCapture(reason = 'operator', run = activeReadCaptureRun) {
+    if (!run || activeReadCaptureRun !== run) return readCaptureStatus();
+    run.disarmedAt = now();
+    run.reason = reason;
+    activeReadCaptureRun = null;
     appendEvent('protocol-read-capture-disarmed', {
+      runId: run.runId,
       reason,
-      capturedBytes: readCaptureBytes,
-      responseCount: readCaptureResponses,
+      requestCount: run.requestCount,
+      capturedBytes: run.capturedBytes,
+      responseCount: run.responseCount,
+      skippedCount: run.skippedCount,
+      errorCount: run.errorCount,
     });
-    readCaptureArmedAt = null;
     scheduleStatusRefresh();
     return readCaptureStatus();
+  }
+
+  function claimReadCaptureRun(requestInfo, transport = 'fetch') {
+    if (!activeReadCaptureRun || !requestInfo.readEligible) return null;
+    const run = activeReadCaptureRun;
+    run.requestCount += 1;
+    appendEvent('protocol-read-request-observed', {
+      runId: run.runId,
+      transport,
+      method: requestInfo.method,
+      endpoint: requestInfo.url?.pathname ?? '<unknown>',
+      queryKeys: requestInfo.queryKeys,
+    });
+    scheduleStatusRefresh();
+    return run;
   }
 
   function conversationScopeFromProtocolId(conversationId) {
@@ -572,12 +615,14 @@
     }
   }
 
-  async function captureProtocolReadResponse(response, requestInfo) {
+  async function captureProtocolReadResponse(response, requestInfo, run, transport = 'fetch') {
     const readId = makeId('protocol-read');
     const contentType = response.headers.get('content-type') ?? '';
     const endpoint = requestInfo.url?.pathname ?? '<unknown>';
     const metadata = {
       readId,
+      runId: run.runId,
+      transport,
       method: requestInfo.method,
       endpoint,
       queryKeys: requestInfo.queryKeys,
@@ -587,15 +632,17 @@
     };
 
     if (!structuredReadContentType(contentType)) {
+      run.skippedCount += 1;
       appendEvent('protocol-read-response-skipped', {
         ...metadata,
         reason: 'unsupported-content-type',
       });
+      scheduleStatusRefresh();
       return;
     }
 
     if (requestInfo.method === 'HEAD') {
-      readCaptureResponses += 1;
+      run.responseCount += 1;
       appendEvent('protocol-read-response-captured', {
         ...metadata,
         capturedBytes: 0,
@@ -608,21 +655,24 @@
     }
 
     if (!response.body) {
+      run.errorCount += 1;
       appendEvent('protocol-read-response-error', {
         ...metadata,
         capturedBytes: 0,
         message: 'response-body-unavailable',
       });
+      scheduleStatusRefresh();
       return;
     }
 
-    const remainingRunBytes = Math.max(0, MAX_READ_RUN_BYTES - readCaptureBytes);
+    const remainingRunBytes = Math.max(0, MAX_READ_RUN_BYTES - run.capturedBytes);
     if (remainingRunBytes === 0) {
       appendEvent('protocol-read-capture-limit', {
+        runId: run.runId,
         limitBytes: MAX_READ_RUN_BYTES,
-        capturedBytes: readCaptureBytes,
+        capturedBytes: run.capturedBytes,
       });
-      disarmReadCapture('run-byte-limit');
+      if (activeReadCaptureRun === run) disarmReadCapture('run-byte-limit', run);
       return;
     }
 
@@ -661,16 +711,18 @@
 
       if (!truncated) text += decoder.decode();
     } catch (error) {
+      run.errorCount += 1;
       appendEvent('protocol-read-response-error', {
         ...metadata,
         capturedBytes,
         message: String(error?.message ?? error),
       });
+      scheduleStatusRefresh();
       return;
     }
 
-    readCaptureBytes += capturedBytes;
-    readCaptureResponses += 1;
+    run.capturedBytes += capturedBytes;
+    run.responseCount += 1;
     appendEvent('protocol-read-response-captured', {
       ...metadata,
       capturedBytes,
@@ -680,12 +732,13 @@
     });
     scheduleStatusRefresh();
 
-    if (readCaptureBytes >= MAX_READ_RUN_BYTES) {
+    if (run.capturedBytes >= MAX_READ_RUN_BYTES) {
       appendEvent('protocol-read-capture-limit', {
+        runId: run.runId,
         limitBytes: MAX_READ_RUN_BYTES,
-        capturedBytes: readCaptureBytes,
+        capturedBytes: run.capturedBytes,
       });
-      disarmReadCapture('run-byte-limit');
+      if (activeReadCaptureRun === run) disarmReadCapture('run-byte-limit', run);
     }
   }
 
@@ -812,9 +865,9 @@
     window.fetch = new Proxy(originalFetch, {
       apply(target, thisArg, args) {
         const requestInfo = networkRequestInfo(args[0], args[1]);
-        const captureRead = readCaptureArmed && requestInfo.readEligible;
+        const readRun = claimReadCaptureRun(requestInfo, 'fetch');
         const result = Reflect.apply(target, thisArg, args);
-        if (!requestInfo.captureStream && !captureRead) return result;
+        if (!requestInfo.captureStream && !readRun) return result;
 
         return Promise.resolve(result).then(
           (response) => {
@@ -831,18 +884,22 @@
               }
             }
 
-            if (captureRead) {
+            if (readRun) {
               try {
                 const clone = response.clone();
-                void captureProtocolReadResponse(clone, requestInfo);
+                void captureProtocolReadResponse(clone, requestInfo, readRun, 'fetch');
               } catch (error) {
+                readRun.errorCount += 1;
                 appendEvent('protocol-read-response-error', {
+                  runId: readRun.runId,
+                  transport: 'fetch',
                   method: requestInfo.method,
                   endpoint: requestInfo.url?.pathname ?? '<unknown>',
                   queryKeys: requestInfo.queryKeys,
                   capturedBytes: 0,
                   message: `clone response: ${String(error?.message ?? error)}`,
                 });
+                scheduleStatusRefresh();
               }
             }
 
@@ -856,13 +913,17 @@
                 message: String(error?.message ?? error),
               });
             }
-            if (captureRead) {
+            if (readRun) {
+              readRun.errorCount += 1;
               appendEvent('protocol-read-fetch-error', {
+                runId: readRun.runId,
+                transport: 'fetch',
                 method: requestInfo.method,
                 endpoint: requestInfo.url?.pathname ?? '<unknown>',
                 queryKeys: requestInfo.queryKeys,
                 message: String(error?.message ?? error),
               });
+              scheduleStatusRefresh();
             }
             throw error;
           },
@@ -1487,7 +1548,7 @@
         </div>
         <div class="sub">${hasDraft ? 'draft saved' : 'no non-empty draft'} · ${pending.length} unresolved send${pending.length === 1 ? '' : 's'}</div>
         <div class="sub">${hasAssistant ? `assistant ${assistantChars.toLocaleString()} chars saved` : 'no assistant snapshot yet'}</div>
-        <div class="sub ${readState.armed ? 'armed' : ''}">protocol reads: ${readState.armed ? `ARMED · ${readState.responseCount} response(s) · ${readState.capturedBytes.toLocaleString()} bytes` : 'off'}</div>
+        <div class="sub ${readState.armed ? 'armed' : ''}">protocol reads: ${readState.armed ? `ARMED · ${readState.requestCount} request(s) · ${readState.responseCount} captured · ${readState.skippedCount} skipped · ${readState.errorCount} errors · ${readState.capturedBytes.toLocaleString()} bytes` : `off${readState.latestRun ? ` · last run ${readState.latestRun.requestCount} request(s) / ${readState.latestRun.responseCount} captured / ${readState.latestRun.errorCount} errors` : ''}`}</div>
         ${latestPending ? `<div class="sub warn">latest unresolved: ${escapeHtml(latestPending.at)}</div>` : ''}
         ${error ? `<div class="sub bad">last site error: ${escapeHtml(error.text.slice(0, 180))}</div>` : ''}
         <div class="actions">
@@ -1504,7 +1565,7 @@
     panelRoot.querySelector('[data-action="copy-send"]')?.addEventListener('click', () => void copyLatestSendIntent());
     panelRoot.querySelector('[data-action="copy-assistant"]')?.addEventListener('click', () => void copyLatestAssistant());
     panelRoot.querySelector('[data-action="toggle-read"]')?.addEventListener('click', () => {
-      if (readCaptureArmed) disarmReadCapture('operator');
+      if (activeReadCaptureRun) disarmReadCapture('operator');
       else armReadCapture();
     });
     panelRoot.querySelector('[data-action="export"]')?.addEventListener('click', () => void exportAll());
