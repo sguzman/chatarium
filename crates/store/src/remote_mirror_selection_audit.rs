@@ -72,7 +72,12 @@ pub fn replay_remote_mirror_selection_audit(
     let bindings = replay_remote_identity_audit(events)?;
     let binding_sequence_by_local = bindings
         .into_iter()
-        .map(|record| (record.binding.local_conversation_id(), record.bound_sequence))
+        .map(|record| {
+            (
+                record.binding.local_conversation_id(),
+                record.bound_sequence,
+            )
+        })
         .collect::<BTreeMap<_, _>>();
 
     let mut current = BTreeMap::<LocalConversationId, RemoteMirrorSelectionAuditRecord>::new();
@@ -106,7 +111,8 @@ pub fn replay_remote_mirror_selection_audit(
         let prior = current.get(&local_conversation_id);
 
         if selected {
-            let Some(binding_sequence) = binding_sequence_by_local.get(&local_conversation_id) else {
+            let Some(binding_sequence) = binding_sequence_by_local.get(&local_conversation_id)
+            else {
                 return Err(format!(
                     "remote mirror selection at sequence {} selects local conversation {} before any durable remote binding",
                     event.sequence, local_conversation_id
@@ -243,9 +249,10 @@ fn validate_scope(
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value.get(field).and_then(Value::as_str).ok_or_else(|| {
-        format!("typed remote mirror selection is missing string field '{field}'")
-    })
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("typed remote mirror selection is missing string field '{field}'"))
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -257,7 +264,7 @@ mod tests {
     use super::*;
     use crate::projection::SqliteProjection;
     use crate::remote_identity_audit::record_remote_conversation_bound;
-    use crate::remote_mirror_readiness::{RemoteMirrorReady, RemoteMirrorReadiness};
+    use crate::remote_mirror_readiness::{RemoteMirrorReadiness, RemoteMirrorReady};
     use crate::remote_read_audit::record_remote_read_observation;
     use crate::{JsonlEventStore, MemoryEventStore};
     use chatarium_core::RemoteReadObservationId;
@@ -265,9 +272,7 @@ mod tests {
     use chatarium_core::remote::{
         ProtocolObservationRevision, RemoteConversationBinding, RemoteConversationId,
     };
-    use chatarium_protocol::read::{
-        JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation,
-    };
+    use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
@@ -506,12 +511,8 @@ mod tests {
         let revision = "future-c02-observation";
         record_remote_conversation_bound(&mut store, &binding(local, revision)).unwrap();
         record_remote_mirror_selection_changed(&mut store, local, true).unwrap();
-        record_remote_read_observation(
-            &mut store,
-            RemoteReadObservationId::new(),
-            &c02(revision),
-        )
-        .unwrap();
+        record_remote_read_observation(&mut store, RemoteReadObservationId::new(), &c02(revision))
+            .unwrap();
 
         assert!(matches!(
             derive_selected_remote_mirror_plan(store.events(), local).unwrap(),
