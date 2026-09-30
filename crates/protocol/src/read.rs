@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn c01_and_c02_have_no_semantic_baseline_yet() {
         assert_eq!(
-            compatibility_for_read_flow(ReadFlow::ConversationList, "2026-09-29.002"),
+            compatibility_for_read_flow(ReadFlow::ConversationList, "2026-09-30.001"),
             Compatibility::NoBaseline
         );
         assert_eq!(
