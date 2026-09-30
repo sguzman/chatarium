@@ -416,7 +416,9 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
                     .is_some_and(|seq| seq >= recorder_started_seq)
         })
         .max_by_key(|event| event.get("seq").and_then(Value::as_u64).unwrap_or_default())
-        .ok_or_else(|| "latest recorder run contains no protocol-read-capture-armed event".to_owned())?;
+        .ok_or_else(|| {
+            "latest recorder run contains no protocol-read-capture-armed event".to_owned()
+        })?;
 
     let started_seq = arm
         .get("seq")
@@ -448,7 +450,9 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
             return false;
         }
         match run_id {
-            Some(expected) => event.pointer("/payload/runId").and_then(Value::as_str) == Some(expected),
+            Some(expected) => {
+                event.pointer("/payload/runId").and_then(Value::as_str) == Some(expected)
+            }
             None => true,
         }
     };
@@ -470,7 +474,9 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
         event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-captured")
     });
     if !has_capture {
-        return Err("latest protocol-read capture run contains no captured JSON response".to_owned());
+        return Err(
+            "latest protocol-read capture run contains no captured JSON response".to_owned(),
+        );
     }
 
     Ok(SelectedRun {
@@ -1887,14 +1893,8 @@ type = "conversation_list_visible"
 
         let derived =
             derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
-        assert_eq!(
-            derived.pointer("/sanitized/send_intents"),
-            Some(&json!([]))
-        );
-        assert_eq!(
-            derived.pointer("/sanitized/messages"),
-            Some(&json!([]))
-        );
+        assert_eq!(derived.pointer("/sanitized/send_intents"), Some(&json!([])));
+        assert_eq!(derived.pointer("/sanitized/messages"), Some(&json!([])));
         assert_eq!(
             derived.pointer("/sanitized/assistant_wal"),
             Some(&Value::Null)
