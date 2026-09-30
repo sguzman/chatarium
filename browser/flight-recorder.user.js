@@ -1490,8 +1490,29 @@
     panelHost.style.zIndex = '2147483647';
     panelHost.style.font = '12px/1.35 system-ui, sans-serif';
     panelRoot = panelHost.attachShadow({ mode: 'open' });
+    panelRoot.addEventListener('pointerdown', handlePanelAction);
     document.body.appendChild(panelHost);
     renderPanel();
+  }
+
+  function handlePanelAction(event) {
+    const button = event.target instanceof Element ? event.target.closest('button[data-action]') : null;
+    if (!button || button.hasAttribute('disabled')) return;
+
+    // Run controls on pointerdown rather than click. The panel is periodically refreshed while
+    // network evidence arrives; replacing a button between pointerdown and click can otherwise
+    // swallow the operator action.
+    event.preventDefault();
+    const action = button.dataset.action;
+    if (action === 'copy-draft') void copySavedDraft();
+    else if (action === 'copy-send') void copyLatestSendIntent();
+    else if (action === 'copy-assistant') void copyLatestAssistant();
+    else if (action === 'toggle-read') {
+      if (activeReadCaptureRun) disarmReadCapture('operator');
+      else armReadCapture();
+    } else if (action === 'export') {
+      void exportAll();
+    }
   }
 
   function renderPanel() {
@@ -1561,14 +1582,6 @@
       </div>
     `;
 
-    panelRoot.querySelector('[data-action="copy-draft"]')?.addEventListener('click', () => void copySavedDraft());
-    panelRoot.querySelector('[data-action="copy-send"]')?.addEventListener('click', () => void copyLatestSendIntent());
-    panelRoot.querySelector('[data-action="copy-assistant"]')?.addEventListener('click', () => void copyLatestAssistant());
-    panelRoot.querySelector('[data-action="toggle-read"]')?.addEventListener('click', () => {
-      if (activeReadCaptureRun) disarmReadCapture('operator');
-      else armReadCapture();
-    });
-    panelRoot.querySelector('[data-action="export"]')?.addEventListener('click', () => void exportAll());
   }
 
   function escapeHtml(value) {
