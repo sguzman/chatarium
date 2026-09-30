@@ -14,7 +14,7 @@ This directory contains Chatarium's **P0 emergency durability layer** for the of
 
 The userscript runs only on `chatgpt.com`.
 
-## What version 0.6 protects
+## What version 0.7.1 protects
 
 - **Per-conversation draft WAL.** Composer text is synchronously copied into `localStorage` and then archived into IndexedDB. Navigating to another chat does not intentionally overwrite another conversation's synchronous draft record.
 - **Separate send-intent WAL.** A send attempt is synchronously journaled *before* the site's normal bubbling send handler runs. Later draft mutations cannot erase this record.
@@ -26,12 +26,13 @@ The userscript runs only on `chatgpt.com`.
 - **Recovery controls.** The status panel can copy the latest saved draft, copy the most recent send intent, copy the latest assistant snapshot, or export the complete local recorder state.
 - **Private text-turn stream capture.** At document start the recorder wraps the page's existing `fetch` function and observes only `POST /backend-api/f/conversation`. It clones the returned response and incrementally journals decoded response-stream chunks into IndexedDB without reading request headers, cookies, request bodies, Sentinel values, conduit tokens, or browser credential stores. The site's original response remains the branch consumed by ChatGPT.
 - **Protocol-backed reconciliation.** For the v1 stream shape validated by snapshot `2026-09-29.002`, the recorder parses completed SSE frames in parallel with the raw chunk journal. A positively observed user `input_message` can confirm the matching pending send intent using the stream's canonical conversation ID. A positively observed `channel="final"` assistant text message is reconstructed incrementally into the existing assistant WAL and message archive. Derived events preserve the evidence source instead of hiding that the conclusion came from protocol rather than DOM observation.
+- **Explicit protocol-read experiments.** Read capture is OFF on every page load. While armed, same-origin `GET`/`HEAD` `/backend-api/` requests are observed without reading request headers, cookies, auth material, request bodies, or browser storage. Each Arm interval is a distinct run with its own ID and request/capture/skip/error/byte counters. Requests are bound to the run active when they begin, so a late response from an earlier run cannot contaminate a later one.
 
 The separate safety records are intentional. An empty post-send composer must not destroy the attempted user message, and a later page mutation must not destroy the assistant text that already reached the machine.
 
 ## Status panel
 
-The lower-right panel reports whether the browser is online, whether the current conversation has a non-empty saved draft, how many send intents remain unresolved, whether an assistant snapshot exists, and the most recently observed visible site error.
+The lower-right panel reports whether the browser is online, whether the current conversation has a non-empty saved draft, how many send intents remain unresolved, whether an assistant snapshot exists, and the most recently observed visible site error. When protocol reads are armed it also reports eligible request count, captured response count, skipped response count, errors, and bytes. This distinguishes "the site made no eligible request" from "the recorder saw the request but failed/skipped the response."
 
 An unresolved send is **not automatically an error**. It means Chatarium observed local send intent but has not yet observed enough evidence to classify the remote outcome. That distinction is central to the project.
 
@@ -48,7 +49,8 @@ Press **Ctrl+Shift+Alt+E** while ChatGPT is open to download a JSON export conta
 - archived events;
 - per-conversation draft records;
 - observed transcript messages;
-- private `network-stream-*` events for captured text-turn response streams, including ordered decoded chunks, status/content type, byte counts, truncation/error observations, and one local stream identifier.
+- private `network-stream-*` events for captured text-turn response streams, including ordered decoded chunks, status/content type, byte counts, truncation/error observations, and one local stream identifier;
+- explicit protocol-read run summaries and `protocol-read-*` events. Each read event carries its run identity, so back-to-back experiments remain separable even when an earlier response completes late.
 
 The status panel provides **Copy draft**, **Copy last send**, **Copy assistant**, and **Export** actions.
 
@@ -97,7 +99,7 @@ A timeout, disconnect, page crash, or frontend exception between the middle stat
 
 This remains a browser flight recorder rather than a complete network-protocol recorder. DOM selectors can change when ChatGPT changes. Assistant text is observational and may miss content that never reached/rendered in the page. A DOM transcript is not treated as canonical remote state.
 
-Version 0.6 adds one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. It does not capture arbitrary fetches, request bodies, request headers, authentication material, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; exceeding that limit is recorded explicitly and the recorder cancels only its cloned branch. For SSE responses, `data: [DONE]` is treated as a clean local terminal condition and is recorded as `network-stream-end` with `terminal = "sse-done"`.
+Version 0.6 added one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. Version 0.7 adds an operator-armed read-only observation surface for same-origin `GET`/`HEAD` `/backend-api/` traffic, and v0.7.1 gives every armed interval an isolated run identity plus per-run diagnostics. Read capture remains OFF after each page load. Neither mode captures request bodies, request headers, authentication material, browser storage, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; read responses are bounded to 1,000,000 bytes each and 4,000,000 bytes per run. Exceeding a limit is recorded explicitly and only Chatarium's observation branch is cancelled.
 
 Version 0.6 intentionally **does not auto-inject recovered text into the composer**. Copying recovered text is safe; mutating a React-controlled editor without a verified adapter can create a second class of data-loss bugs. Automatic restore belongs behind a tested site adapter.
 
@@ -107,6 +109,6 @@ Visible-error capture is intentionally conservative: it observes `role="alert"` 
 
 ## Privacy
 
-The local archive contains conversation text. Version 0.6 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
+The local archive contains conversation text. Version 0.7.1 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
 
 Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed.
