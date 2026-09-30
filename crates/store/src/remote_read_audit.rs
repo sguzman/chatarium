@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 const REMOTE_READ_SCHEMA: &str = "chatarium-remote-read-observation";
-const REMOTE_READ_VERSION: u64 = 1;
+const REMOTE_READ_VERSION_V1: u64 = 1;
+const REMOTE_READ_VERSION_V2: u64 = 2;
+const SANITIZED_READ_FIXTURE_SOURCE: &str = "sanitized_read_fixture";
 
 const FORBIDDEN_PAYLOAD_FIELDS: &[&str] = &[
     "body",
@@ -39,10 +41,40 @@ pub struct RemoteReadObservationAuditRecord {
     pub observation_id: RemoteReadObservationId,
     /// Validated safe structural protocol metadata.
     pub observation: ReadObservation,
+    /// Optional durable provenance for a publication-safe source fixture.
+    pub provenance: Option<RemoteReadObservationProvenance>,
     /// Evidence-gated semantic compatibility for the experiment's P3 flow.
     pub compatibility: Compatibility,
     /// Durable sequence where the observation was recorded.
     pub recorded_sequence: u64,
+}
+
+/// Publication-safe provenance for one typed read observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteReadObservationProvenance {
+    /// SHA-256 of the exact sanitized fixture bytes selected by the importer.
+    pub source_sha256: String,
+    /// Zero-based index in the fixture's read_responses array.
+    pub source_read_index: u64,
+}
+
+impl RemoteReadObservationProvenance {
+    /// Construct validated provenance for one sanitized read fixture entry.
+    pub fn sanitized_read_fixture(
+        source_sha256: impl Into<String>,
+        source_read_index: u64,
+    ) -> Result<Self, String> {
+        let source_sha256 = source_sha256.into();
+        if source_sha256.len() != 64
+            || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("sanitized read fixture SHA-256 must be exactly 64 hex characters".to_owned());
+        }
+        Ok(Self {
+            source_sha256: source_sha256.to_ascii_lowercase(),
+            source_read_index,
+        })
+    }
 }
 
 /// Append one safe structural read observation.
@@ -53,7 +85,7 @@ pub fn record_remote_read_observation(
 ) -> std::io::Result<u64> {
     let payload = serde_json::to_string(&json!({
         "schema": REMOTE_READ_SCHEMA,
-        "version": REMOTE_READ_VERSION,
+        "version": REMOTE_READ_VERSION_V1,
         "record": "remote_read_observation",
         "observation_id": observation_id.to_string(),
         "protocol_revision": observation.protocol_revision(),
@@ -77,6 +109,44 @@ pub fn record_remote_read_observation(
     )
 }
 
+/// Append one safe structural read observation selected from a sanitized fixture.
+pub fn record_remote_read_observation_from_fixture(
+    store: &mut impl EventStore,
+    observation_id: RemoteReadObservationId,
+    observation: &ReadObservation,
+    provenance: &RemoteReadObservationProvenance,
+) -> std::io::Result<u64> {
+    let payload = serde_json::to_string(&json!({
+        "schema": REMOTE_READ_SCHEMA,
+        "version": REMOTE_READ_VERSION_V2,
+        "record": "remote_read_observation",
+        "observation_id": observation_id.to_string(),
+        "protocol_revision": observation.protocol_revision(),
+        "experiment": observation.experiment().stable_name(),
+        "flow": observation.flow().stable_name(),
+        "method": observation.method().stable_name(),
+        "path": observation.path(),
+        "query_keys": observation.query_keys(),
+        "status": observation.status(),
+        "content_type": observation.content_type(),
+        "truncated": observation.truncated(),
+        "body_present": observation.body_present(),
+        "top_level_type": observation.top_level_type().map(JsonTopLevelType::stable_name),
+        "provenance": {
+            "source_kind": SANITIZED_READ_FIXTURE_SOURCE,
+            "source_sha256": provenance.source_sha256,
+            "source_read_index": provenance.source_read_index,
+        },
+    }))
+    .map_err(invalid_data)?;
+
+    store.append_scoped(
+        Some(remote_read_observation_scope(observation_id)),
+        EventKind::RemoteReadObservationRecorded,
+        payload,
+    )
+}
+
 /// Replay all durable safe read observations.
 pub fn replay_remote_read_audit(
     events: &[EventEnvelope],
@@ -88,7 +158,7 @@ pub fn replay_remote_read_audit(
             continue;
         }
 
-        let payload = typed_payload(event)?;
+        let (payload, version) = typed_payload(event)?;
         reject_forbidden_fields(event, &payload)?;
 
         let observation_id = required_string(&payload, "observation_id")?
@@ -168,12 +238,14 @@ pub fn replay_remote_read_audit(
             )
         })?;
 
+        let provenance = parse_provenance(&payload, version, event.sequence)?;
         let compatibility = compatibility_for_read_flow(flow, &protocol_revision);
         by_id.insert(
             observation_id,
             RemoteReadObservationAuditRecord {
                 observation_id,
                 observation,
+                provenance,
                 compatibility,
                 recorded_sequence: event.sequence,
             },
@@ -191,7 +263,7 @@ pub fn remote_read_observation_scope(observation_id: RemoteReadObservationId) ->
     format!("remote-read-observation:{observation_id}")
 }
 
-fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
+fn typed_payload(event: &EventEnvelope) -> Result<(Value, u64), String> {
     let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
         format!(
             "malformed remote read observation payload at sequence {}: {error}",
@@ -215,7 +287,7 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
                 event.sequence
             )
         })?;
-    if version != REMOTE_READ_VERSION {
+    if !matches!(version, REMOTE_READ_VERSION_V1 | REMOTE_READ_VERSION_V2) {
         return Err(format!(
             "unsupported remote read observation version {version} at sequence {}",
             event.sequence
@@ -229,7 +301,65 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
         ));
     }
 
-    Ok(value)
+    Ok((value, version))
+}
+
+fn parse_provenance(
+    payload: &Value,
+    version: u64,
+    sequence: u64,
+) -> Result<Option<RemoteReadObservationProvenance>, String> {
+    if version == REMOTE_READ_VERSION_V1 {
+        if payload.get("provenance").is_some() {
+            return Err(format!(
+                "v1 remote read observation at sequence {sequence} must not contain provenance"
+            ));
+        }
+        return Ok(None);
+    }
+
+    let provenance = payload
+        .get("provenance")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "v2 remote read observation at sequence {sequence} is missing provenance object"
+            )
+        })?;
+    if provenance.get("source_kind").and_then(Value::as_str)
+        != Some(SANITIZED_READ_FIXTURE_SOURCE)
+    {
+        return Err(format!(
+            "v2 remote read observation at sequence {sequence} has unsupported provenance source_kind"
+        ));
+    }
+    let source_sha256 = provenance
+        .get("source_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "v2 remote read observation at sequence {sequence} is missing provenance source_sha256"
+            )
+        })?;
+    let source_read_index = provenance
+        .get("source_read_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            format!(
+                "v2 remote read observation at sequence {sequence} is missing provenance source_read_index"
+            )
+        })?;
+
+    RemoteReadObservationProvenance::sanitized_read_fixture(
+        source_sha256,
+        source_read_index,
+    )
+    .map(Some)
+    .map_err(|error| {
+        format!(
+            "invalid v2 remote read observation provenance at sequence {sequence}: {error}"
+        )
+    })
 }
 
 fn reject_forbidden_fields(event: &EventEnvelope, payload: &Value) -> Result<(), String> {
@@ -390,6 +520,46 @@ mod tests {
     }
 
     #[test]
+    fn fixture_provenance_round_trips_in_v2() {
+        let mut store = MemoryEventStore::default();
+        let id = RemoteReadObservationId::new();
+        let observation = observation(ReadExperiment::OpenConversation, ReadMethod::Get);
+        let provenance = RemoteReadObservationProvenance::sanitized_read_fixture(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            3,
+        )
+        .unwrap();
+
+        record_remote_read_observation_from_fixture(
+            &mut store,
+            id,
+            &observation,
+            &provenance,
+        )
+        .unwrap();
+
+        let records = replay_remote_read_audit(store.events()).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].observation_id, id);
+        assert_eq!(records[0].provenance, Some(provenance));
+    }
+
+    #[test]
+    fn legacy_v1_observation_replays_without_fixture_provenance() {
+        let mut store = MemoryEventStore::default();
+        let id = RemoteReadObservationId::new();
+        record_remote_read_observation(
+            &mut store,
+            id,
+            &observation(ReadExperiment::ConversationList, ReadMethod::Get),
+        )
+        .unwrap();
+
+        let records = replay_remote_read_audit(store.events()).unwrap();
+        assert_eq!(records[0].provenance, None);
+    }
+
+    #[test]
     fn duplicate_observation_id_is_rejected() {
         let mut store = MemoryEventStore::default();
         let id = RemoteReadObservationId::new();
@@ -410,7 +580,7 @@ mod tests {
             id,
             json!({
                 "schema": REMOTE_READ_SCHEMA,
-                "version": REMOTE_READ_VERSION,
+                "version": REMOTE_READ_VERSION_V1,
                 "record": "remote_read_observation",
                 "observation_id": id.to_string(),
                 "protocol_revision": "rev",
@@ -550,7 +720,7 @@ mod tests {
     fn base_payload(id: RemoteReadObservationId) -> Value {
         json!({
             "schema": REMOTE_READ_SCHEMA,
-            "version": REMOTE_READ_VERSION,
+            "version": REMOTE_READ_VERSION_V1,
             "record": "remote_read_observation",
             "observation_id": id.to_string(),
             "protocol_revision": "rev",
