@@ -65,10 +65,11 @@ impl RemoteReadObservationProvenance {
         source_read_index: u64,
     ) -> Result<Self, String> {
         let source_sha256 = source_sha256.into();
-        if source_sha256.len() != 64
-            || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        if source_sha256.len() != 64 || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            return Err("sanitized read fixture SHA-256 must be exactly 64 hex characters".to_owned());
+            return Err(
+                "sanitized read fixture SHA-256 must be exactly 64 hex characters".to_owned(),
+            );
         }
         Ok(Self {
             source_sha256: source_sha256.to_ascii_lowercase(),
@@ -326,8 +327,7 @@ fn parse_provenance(
                 "v2 remote read observation at sequence {sequence} is missing provenance object"
             )
         })?;
-    if provenance.get("source_kind").and_then(Value::as_str)
-        != Some(SANITIZED_READ_FIXTURE_SOURCE)
+    if provenance.get("source_kind").and_then(Value::as_str) != Some(SANITIZED_READ_FIXTURE_SOURCE)
     {
         return Err(format!(
             "v2 remote read observation at sequence {sequence} has unsupported provenance source_kind"
@@ -350,16 +350,11 @@ fn parse_provenance(
             )
         })?;
 
-    RemoteReadObservationProvenance::sanitized_read_fixture(
-        source_sha256,
-        source_read_index,
-    )
-    .map(Some)
-    .map_err(|error| {
-        format!(
-            "invalid v2 remote read observation provenance at sequence {sequence}: {error}"
-        )
-    })
+    RemoteReadObservationProvenance::sanitized_read_fixture(source_sha256, source_read_index)
+        .map(Some)
+        .map_err(|error| {
+            format!("invalid v2 remote read observation provenance at sequence {sequence}: {error}")
+        })
 }
 
 fn reject_forbidden_fields(event: &EventEnvelope, payload: &Value) -> Result<(), String> {
@@ -530,13 +525,8 @@ mod tests {
         )
         .unwrap();
 
-        record_remote_read_observation_from_fixture(
-            &mut store,
-            id,
-            &observation,
-            &provenance,
-        )
-        .unwrap();
+        record_remote_read_observation_from_fixture(&mut store, id, &observation, &provenance)
+            .unwrap();
 
         let records = replay_remote_read_audit(store.events()).unwrap();
         assert_eq!(records.len(), 1);
