@@ -2270,20 +2270,10 @@ data: [DONE]
 
         let first_selected = select_latest_run(&first).unwrap();
         let second_selected = select_latest_run(&second).unwrap();
-        let first_derived = derive_sanitized_run(
-            &first,
-            &first_selected,
-            &experiment,
-            &BTreeSet::new(),
-        )
-        .unwrap();
-        let second_derived = derive_sanitized_run(
-            &second,
-            &second_selected,
-            &experiment,
-            &BTreeSet::new(),
-        )
-        .unwrap();
+        let first_derived =
+            derive_sanitized_run(&first, &first_selected, &experiment, &BTreeSet::new()).unwrap();
+        let second_derived =
+            derive_sanitized_run(&second, &second_selected, &experiment, &BTreeSet::new()).unwrap();
 
         assert_ne!(
             first_derived.pointer("/inventory/read_responses"),
