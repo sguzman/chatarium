@@ -81,8 +81,7 @@ pub fn record_remote_read_observation(
 pub fn replay_remote_read_audit(
     events: &[EventEnvelope],
 ) -> Result<Vec<RemoteReadObservationAuditRecord>, String> {
-    let mut by_id =
-        BTreeMap::<RemoteReadObservationId, RemoteReadObservationAuditRecord>::new();
+    let mut by_id = BTreeMap::<RemoteReadObservationId, RemoteReadObservationAuditRecord>::new();
 
     for event in events {
         if event.kind != EventKind::RemoteReadObservationRecorded {
@@ -300,10 +299,9 @@ fn required_bool(value: &Value, field: &str) -> Result<bool, String> {
 }
 
 fn required_u16(value: &Value, field: &str) -> Result<u16, String> {
-    let raw = value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed remote read observation is missing integer field '{field}'"))?;
+    let raw = value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed remote read observation is missing integer field '{field}'")
+    })?;
     u16::try_from(raw)
         .map_err(|_| format!("typed remote read observation field '{field}' exceeds u16"))
 }
@@ -315,11 +313,9 @@ fn required_string_array(value: &Value, field: &str) -> Result<Vec<String>, Stri
         .ok_or_else(|| format!("typed remote read observation is missing array field '{field}'"))?
         .iter()
         .map(|item| {
-            item.as_str()
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| {
-                    format!("typed remote read observation field '{field}' contains non-string")
-                })
+            item.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                format!("typed remote read observation field '{field}' contains non-string")
+            })
         })
         .collect()
 }
@@ -507,7 +503,11 @@ mod tests {
         }
 
         let reopened = JsonlEventStore::open(&path).unwrap();
-        assert!(replay_remote_read_audit(reopened.events()).unwrap().is_empty());
+        assert!(
+            replay_remote_read_audit(reopened.events())
+                .unwrap()
+                .is_empty()
+        );
         let _ = fs::remove_file(path);
     }
 
