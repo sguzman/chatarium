@@ -703,6 +703,7 @@ name = "chatarium-store"
 version = "0.1.0"
 dependencies = [
  "chatarium-core",
+ "chatarium-protocol",
  "rusqlite",
  "serde_json",
 ]
