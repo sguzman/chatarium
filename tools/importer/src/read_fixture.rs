@@ -484,6 +484,33 @@ mod tests {
     }
 
     #[test]
+    fn committed_c01_fixture_is_importable_without_semantic_promotion() {
+        let dir = temp_dir("committed-c01");
+        let bytes = include_bytes!(
+            "../../../protocol/fixtures/2026-09-30.001/c01-sidebar-read.json"
+        );
+
+        let summary = import_bytes(bytes, 0, &dir).unwrap();
+        let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].observation_id, summary.observation_id);
+        assert_eq!(
+            records[0].observation.experiment(),
+            ReadExperiment::ConversationList
+        );
+        assert_eq!(records[0].observation.protocol_revision(), "2026-09-30.001");
+        assert_eq!(records[0].compatibility, Compatibility::NoBaseline);
+        assert_eq!(
+            records[0].observation.path(),
+            "/backend-api/gizmos/snorlax/sidebar"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn sanitized_fixture_import_is_idempotent_and_typed() {
         let dir = temp_dir("idempotent");
         let bytes = fixture_bytes();
