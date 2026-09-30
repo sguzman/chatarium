@@ -4,6 +4,7 @@ pub mod control;
 pub mod control_provenance;
 pub mod control_route;
 pub mod orchestration;
+pub mod remote;
 pub mod routing;
 pub mod session;
 pub mod supervision;
@@ -264,7 +265,8 @@ impl TurnEvidence {
             | EventKind::ControllerWorkerBound
             | EventKind::WorkerControlIssuerBound
             | EventKind::ContinuationLeaseCreated
-            | EventKind::ContinuationPermitIssued => {}
+            | EventKind::ContinuationPermitIssued
+            | EventKind::RemoteConversationBound => {}
         }
         Ok(())
     }
@@ -350,6 +352,8 @@ pub enum EventKind {
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
     ContinuationPermitIssued,
+    /// One local conversation was correlated to an observed remote conversation identity.
+    RemoteConversationBound,
 }
 
 impl EventKind {
@@ -390,6 +394,7 @@ impl EventKind {
             Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
+            Self::RemoteConversationBound => "remote_conversation_bound",
         }
     }
 
@@ -430,6 +435,7 @@ impl EventKind {
             "worker_control_issuer_bound" => Some(Self::WorkerControlIssuerBound),
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
+            "remote_conversation_bound" => Some(Self::RemoteConversationBound),
             _ => None,
         }
     }
