@@ -72,7 +72,9 @@ pub enum RemoteMirrorBlocked {
 /// Derived P3 mirror readiness. Derivation never mutates durable state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteMirrorReadiness {
+    /// The durable evidence required for future semantic mirroring is unambiguous and validated.
     Ready(RemoteMirrorReady),
+    /// One or more evidence requirements prevent future semantic mirroring.
     Blocked(RemoteMirrorBlocked),
 }
 
@@ -223,7 +225,7 @@ mod tests {
     use super::*;
     use crate::remote_identity_audit::record_remote_conversation_bound;
     use crate::remote_read_audit::record_remote_read_observation;
-    use crate::{JsonlEventStore, MemoryEventStore};
+    use crate::{EventStore, JsonlEventStore, MemoryEventStore};
     use chatarium_core::remote::RemoteConversationBinding;
     use chatarium_protocol::read::{JsonTopLevelType, ReadMethod, ReadObservation};
     use std::fs::{self, OpenOptions};
