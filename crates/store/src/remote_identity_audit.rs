@@ -12,7 +12,6 @@ use chatarium_core::remote::{
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
 const REMOTE_IDENTITY_SCHEMA: &str = "chatarium-remote-conversation-binding";
 const REMOTE_IDENTITY_VERSION: u64 = 1;
