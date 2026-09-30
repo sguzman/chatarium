@@ -194,7 +194,7 @@ impl fmt::Display for ReadObservationError {
             }
             Self::EmptyQueryKey => {
                 write!(formatter, "read observation query key must not be empty")
-            },
+            }
             Self::DuplicateQueryKey(key) => {
                 write!(formatter, "duplicate read observation query key {key:?}")
             }
