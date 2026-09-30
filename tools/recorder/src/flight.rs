@@ -437,12 +437,26 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
         .unwrap_or("?")
         .to_owned();
 
+    let legacy_disarm_seq = run_id.is_none().then(|| {
+        events
+            .iter()
+            .filter(|event| {
+                event.get("kind").and_then(Value::as_str)
+                    == Some("protocol-read-capture-disarmed")
+                    && event
+                        .get("seq")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|seq| seq >= started_seq)
+            })
+            .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+            .min()
+    }).flatten();
+
     let matching_read_event = |event: &&Value| {
-        let seq_matches = event
-            .get("seq")
-            .and_then(Value::as_u64)
-            .is_some_and(|seq| seq >= started_seq);
-        if !seq_matches {
+        let Some(seq) = event.get("seq").and_then(Value::as_u64) else {
+            return false;
+        };
+        if seq < started_seq {
             return false;
         }
         let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -453,7 +467,7 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
             Some(expected) => {
                 event.pointer("/payload/runId").and_then(Value::as_str) == Some(expected)
             }
-            None => true,
+            None => legacy_disarm_seq.is_none_or(|disarm_seq| seq <= disarm_seq),
         }
     };
 
@@ -1972,7 +1986,7 @@ type = "conversation_list_visible"
             .collect::<Vec<_>>();
 
         assert_eq!(selected.started_seq, 15);
-        assert_eq!(seqs, vec![15, 16, 17, 18]);
+        assert_eq!(seqs, vec![15, 16, 17]);
     }
 
     fn cumulative_export() -> Value {
