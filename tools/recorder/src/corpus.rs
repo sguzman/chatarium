@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 const SNAPSHOT_SCHEMA: &str = "chatarium-protocol-snapshot";
 const SNAPSHOT_VERSION: u64 = 1;
+const C01_EXPERIMENT: &str = "C01-conversation-list";
+const C02_EXPERIMENT: &str = "C02-open-conversation";
 const C03_EXPERIMENT: &str = "C03-send-text";
 const C03_USER_TEXT: &str = "respond with exactly CHATARIUM_PROTOCOL_TEST_001";
 const C03_ASSISTANT_TEXT: &str = "CHATARIUM_PROTOCOL_TEST_001";
@@ -22,6 +24,8 @@ pub struct CorpusValidationReport {
     pub fixtures: usize,
     /// Number of canonical C03 SSE fixtures replayed through the typed parser.
     pub c03_sse_replays: usize,
+    /// Number of C01/C02 sanitized read fixtures structurally validated.
+    pub read_fixtures: usize,
 }
 
 /// Validate committed snapshot metadata, fixture provenance, and executable C03 evidence.
@@ -51,6 +55,7 @@ pub fn validate_corpus(protocol_dir: &Path) -> Result<CorpusValidationReport, St
     let fixture_dirs = child_dirs(&fixtures_dir)?;
     let mut fixture_count = 0_usize;
     let mut c03_sse_replays = 0_usize;
+    let mut read_fixtures = 0_usize;
 
     for fixture_dir in fixture_dirs {
         let revision = file_name(&fixture_dir)?;
@@ -71,9 +76,12 @@ pub fn validate_corpus(protocol_dir: &Path) -> Result<CorpusValidationReport, St
         for fixture_path in json_files(&fixture_dir)? {
             fixture_count = fixture_count.saturating_add(1);
             match validate_fixture(&fixture_path, &revision) {
-                Ok(replayed_c03) => {
-                    if replayed_c03 {
+                Ok(kind) => {
+                    if kind.replayed_c03 {
                         c03_sse_replays = c03_sse_replays.saturating_add(1);
+                    }
+                    if kind.validated_read {
+                        read_fixtures = read_fixtures.saturating_add(1);
                     }
                 }
                 Err(error) => errors.push(format!("{}: {error}", fixture_path.display())),
@@ -94,6 +102,7 @@ pub fn validate_corpus(protocol_dir: &Path) -> Result<CorpusValidationReport, St
         snapshots: snapshot_dirs.len(),
         fixtures: fixture_count,
         c03_sse_replays,
+        read_fixtures,
     })
 }
 
@@ -166,7 +175,13 @@ fn validate_snapshot(snapshot_dir: &Path, revision: &str, errors: &mut Vec<Strin
     }
 }
 
-fn validate_fixture(path: &Path, revision: &str) -> Result<bool, String> {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FixtureValidationKind {
+    replayed_c03: bool,
+    validated_read: bool,
+}
+
+fn validate_fixture(path: &Path, revision: &str) -> Result<FixtureValidationKind, String> {
     let fixture = read_json(path)?;
     let snapshot = fixture
         .get("snapshot")
@@ -180,12 +195,95 @@ fn validate_fixture(path: &Path, revision: &str) -> Result<bool, String> {
 
     scan_sensitive_object_values(&fixture, "")?;
 
-    let is_c03_sse = fixture.get("experiment").and_then(Value::as_str) == Some(C03_EXPERIMENT)
+    let experiment = fixture.get("experiment").and_then(Value::as_str);
+    let is_c03_sse = experiment == Some(C03_EXPERIMENT)
         && fixture.get("representative_sequence").is_some();
     if is_c03_sse {
         validate_c03_sse_fixture(&fixture)?;
     }
-    Ok(is_c03_sse)
+
+    let is_read = matches!(experiment, Some(C01_EXPERIMENT | C02_EXPERIMENT));
+    if is_read {
+        validate_read_fixture(&fixture)?;
+    }
+
+    Ok(FixtureValidationKind {
+        replayed_c03: is_c03_sse,
+        validated_read: is_read,
+    })
+}
+
+fn validate_read_fixture(fixture: &Value) -> Result<(), String> {
+    let reads = fixture
+        .get("read_responses")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "C01/C02 read fixture is missing read_responses array".to_owned())?;
+    if reads.is_empty() {
+        return Err("C01/C02 read fixture contains no read responses".to_owned());
+    }
+
+    for (index, read) in reads.iter().enumerate() {
+        let method = read
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("read response {index} is missing method"))?;
+        if !matches!(method, "GET" | "HEAD") {
+            return Err(format!("read response {index} has non-read method {method}"));
+        }
+
+        let path = read
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("read response {index} is missing path"))?;
+        if !path.starts_with("/backend-api/") {
+            return Err(format!(
+                "read response {index} escaped /backend-api/: {path}"
+            ));
+        }
+        if read.get("bodyText").is_some() || read.get("body_text").is_some() {
+            return Err(format!(
+                "read response {index} contains forbidden raw body text field"
+            ));
+        }
+
+        if let Some(body) = read.get("body") {
+            validate_read_body_placeholders(body, &format!("/read_responses/{index}/body"))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_read_body_placeholders(value: &Value, path: &str) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                validate_read_body_placeholders(
+                    nested,
+                    &format!("{path}/{}", escape_pointer_segment(key)),
+                )?;
+            }
+        }
+        Value::Array(items) => {
+            for (index, nested) in items.iter().enumerate() {
+                validate_read_body_placeholders(nested, &format!("{path}/{index}"))?;
+            }
+        }
+        Value::String(text) => {
+            if !(text.starts_with('<') && text.ends_with('>')) {
+                return Err(format!(
+                    "read body field {path} contains non-placeholder string content"
+                ));
+            }
+        }
+        Value::Null => {}
+        Value::Bool(_) | Value::Number(_) => {
+            return Err(format!(
+                "read body field {path} contains raw scalar instead of typed placeholder"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_c03_sse_fixture(fixture: &Value) -> Result<(), String> {
@@ -494,8 +592,89 @@ mod tests {
                 snapshots: 2,
                 fixtures: 1,
                 c03_sse_replays: 1,
+                read_fixtures: 0,
             }
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sanitized_c01_read_fixture_passes_without_raw_text() {
+        let root = temp_protocol();
+        let fixture = json!({
+            "snapshot": "2026-09-29.002",
+            "experiment": C01_EXPERIMENT,
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations",
+                "query_keys": ["limit", "offset"],
+                "body": {
+                    "items": [{
+                        "id": "<message:1>",
+                        "title": "<string>",
+                        "create_time": "<number>"
+                    }]
+                }
+            }]
+        });
+        fs::write(
+            root.join("fixtures/2026-09-29.002/c01.json"),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let report = validate_corpus(&root).unwrap();
+        assert_eq!(report.read_fixtures, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c01_read_fixture_rejects_arbitrary_conversation_text() {
+        let root = temp_protocol();
+        let fixture = json!({
+            "snapshot": "2026-09-29.002",
+            "experiment": C01_EXPERIMENT,
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations",
+                "body": {
+                    "title": "PRIVATE CONVERSATION TITLE"
+                }
+            }]
+        });
+        fs::write(
+            root.join("fixtures/2026-09-29.002/c01-private.json"),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let error = validate_corpus(&root).unwrap_err();
+        assert!(error.contains("non-placeholder string content"));
+        assert!(!error.contains("PRIVATE CONVERSATION TITLE"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c02_read_fixture_rejects_raw_body_text_field() {
+        let root = temp_protocol();
+        let fixture = json!({
+            "snapshot": "2026-09-29.002",
+            "experiment": C02_EXPERIMENT,
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversation/<id:1>",
+                "bodyText": "{PRIVATE}"
+            }]
+        });
+        fs::write(
+            root.join("fixtures/2026-09-29.002/c02-private.json"),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let error = validate_corpus(&root).unwrap_err();
+        assert!(error.contains("forbidden raw body text field"));
+        assert!(!error.contains("{PRIVATE}"));
         let _ = fs::remove_dir_all(root);
     }
 
