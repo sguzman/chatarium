@@ -51,5 +51,9 @@
     "The observed sidebar/gizmo surface is not proven to enumerate every remote conversation.",
     "C02 open-existing-conversation semantics remain unobserved.",
     "The private raw export contains unrelated account and conversation material and is not publication-safe."
-  ]
+  ],
+  "artifacts": {
+    "sanitized_observation": "evidence/C01.read-observation.json",
+    "regression_fixture": "../../fixtures/2026-09-30.001/c01-sidebar-read.json"
+  }
 }
