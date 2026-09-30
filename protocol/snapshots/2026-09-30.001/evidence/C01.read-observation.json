@@ -1,0 +1,356 @@
+{
+  "format": "chatarium-c01-read-observation",
+  "version": 1,
+  "snapshot": "2026-09-30.001",
+  "experiment": "C01-conversation-list",
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "ecfb1f1228321e8319de4aeab819e4b0f2bb1422377a96af56143ad2aaf42900",
+    "raw_bytes": 786960,
+    "committed_to_git": false
+  },
+  "selected_run": {
+    "armed_seq": 67,
+    "disarmed_seq": 80,
+    "response_count": 12,
+    "captured_bytes": 460268,
+    "truncated_response_count": 0,
+    "read_error_count": 0
+  },
+  "read_responses": [
+    {
+      "seq": 68,
+      "method": "GET",
+      "path": "/backend-api/pins",
+      "query_keys": [
+        "item_type"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 30545,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "array"
+    },
+    {
+      "seq": 69,
+      "method": "GET",
+      "path": "/backend-api/accounts/check/v4-2023-04-27",
+      "query_keys": [],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 9881,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 70,
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 179026,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 71,
+      "method": "GET",
+      "path": "/backend-api/pins",
+      "query_keys": [
+        "item_type"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 985,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "array"
+    },
+    {
+      "seq": 72,
+      "method": "GET",
+      "path": "/backend-api/settings/user",
+      "query_keys": [],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 11742,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 73,
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 76122,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 74,
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 76115,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 75,
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 22699,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 76,
+      "method": "GET",
+      "path": "/backend-api/accounts/check/v4-2023-04-27",
+      "query_keys": [],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 9881,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 77,
+      "method": "GET",
+      "path": "/backend-api/settings/user",
+      "query_keys": [],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 11742,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "seq": 78,
+      "method": "GET",
+      "path": "/backend-api/pins",
+      "query_keys": [
+        "item_type"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 985,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "array"
+    },
+    {
+      "seq": 79,
+      "method": "GET",
+      "path": "/backend-api/pins",
+      "query_keys": [
+        "item_type"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 30545,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "array"
+    }
+  ],
+  "sidebar_structure": [
+    {
+      "seq": 70,
+      "top_level_keys": [
+        "cursor",
+        "items"
+      ],
+      "top_level_item_count": 20,
+      "top_level_cursor_present": true,
+      "nested_conversation_container_count": 20,
+      "nested_conversation_item_counts": [
+        5,
+        5,
+        5,
+        5,
+        1,
+        5,
+        5,
+        2,
+        2,
+        1,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        3,
+        2
+      ],
+      "nested_conversation_cursor_present_count": 14,
+      "conversation_summary_keys": [
+        "async_status",
+        "blocked_urls",
+        "context_scopes",
+        "context_scopes_v2",
+        "conversation_origin",
+        "conversation_template_id",
+        "create_time",
+        "current_node",
+        "gizmo_id",
+        "id",
+        "is_archived",
+        "is_automation_conversation",
+        "is_do_not_remember",
+        "is_starred",
+        "is_temporary_chat",
+        "latest_assistant_turn_created_at",
+        "mapping",
+        "memory_scope",
+        "owner",
+        "pinned_time",
+        "safe_urls",
+        "snippet",
+        "sugar_item_id",
+        "sugar_item_visible",
+        "summary_metadata",
+        "title",
+        "trial_conversation_type",
+        "update_time",
+        "workspace_id"
+      ]
+    },
+    {
+      "seq": 73,
+      "top_level_keys": [
+        "cursor",
+        "items"
+      ],
+      "top_level_item_count": 20,
+      "top_level_cursor_present": true,
+      "nested_conversation_container_count": 20,
+      "nested_conversation_item_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "nested_conversation_cursor_present_count": 0
+    },
+    {
+      "seq": 74,
+      "top_level_keys": [
+        "cursor",
+        "items"
+      ],
+      "top_level_item_count": 20,
+      "top_level_cursor_present": true,
+      "nested_conversation_container_count": 20,
+      "nested_conversation_item_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "nested_conversation_cursor_present_count": 0
+    },
+    {
+      "seq": 75,
+      "top_level_keys": [
+        "cursor",
+        "items"
+      ],
+      "top_level_item_count": 6,
+      "top_level_cursor_present": false,
+      "nested_conversation_container_count": 6,
+      "nested_conversation_item_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "nested_conversation_cursor_present_count": 0
+    }
+  ],
+  "semantic_boundary": {
+    "conversation_list_baseline_established": false,
+    "reason": "Observed sidebar pagination can contain nested conversation summaries, but complete account-wide conversation enumeration was not established."
+  },
+  "privacy": {
+    "raw_response_bodies_copied": false,
+    "query_values_copied": false,
+    "request_headers_copied": false,
+    "credentials_copied": false,
+    "concrete_remote_identifiers_copied": false,
+    "conversation_text_copied": false
+  }
+}

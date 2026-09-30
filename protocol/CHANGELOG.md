@@ -12,3 +12,4 @@ This file records changes in **our observations** of the ChatGPT web client. It 
 - Added canonical C03 snapshot `2026-09-29.002` from Flight Recorder v0.5.0 with the full `/backend-api/f/conversation` response stream.
 - Observed SSE `delta_encoding = "v1"`, incremental delta operations, final-message completion patching, `message_stream_complete`, and terminal `[DONE]`.
 - Flight Recorder v0.5.1 now treats `[DONE]` as a clean local terminal condition instead of reading once more and reporting Chromium's post-terminal clone abort.
+- Added partial controlled C01 snapshot `2026-09-30.001` from Flight Recorder v0.7.0: observed a paginated `/backend-api/gizmos/snorlax/sidebar` JSON surface with nested conversation summaries during sidebar scrolling. The evidence is committed with placeholder-only structure, while `ConversationList` remains `NoBaseline` because the capture does not prove complete account-wide enumeration.

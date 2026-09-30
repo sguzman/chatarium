@@ -1,0 +1,97 @@
+{
+  "snapshot": "2026-09-30.001",
+  "experiment": "C01-conversation-list",
+  "status": "partial_observation",
+  "read_responses": [
+    {
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "body": {
+        "items": [
+          {
+            "gizmo": {
+              "gizmo": {
+                "id": "<id>"
+              }
+            },
+            "conversations": {
+              "items": [
+                {
+                  "id": "<id>",
+                  "title": "<string>",
+                  "create_time": "<number>",
+                  "update_time": "<number>"
+                }
+              ],
+              "cursor": "<string>"
+            }
+          }
+        ],
+        "cursor": "<string>"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "body": {
+        "items": [
+          {
+            "gizmo": {
+              "gizmo": {
+                "id": "<id>"
+              }
+            },
+            "conversations": {
+              "items": [],
+              "cursor": null
+            }
+          }
+        ],
+        "cursor": "<string>"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "body": {
+        "items": [
+          {
+            "gizmo": {
+              "gizmo": {
+                "id": "<id>"
+              }
+            },
+            "conversations": {
+              "items": [],
+              "cursor": null
+            }
+          }
+        ],
+        "cursor": null
+      }
+    }
+  ]
+}

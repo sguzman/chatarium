@@ -71,60 +71,11 @@ Canonical experiments:
 
 The first machine-executable experiment definitions live under `protocol/experiments/`. Each experiment should produce its own capture or clearly delimited action log. Human QA is reserved for observations the harness genuinely cannot obtain itself.
 
-Current state: the basic canonical text-turn stream is directly observed and typed in `crates/protocol`; browser-local capture and protocol-backed reconciliation work on Linux. Flight Recorder export ingestion, fail-closed selected-run sanitization, deterministic sanitization reports, HAR/Flight structural inventories and diffs, evidence-scoped field classification, committed-corpus validation, frontend asset identity manifests, and frontend asset manifest diffs are automated.
+Current state: Flight Recorder v0.7.1 has an explicit, bounded protocol-read evidence mode that is off by default and captures only explicitly armed same-origin `GET`/`HEAD` responses under `/backend-api/` with JSON-family content types. Query values, request headers, cookies, authorization values, request bodies, browser storage, and third-party traffic are not captured. Each armed interval has isolated run identity and counters; legacy v0.7.0 evidence is bounded Arm-through-Disarm so late responses cannot contaminate a later or public run. Offline `snapshot-flight` reduces private read bodies to deterministic object/array/key/type structure and stable identity placeholders before public evidence is written; malformed declared JSON fails closed and truncation remains explicit.
 
-P0.5 exit criterion: equivalent controlled captures can be repeated and transformed into deterministic sanitized evidence/inventory without Windows-specific bootstrap machinery or manual protocol archaeology from zero.
+Controlled C01 snapshot `2026-09-30.001` is now committed. It observes the official client using a paginated `/backend-api/gizmos/snorlax/sidebar` JSON surface during sidebar loading and scrolling, with nested `conversations.items` and nested/top-level cursors. This is real conversation-list-side evidence, but it does **not** prove that the surface enumerates the complete account-wide remote conversation set. Therefore `LATEST_VALIDATED_CONVERSATION_LIST_OBSERVATION` deliberately remains `None` and conversation-list compatibility remains `NoBaseline`. C02 open-existing-conversation evidence is still unobserved, so conversation-fetch compatibility also remains `NoBaseline`.
 
-## P1 — recorder and diff tooling — COMPLETE
-
-Build reproducible tooling for turning captures into protocol evidence.
-
-Deliverables:
-
-- HAR and Flight Recorder capture ingestion;
-- fail-closed secret/content sanitization and sanitization report;
-- frontend asset manifest/hashes;
-- request/response/event shape extraction;
-- stable-vs-ephemeral field annotations;
-- structural diff between protocol snapshots;
-- fixture validation in CI.
-
-Exit criterion met: a new ChatGPT deployment can be captured, sanitized, inventoried, classified, fixture-validated, and structurally compared with the last working observation without manual archaeology from zero.
-
-## P2 — durable application core — COMPLETE
-
-Implement the local event model and persistence substrate.
-
-Deliverables:
-
-- typed local IDs;
-- user-message commit transaction;
-- turn evidence state machine;
-- append-oriented event journal;
-- SQLite projections and migrations;
-- projection rebuild tests;
-- interrupted-turn recovery tests.
-
-Current state: typed local identities, fsync-backed typed user-message commits, replayable turn evidence, the append-only JSONL journal, and SQLite projection schema v2 are implemented. SQLite rebuilds both generic durable events and typed authored-turn state (exact text + local IDs + replayed evidence) transactionally from the journal, while legacy text-only commits remain event-only.
-
-The persistent crash matrix now reopens the real JSONL journal and SQLite projection across pre-commit, committed, dispatching, ambiguous interruption, reconciliation, accepted, streaming, partial-interruption, completion-before-projection-update, and final rebuild boundaries. A typed commit also survives an fsynced unterminated next-record tail without fabricating dispatch evidence.
-
-Exit criterion met: simulated crashes across the durable turn lifecycle do not lose committed authorship, erase typed identity, fabricate remote certainty, or corrupt recoverable projection state.
-
-## P3 — read-only remote integration
-
-Consume the observed ChatGPT protocol without sending mutations first.
-
-Deliverables:
-
-- authenticated-session boundary;
-- conversation listing;
-- conversation fetch;
-- remote/local identity mapping;
-- import into the local durable model;
-- protocol mismatch diagnostics.
-
-Current state: Flight Recorder v0.7.0 now has an explicit, bounded protocol-read evidence mode that is off by default and captures only explicitly armed same-origin `GET`/`HEAD` responses under `/backend-api/` with JSON-family content types. Query values, request headers, cookies, authorization values, request bodies, browser storage, and third-party traffic are not captured. Offline `snapshot-flight` reduces private read bodies to deterministic object/array/key/type structure and stable identity placeholders before public evidence is written; malformed declared JSON fails closed and truncation remains explicit. C01/C02 experiment definitions and corpus guards exist. Local and remote conversation identity are also now separate first-class domains, with restart-safe one-to-one binding that preserves the protocol observation revision supporting the correlation. No conversation-list/fetch endpoint or response semantics are considered supported until controlled C01/C02 evidence is actually observed and committed. Safe read observations are now also first-class typed durable records: Chatarium can persist the controlled experiment identity, named protocol revision, GET/HEAD metadata, normalized backend path, query-key names, status/content type, truncation/body presence, and optional structural JSON top-level type without persisting raw response text. The protocol crate exposes per-flow compatibility diagnostics independently from the global C03 baseline; with the current corpus both conversation-list and conversation-fetch semantics correctly report `NoBaseline`. A composed remote-mirror readiness layer now joins durable local/remote identity provenance to C02 conversation-fetch evidence and refuses semantic import unless the binding revision has one unambiguous `ValidatedAgainst` C02 observation. With the current corpus this readiness is explicitly blocked by `NoBaseline`; no transcript/message semantics are invented. Durable user selection intent is now also restart-safe and separate from readiness: a bound conversation can be selected or deselected for future mirroring, and the derived plan remains `SelectedButBlocked` until the evidence gate becomes ready. The authenticated-session boundary is now typed and explicitly transient: a selected, protocol-ready mirror plan stops at `RequiresAuthenticatedSession` until a borrow-scoped runtime provider reports positive authentication evidence. The lease contains no credential representation, is not durable or clonable, and cannot be reconstructed after restart; concrete official-client session bridging remains future adapter work.
+Local and remote conversation identity are separate first-class domains, with restart-safe one-to-one binding that preserves the protocol observation revision supporting the correlation. Safe read observations are first-class typed durable records: Chatarium can persist controlled experiment identity, named protocol revision, GET/HEAD metadata, normalized backend path, query-key names, status/content type, truncation/body presence, and optional structural JSON top-level type without persisting raw response text. A composed remote-mirror readiness layer joins durable local/remote identity provenance to C02 conversation-fetch evidence and refuses semantic import unless the binding revision has one unambiguous `ValidatedAgainst` C02 observation. Durable user selection intent is restart-safe and separate from readiness. The authenticated-session boundary is typed and explicitly transient: a selected, protocol-ready mirror plan stops at `RequiresAuthenticatedSession` until a borrow-scoped runtime provider reports positive authentication evidence. The lease contains no credential representation, is not durable or clonable, and revalidates authentication before every provider use.
 
 Exit criterion: Chatarium can mirror selected existing conversations into local durable state and explain incompatibilities against a named protocol snapshot.
 
