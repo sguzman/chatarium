@@ -815,7 +815,6 @@ fn sanitize_read_response_event(
         "query_keys": sanitized.get("query_keys"),
         "status": status,
         "content_type": content_type,
-        "captured_bytes": captured_bytes,
         "truncated": truncated,
         "body_present": body_present,
         "top_level_type": top_level_type,
