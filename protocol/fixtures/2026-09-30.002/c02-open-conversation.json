@@ -1,0 +1,40 @@
+{
+  "snapshot": "2026-09-30.002",
+  "experiment": "C02-open-conversation",
+  "status": "observed_failure",
+  "read_responses": [
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": ["include_has_versions", "num_turns"],
+      "status": 429,
+      "content_type": "application/json",
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object",
+      "body": {"detail": "<string>"}
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": ["include_has_versions", "num_turns"],
+      "status": 429,
+      "content_type": "application/json",
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object",
+      "body": {"detail": "<string>"}
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": ["include_has_versions", "num_turns"],
+      "status": 429,
+      "content_type": "application/json",
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object",
+      "body": {"detail": "<string>"}
+    }
+  ]
+}

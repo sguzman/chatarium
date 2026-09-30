@@ -1,0 +1,259 @@
+{
+  "schema": "chatarium-protocol-read-observation",
+  "version": 1,
+  "snapshot": "2026-09-30.002",
+  "canonical_experiment": "C02-open-conversation",
+  "recorder": {
+    "name": "Chatarium Flight Recorder",
+    "version": "0.7.1"
+  },
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "f8f2a1de659dc1a5c7aca636ee1d4a0c66cdb4351fffb530a857fbd63507a0eb",
+    "raw_bytes": 864006,
+    "committed_to_git": false
+  },
+  "selected_run": {
+    "run_id": "<run-id>",
+    "armed_at": "2026-09-30T21:06:37.884Z",
+    "disarmed_at": "2026-09-30T21:07:33.937Z",
+    "request_count": 11,
+    "response_count": 8,
+    "skipped_count": 0,
+    "error_count": 1,
+    "captured_bytes": 51816
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/backend-api/automations",
+      "query_keys": [
+        "filter",
+        "limit"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/automations",
+      "query_keys": [
+        "filter",
+        "limit"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/amphora/notifications",
+      "query_keys": [
+        "limit"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/settings/user",
+      "query_keys": []
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/wham/usage",
+      "query_keys": []
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations",
+      "query_keys": [
+        "exclude_conversation_origin",
+        "expand",
+        "hide_snorlax",
+        "is_archived",
+        "is_starred",
+        "limit",
+        "offset",
+        "order"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations",
+      "query_keys": [
+        "conversation_origin",
+        "expand",
+        "hide_snorlax",
+        "is_archived",
+        "is_starred",
+        "limit",
+        "offset",
+        "order"
+      ]
+    }
+  ],
+  "responses": [
+    {
+      "method": "GET",
+      "path": "/backend-api/automations",
+      "query_keys": [
+        "filter",
+        "limit"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 4885,
+      "truncated": false,
+      "body_present": true
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/automations",
+      "query_keys": [
+        "filter",
+        "limit"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 12365,
+      "truncated": false,
+      "body_present": true
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/gizmos/snorlax/sidebar",
+      "query_keys": [
+        "conversations_per_gizmo",
+        "cursor",
+        "limit",
+        "owned_only"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 22699,
+      "truncated": false,
+      "body_present": true
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/amphora/notifications",
+      "query_keys": [
+        "limit"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 35,
+      "truncated": false,
+      "body_present": true
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ],
+      "status": 429,
+      "content_type": "application/json",
+      "captured_bytes": 30,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/settings/user",
+      "query_keys": [],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 11742,
+      "truncated": false,
+      "body_present": true
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ],
+      "status": 429,
+      "content_type": "application/json",
+      "captured_bytes": 30,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    },
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ],
+      "status": 429,
+      "content_type": "application/json",
+      "captured_bytes": 30,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    }
+  ],
+  "errors": [
+    {
+      "method": "GET",
+      "path": "/backend-api/wham/usage",
+      "query_keys": [],
+      "error_class": "timeout"
+    }
+  ],
+  "semantic_candidates": [
+    {
+      "response_index": 4,
+      "causal_event": "navigation to an existing conversation immediately preceded the request/response pair"
+    },
+    {
+      "response_index": 6,
+      "causal_event": "navigation to a second existing conversation immediately preceded the request/response pair"
+    },
+    {
+      "response_index": 7,
+      "causal_event": "return navigation to the first existing conversation preceded the repeated fetch"
+    }
+  ],
+  "assessment": {
+    "request_path_observed": true,
+    "query_shape_observed": true,
+    "successful_conversation_fetch_response_observed": false,
+    "conversation_fetch_semantic_baseline_established": false,
+    "compatibility": "NoBaseline"
+  }
+}

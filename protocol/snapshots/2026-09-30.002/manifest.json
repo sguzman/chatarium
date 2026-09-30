@@ -1,0 +1,60 @@
+{
+  "schema": "chatarium-protocol-snapshot",
+  "version": 1,
+  "revision": "2026-09-30.002",
+  "observation_kind": "flight_recorder_c02_conversation_fetch_rate_limited",
+  "canonical_experiment": "C02-open-conversation",
+  "capture_start_utc": "2026-09-30T21:06:37.884Z",
+  "capture_end_utc": "2026-09-30T21:07:33.937Z",
+  "recorder": {
+    "name": "Chatarium Flight Recorder",
+    "version": "0.7.1"
+  },
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "f8f2a1de659dc1a5c7aca636ee1d4a0c66cdb4351fffb530a857fbd63507a0eb",
+    "raw_bytes": 864006,
+    "committed_to_git": false
+  },
+  "controlled_action": {
+    "type": "open_existing_conversation",
+    "mutation": false,
+    "steps": [
+      "Arm protocol-read capture.",
+      "Navigate to an existing conversation from a different conversation.",
+      "Navigate to another existing conversation.",
+      "Return to the first existing conversation.",
+      "Disarm protocol-read capture and export once."
+    ]
+  },
+  "selected_run": {
+    "request_count": 11,
+    "captured_responses": 8,
+    "captured_bytes": 51816,
+    "truncated_responses": 0,
+    "read_errors": 1
+  },
+  "observed_reads": {
+    "/backend-api/conversations/<id>": 3,
+    "/backend-api/automations": 2,
+    "/backend-api/gizmos/snorlax/sidebar": 1,
+    "/backend-api/amphora/notifications": 1,
+    "/backend-api/settings/user": 1
+  },
+  "semantic_assessment": {
+    "conversation_fetch_request_path_observed": true,
+    "conversation_fetch_baseline_established": false,
+    "reason": "Three GET requests to /backend-api/conversations/<id> with the same query-key shape were causally associated with navigation among existing conversations, but every captured conversation-fetch response was HTTP 429 and therefore no successful response schema was observed."
+  },
+  "limitations": [
+    "The conversation-fetch response body was not successfully observed.",
+    "The 429 body is represented only as placeholder structure in committed evidence.",
+    "One unrelated /backend-api/wham/usage read timed out during the selected run.",
+    "C02 remains NoBaseline until a successful conversation-fetch response is observed.",
+    "The private raw export contains unrelated account and conversation material and is not publication-safe."
+  ],
+  "artifacts": {
+    "sanitized_observation": "evidence/C02.read-observation.json",
+    "regression_fixture": "../../fixtures/2026-09-30.002/c02-open-conversation-rate-limited.json"
+  }
+}
