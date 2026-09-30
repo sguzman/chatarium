@@ -202,7 +202,7 @@ fn validate_fixture(path: &Path, revision: &str) -> Result<FixtureValidationKind
         validate_c03_sse_fixture(&fixture)?;
     }
 
-    let is_read = matches!(experiment, Some(C01_EXPERIMENT | C02_EXPERIMENT));
+    let is_read = matches!(experiment, Some(C01_EXPERIMENT) | Some(C02_EXPERIMENT));
     if is_read {
         validate_read_fixture(&fixture)?;
     }
