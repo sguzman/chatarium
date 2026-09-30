@@ -1605,6 +1605,63 @@ text = "CHATARIUM_PROTOCOL_TEST_001"
         .unwrap()
     }
 
+    fn read_experiment() -> ExperimentDefinition {
+        toml::from_str(
+            r#"
+schema = "chatarium-experiment"
+version = 1
+id = "C01-conversation-list"
+
+[action]
+type = "observe_conversation_list"
+
+[success]
+type = "conversation_list_visible"
+"#,
+        )
+        .unwrap()
+    }
+
+    fn export_with_read_body(body: &str, truncated: bool) -> Value {
+        let mut export = cumulative_export();
+        export["recorderVersion"] = json!("0.7.0");
+        export["protocolReadCapture"] = json!({
+            "armed": false,
+            "armedAt": null,
+            "capturedBytes": body.len(),
+            "responseCount": 1,
+            "responseLimitBytes": 1_000_000,
+            "runLimitBytes": 4_000_000,
+            "intervals": [{
+                "armedAt": "2026-09-29T11:00:00Z",
+                "disarmedAt": "2026-09-29T11:00:03Z",
+                "reason": "operator"
+            }]
+        });
+        export["events"]
+            .as_array_mut()
+            .expect("events")
+            .push(json!({
+                "seq": 15,
+                "at": "2026-09-29T11:00:03Z",
+                "kind": "protocol-read-response-captured",
+                "payload": {
+                    "readId": "PRIVATE-read-id",
+                    "method": "GET",
+                    "endpoint": "/backend-api/conversation/12345678-abcd-1234-abcd-1234567890ab",
+                    "queryKeys": ["limit", "offset"],
+                    "status": 200,
+                    "contentType": "application/json; charset=utf-8",
+                    "capturedBytes": body.len(),
+                    "truncated": truncated,
+                    "bodyPresent": true,
+                    "bodyText": body,
+                    "privateEvidence": true
+                }
+            }));
+        export
+    }
+
     fn cumulative_export() -> Value {
         let first_chunk = r#"event: delta_encoding
 data: "v1"
@@ -2114,6 +2171,196 @@ data: [DONE]
         assert_eq!(
             derived.pointer("/sanitization_report/counts/unterminated_sse_tails_redacted"),
             Some(&json!(1))
+        );
+    }
+
+    #[test]
+    fn read_json_reduction_removes_titles_messages_secrets_and_raw_ids() {
+        let body = r#"{
+            "items": [{
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "conversation_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "message_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "title": "PRIVATE CONVERSATION TITLE",
+                "content": "PRIVATE MESSAGE TEXT",
+                "active": true,
+                "score": 42
+            }],
+            "access_token": "PRIVATE TOKEN"
+        }"#;
+        let export = export_with_read_body(body, false);
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = read_experiment();
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+        let text = serde_json::to_string_pretty(&derived).unwrap();
+
+        for secret in [
+            "PRIVATE CONVERSATION TITLE",
+            "PRIVATE MESSAGE TEXT",
+            "PRIVATE TOKEN",
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "12345678-abcd-1234-abcd-1234567890ab",
+            "PRIVATE-read-id",
+        ] {
+            assert!(!text.contains(secret), "read evidence leaked {secret}");
+        }
+
+        assert!(text.contains("<string>"));
+        assert!(text.contains("<bool>"));
+        assert!(text.contains("<number>"));
+        assert!(text.contains("<redacted>"));
+        assert!(text.contains("<conversation:"));
+        assert!(text.contains("<message:"));
+        assert!(text.contains("/backend-api/conversation/<id:"));
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/top_level_type"),
+            Some(&json!("object"))
+        );
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/query_keys"),
+            Some(&json!(["limit", "offset"]))
+        );
+        assert!(
+            derived
+                .pointer("/inventory/read_responses/0/shape")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|row| {
+                    row.get("pointer").and_then(Value::as_str) == Some("/items/0/title")
+                        && row.get("type").and_then(Value::as_str) == Some("string")
+                })
+        );
+        assert_eq!(
+            derived.pointer("/sanitization_report/counts/raw_read_response_bodies_copied"),
+            Some(&json!(0))
+        );
+    }
+
+    #[test]
+    fn private_read_value_changes_do_not_change_structural_inventory() {
+        let first = export_with_read_body(
+            r#"{"items":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","title":"FIRST PRIVATE TITLE","count":1}]}"#,
+            false,
+        );
+        let second = export_with_read_body(
+            r#"{"items":[{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","title":"SECOND PRIVATE TITLE","count":999}]}"#,
+            false,
+        );
+        let experiment = read_experiment();
+
+        let first_selected = select_latest_run(&first).unwrap();
+        let second_selected = select_latest_run(&second).unwrap();
+        let first_derived = derive_sanitized_run(
+            &first,
+            &first_selected,
+            &experiment,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let second_derived = derive_sanitized_run(
+            &second,
+            &second_selected,
+            &experiment,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            first_derived.pointer("/inventory/read_responses"),
+            second_derived.pointer("/inventory/read_responses")
+        );
+    }
+
+    #[test]
+    fn read_structural_type_change_is_inventory_visible() {
+        let first = export_with_read_body(r#"{"items":[{"title":"PRIVATE"}]}"#, false);
+        let second =
+            export_with_read_body(r#"{"items":[{"title":{"value":"PRIVATE"}}]}"#, false);
+        let experiment = read_experiment();
+
+        let first_selected = select_latest_run(&first).unwrap();
+        let second_selected = select_latest_run(&second).unwrap();
+        let first_derived = derive_sanitized_run(
+            &first,
+            &first_selected,
+            &experiment,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let second_derived = derive_sanitized_run(
+            &second,
+            &second_selected,
+            &experiment,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert_ne!(
+            first_derived.pointer("/inventory/read_responses"),
+            second_derived.pointer("/inventory/read_responses")
+        );
+    }
+
+    #[test]
+    fn malformed_declared_read_json_fails_closed_without_copying_body() {
+        let export = export_with_read_body("{PRIVATE BROKEN JSON", false);
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = read_experiment();
+        let error =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap_err();
+
+        assert!(error.contains("declared JSON protocol read body failed closed"));
+        assert!(!error.contains("PRIVATE BROKEN JSON"));
+    }
+
+    #[test]
+    fn truncated_read_json_is_explicit_and_not_parsed_or_copied() {
+        let export = export_with_read_body("{\"private\":\"DO NOT LEAK", true);
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = read_experiment();
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+        let text = serde_json::to_string_pretty(&derived).unwrap();
+
+        assert!(!text.contains("DO NOT LEAK"));
+        assert!(text.contains(TRUNCATED_READ_BODY));
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/truncated"),
+            Some(&json!(true))
+        );
+        assert!(
+            derived
+                .pointer("/inventory/warning_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                >= 1
+        );
+    }
+
+    #[test]
+    fn head_read_does_not_fabricate_body() {
+        let mut export = export_with_read_body("", false);
+        let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
+        event["payload"]["method"] = json!("HEAD");
+        event["payload"]["bodyPresent"] = json!(false);
+        event["payload"]["bodyText"] = Value::Null;
+
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = read_experiment();
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+
+        assert_eq!(
+            derived.pointer("/sanitized/read_responses/0/body"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/top_level_type"),
+            Some(&Value::Null)
         );
     }
 
