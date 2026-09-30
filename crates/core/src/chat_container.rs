@@ -122,8 +122,7 @@ impl SessionLifecyclePhase {
     pub const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Healthy, Self::Aging | Self::Saturated)
-                | (Self::Aging, Self::Saturated)
+            (Self::Healthy, Self::Aging | Self::Saturated) | (Self::Aging, Self::Saturated)
         )
     }
 }
