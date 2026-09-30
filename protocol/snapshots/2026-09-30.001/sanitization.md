@@ -25,4 +25,6 @@ The public evidence removes or generalizes:
 
 Flight Recorder read mode did not inspect or persist cookies, authorization values, request headers, request bodies, browser storage, or query parameter values.
 
+The snapshot's `evidence/C01.read-observation.json` preserves all 12 selected response metadata records plus value-free structural measurements for the four sidebar responses. `protocol/fixtures/2026-09-30.001/c01-sidebar-read.json` is a smaller representative regression fixture derived from that evidence.
+
 The raw export must remain outside Git.
