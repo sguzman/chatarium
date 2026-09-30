@@ -672,6 +672,41 @@ mod tests {
     }
 
     #[test]
+    fn generic_sqlite_projection_carries_v2_fixture_provenance_without_schema_change() {
+        let path = temp_path("projection-v2", "sqlite");
+        let mut store = MemoryEventStore::default();
+        let id = RemoteReadObservationId::new();
+        let provenance = RemoteReadObservationProvenance::sanitized_read_fixture(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            2,
+        )
+        .unwrap();
+        record_remote_read_observation_from_fixture(
+            &mut store,
+            id,
+            &observation(ReadExperiment::OpenConversation, ReadMethod::Get),
+            &provenance,
+        )
+        .unwrap();
+
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(store.events()).unwrap();
+        assert_eq!(
+            projection
+                .events_of_kind(EventKind::RemoteReadObservationRecorded)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let replayed = replay_remote_read_audit(store.events()).unwrap();
+        assert_eq!(replayed[0].provenance, Some(provenance));
+
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn generic_sqlite_projection_carries_observation_without_schema_change() {
         let path = temp_path("projection", "sqlite");
         let mut store = MemoryEventStore::default();
