@@ -4,9 +4,7 @@
 //! read_responses index explicitly after protocol evidence has been reviewed.
 
 use chatarium_core::RemoteReadObservationId;
-use chatarium_protocol::read::{
-    JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation,
-};
+use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
 use chatarium_store::remote_read_audit::{
     RemoteReadObservationProvenance, record_remote_read_observation_from_fixture,
     replay_remote_read_audit,
@@ -19,12 +17,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-const ALLOWED_FIXTURE_FIELDS: &[&str] = &[
-    "snapshot",
-    "experiment",
-    "status",
-    "read_responses",
-];
+const ALLOWED_FIXTURE_FIELDS: &[&str] = &["snapshot", "experiment", "status", "read_responses"];
 
 const ALLOWED_READ_FIELDS: &[&str] = &[
     "read",
@@ -55,8 +48,8 @@ pub fn import_file(
     selected_index: usize,
     data_dir: &Path,
 ) -> Result<ReadFixtureImportSummary, String> {
-    let bytes =
-        fs::read(fixture_path).map_err(|error| format!("read {}: {error}", fixture_path.display()))?;
+    let bytes = fs::read(fixture_path)
+        .map_err(|error| format!("read {}: {error}", fixture_path.display()))?;
     import_bytes(&bytes, selected_index, data_dir)
 }
 
@@ -65,8 +58,8 @@ fn import_bytes(
     selected_index: usize,
     data_dir: &Path,
 ) -> Result<ReadFixtureImportSummary, String> {
-    let fixture: Value =
-        serde_json::from_slice(bytes).map_err(|error| format!("parse read fixture JSON: {error}"))?;
+    let fixture: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("parse read fixture JSON: {error}"))?;
     let observation = observation_from_fixture(&fixture, selected_index)?;
 
     let source_sha256 = sha256_hex(bytes);
@@ -139,7 +132,10 @@ fn import_bytes(
     })
 }
 
-fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<ReadObservation, String> {
+fn observation_from_fixture(
+    fixture: &Value,
+    selected_index: usize,
+) -> Result<ReadObservation, String> {
     fixture
         .as_object()
         .ok_or_else(|| "sanitized read fixture must be a JSON object".to_owned())?;
@@ -226,7 +222,9 @@ fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
         .ok_or_else(|| "sanitized read fixture must be a JSON object".to_owned())?;
     for key in fixture_object.keys() {
         if !ALLOWED_FIXTURE_FIELDS.contains(&key.as_str()) {
-            return Err(format!("sanitized read fixture contains unsupported top-level field {key:?}"));
+            return Err(format!(
+                "sanitized read fixture contains unsupported top-level field {key:?}"
+            ));
         }
     }
 
@@ -306,9 +304,7 @@ fn optional_top_level_type(
         Some(Value::String(raw)) => JsonTopLevelType::from_stable_name(raw)
             .map(Some)
             .ok_or_else(|| {
-                format!(
-                    "read response {selected_index} has unsupported top_level_type {raw:?}"
-                )
+                format!("read response {selected_index} has unsupported top_level_type {raw:?}")
             }),
         Some(_) => Err(format!(
             "read response {selected_index} top_level_type must be string or null"
@@ -328,8 +324,7 @@ fn required_u16(value: &Value, field: &str) -> Result<u16, String> {
         .get(field)
         .and_then(Value::as_u64)
         .ok_or_else(|| format!("selected read response is missing integer field {field:?}"))?;
-    u16::try_from(raw)
-        .map_err(|_| format!("selected read response field {field:?} exceeds u16"))
+    u16::try_from(raw).map_err(|_| format!("selected read response field {field:?} exceeds u16"))
 }
 
 fn optional_bool(value: &Value, field: &str) -> Result<Option<bool>, String> {
@@ -348,12 +343,9 @@ fn optional_string_array(value: &Value, field: &str) -> Result<Vec<String>, Stri
         Some(Value::Array(values)) => values
             .iter()
             .map(|value| {
-                value
-                    .as_str()
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| {
-                        format!("selected read response field {field:?} contains non-string")
-                    })
+                value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                    format!("selected read response field {field:?} contains non-string")
+                })
             })
             .collect(),
         Some(_) => Err(format!(
@@ -380,7 +372,10 @@ fn deterministic_observation_id(
     bytes[6] = (bytes[6] & 0x0f) | 0x50;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
 
-    let hex = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let formatted = format!(
         "{}-{}-{}-{}-{}",
         &hex[0..8],
@@ -481,9 +476,8 @@ mod tests {
     #[test]
     fn committed_c01_fixture_is_importable_without_semantic_promotion() {
         let dir = temp_dir("committed-c01");
-        let bytes = include_bytes!(
-            "../../../protocol/fixtures/2026-09-30.001/c01-sidebar-read.json"
-        );
+        let bytes =
+            include_bytes!("../../../protocol/fixtures/2026-09-30.001/c01-sidebar-read.json");
 
         let summary = import_bytes(bytes, 0, &dir).unwrap();
         let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
