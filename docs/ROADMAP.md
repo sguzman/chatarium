@@ -124,6 +124,8 @@ Deliverables:
 - import into the local durable model;
 - protocol mismatch diagnostics.
 
+Current state: Flight Recorder v0.7.0 now has an explicit, bounded protocol-read evidence mode that is off by default and captures only explicitly armed same-origin `GET`/`HEAD` responses under `/backend-api/` with JSON-family content types. Query values, request headers, cookies, authorization values, request bodies, browser storage, and third-party traffic are not captured. Offline `snapshot-flight` reduces private read bodies to deterministic object/array/key/type structure and stable identity placeholders before public evidence is written; malformed declared JSON fails closed and truncation remains explicit. C01/C02 experiment definitions and corpus guards exist. No conversation-list/fetch endpoint or response semantics are considered supported until controlled C01/C02 evidence is actually observed and committed.
+
 Exit criterion: Chatarium can mirror selected existing conversations into local durable state and explain incompatibilities against a named protocol snapshot.
 
 ## P4 — direct text turns
