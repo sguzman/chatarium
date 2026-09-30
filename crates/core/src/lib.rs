@@ -271,7 +271,8 @@ impl TurnEvidence {
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
-            | EventKind::RemoteReadObservationRecorded => {}
+            | EventKind::RemoteReadObservationRecorded
+            | EventKind::RemoteMirrorSelectionChanged => {}
         }
         Ok(())
     }
@@ -361,6 +362,8 @@ pub enum EventKind {
     RemoteConversationBound,
     /// One safe structural remote read observation was durably recorded.
     RemoteReadObservationRecorded,
+    /// User intent to include or exclude one bound conversation from future remote mirroring changed.
+    RemoteMirrorSelectionChanged,
 }
 
 impl EventKind {
@@ -403,6 +406,7 @@ impl EventKind {
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
             Self::RemoteReadObservationRecorded => "remote_read_observation_recorded",
+            Self::RemoteMirrorSelectionChanged => "remote_mirror_selection_changed",
         }
     }
 
@@ -445,6 +449,7 @@ impl EventKind {
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
             "remote_conversation_bound" => Some(Self::RemoteConversationBound),
             "remote_read_observation_recorded" => Some(Self::RemoteReadObservationRecorded),
+            "remote_mirror_selection_changed" => Some(Self::RemoteMirrorSelectionChanged),
             _ => None,
         }
     }
@@ -625,6 +630,7 @@ mod tests {
             EventKind::ReconciliationObserved,
             EventKind::ImportStarted,
             EventKind::ImportCompleted,
+            EventKind::RemoteMirrorSelectionChanged,
         ];
 
         for kind in kinds {
