@@ -102,6 +102,8 @@ Complete the egui experience around the reliable core.
 Deliverables:
 
 - conversation browser;
+- logical chat containers whose identity survives physical session rollover;
+- healthy/aging/saturated/retired session lifecycle with explicit context handoff to successors;
 - durable composer;
 - transcript renderer;
 - explicit local/remote/recovery status;
@@ -136,6 +138,7 @@ Deliverables:
 - first-class MCP/tool integration surface;
 - import/adaptation of the existing user-owned XML tool/message envelope into a versioned Chatarium contract;
 - multiple concurrent ChatGPT sessions with explicit local session identity;
+- reuse logical chat-container rollover so long-running controller/worker conversations can replace saturated physical sessions without losing lineage;
 - user-designated master/controller and worker relationships;
 - durable goal assignment/update and continuation/stop messages;
 - explicit worker lifecycle states such as working, blocked, needs-input, completed, and failed;
