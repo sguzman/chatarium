@@ -25,9 +25,7 @@ pub trait UserAuthenticatedSessionProvider {
     type Error;
 
     /// Return current authentication evidence without exposing credential material.
-    fn authentication_evidence(
-        &mut self,
-    ) -> Result<SessionAuthenticationEvidence, Self::Error>;
+    fn authentication_evidence(&mut self) -> Result<SessionAuthenticationEvidence, Self::Error>;
 }
 
 /// Failure to obtain a borrow-scoped authenticated-session lease.
