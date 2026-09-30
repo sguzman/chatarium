@@ -175,15 +175,26 @@ impl fmt::Display for ReadObservationError {
                 write!(formatter, "protocol observation revision must not be empty")
             }
             Self::PathOutsideBackendApi => {
-                write!(formatter, "read observation path must be under /backend-api/")
+                write!(
+                    formatter,
+                    "read observation path must be under /backend-api/"
+                )
             }
             Self::NonJsonContentType => {
-                write!(formatter, "read observation content type must be JSON-family")
+                write!(
+                    formatter,
+                    "read observation content type must be JSON-family"
+                )
             }
             Self::InvalidStatus(status) => {
-                write!(formatter, "read observation HTTP status {status} is invalid")
+                write!(
+                    formatter,
+                    "read observation HTTP status {status} is invalid"
+                )
             }
-            Self::EmptyQueryKey => write!(formatter, "read observation query key must not be empty"),
+            Self::EmptyQueryKey => {
+                write!(formatter, "read observation query key must not be empty")
+            },
             Self::DuplicateQueryKey(key) => {
                 write!(formatter, "duplicate read observation query key {key:?}")
             }
@@ -192,7 +203,10 @@ impl fmt::Display for ReadObservationError {
                 write!(formatter, "top-level JSON type requires an observed body")
             }
             Self::TruncatedBodyCannotClaimTopLevelType => {
-                write!(formatter, "truncated body cannot claim a semantic top-level JSON type")
+                write!(
+                    formatter,
+                    "truncated body cannot claim a semantic top-level JSON type"
+                )
             }
         }
     }
