@@ -270,6 +270,7 @@ mod tests {
                 Some(JsonTopLevelType::Object),
             )
             .unwrap(),
+            provenance: None,
             compatibility,
             recorded_sequence: sequence,
         }
