@@ -437,20 +437,23 @@ fn select_latest_read_capture_run(export: &Value) -> Result<SelectedRun, String>
         .unwrap_or("?")
         .to_owned();
 
-    let legacy_disarm_seq = run_id.is_none().then(|| {
-        events
-            .iter()
-            .filter(|event| {
-                event.get("kind").and_then(Value::as_str)
-                    == Some("protocol-read-capture-disarmed")
-                    && event
-                        .get("seq")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|seq| seq >= started_seq)
-            })
-            .filter_map(|event| event.get("seq").and_then(Value::as_u64))
-            .min()
-    }).flatten();
+    let legacy_disarm_seq = run_id
+        .is_none()
+        .then(|| {
+            events
+                .iter()
+                .filter(|event| {
+                    event.get("kind").and_then(Value::as_str)
+                        == Some("protocol-read-capture-disarmed")
+                        && event
+                            .get("seq")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|seq| seq >= started_seq)
+                })
+                .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+                .min()
+        })
+        .flatten();
 
     let matching_read_event = |event: &&Value| {
         let Some(seq) = event.get("seq").and_then(Value::as_u64) else {
@@ -807,33 +810,33 @@ fn sanitize_read_capture_metadata(selected: &SelectedRun) -> Value {
         .events
         .iter()
         .filter(|event| {
-            event.get("kind").and_then(Value::as_str)
-                == Some("protocol-read-response-captured")
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-captured")
         })
         .count() as u64;
     let captured_bytes = selected
         .events
         .iter()
         .filter(|event| {
-            event.get("kind").and_then(Value::as_str)
-                == Some("protocol-read-response-captured")
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-captured")
         })
-        .filter_map(|event| event.pointer("/payload/capturedBytes").and_then(Value::as_u64))
+        .filter_map(|event| {
+            event
+                .pointer("/payload/capturedBytes")
+                .and_then(Value::as_u64)
+        })
         .sum::<u64>();
     let request_count = selected
         .events
         .iter()
         .filter(|event| {
-            event.get("kind").and_then(Value::as_str)
-                == Some("protocol-read-request-observed")
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-request-observed")
         })
         .count() as u64;
     let skipped_count = selected
         .events
         .iter()
         .filter(|event| {
-            event.get("kind").and_then(Value::as_str)
-                == Some("protocol-read-response-skipped")
+            event.get("kind").and_then(Value::as_str) == Some("protocol-read-response-skipped")
         })
         .count() as u64;
     let error_count = selected
