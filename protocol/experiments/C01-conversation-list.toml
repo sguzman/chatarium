@@ -1,0 +1,25 @@
+schema = "chatarium-experiment"
+version = 1
+id = "C01-conversation-list"
+description = "Observe the official ChatGPT conversation-list surface without mutating remote state."
+start_url = "https://chatgpt.com/"
+timeout_seconds = 60
+mutation = false
+
+[action]
+type = "observe_conversation_list"
+
+[success]
+type = "conversation_list_visible"
+
+[settle]
+quiet_network_ms = 1500
+quiet_dom_ms = 750
+minimum_observation_ms = 1500
+
+[capture]
+network = true
+websocket = false
+response_bodies = true
+frontend_assets = false
+page_observations = true
