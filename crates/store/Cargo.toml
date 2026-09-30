@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 chatarium-core = { path = "../core" }
+chatarium-protocol = { path = "../protocol" }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
