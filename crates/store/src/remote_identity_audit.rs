@@ -53,8 +53,7 @@ pub fn record_remote_conversation_bound(
 pub fn replay_remote_identity_audit(
     events: &[EventEnvelope],
 ) -> Result<Vec<RemoteConversationBindingAuditRecord>, String> {
-    let mut by_local =
-        BTreeMap::<LocalConversationId, RemoteConversationBindingAuditRecord>::new();
+    let mut by_local = BTreeMap::<LocalConversationId, RemoteConversationBindingAuditRecord>::new();
     let mut remote_owner = BTreeMap::<RemoteConversationId, LocalConversationId>::new();
 
     for event in events {
@@ -104,9 +103,7 @@ pub fn replay_remote_identity_audit(
         if let Some(existing_local) = remote_owner.get(&remote) {
             return Err(format!(
                 "remote conversation identity is already bound to local conversation {}; cannot also bind local conversation {} at sequence {}",
-                existing_local,
-                local,
-                event.sequence
+                existing_local, local, event.sequence
             ));
         }
 
@@ -187,12 +184,9 @@ fn validate_scope(event: &EventEnvelope, local: LocalConversationId) -> Result<(
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            format!("typed remote conversation binding is missing string field '{field}'")
-        })
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed remote conversation binding is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -277,10 +271,8 @@ mod tests {
     fn one_local_cannot_bind_two_remote_identities() {
         let mut store = MemoryEventStore::default();
         let local = LocalConversationId::new();
-        record_remote_conversation_bound(&mut store, &binding(local, "remote-a", "rev-a"))
-            .unwrap();
-        record_remote_conversation_bound(&mut store, &binding(local, "remote-b", "rev-b"))
-            .unwrap();
+        record_remote_conversation_bound(&mut store, &binding(local, "remote-a", "rev-a")).unwrap();
+        record_remote_conversation_bound(&mut store, &binding(local, "remote-b", "rev-b")).unwrap();
 
         let error = replay_remote_identity_audit(store.events()).unwrap_err();
         assert!(error.contains("already bound"));
@@ -291,8 +283,7 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let first = LocalConversationId::new();
         let second = LocalConversationId::new();
-        record_remote_conversation_bound(&mut store, &binding(first, "remote-a", "rev-a"))
-            .unwrap();
+        record_remote_conversation_bound(&mut store, &binding(first, "remote-a", "rev-a")).unwrap();
         record_remote_conversation_bound(&mut store, &binding(second, "remote-a", "rev-b"))
             .unwrap();
 
@@ -393,7 +384,11 @@ mod tests {
         }
 
         let reopened = JsonlEventStore::open(&path).unwrap();
-        assert!(replay_remote_identity_audit(reopened.events()).unwrap().is_empty());
+        assert!(
+            replay_remote_identity_audit(reopened.events())
+                .unwrap()
+                .is_empty()
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -403,7 +398,11 @@ mod tests {
         store
             .append(EventKind::DraftChanged, "draft".to_owned())
             .unwrap();
-        assert!(replay_remote_identity_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_remote_identity_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
