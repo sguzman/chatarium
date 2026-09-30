@@ -107,6 +107,46 @@ Examples include:
 
 The product should not require the human to manually copy/paste every coordination message between sessions.
 
+### Logical chat containers and session rollover
+
+A long-lived Chatarium conversation must not be identical to one finite ChatGPT session.
+
+Chatarium therefore treats a **chat container** as the durable logical conversation and individual sessions as replaceable leaves in that container's lineage. A session may be healthy, aging, saturated, or retired without killing the logical conversation.
+
+The intended lifecycle is:
+
+```text
+logical chat container
+        |
+        v
+session A: healthy -> aging -> saturated
+        |
+        | explicit context handoff
+        v
+session A: retired
+session B: healthy -> ...
+```
+
+A saturated session is not a failed conversation. It is a session that should receive no more ordinary work and requires a successor. Once a successor is durably bound, the predecessor becomes retired and the successor becomes the current healthy leaf.
+
+The successor edge must preserve explicit context-handoff provenance. Chatarium should be able to answer which predecessor the successor continues and which context artifact was designated for that rollover. The handoff representation is intentionally not fixed yet: future implementations may use a transcript attachment, continuity capsule, local retrieval bundle, or another mechanism supported by the direct ChatGPT adapter.
+
+This gives Chatarium a stable place for conversation-level ontology, goals, summaries, and continuity metadata that survives individual session exhaustion.
+
+The first local implementation now exists in the core/store layers:
+
+- `ChatContainerId` identifies the logical conversation;
+- `SessionId` continues to identify one physical/local session surface;
+- lifecycle phases are `Healthy`, `Aging`, `Saturated`, and `Retired`;
+- only `Healthy` and `Aging` accept ordinary turns;
+- `Saturated` explicitly requires a successor;
+- `Retired` is terminal but is reached only through a validated successor binding;
+- each container is a single linear lineage in this first model;
+- each rollover carries a unique opaque `ContextHandoffId`;
+- restart replay reconstructs the current leaf and all predecessor/successor edges.
+
+Automatic detection of context pressure, remote creation of the successor conversation, and delivery/attachment of the handoff material remain future adapter/UI work. Chatarium must not invent a token threshold or claim a remote context limit until it has real evidence. The important product invariant already holds locally: **a full session is an expected rollover condition, not a logical-conversation failure.**
+
 ### "Continue" as an orchestration primitive
 
 A common case is intentionally simple:
