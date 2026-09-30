@@ -279,7 +279,10 @@ fn replay_lifecycle_transition(
     let session_id = SessionId::new(required_u64(&payload, "session_id")?);
     let from = required_phase(&payload, "from_phase")?;
     let to = required_phase(&payload, "to_phase")?;
-    validate_scope(event, &chat_session_lifecycle_scope(container_id, session_id))?;
+    validate_scope(
+        event,
+        &chat_session_lifecycle_scope(container_id, session_id),
+    )?;
 
     SessionLifecycleTransition::new(session_id, from, to).map_err(|error| {
         format!(
@@ -335,17 +338,12 @@ fn replay_successor_binding(
 ) -> Result<(), String> {
     let payload = typed_payload(event, "chat_session_successor_bound")?;
     let container_id = ChatContainerId::new(required_u64(&payload, "container_id")?);
-    let predecessor_session_id =
-        SessionId::new(required_u64(&payload, "predecessor_session_id")?);
+    let predecessor_session_id = SessionId::new(required_u64(&payload, "predecessor_session_id")?);
     let successor_session_id = SessionId::new(required_u64(&payload, "successor_session_id")?);
     let context_handoff_id = ContextHandoffId::new(required_u64(&payload, "context_handoff_id")?);
     validate_scope(
         event,
-        &chat_session_successor_scope(
-            container_id,
-            predecessor_session_id,
-            successor_session_id,
-        ),
+        &chat_session_successor_scope(container_id, predecessor_session_id, successor_session_id),
     )?;
 
     let binding = SessionSuccessorBinding::new(
@@ -912,6 +910,10 @@ mod tests {
         store
             .append(EventKind::DraftChanged, "unrelated".to_owned())
             .unwrap();
-        assert!(replay_chat_container_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_chat_container_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 }
