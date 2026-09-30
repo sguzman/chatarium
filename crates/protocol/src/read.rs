@@ -416,6 +416,11 @@ mod tests {
     }
 
     #[test]
+    fn post_is_not_an_allowed_read_method() {
+        assert_eq!(ReadMethod::from_stable_name("POST"), None);
+    }
+
+    #[test]
     fn get_and_bodyless_head_are_valid_safe_observations() {
         let get = valid(ReadExperiment::ConversationList, ReadMethod::Get).unwrap();
         assert!(get.body_present());
