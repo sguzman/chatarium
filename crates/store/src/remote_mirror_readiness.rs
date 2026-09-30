@@ -8,9 +8,7 @@ use crate::EventEnvelope;
 use crate::remote_identity_audit::{
     RemoteConversationBindingAuditRecord, replay_remote_identity_audit,
 };
-use crate::remote_read_audit::{
-    RemoteReadObservationAuditRecord, replay_remote_read_audit,
-};
+use crate::remote_read_audit::{RemoteReadObservationAuditRecord, replay_remote_read_audit};
 use chatarium_core::remote::{ProtocolObservationRevision, RemoteConversationId};
 use chatarium_core::{LocalConversationId, RemoteReadObservationId};
 use chatarium_protocol::Compatibility;
@@ -189,10 +187,7 @@ fn derive_from_records(
     if let Some(record) = validated.first() {
         return RemoteMirrorReadiness::Ready(RemoteMirrorReady {
             local_conversation_id,
-            remote_conversation_id: binding_record
-                .binding
-                .remote_conversation_id()
-                .clone(),
+            remote_conversation_id: binding_record.binding.remote_conversation_id().clone(),
             protocol_revision: binding_record.binding.protocol_revision().clone(),
             read_observation_id: record.observation_id,
             binding_sequence: binding_record.bound_sequence,
@@ -230,9 +225,7 @@ mod tests {
     use crate::remote_read_audit::record_remote_read_observation;
     use crate::{JsonlEventStore, MemoryEventStore};
     use chatarium_core::remote::RemoteConversationBinding;
-    use chatarium_protocol::read::{
-        JsonTopLevelType, ReadMethod, ReadObservation,
-    };
+    use chatarium_protocol::read::{JsonTopLevelType, ReadMethod, ReadObservation};
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
@@ -280,7 +273,10 @@ mod tests {
         }
     }
 
-    fn bound(local: LocalConversationId, revision: &str) -> Vec<RemoteConversationBindingAuditRecord> {
+    fn bound(
+        local: LocalConversationId,
+        revision: &str,
+    ) -> Vec<RemoteConversationBindingAuditRecord> {
         vec![binding_record(local, "opaque-remote", revision, 1)]
     }
 
@@ -338,12 +334,8 @@ mod tests {
             Some(JsonTopLevelType::Object),
         )
         .unwrap();
-        record_remote_read_observation(
-            &mut store,
-            RemoteReadObservationId::new(),
-            &observation,
-        )
-        .unwrap();
+        record_remote_read_observation(&mut store, RemoteReadObservationId::new(), &observation)
+            .unwrap();
 
         assert!(matches!(
             derive_remote_mirror_readiness(store.events(), local).unwrap(),
@@ -403,8 +395,7 @@ mod tests {
 
         let readiness = derive_from_records(local, &bound(local, "rev-a"), &reads);
         let RemoteMirrorReadiness::Blocked(RemoteMirrorBlocked::ProtocolMismatch {
-            detail,
-            ..
+            detail, ..
         }) = readiness
         else {
             panic!("expected protocol mismatch");
@@ -484,10 +475,8 @@ mod tests {
         }
         {
             let mut raw = OpenOptions::new().append(true).open(&path).unwrap();
-            raw.write_all(
-                br#"{"v":2,"sequence":2,"kind":"remote_read_observation_recorded""#,
-            )
-            .unwrap();
+            raw.write_all(br#"{"v":2,"sequence":2,"kind":"remote_read_observation_recorded""#)
+                .unwrap();
             raw.sync_data().unwrap();
         }
 
