@@ -13,6 +13,9 @@ const REDACTED: &str = "<redacted>";
 const REDACTED_CONTENT: &str = "<redacted-content>";
 const REDACTED_VALUE: &str = "<redacted-value>";
 const NUMBER: &str = "<number>";
+const STRING: &str = "<string>";
+const BOOL: &str = "<bool>";
+const TRUNCATED_READ_BODY: &str = "<truncated-private-json-omitted>";
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct FlightSanitizationStats {
@@ -31,6 +34,11 @@ struct FlightSanitizationStats {
     unknown_paths_redacted: u64,
     unknown_encodings_redacted: u64,
     canonical_experiment_literals_retained: u64,
+    read_responses_reduced: u64,
+    read_string_values_generalized: u64,
+    read_identity_values_placeholdered: u64,
+    read_truncated_bodies_omitted: u64,
+    malformed_read_json_fail_closed: u64,
 }
 
 impl FlightSanitizationStats {
@@ -55,10 +63,17 @@ impl FlightSanitizationStats {
                 "unknown_paths_redacted": self.unknown_paths_redacted,
                 "unknown_encodings_redacted": self.unknown_encodings_redacted,
                 "raw_network_stream_chunks_copied": 0,
+                "raw_read_response_bodies_copied": 0,
                 "canonical_experiment_literals_retained": self.canonical_experiment_literals_retained,
+                "read_responses_reduced": self.read_responses_reduced,
+                "read_string_values_generalized": self.read_string_values_generalized,
+                "read_identity_values_placeholdered": self.read_identity_values_placeholdered,
+                "read_truncated_bodies_omitted": self.read_truncated_bodies_omitted,
+                "malformed_read_json_fail_closed": self.malformed_read_json_fail_closed,
             },
             "raw_sensitive_values_retained": false,
             "raw_network_stream_chunks_copied": false,
+            "raw_read_response_bodies_copied": false,
             "publication_safety_proven": false,
             "warning": "This report counts selected-run sanitizer transformations; it does not prove arbitrary source material safe to publish."
         })
@@ -129,6 +144,7 @@ struct IdentityMap {
     conversation: HashMap<String, String>,
     message: HashMap<String, String>,
     send: HashMap<String, String>,
+    generic: HashMap<String, String>,
 }
 
 impl IdentityMap {
@@ -142,6 +158,10 @@ impl IdentityMap {
 
     fn map_send(&mut self, raw: &str) -> String {
         stable_placeholder(&mut self.send, raw, "send")
+    }
+
+    fn map_generic(&mut self, raw: &str) -> String {
+        stable_placeholder(&mut self.generic, raw, "id")
     }
 }
 
@@ -413,6 +433,8 @@ fn derive_sanitized_run(
     let mut stream_order = Vec::<String>::new();
     let mut stream_by_raw_id = HashMap::<String, usize>::new();
     let mut streams = Vec::<StreamBuilder>::new();
+    let mut read_responses = Vec::<Value>::new();
+    let mut read_inventory = Vec::<Value>::new();
 
     for event in &selected.events {
         let seq = event.get("seq").and_then(Value::as_u64).unwrap_or_default();
@@ -503,6 +525,24 @@ fn derive_sanitized_run(
             "network-stream-error" => warnings.push(format!(
                 "seq {seq}: source recorder reported network-stream-error"
             )),
+            "protocol-read-response-captured" => {
+                let public_id = format!("read-{}", read_responses.len() + 1);
+                let (sanitized_read, inventory_read) = sanitize_read_response_event(
+                    event,
+                    &public_id,
+                    allowed_texts,
+                    &mut ids,
+                    &mut stats,
+                    &mut warnings,
+                )?;
+                read_responses.push(sanitized_read);
+                read_inventory.push(inventory_read);
+            }
+            "protocol-read-response-error" | "protocol-read-fetch-error" => {
+                warnings.push(format!(
+                    "seq {seq}: source recorder reported {kind}"
+                ));
+            }
             _ => {}
         }
     }
@@ -584,6 +624,8 @@ fn derive_sanitized_run(
         "assistant_wal": assistant_wal,
         "messages": messages,
         "streams": sanitized_streams,
+        "read_capture": sanitize_read_capture_metadata(export),
+        "read_responses": read_responses,
         "warnings": warnings,
     });
 
@@ -609,6 +651,8 @@ fn derive_sanitized_run(
         "message_source_counts": message_source_counts,
         "assistant_wal": assistant_inventory(export, selected, allowed_texts),
         "streams": inventory_streams,
+        "read_capture": sanitize_read_capture_metadata(export),
+        "read_responses": read_inventory,
         "warning_count": warning_count,
     });
 
@@ -617,6 +661,328 @@ fn derive_sanitized_run(
         "inventory": inventory,
         "sanitization_report": stats.report(),
     }))
+}
+
+fn sanitize_read_capture_metadata(export: &Value) -> Value {
+    let Some(capture) = export.get("protocolReadCapture") else {
+        return json!({
+            "present": false,
+            "armed": false,
+        });
+    };
+
+    let intervals = capture
+        .get("intervals")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|interval| {
+            json!({
+                "armed_at": interval.get("armedAt"),
+                "disarmed_at": interval.get("disarmedAt"),
+                "reason": interval.get("reason"),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "present": true,
+        "armed": capture.get("armed").and_then(Value::as_bool).unwrap_or(false),
+        "armed_at": capture.get("armedAt"),
+        "captured_bytes": capture.get("capturedBytes").and_then(Value::as_u64),
+        "response_count": capture.get("responseCount").and_then(Value::as_u64),
+        "response_limit_bytes": capture.get("responseLimitBytes").and_then(Value::as_u64),
+        "run_limit_bytes": capture.get("runLimitBytes").and_then(Value::as_u64),
+        "intervals": intervals,
+    })
+}
+
+fn sanitize_read_response_event(
+    event: &Value,
+    public_id: &str,
+    allowed_texts: &BTreeSet<String>,
+    ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
+    warnings: &mut Vec<String>,
+) -> Result<(Value, Value), String> {
+    let seq = event.get("seq").and_then(Value::as_u64).unwrap_or_default();
+    let payload = event
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("seq {seq}: protocol read response is missing object payload"))?;
+
+    let method = payload
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("seq {seq}: protocol read response is missing method"))?;
+    if !matches!(method, "GET" | "HEAD") {
+        return Err(format!(
+            "seq {seq}: protocol read response used non-read method {method}"
+        ));
+    }
+
+    let raw_path = payload
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("seq {seq}: protocol read response is missing endpoint"))?;
+    if !raw_path.starts_with("/backend-api/") {
+        return Err(format!(
+            "seq {seq}: protocol read response escaped /backend-api/: {raw_path}"
+        ));
+    }
+    let path = normalize_read_path(raw_path, ids, stats);
+
+    let query_keys = payload
+        .get("queryKeys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("seq {seq}: protocol read response is missing queryKeys"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| format!("seq {seq}: protocol read query key is not a string"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let content_type = payload
+        .get("contentType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !json_content_type(content_type) {
+        return Err(format!(
+            "seq {seq}: captured protocol read response has unsupported content type {content_type:?}"
+        ));
+    }
+
+    let status = payload.get("status").and_then(Value::as_i64);
+    let captured_bytes = payload.get("capturedBytes").and_then(Value::as_u64);
+    let truncated = payload
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let body_present = payload
+        .get("bodyPresent")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let (body, top_level_type, shape, body_warning) = if method == "HEAD" || !body_present {
+        (Value::Null, None, Vec::new(), None)
+    } else if truncated {
+        stats.read_truncated_bodies_omitted = stats.read_truncated_bodies_omitted.saturating_add(1);
+        warnings.push(format!(
+            "seq {seq}: {public_id} read body was truncated and omitted from public evidence"
+        ));
+        (
+            Value::String(TRUNCATED_READ_BODY.to_owned()),
+            None,
+            Vec::new(),
+            Some("truncated-private-json-omitted"),
+        )
+    } else {
+        let raw = payload
+            .get("bodyText")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("seq {seq}: GET read response body is missing bodyText"))?;
+        let parsed: Value = serde_json::from_str(raw).map_err(|error| {
+            stats.malformed_read_json_fail_closed =
+                stats.malformed_read_json_fail_closed.saturating_add(1);
+            format!(
+                "seq {seq}: declared JSON protocol read body failed closed: {error}"
+            )
+        })?;
+        let top = json_type_name(&parsed).to_owned();
+        let mut shape = Vec::new();
+        collect_read_shape(&parsed, "", &mut shape);
+        let reduced = reduce_read_json(&parsed, None, allowed_texts, ids, stats);
+        stats.read_responses_reduced = stats.read_responses_reduced.saturating_add(1);
+        (reduced, Some(top), shape, None)
+    };
+
+    let sanitized = json!({
+        "read": public_id,
+        "method": method,
+        "path": path,
+        "query_keys": query_keys,
+        "status": status,
+        "content_type": content_type,
+        "captured_bytes": captured_bytes,
+        "truncated": truncated,
+        "body_present": body_present,
+        "body": body,
+    });
+
+    let inventory = json!({
+        "read": public_id,
+        "method": method,
+        "path": sanitized.get("path"),
+        "query_keys": sanitized.get("query_keys"),
+        "status": status,
+        "content_type": content_type,
+        "captured_bytes": captured_bytes,
+        "truncated": truncated,
+        "body_present": body_present,
+        "top_level_type": top_level_type,
+        "shape": shape,
+        "warning": body_warning,
+    });
+
+    Ok((sanitized, inventory))
+}
+
+fn json_content_type(content_type: &str) -> bool {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    mime == "application/json" || mime == "text/json" || mime.ends_with("+json")
+}
+
+fn normalize_read_path(
+    raw: &str,
+    ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
+) -> String {
+    raw.split('/')
+        .map(|segment| {
+            if looks_like_identity_segment(segment) {
+                stats.read_identity_values_placeholdered =
+                    stats.read_identity_values_placeholdered.saturating_add(1);
+                ids.map_generic(segment)
+            } else {
+                segment.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn looks_like_identity_segment(segment: &str) -> bool {
+    if segment.len() < 16 {
+        return false;
+    }
+    let compact = segment.replace('-', "");
+    compact.len() >= 16 && compact.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn reduce_read_json(
+    value: &Value,
+    key: Option<&str>,
+    allowed_texts: &BTreeSet<String>,
+    ids: &mut IdentityMap,
+    stats: &mut FlightSanitizationStats,
+) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            let mut output = Map::new();
+            for child_key in keys {
+                output.insert(
+                    child_key.clone(),
+                    reduce_read_json(
+                        &map[child_key],
+                        Some(child_key),
+                        allowed_texts,
+                        ids,
+                        stats,
+                    ),
+                );
+            }
+            Value::Object(output)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| reduce_read_json(item, key, allowed_texts, ids, stats))
+                .collect(),
+        ),
+        Value::String(text) => {
+            if key.is_some_and(sensitive_field) {
+                stats.sensitive_values_redacted =
+                    stats.sensitive_values_redacted.saturating_add(1);
+                return Value::String(REDACTED.to_owned());
+            }
+            if let Some(key) = key {
+                if conversation_identity_field(key) {
+                    stats.read_identity_values_placeholdered =
+                        stats.read_identity_values_placeholdered.saturating_add(1);
+                    return Value::String(ids.map_conversation(text));
+                }
+                if message_identity_field(key) {
+                    stats.read_identity_values_placeholdered =
+                        stats.read_identity_values_placeholdered.saturating_add(1);
+                    return Value::String(ids.map_message(text));
+                }
+                if generic_identity_field(key) {
+                    stats.read_identity_values_placeholdered =
+                        stats.read_identity_values_placeholdered.saturating_add(1);
+                    return Value::String(ids.map_generic(text));
+                }
+            }
+            if allowed_texts.contains(text) {
+                stats.canonical_experiment_literals_retained = stats
+                    .canonical_experiment_literals_retained
+                    .saturating_add(1);
+                return Value::String(text.clone());
+            }
+            stats.read_string_values_generalized =
+                stats.read_string_values_generalized.saturating_add(1);
+            Value::String(STRING.to_owned())
+        }
+        Value::Number(_) => Value::String(NUMBER.to_owned()),
+        Value::Bool(_) => Value::String(BOOL.to_owned()),
+        Value::Null => Value::Null,
+    }
+}
+
+fn collect_read_shape(value: &Value, pointer: &str, rows: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            rows.push(json!({
+                "pointer": pointer,
+                "type": "object",
+                "member_count": map.len(),
+            }));
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                let child = format!("{pointer}/{}", escape_pointer_segment(key));
+                collect_read_shape(&map[key], &child, rows);
+            }
+        }
+        Value::Array(items) => {
+            rows.push(json!({
+                "pointer": pointer,
+                "type": "array",
+                "length": items.len(),
+            }));
+            for (index, item) in items.iter().enumerate() {
+                collect_read_shape(item, &format!("{pointer}/{index}"), rows);
+            }
+        }
+        _ => rows.push(json!({
+            "pointer": pointer,
+            "type": json_type_name(value),
+        })),
+    }
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn escape_pointer_segment(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
 }
 
 fn ensure_stream(
