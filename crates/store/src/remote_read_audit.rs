@@ -134,7 +134,7 @@ pub fn record_remote_read_observation_from_fixture(
         "top_level_type": observation.top_level_type().map(JsonTopLevelType::stable_name),
         "provenance": {
             "source_kind": SANITIZED_READ_FIXTURE_SOURCE,
-            "source_sha256": provenance.source_sha256,
+            "source_sha256": provenance.source_sha256.as_str(),
             "source_read_index": provenance.source_read_index,
         },
     }))
