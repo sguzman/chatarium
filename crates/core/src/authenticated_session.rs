@@ -63,13 +63,26 @@ impl<'a, P: UserAuthenticatedSessionProvider + ?Sized> AuthenticatedSessionLease
         }
     }
 
-    /// Let adapter code use the exact provider covered by this authenticated borrow.
+    /// Use the exact provider covered by this lease after revalidating authentication.
     ///
-    /// Chatarium's generic boundary still does not know or copy any concrete
-    /// credential representation; provider-specific code remains responsible for
-    /// keeping reusable authentication material private.
-    pub fn with_provider<R>(&mut self, operation: impl FnOnce(&mut P) -> R) -> R {
-        operation(self.provider)
+    /// The recheck prevents a once-authenticated lease from silently remaining valid
+    /// after the underlying runtime session becomes unauthenticated or uncertain.
+    /// Chatarium still does not know or copy any concrete credential representation.
+    pub fn with_authenticated_provider<R>(
+        &mut self,
+        operation: impl FnOnce(&mut P) -> R,
+    ) -> Result<R, SessionLeaseError<P::Error>> {
+        match self
+            .provider
+            .authentication_evidence()
+            .map_err(SessionLeaseError::Provider)?
+        {
+            SessionAuthenticationEvidence::Authenticated => Ok(operation(self.provider)),
+            SessionAuthenticationEvidence::Unauthenticated => {
+                Err(SessionLeaseError::Unauthenticated)
+            }
+            SessionAuthenticationEvidence::Unknown => Err(SessionLeaseError::Unknown),
+        }
     }
 }
 
@@ -104,11 +117,13 @@ mod tests {
 
         {
             let mut lease = AuthenticatedSessionLease::acquire(&mut provider).unwrap();
-            let marker = lease.with_provider(|session| session.private_material.len());
+            let marker = lease
+                .with_authenticated_provider(|session| session.private_material.len())
+                .unwrap();
             assert_eq!(marker, "not-part-of-the-lease".len());
         }
 
-        assert_eq!(provider.probe_count, 1);
+        assert_eq!(provider.probe_count, 2);
         assert_eq!(provider.private_material, "not-part-of-the-lease");
     }
 
@@ -138,6 +153,31 @@ mod tests {
             AuthenticatedSessionLease::acquire(&mut provider).err(),
             Some(SessionLeaseError::Unknown)
         );
+    }
+
+    #[test]
+    fn lease_use_rechecks_authentication_and_rejects_stale_authority() {
+        let mut provider = FakeProvider {
+            evidence: Ok(SessionAuthenticationEvidence::Authenticated),
+            probe_count: 0,
+            private_material: "private",
+        };
+
+        {
+            let mut lease = AuthenticatedSessionLease::acquire(&mut provider).unwrap();
+            lease
+                .with_authenticated_provider(|session| {
+                    session.evidence = Ok(SessionAuthenticationEvidence::Unauthenticated);
+                })
+                .unwrap();
+
+            assert_eq!(
+                lease.with_authenticated_provider(|_| ()).err(),
+                Some(SessionLeaseError::Unauthenticated)
+            );
+        }
+
+        assert_eq!(provider.probe_count, 3);
     }
 
     #[test]
