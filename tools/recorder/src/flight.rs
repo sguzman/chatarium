@@ -1772,6 +1772,209 @@ type = "conversation_list_visible"
         export
     }
 
+    fn export_with_two_isolated_read_runs() -> Value {
+        let mut export = cumulative_export();
+        export["recorderVersion"] = json!("0.7.1");
+        let events = export["events"].as_array_mut().expect("events");
+
+        events.extend([
+            json!({
+                "seq": 15,
+                "at": "2026-09-29T11:01:00Z",
+                "kind": "protocol-read-capture-armed",
+                "payload": {"runId": "PRIVATE-RUN-ONE"}
+            }),
+            json!({
+                "seq": 16,
+                "at": "2026-09-29T11:01:01Z",
+                "kind": "protocol-read-request-observed",
+                "payload": {
+                    "runId": "PRIVATE-RUN-ONE",
+                    "transport": "fetch",
+                    "method": "GET",
+                    "endpoint": "/backend-api/first",
+                    "queryKeys": []
+                }
+            }),
+            json!({
+                "seq": 17,
+                "at": "2026-09-29T11:01:02Z",
+                "kind": "protocol-read-capture-disarmed",
+                "payload": {"runId": "PRIVATE-RUN-ONE", "reason": "operator"}
+            }),
+            json!({
+                "seq": 18,
+                "at": "2026-09-29T11:02:00Z",
+                "kind": "protocol-read-capture-armed",
+                "payload": {"runId": "PRIVATE-RUN-TWO"}
+            }),
+            json!({
+                "seq": 19,
+                "at": "2026-09-29T11:02:01Z",
+                "kind": "protocol-read-request-observed",
+                "payload": {
+                    "runId": "PRIVATE-RUN-TWO",
+                    "transport": "fetch",
+                    "method": "GET",
+                    "endpoint": "/backend-api/conversations",
+                    "queryKeys": ["limit"]
+                }
+            }),
+            json!({
+                "seq": 20,
+                "at": "2026-09-29T11:02:02Z",
+                "kind": "protocol-read-response-captured",
+                "payload": {
+                    "runId": "PRIVATE-RUN-TWO",
+                    "transport": "fetch",
+                    "readId": "PRIVATE-READ-TWO",
+                    "method": "GET",
+                    "endpoint": "/backend-api/conversations",
+                    "queryKeys": ["limit"],
+                    "status": 200,
+                    "contentType": "application/json",
+                    "capturedBytes": 48,
+                    "truncated": false,
+                    "bodyPresent": true,
+                    "bodyText": "{\"items\":[{\"title\":\"PRIVATE RUN TWO TITLE\"}]}",
+                    "privateEvidence": true
+                }
+            }),
+            json!({
+                "seq": 21,
+                "at": "2026-09-29T11:02:03Z",
+                "kind": "protocol-read-capture-disarmed",
+                "payload": {"runId": "PRIVATE-RUN-TWO", "reason": "operator"}
+            }),
+            json!({
+                "seq": 22,
+                "at": "2026-09-29T11:02:04Z",
+                "kind": "protocol-read-response-captured",
+                "payload": {
+                    "runId": "PRIVATE-RUN-ONE",
+                    "transport": "fetch",
+                    "readId": "PRIVATE-LATE-READ-ONE",
+                    "method": "GET",
+                    "endpoint": "/backend-api/first",
+                    "queryKeys": [],
+                    "status": 200,
+                    "contentType": "application/json",
+                    "capturedBytes": 42,
+                    "truncated": false,
+                    "bodyPresent": true,
+                    "bodyText": "{\"secret\":\"LATE PRIVATE RUN ONE\"}",
+                    "privateEvidence": true
+                }
+            }),
+        ]);
+
+        export
+    }
+
+    #[test]
+    fn latest_read_capture_run_excludes_late_prior_run_responses() {
+        let export = export_with_two_isolated_read_runs();
+        let experiment = read_experiment();
+        let selected = select_run_for_experiment(&export, &experiment).unwrap();
+
+        assert_eq!(selected.started_seq, 18);
+        let seqs = selected
+            .events
+            .iter()
+            .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+            .collect::<Vec<_>>();
+        assert_eq!(seqs, vec![18, 19, 20, 21]);
+
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            derived.pointer("/sanitized/send_intents"),
+            Some(&json!([]))
+        );
+        assert_eq!(
+            derived.pointer("/sanitized/messages"),
+            Some(&json!([]))
+        );
+        assert_eq!(
+            derived.pointer("/sanitized/assistant_wal"),
+            Some(&Value::Null)
+        );
+
+        let text = serde_json::to_string(&derived).unwrap();
+        assert!(!text.contains("LATE PRIVATE RUN ONE"));
+        assert!(!text.contains("PRIVATE-RUN-ONE"));
+        assert!(!text.contains("PRIVATE-RUN-TWO"));
+        assert!(!text.contains("old private prompt"));
+    }
+
+    #[test]
+    fn legacy_v070_read_run_without_run_ids_remains_ingestable() {
+        let mut export = cumulative_export();
+        export["recorderVersion"] = json!("0.7.0");
+        let events = export["events"].as_array_mut().expect("events");
+        events.extend([
+            json!({
+                "seq": 15,
+                "at": "2026-09-29T11:03:00Z",
+                "kind": "protocol-read-capture-armed",
+                "payload": {}
+            }),
+            json!({
+                "seq": 16,
+                "at": "2026-09-29T11:03:01Z",
+                "kind": "protocol-read-response-captured",
+                "payload": {
+                    "readId": "PRIVATE-READ",
+                    "method": "GET",
+                    "endpoint": "/backend-api/conversations",
+                    "queryKeys": [],
+                    "status": 200,
+                    "contentType": "application/json",
+                    "capturedBytes": 12,
+                    "truncated": false,
+                    "bodyPresent": true,
+                    "bodyText": "{\"items\":[]}",
+                    "privateEvidence": true
+                }
+            }),
+            json!({
+                "seq": 17,
+                "at": "2026-09-29T11:03:02Z",
+                "kind": "protocol-read-capture-disarmed",
+                "payload": {"reason": "operator"}
+            }),
+            json!({
+                "seq": 18,
+                "at": "2026-09-29T11:03:03Z",
+                "kind": "protocol-read-response-captured",
+                "payload": {
+                    "readId": "PRIVATE-LATE-READ",
+                    "method": "GET",
+                    "endpoint": "/backend-api/sidebar",
+                    "queryKeys": [],
+                    "status": 200,
+                    "contentType": "application/json",
+                    "capturedBytes": 12,
+                    "truncated": false,
+                    "bodyPresent": true,
+                    "bodyText": "{\"items\":[]}",
+                    "privateEvidence": true
+                }
+            }),
+        ]);
+
+        let experiment = read_experiment();
+        let selected = select_run_for_experiment(&export, &experiment).unwrap();
+        let seqs = selected
+            .events
+            .iter()
+            .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+            .collect::<Vec<_>>();
+
+        assert_eq!(selected.started_seq, 15);
+        assert_eq!(seqs, vec![15, 16, 17, 18]);
+    }
+
     fn cumulative_export() -> Value {
         let first_chunk = r#"event: delta_encoding
 data: "v1"
