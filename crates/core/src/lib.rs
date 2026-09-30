@@ -67,6 +67,10 @@ local_id_type!(
     LocalMessageId,
     "Opaque local message identity independent of any remote message identifier."
 );
+local_id_type!(
+    RemoteReadObservationId,
+    "Opaque local identity for one recorded remote read observation."
+);
 
 /// One locally authored user message with identities independent of the remote service.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,7 +270,8 @@ impl TurnEvidence {
             | EventKind::WorkerControlIssuerBound
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
-            | EventKind::RemoteConversationBound => {}
+            | EventKind::RemoteConversationBound
+            | EventKind::RemoteReadObservationRecorded => {}
         }
         Ok(())
     }
@@ -354,6 +359,8 @@ pub enum EventKind {
     ContinuationPermitIssued,
     /// One local conversation was correlated to an observed remote conversation identity.
     RemoteConversationBound,
+    /// One safe structural remote read observation was durably recorded.
+    RemoteReadObservationRecorded,
 }
 
 impl EventKind {
@@ -395,6 +402,7 @@ impl EventKind {
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
+            Self::RemoteReadObservationRecorded => "remote_read_observation_recorded",
         }
     }
 
@@ -436,6 +444,7 @@ impl EventKind {
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
             "remote_conversation_bound" => Some(Self::RemoteConversationBound),
+            "remote_read_observation_recorded" => Some(Self::RemoteReadObservationRecorded),
             _ => None,
         }
     }
