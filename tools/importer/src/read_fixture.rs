@@ -145,11 +145,11 @@ fn import_bytes(
 }
 
 fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<ReadObservation, String> {
-    let object = fixture
+    fixture
         .as_object()
         .ok_or_else(|| "sanitized read fixture must be a JSON object".to_owned())?;
 
-    reject_forbidden_fields(fixture, "")?;
+    validate_fixture_publication_safety(fixture)?;
 
     let protocol_revision = required_string(fixture, "snapshot")?.to_owned();
     if protocol_revision.is_empty() {
@@ -178,14 +178,6 @@ fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<Re
         .as_object()
         .ok_or_else(|| format!("read response {selected_index} must be a JSON object"))?;
 
-    for key in read_object.keys() {
-        if !ALLOWED_READ_FIELDS.contains(&key.as_str()) {
-            return Err(format!(
-                "read response {selected_index} contains unsupported field {key:?}"
-            ));
-        }
-    }
-
     let method_name = required_string(read, "method")?;
     let method = ReadMethod::from_stable_name(method_name).ok_or_else(|| {
         format!("read response {selected_index} has unsupported method {method_name:?}")
@@ -197,9 +189,6 @@ fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<Re
     let truncated = optional_bool(read, "truncated")?.unwrap_or(false);
 
     let body = read.get("body");
-    if let Some(body) = body {
-        validate_placeholder_body(body, &format!("/read_responses/{selected_index}/body"))?;
-    }
 
     let derived_body_present = body.is_some_and(|value| !value.is_null());
     let body_present = optional_bool(read, "body_present")?.unwrap_or(derived_body_present);
@@ -222,9 +211,6 @@ fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<Re
     }
     let top_level_type = explicit_top_level_type.or(derived_top_level_type);
 
-    // Access the object so future schema changes cannot silently turn this into a permissive parser.
-    let _ = object;
-
     ReadObservation::new(
         protocol_revision,
         experiment,
@@ -238,6 +224,36 @@ fn observation_from_fixture(fixture: &Value, selected_index: usize) -> Result<Re
         top_level_type,
     )
     .map_err(|error| format!("invalid selected read response {selected_index}: {error}"))
+}
+
+fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
+    reject_forbidden_fields(fixture, "")?;
+
+    let reads = fixture
+        .get("read_responses")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sanitized read fixture is missing read_responses array".to_owned())?;
+    if reads.is_empty() {
+        return Err("sanitized read fixture contains no read responses".to_owned());
+    }
+
+    for (index, read) in reads.iter().enumerate() {
+        let object = read
+            .as_object()
+            .ok_or_else(|| format!("read response {index} must be a JSON object"))?;
+        for key in object.keys() {
+            if !ALLOWED_READ_FIELDS.contains(&key.as_str()) {
+                return Err(format!(
+                    "read response {index} contains unsupported field {key:?}"
+                ));
+            }
+        }
+        if let Some(body) = read.get("body") {
+            validate_placeholder_body(body, &format!("/read_responses/{index}/body"))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn reject_forbidden_fields(value: &Value, pointer: &str) -> Result<(), String> {
@@ -566,6 +582,31 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].observation_id, summary.observation_id);
         assert_eq!(records[0].observation.path(), "/backend-api/second");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn private_content_in_unselected_read_also_fails_before_archive() {
+        let dir = temp_dir("unselected-private");
+        let mut fixture: Value = serde_json::from_slice(&fixture_bytes()).unwrap();
+        fixture["read_responses"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "method": "GET",
+                "path": "/backend-api/unselected",
+                "query_keys": [],
+                "status": 200,
+                "content_type": "application/json",
+                "body": {"title": "PRIVATE UNSELECTED TITLE"}
+            }));
+        let bytes = serde_json::to_vec(&fixture).unwrap();
+
+        let error = import_bytes(&bytes, 0, &dir).unwrap_err();
+        assert!(error.contains("non-placeholder string content"));
+        assert!(!error.contains("PRIVATE UNSELECTED TITLE"));
+        assert!(!dir.join("imports").exists());
 
         let _ = fs::remove_dir_all(dir);
     }
