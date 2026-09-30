@@ -9,7 +9,7 @@ use crate::Compatibility;
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// No committed C01 semantic baseline exists yet.
+/// Controlled C01 evidence exists at `2026-09-30.001`, but it does not establish complete\n/// conversation enumeration, so no semantic baseline exists yet.
 pub const LATEST_VALIDATED_CONVERSATION_LIST_OBSERVATION: Option<&str> = None;
 
 /// No committed C02 semantic baseline exists yet.
