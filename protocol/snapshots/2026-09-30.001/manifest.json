@@ -1,0 +1,55 @@
+{
+  "schema": "chatarium-protocol-snapshot",
+  "version": 1,
+  "revision": "2026-09-30.001",
+  "observation_kind": "flight_recorder_c01_conversation_list_partial",
+  "canonical_experiment": "C01-conversation-list",
+  "capture_start_utc": "2026-09-30T19:27:03.950Z",
+  "capture_end_utc": "2026-09-30T19:27:45.371Z",
+  "recorder": {
+    "name": "Chatarium Flight Recorder",
+    "version": "0.7.0"
+  },
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "ecfb1f1228321e8319de4aeab819e4b0f2bb1422377a96af56143ad2aaf42900",
+    "raw_bytes": 786960,
+    "committed_to_git": false
+  },
+  "controlled_action": {
+    "type": "observe_conversation_list",
+    "mutation": false,
+    "steps": [
+      "Arm protocol-read capture.",
+      "Open or expand the ChatGPT sidebar.",
+      "Scroll far enough for older sidebar entries to request additional data.",
+      "Wait briefly for traffic to settle.",
+      "Disarm protocol-read capture and export once."
+    ]
+  },
+  "selected_run": {
+    "armed_seq": 67,
+    "disarmed_seq": 80,
+    "captured_responses": 12,
+    "captured_bytes": 460268,
+    "truncated_responses": 0,
+    "read_errors": 0
+  },
+  "observed_reads": {
+    "/backend-api/gizmos/snorlax/sidebar": 4,
+    "/backend-api/pins": 4,
+    "/backend-api/accounts/check/v4-2023-04-27": 2,
+    "/backend-api/settings/user": 2
+  },
+  "semantic_assessment": {
+    "conversation_list_baseline_established": false,
+    "reason": "The capture proves a paginated sidebar/gizmo read surface containing nested conversation summaries, but does not prove complete account-wide conversation enumeration."
+  },
+  "recorder_artifact_note": "A thirteenth sidebar response completed after the durable Disarm event. Legacy v0.7.0 ingestion is bounded at Disarm, so that late response and the subsequently mutated top-level counters are excluded.",
+  "limitations": [
+    "One controlled capture does not establish cross-deployment stability.",
+    "The observed sidebar/gizmo surface is not proven to enumerate every remote conversation.",
+    "C02 open-existing-conversation semantics remain unobserved.",
+    "The private raw export contains unrelated account and conversation material and is not publication-safe."
+  ]
+}
