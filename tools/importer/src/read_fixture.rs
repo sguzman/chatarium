@@ -511,8 +511,14 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].observation_id, summary.observation_id);
-        assert_eq!(records[0].observation.experiment(), ReadExperiment::OpenConversation);
-        assert_eq!(records[0].observation.path(), "/backend-api/conversations/<id>");
+        assert_eq!(
+            records[0].observation.experiment(),
+            ReadExperiment::OpenConversation
+        );
+        assert_eq!(
+            records[0].observation.path(),
+            "/backend-api/conversations/<id>"
+        );
         assert_eq!(records[0].observation.status(), 429);
         assert_eq!(records[0].compatibility, Compatibility::NoBaseline);
 
