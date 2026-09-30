@@ -539,9 +539,7 @@ fn derive_sanitized_run(
                 read_inventory.push(inventory_read);
             }
             "protocol-read-response-error" | "protocol-read-fetch-error" => {
-                warnings.push(format!(
-                    "seq {seq}: source recorder reported {kind}"
-                ));
+                warnings.push(format!("seq {seq}: source recorder reported {kind}"));
             }
             _ => {}
         }
@@ -787,9 +785,7 @@ fn sanitize_read_response_event(
         let parsed: Value = serde_json::from_str(raw).map_err(|error| {
             stats.malformed_read_json_fail_closed =
                 stats.malformed_read_json_fail_closed.saturating_add(1);
-            format!(
-                "seq {seq}: declared JSON protocol read body failed closed: {error}"
-            )
+            format!("seq {seq}: declared JSON protocol read body failed closed: {error}")
         })?;
         let top = json_type_name(&parsed).to_owned();
         let mut shape = Vec::new();
@@ -864,7 +860,10 @@ fn looks_like_identity_segment(segment: &str) -> bool {
         return false;
     }
     let compact = segment.replace('-', "");
-    compact.len() >= 16 && compact.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    compact.len() >= 16
+        && compact
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn reduce_read_json(
@@ -882,13 +881,7 @@ fn reduce_read_json(
             for child_key in keys {
                 output.insert(
                     child_key.clone(),
-                    reduce_read_json(
-                        &map[child_key],
-                        Some(child_key),
-                        allowed_texts,
-                        ids,
-                        stats,
-                    ),
+                    reduce_read_json(&map[child_key], Some(child_key), allowed_texts, ids, stats),
                 );
             }
             Value::Object(output)
@@ -901,8 +894,7 @@ fn reduce_read_json(
         ),
         Value::String(text) => {
             if key.is_some_and(sensitive_field) {
-                stats.sensitive_values_redacted =
-                    stats.sensitive_values_redacted.saturating_add(1);
+                stats.sensitive_values_redacted = stats.sensitive_values_redacted.saturating_add(1);
                 return Value::String(REDACTED.to_owned());
             }
             if let Some(key) = key {
@@ -2259,20 +2251,10 @@ data: [DONE]
 
         let first_selected = select_latest_run(&first).unwrap();
         let second_selected = select_latest_run(&second).unwrap();
-        let first_derived = derive_sanitized_run(
-            &first,
-            &first_selected,
-            &experiment,
-            &BTreeSet::new(),
-        )
-        .unwrap();
-        let second_derived = derive_sanitized_run(
-            &second,
-            &second_selected,
-            &experiment,
-            &BTreeSet::new(),
-        )
-        .unwrap();
+        let first_derived =
+            derive_sanitized_run(&first, &first_selected, &experiment, &BTreeSet::new()).unwrap();
+        let second_derived =
+            derive_sanitized_run(&second, &second_selected, &experiment, &BTreeSet::new()).unwrap();
 
         assert_eq!(
             first_derived.pointer("/inventory/read_responses"),
@@ -2283,8 +2265,7 @@ data: [DONE]
     #[test]
     fn read_structural_type_change_is_inventory_visible() {
         let first = export_with_read_body(r#"{"items":[{"title":"PRIVATE"}]}"#, false);
-        let second =
-            export_with_read_body(r#"{"items":[{"title":{"value":"PRIVATE"}}]}"#, false);
+        let second = export_with_read_body(r#"{"items":[{"title":{"value":"PRIVATE"}}]}"#, false);
         let experiment = read_experiment();
 
         let first_selected = select_latest_run(&first).unwrap();
