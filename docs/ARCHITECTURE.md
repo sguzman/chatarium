@@ -34,6 +34,8 @@ The authoritative local record consists of append-oriented events plus materiali
 - **projections** answer what the UI should currently render;
 - **remote identifiers** allow later reconciliation without making remote state authoritative over local authorship.
 
+Remote conversation identity is now a first-class domain separate from `LocalConversationId`. A `RemoteConversationId` is an exact opaque string: core does not assume UUID syntax, parse structure, case semantics, or normalization. The authoritative journal can bind one local conversation one-to-one to one remote conversation identity and records the named protocol observation revision that justified that correlation. The remote identifier stays in the private event payload rather than the journal scope. A binding is provenance only; it does not imply authentication, connectivity, fetch success, synchronization completeness, or remote mutability.
+
 The first persistent implementation is a newline-delimited JSON event journal in `crates/store`. Each complete record has a stable event-kind name, monotonic sequence, local Unix-millisecond timestamp, and exact textual payload. A successful persistent append does not return until the line has been written, flushed, and `sync_data()` has succeeded.
 
 Startup treats only an **unterminated final fragment** as a torn last write and truncates it back to the previous newline. A malformed complete record is a hard integrity error; it is not silently skipped.
