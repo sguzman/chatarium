@@ -10,7 +10,7 @@ use crate::remote_mirror_selection_audit::{
 };
 use chatarium_core::LocalConversationId;
 use chatarium_core::authenticated_session::{
-    AuthenticatedSessionLease, UserAuthenticatedSessionProvider,
+    AuthenticatedSessionLease, SessionLeaseError, UserAuthenticatedSessionProvider,
 };
 
 /// Persistent P3 mirror state immediately before transient authentication.
@@ -49,11 +49,15 @@ impl<'a, P: UserAuthenticatedSessionProvider + ?Sized> AuthorizedRemoteMirrorRea
         &self.ready
     }
 
-    /// Run adapter-specific logic against the exact provider covered by the live session lease.
+    /// Run adapter-specific logic only after revalidating the live session authority.
     ///
-    /// This boundary still does not expose or copy any reusable authentication material.
-    pub fn with_session_provider<R>(&mut self, operation: impl FnOnce(&mut P) -> R) -> R {
-        self.session.with_provider(operation)
+    /// This boundary still does not expose or copy any reusable authentication material,
+    /// and stale/uncertain authentication fails closed before the operation runs.
+    pub fn with_authenticated_session_provider<R>(
+        &mut self,
+        operation: impl FnOnce(&mut P) -> R,
+    ) -> Result<R, SessionLeaseError<P::Error>> {
+        self.session.with_authenticated_provider(operation)
     }
 }
 
@@ -205,7 +209,9 @@ mod tests {
             .unwrap();
 
             assert_eq!(authorized.ready(), &ready);
-            authorized.with_session_provider(|session| session.uses += 1);
+            authorized
+                .with_authenticated_session_provider(|session| session.uses += 1)
+                .unwrap();
         }
 
         assert_eq!(provider.uses, 1);
