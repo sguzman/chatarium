@@ -67,8 +67,8 @@ pub fn run_cli(args: &[String]) -> Result<(), String> {
         [command, protocol_dir] if command == "validate-corpus" => {
             let report = corpus::validate_corpus(Path::new(protocol_dir))?;
             println!(
-                "snapshots={} fixtures={} c03_sse_replays={}",
-                report.snapshots, report.fixtures, report.c03_sse_replays
+                "snapshots={} fixtures={} c03_sse_replays={} read_fixtures={}",
+                report.snapshots, report.fixtures, report.c03_sse_replays, report.read_fixtures
             );
             Ok(())
         }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.6.0
+// @version      0.7.0
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -17,7 +17,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.6.0';
+  const VERSION = '0.7.0';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -29,6 +29,8 @@
   const MAX_ASSISTANT_WAL_CHARS = 500_000;
   const MAX_ERROR_WAL_CHARS = 5_000;
   const MAX_NETWORK_STREAM_BYTES = 8_000_000;
+  const MAX_READ_RESPONSE_BYTES = 1_000_000;
+  const MAX_READ_RUN_BYTES = 4_000_000;
   const COMPOSER_POLL_MS = 250;
   const EXPORT_HOTKEY = { ctrlKey: true, shiftKey: true, altKey: true, code: 'KeyE' };
 
@@ -40,6 +42,11 @@
   let panelHost = null;
   let panelRoot = null;
   let lastPolledComposerFingerprint = null;
+  let readCaptureArmed = false;
+  let readCaptureArmedAt = null;
+  let readCaptureBytes = 0;
+  let readCaptureResponses = 0;
+  const readCaptureIntervals = [];
   const observedErrors = new Set();
 
   const now = () => new Date().toISOString();
@@ -147,16 +154,82 @@
           : String(input);
       const url = new URL(requestUrl, location.href);
       const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      const sameOriginBackend = url.origin === location.origin && url.pathname.startsWith('/backend-api/');
       return {
         url,
         method,
-        capture: method === 'POST'
+        queryKeys: [...new Set([...url.searchParams.keys()])].sort(),
+        captureStream: method === 'POST'
           && url.origin === location.origin
           && url.pathname === '/backend-api/f/conversation',
+        readEligible: (method === 'GET' || method === 'HEAD') && sameOriginBackend,
       };
     } catch {
-      return { url: null, method: null, capture: false };
+      return {
+        url: null,
+        method: null,
+        queryKeys: [],
+        captureStream: false,
+        readEligible: false,
+      };
     }
+  }
+
+  function structuredReadContentType(contentType) {
+    const mime = String(contentType ?? '').split(';')[0].trim().toLowerCase();
+    return mime === 'application/json'
+      || mime === 'text/json'
+      || mime.endsWith('+json');
+  }
+
+  function readCaptureStatus() {
+    return {
+      armed: readCaptureArmed,
+      armedAt: readCaptureArmedAt,
+      capturedBytes: readCaptureBytes,
+      responseCount: readCaptureResponses,
+      responseLimitBytes: MAX_READ_RESPONSE_BYTES,
+      runLimitBytes: MAX_READ_RUN_BYTES,
+      intervals: readCaptureIntervals.map((interval) => ({ ...interval })),
+    };
+  }
+
+  function armReadCapture() {
+    if (readCaptureArmed) return readCaptureStatus();
+    readCaptureArmed = true;
+    readCaptureArmedAt = now();
+    readCaptureBytes = 0;
+    readCaptureResponses = 0;
+    readCaptureIntervals.push({
+      armedAt: readCaptureArmedAt,
+      disarmedAt: null,
+      reason: null,
+    });
+    appendEvent('protocol-read-capture-armed', {
+      responseLimitBytes: MAX_READ_RESPONSE_BYTES,
+      runLimitBytes: MAX_READ_RUN_BYTES,
+    });
+    scheduleStatusRefresh();
+    return readCaptureStatus();
+  }
+
+  function disarmReadCapture(reason = 'operator') {
+    if (!readCaptureArmed) return readCaptureStatus();
+    readCaptureArmed = false;
+    const disarmedAt = now();
+    const interval = readCaptureIntervals.at(-1);
+    if (interval && interval.disarmedAt === null) {
+      interval.disarmedAt = disarmedAt;
+      interval.reason = reason;
+    }
+    appendEvent('protocol-read-capture-disarmed', {
+      reason,
+      capturedBytes: readCaptureBytes,
+      responseCount: readCaptureResponses,
+    });
+    readCaptureArmedAt = null;
+    scheduleStatusRefresh();
+    return readCaptureStatus();
   }
 
   function conversationScopeFromProtocolId(conversationId) {
@@ -499,6 +572,123 @@
     }
   }
 
+  async function captureProtocolReadResponse(response, requestInfo) {
+    const readId = makeId('protocol-read');
+    const contentType = response.headers.get('content-type') ?? '';
+    const endpoint = requestInfo.url?.pathname ?? '<unknown>';
+    const metadata = {
+      readId,
+      method: requestInfo.method,
+      endpoint,
+      queryKeys: requestInfo.queryKeys,
+      status: response.status,
+      contentType,
+      privateEvidence: true,
+    };
+
+    if (!structuredReadContentType(contentType)) {
+      appendEvent('protocol-read-response-skipped', {
+        ...metadata,
+        reason: 'unsupported-content-type',
+      });
+      return;
+    }
+
+    if (requestInfo.method === 'HEAD') {
+      readCaptureResponses += 1;
+      appendEvent('protocol-read-response-captured', {
+        ...metadata,
+        capturedBytes: 0,
+        truncated: false,
+        bodyPresent: false,
+        bodyText: null,
+      });
+      scheduleStatusRefresh();
+      return;
+    }
+
+    if (!response.body) {
+      appendEvent('protocol-read-response-error', {
+        ...metadata,
+        capturedBytes: 0,
+        message: 'response-body-unavailable',
+      });
+      return;
+    }
+
+    const remainingRunBytes = Math.max(0, MAX_READ_RUN_BYTES - readCaptureBytes);
+    if (remainingRunBytes === 0) {
+      appendEvent('protocol-read-capture-limit', {
+        limitBytes: MAX_READ_RUN_BYTES,
+        capturedBytes: readCaptureBytes,
+      });
+      disarmReadCapture('run-byte-limit');
+      return;
+    }
+
+    const limitBytes = Math.min(MAX_READ_RESPONSE_BYTES, remainingRunBytes);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let capturedBytes = 0;
+    let text = '';
+    let truncated = false;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+
+        const remaining = limitBytes - capturedBytes;
+        if (value.byteLength > remaining) {
+          if (remaining > 0) {
+            const prefix = value.subarray(0, remaining);
+            text += decoder.decode(prefix, { stream: true });
+            capturedBytes += prefix.byteLength;
+          }
+          truncated = true;
+          try {
+            await reader.cancel('Chatarium protocol read capture limit reached');
+          } catch {
+            // Clone cancellation is diagnostic-only. The site's original response is untouched.
+          }
+          break;
+        }
+
+        text += decoder.decode(value, { stream: true });
+        capturedBytes += value.byteLength;
+      }
+
+      if (!truncated) text += decoder.decode();
+    } catch (error) {
+      appendEvent('protocol-read-response-error', {
+        ...metadata,
+        capturedBytes,
+        message: String(error?.message ?? error),
+      });
+      return;
+    }
+
+    readCaptureBytes += capturedBytes;
+    readCaptureResponses += 1;
+    appendEvent('protocol-read-response-captured', {
+      ...metadata,
+      capturedBytes,
+      truncated,
+      bodyPresent: true,
+      bodyText: text,
+    });
+    scheduleStatusRefresh();
+
+    if (readCaptureBytes >= MAX_READ_RUN_BYTES) {
+      appendEvent('protocol-read-capture-limit', {
+        limitBytes: MAX_READ_RUN_BYTES,
+        capturedBytes: readCaptureBytes,
+      });
+      disarmReadCapture('run-byte-limit');
+    }
+  }
+
   async function captureNetworkResponseStream(response, requestInfo) {
     const streamId = makeId('network-stream');
     const contentType = response.headers.get('content-type') ?? '';
@@ -622,29 +812,58 @@
     window.fetch = new Proxy(originalFetch, {
       apply(target, thisArg, args) {
         const requestInfo = networkRequestInfo(args[0], args[1]);
+        const captureRead = readCaptureArmed && requestInfo.readEligible;
         const result = Reflect.apply(target, thisArg, args);
-        if (!requestInfo.capture) return result;
+        if (!requestInfo.captureStream && !captureRead) return result;
 
         return Promise.resolve(result).then(
           (response) => {
-            try {
-              const clone = response.clone();
-              void captureNetworkResponseStream(clone, requestInfo);
-            } catch (error) {
-              appendEvent('network-stream-error', {
-                endpoint: requestInfo.url?.pathname ?? '/backend-api/f/conversation',
-                capturedBytes: 0,
-                message: `clone response: ${String(error?.message ?? error)}`,
-              });
+            if (requestInfo.captureStream) {
+              try {
+                const clone = response.clone();
+                void captureNetworkResponseStream(clone, requestInfo);
+              } catch (error) {
+                appendEvent('network-stream-error', {
+                  endpoint: requestInfo.url?.pathname ?? '/backend-api/f/conversation',
+                  capturedBytes: 0,
+                  message: `clone response: ${String(error?.message ?? error)}`,
+                });
+              }
             }
+
+            if (captureRead) {
+              try {
+                const clone = response.clone();
+                void captureProtocolReadResponse(clone, requestInfo);
+              } catch (error) {
+                appendEvent('protocol-read-response-error', {
+                  method: requestInfo.method,
+                  endpoint: requestInfo.url?.pathname ?? '<unknown>',
+                  queryKeys: requestInfo.queryKeys,
+                  capturedBytes: 0,
+                  message: `clone response: ${String(error?.message ?? error)}`,
+                });
+              }
+            }
+
             return response;
           },
           (error) => {
-            appendEvent('network-fetch-error', {
-              endpoint: requestInfo.url?.pathname ?? '/backend-api/f/conversation',
-              method: requestInfo.method,
-              message: String(error?.message ?? error),
-            });
+            if (requestInfo.captureStream) {
+              appendEvent('network-fetch-error', {
+                endpoint: requestInfo.url?.pathname ?? '/backend-api/f/conversation',
+                method: requestInfo.method,
+                message: String(error?.message ?? error),
+              });
+            }
+            if (captureRead) {
+              appendEvent('protocol-read-fetch-error', {
+                method: requestInfo.method,
+                endpoint: requestInfo.url?.pathname ?? '<unknown>',
+                queryKeys: requestInfo.queryKeys,
+                message: String(error?.message ?? error),
+              });
+            }
             throw error;
           },
         );
@@ -1134,6 +1353,7 @@
       events,
       drafts,
       messages,
+      protocolReadCapture: readCaptureStatus(),
     };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -1188,6 +1408,7 @@
       pendingSendIntents: intents.filter((intent) => intent.state !== 'confirmed'),
       assistantWal: readAssistantWal(),
       lastVisibleError: readErrorWal(),
+      protocolReadCapture: readCaptureStatus(),
       counts: {
         events: (await readStore('events')).length,
         drafts: (await readStore('drafts')).length,
@@ -1225,6 +1446,7 @@
     const hasAssistant = Boolean(normalizeText(assistant?.text));
     const latestPending = pending.at(-1);
     const assistantChars = assistant?.originalChars ?? assistant?.text?.length ?? 0;
+    const readState = readCaptureStatus();
 
     panelRoot.innerHTML = `
       <style>
@@ -1256,6 +1478,7 @@
         .ok { color: #86efac; }
         .warn { color: #fde68a; }
         .bad { color: #fca5a5; }
+        .armed { color: #fca5a5; font-weight: 700; }
       </style>
       <div class="box">
         <div class="row">
@@ -1264,12 +1487,14 @@
         </div>
         <div class="sub">${hasDraft ? 'draft saved' : 'no non-empty draft'} · ${pending.length} unresolved send${pending.length === 1 ? '' : 's'}</div>
         <div class="sub">${hasAssistant ? `assistant ${assistantChars.toLocaleString()} chars saved` : 'no assistant snapshot yet'}</div>
+        <div class="sub ${readState.armed ? 'armed' : ''}">protocol reads: ${readState.armed ? `ARMED · ${readState.responseCount} response(s) · ${readState.capturedBytes.toLocaleString()} bytes` : 'off'}</div>
         ${latestPending ? `<div class="sub warn">latest unresolved: ${escapeHtml(latestPending.at)}</div>` : ''}
         ${error ? `<div class="sub bad">last site error: ${escapeHtml(error.text.slice(0, 180))}</div>` : ''}
         <div class="actions">
           <button data-action="copy-draft" ${hasDraft ? '' : 'disabled'}>Copy draft</button>
           <button data-action="copy-send" ${intents.length ? '' : 'disabled'}>Copy last send</button>
           <button data-action="copy-assistant" ${hasAssistant ? '' : 'disabled'}>Copy assistant</button>
+          <button data-action="toggle-read">${readState.armed ? 'Disarm reads' : 'Arm reads'}</button>
           <button data-action="export">Export</button>
         </div>
       </div>
@@ -1278,6 +1503,10 @@
     panelRoot.querySelector('[data-action="copy-draft"]')?.addEventListener('click', () => void copySavedDraft());
     panelRoot.querySelector('[data-action="copy-send"]')?.addEventListener('click', () => void copyLatestSendIntent());
     panelRoot.querySelector('[data-action="copy-assistant"]')?.addEventListener('click', () => void copyLatestAssistant());
+    panelRoot.querySelector('[data-action="toggle-read"]')?.addEventListener('click', () => {
+      if (readCaptureArmed) disarmReadCapture('operator');
+      else armReadCapture();
+    });
     panelRoot.querySelector('[data-action="export"]')?.addEventListener('click', () => void exportAll());
   }
 
@@ -1312,6 +1541,9 @@
       readSendIntents,
       readAssistantWal,
       readErrorWal,
+      armReadCapture,
+      disarmReadCapture,
+      readCaptureStatus,
     }),
   });
 

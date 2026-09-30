@@ -1,0 +1,25 @@
+schema = "chatarium-experiment"
+version = 1
+id = "C02-open-conversation"
+description = "Open one existing conversation through the official ChatGPT UI and observe the settled read path without mutating it."
+start_url = "https://chatgpt.com/"
+timeout_seconds = 60
+mutation = false
+
+[action]
+type = "open_existing_conversation"
+
+[success]
+type = "conversation_visible"
+
+[settle]
+quiet_network_ms = 1500
+quiet_dom_ms = 750
+minimum_observation_ms = 1500
+
+[capture]
+network = true
+websocket = false
+response_bodies = true
+frontend_assets = false
+page_observations = true

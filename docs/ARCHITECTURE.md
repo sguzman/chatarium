@@ -146,6 +146,10 @@ Before the full native client is capable of direct interaction, Chatarium provid
 - record connectivity, navigation, visible error/toast observations, and unresolved sends;
 - provide copy/export recovery surfaces independent of the current DOM.
 
+For controlled protocol observation only, Flight Recorder v0.7.0 also exposes a separate read-capture mode. It is in-memory and off by default on every page load. While explicitly armed it may clone same-origin `GET`/`HEAD` fetch responses under `/backend-api/` only when their response content type is JSON-family. It records path plus query-key names, never query values, request headers, cookies, authorization values, request bodies, browser storage, or third-party traffic. Per-response and per-run byte limits are explicit, and any clone/capture failure is isolated from ChatGPT's original response branch.
+
+Raw read bodies exist only in the private recorder export. `snapshot-flight` fail-closes them into structural public evidence: keys, containers, array occurrence/length, JSON pointer/type observations, typed scalar placeholders, and deterministic identity placeholders. Arbitrary titles/message strings are not publishable output. A truncated read body is omitted rather than parsed; malformed declared JSON aborts derivation rather than copying raw text. The browser recorder deliberately does not label any observed endpoint as "conversation list" or "conversation fetch"; those semantics require committed C01/C02 evidence.
+
 This layer is intentionally disposable once the native client supersedes it, but its evidence vocabulary should align with `crates/core` so recovered histories can be imported later.
 
 ## Protocol revisions
