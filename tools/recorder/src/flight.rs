@@ -911,6 +911,11 @@ fn reduce_read_json(
                         stats.read_identity_values_placeholdered.saturating_add(1);
                     return Value::String(ids.map_conversation(text));
                 }
+                if key.eq_ignore_ascii_case("id") {
+                    stats.read_identity_values_placeholdered =
+                        stats.read_identity_values_placeholdered.saturating_add(1);
+                    return Value::String(ids.map_generic(text));
+                }
                 if message_identity_field(key) {
                     stats.read_identity_values_placeholdered =
                         stats.read_identity_values_placeholdered.saturating_add(1);
