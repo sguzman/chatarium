@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn c01_and_c02_round_trip_as_no_baseline() {
+    fn c01_no_baseline_and_unvalidated_c02_mismatch_round_trip() {
         let mut store = MemoryEventStore::default();
         let c01 = RemoteReadObservationId::new();
         let c02 = RemoteReadObservationId::new();
@@ -511,7 +511,13 @@ mod tests {
         assert_eq!(records[0].observation_id, c01);
         assert_eq!(records[0].compatibility, Compatibility::NoBaseline);
         assert_eq!(records[1].observation_id, c02);
-        assert_eq!(records[1].compatibility, Compatibility::NoBaseline);
+        assert!(matches!(
+            &records[1].compatibility,
+            Compatibility::Mismatch {
+                expected_revision,
+                ..
+            } if expected_revision == "2026-10-01.001"
+        ));
     }
 
     #[test]
