@@ -1,0 +1,151 @@
+{
+  "schema": "chatarium-protocol-read-observation",
+  "version": 1,
+  "snapshot": "2026-10-01.001",
+  "canonical_experiment": "C02-open-conversation",
+  "recorder": {
+    "name": "Chatarium Flight Recorder",
+    "version": "0.7.1"
+  },
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "d204b5c6e26536cef112b1dce9b551613129f17b74f1b4e2235c2491b9081fc6",
+    "raw_bytes": 990898,
+    "committed_to_git": false
+  },
+  "selected_run": {
+    "run_id": "<run-id>",
+    "armed_at": "2026-10-01T13:59:16.215Z",
+    "disarmed_at": "2026-10-01T13:59:25.320Z",
+    "request_count": 1,
+    "response_count": 1,
+    "skipped_count": 0,
+    "error_count": 0,
+    "captured_bytes": 5081
+  },
+  "requests": [
+    {
+      "seq": 132,
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ]
+    }
+  ],
+  "responses": [
+    {
+      "seq": 134,
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "captured_bytes": 5081,
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object"
+    }
+  ],
+  "navigation": {
+    "seq": 133,
+    "from": "<conversation-url>",
+    "to": "<conversation-url>"
+  },
+  "response_structure": {
+    "top_level_type": "object",
+    "top_level_keys": [
+      "title",
+      "create_time",
+      "update_time",
+      "moderation_results",
+      "plugin_ids",
+      "conversation_id",
+      "conversation_template_id",
+      "gizmo_id",
+      "gizmo_type",
+      "is_archived",
+      "is_starred",
+      "safe_urls",
+      "blocked_urls",
+      "default_model_slug",
+      "atlas_mode_enabled",
+      "conversation_origin",
+      "is_read_only",
+      "voice",
+      "async_status",
+      "disabled_tool_ids",
+      "is_temporary_chat",
+      "is_do_not_remember",
+      "memory_scope",
+      "context_scopes",
+      "sugar_item_id",
+      "sugar_item_visible",
+      "pinned_time",
+      "is_study_mode",
+      "owner",
+      "messages",
+      "current_node",
+      "page_info",
+      "context_truncation_continuation"
+    ],
+    "message_count": 5,
+    "message_item_keys": [
+      "author",
+      "channel",
+      "content",
+      "create_time",
+      "end_turn",
+      "id",
+      "metadata",
+      "recipient",
+      "status",
+      "update_time",
+      "weight"
+    ],
+    "message_content_key_variants": [
+      [
+        "content",
+        "content_type"
+      ],
+      [
+        "content_type",
+        "parts"
+      ]
+    ],
+    "message_parts_item_counts": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "page_info_keys": [
+      "start_cursor",
+      "end_cursor",
+      "has_previous_page",
+      "has_next_page"
+    ],
+    "page_info_has_previous_page": true,
+    "page_info_has_next_page": true,
+    "identity_placeholders_preserve_repeated_references": true
+  },
+  "assessment": {
+    "request_path_observed": true,
+    "query_shape_observed": true,
+    "successful_conversation_fetch_response_observed": true,
+    "conversation_fetch_semantic_baseline_established": true,
+    "compatibility": "ValidatedAgainst:2026-10-01.001"
+  },
+  "privacy": {
+    "raw_response_bodies_copied": false,
+    "query_values_copied": false,
+    "request_headers_copied": false,
+    "credentials_copied": false,
+    "concrete_remote_identifiers_copied": false,
+    "conversation_text_copied": false
+  }
+}
