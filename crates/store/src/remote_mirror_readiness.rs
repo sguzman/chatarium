@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn current_production_compatibility_blocks_as_no_baseline() {
+    fn unvalidated_c02_revision_blocks_as_protocol_mismatch() {
         let mut store = MemoryEventStore::default();
         let local = LocalConversationId::new();
         let revision = "future-c02-observation";
@@ -342,7 +342,7 @@ mod tests {
 
         assert!(matches!(
             derive_remote_mirror_readiness(store.events(), local).unwrap(),
-            RemoteMirrorReadiness::Blocked(RemoteMirrorBlocked::NoBaseline { .. })
+            RemoteMirrorReadiness::Blocked(RemoteMirrorBlocked::ProtocolMismatch { .. })
         ));
     }
 
