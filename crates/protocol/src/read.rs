@@ -13,8 +13,8 @@ use std::fmt;
 /// conversation enumeration, so no semantic baseline exists yet.
 pub const LATEST_VALIDATED_CONVERSATION_LIST_OBSERVATION: Option<&str> = None;
 
-/// No committed C02 semantic baseline exists yet.
-pub const LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION: Option<&str> = None;
+/// The first successful controlled C02 conversation-fetch response is validated by snapshot `2026-10-01.001`.
+pub const LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION: Option<&str> = Some("2026-10-01.001");
 
 /// Controlled read experiment that produced an observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,15 +418,19 @@ mod tests {
     }
 
     #[test]
-    fn c01_and_c02_have_no_semantic_baseline_yet() {
+    fn c01_remains_unbaselined_while_c02_uses_the_successful_fetch_revision() {
         assert_eq!(
             compatibility_for_read_flow(ReadFlow::ConversationList, "2026-09-30.001"),
             Compatibility::NoBaseline
         );
         assert_eq!(
-            compatibility_for_read_flow(ReadFlow::ConversationFetch, "2026-09-29.002"),
-            Compatibility::NoBaseline
+            compatibility_for_read_flow(ReadFlow::ConversationFetch, "2026-10-01.001"),
+            Compatibility::ValidatedAgainst("2026-10-01.001".to_owned())
         );
+        assert!(matches!(
+            compatibility_for_read_flow(ReadFlow::ConversationFetch, "2026-09-30.002"),
+            Compatibility::Mismatch { expected_revision, .. } if expected_revision == "2026-10-01.001"
+        ));
         assert_eq!(LATEST_VALIDATED_OBSERVATION, Some("2026-09-29.002"));
     }
 
