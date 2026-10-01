@@ -243,6 +243,31 @@ mod tests {
     }
 
     #[test]
+    fn current_validated_c02_reaches_authenticated_session_gate() {
+        let mut store = MemoryEventStore::default();
+        let local = LocalConversationId::new();
+        let revision = "2026-10-01.001";
+        let binding = RemoteConversationBinding::new(
+            local,
+            RemoteConversationId::new("opaque-remote").unwrap(),
+            ProtocolObservationRevision::new(revision).unwrap(),
+        );
+        record_remote_conversation_bound(&mut store, &binding).unwrap();
+        record_remote_mirror_selection_changed(&mut store, local, true).unwrap();
+        record_remote_read_observation(
+            &mut store,
+            RemoteReadObservationId::new(),
+            &production_c02(revision),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            derive_remote_mirror_execution_plan(store.events(), local).unwrap(),
+            RemoteMirrorExecutionPlan::RequiresAuthenticatedSession(_)
+        ));
+    }
+
+    #[test]
     fn execution_plan_derivation_is_read_only() {
         let mut store = MemoryEventStore::default();
         let local = LocalConversationId::new();
