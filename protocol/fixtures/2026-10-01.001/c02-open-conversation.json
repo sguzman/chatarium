@@ -225,8 +225,7 @@
               "thinking_effort": "<string>",
               "can_save": "<bool>",
               "parent_id": "<id:8>",
-              "model_switcher_deny": [],
-              "hide_inline_actions": "<bool>"
+              "model_switcher_deny": []
             },
             "recipient": "<string>",
             "channel": "<string>"
