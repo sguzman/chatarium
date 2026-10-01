@@ -1,0 +1,119 @@
+{
+  "snapshot": "2026-10-01.001",
+  "experiment": "C02-open-conversation",
+  "status": "observed_success",
+  "read_responses": [
+    {
+      "method": "GET",
+      "path": "/backend-api/conversations/<id>",
+      "query_keys": [
+        "include_has_versions",
+        "num_turns"
+      ],
+      "status": 200,
+      "content_type": "application/json",
+      "truncated": false,
+      "body_present": true,
+      "top_level_type": "object",
+      "body": {
+        "title": "<redacted-text>",
+        "create_time": "<number>",
+        "update_time": "<number>",
+        "moderation_results": [],
+        "plugin_ids": null,
+        "conversation_id": "<id:1>",
+        "conversation_template_id": null,
+        "gizmo_id": null,
+        "gizmo_type": null,
+        "is_archived": "<bool>",
+        "is_starred": null,
+        "safe_urls": [],
+        "blocked_urls": [],
+        "default_model_slug": "<string>",
+        "atlas_mode_enabled": null,
+        "conversation_origin": null,
+        "is_read_only": null,
+        "voice": null,
+        "async_status": null,
+        "disabled_tool_ids": [],
+        "is_temporary_chat": "<bool>",
+        "is_do_not_remember": "<bool>",
+        "memory_scope": "<string>",
+        "context_scopes": [],
+        "sugar_item_id": null,
+        "sugar_item_visible": "<bool>",
+        "pinned_time": null,
+        "is_study_mode": "<bool>",
+        "owner": null,
+        "messages": [
+          {
+            "id": "<id:2>",
+            "author": {
+              "role": "<string>",
+              "name": null,
+              "metadata": {}
+            },
+            "create_time": "<number>",
+            "update_time": null,
+            "content": {
+              "content_type": "<string>",
+              "parts": [
+                "<empty-string>"
+              ]
+            },
+            "status": "<string>",
+            "end_turn": null,
+            "weight": "<number>",
+            "metadata": {
+              "request_id": "<id:3>",
+              "message_source": null,
+              "turn_exchange_id": "<id:4>",
+              "working_turn_id": "<id:4",
+              "can_save": "<bool>"
+            },
+            "recipient": "<string>",
+            "channel": null
+          },
+          {
+            "id": "<id:5>",
+            "author": {
+              "role": "<string>",
+              "name": null,
+              "metadata": {}
+            },
+            "create_time": "<number>",
+            "update_time": "<number>",
+            "content": {
+              "content_type": "<string>",
+              "parts": [
+                "<redacted-text>"
+              ]
+            },
+            "status": "<string>",
+            "end_turn": null,
+            "weight": "<number>",
+            "metadata": {
+              "serialization_metadata": {
+                "render_format": "<string>"
+              },
+              "request_id": "<id:3>",
+              "message_source": null,
+              "turn_exchange_id": "<id:4>",
+              "working_turn_id": "<id:4>",
+              "can_save": "<bool>"
+            },
+            "recipient": "<string>",
+            "channel": null
+          },
+          {
+            "id": "<id:6>",
+            "author": {
+              "role": "<string>"
+            },
+            "name": null
+          }
+        ]
+      }
+    }
+  ]
+}
