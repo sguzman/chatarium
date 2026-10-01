@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn current_production_no_baseline_remains_protocol_blocked() {
+    fn unvalidated_c02_revision_remains_protocol_blocked() {
         let mut store = MemoryEventStore::default();
         let local = LocalConversationId::new();
         let revision = "future-c02-observation";
@@ -238,7 +238,7 @@ mod tests {
 
         assert!(matches!(
             derive_remote_mirror_execution_plan(store.events(), local).unwrap(),
-            RemoteMirrorExecutionPlan::ProtocolBlocked(RemoteMirrorBlocked::NoBaseline { .. })
+            RemoteMirrorExecutionPlan::ProtocolBlocked(RemoteMirrorBlocked::ProtocolMismatch { .. })
         ));
     }
 
