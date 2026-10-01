@@ -61,6 +61,27 @@ The baseline experiment set is defined in [`CAPTURE_PLAYBOOK.md`](CAPTURE_PLAYBO
 
 `crates/protocol` may encode interpretations derived from this corpus. It must identify the newest observation revision against which it was validated. The Rust implementation is never retroactive evidence that the remote service behaved a certain way.
 
+## C02 semantic parsing
+
+Snapshot 2026-10-01.001 is the validated baseline for the ConversationFetch flow. The crates/protocol::conversation_fetch module now parses the observed successful envelope only when the caller supplies that exact observation revision.
+
+The parser establishes a minimal semantic envelope:
+
+- exact opaque remote conversation identity;
+- observed title and numeric create/update timestamps;
+- ordered message records;
+- author role/name/metadata;
+- the two observed content shapes, content_type + parts and content_type + content;
+- message status/end-turn/weight/metadata/recipient/channel;
+- current-node identity;
+- page-info cursors and pagination flags.
+
+Unmodeled top-level fields are intentionally ignored. Message content and metadata remain structural JSON at this stage; the parser does not infer transcript semantics, convert timestamps, or write remote content into the durable journal.
+
+The parser also supports exact identity correlation: a caller may provide the remote conversation identity it requested or has durably bound, and the response is rejected if the returned conversation_id differs.
+
+The committed sanitized C02 fixture is used as the parser regression source. Tests materialize its typed placeholders into deterministic non-private values at test time, so the repository exercises the observed structure without committing real conversation content.
+
 
 ## Corpus validation
 
