@@ -71,7 +71,10 @@ impl fmt::Display for RemoteConversationSnapshotImportError {
             }
             Self::Unselected => write!(formatter, "conversation is not selected for mirroring"),
             Self::ProtocolBlocked(blocked) => {
-                write!(formatter, "remote mirror protocol gate is blocked: {blocked:?}")
+                write!(
+                    formatter,
+                    "remote mirror protocol gate is blocked: {blocked:?}"
+                )
             }
             Self::Parse(error) => write!(formatter, "conversation-fetch parse failed: {error}"),
             Self::Persistence(error) => {
@@ -263,9 +266,7 @@ pub fn replay_remote_conversation_snapshot_audit(
 
 /// Stable local-only journal scope for one remote mirror snapshot lineage.
 #[must_use]
-pub fn remote_conversation_snapshot_scope(
-    local_conversation_id: LocalConversationId,
-) -> String {
+pub fn remote_conversation_snapshot_scope(local_conversation_id: LocalConversationId) -> String {
     format!("remote-conversation-snapshot:{local_conversation_id}")
 }
 
@@ -279,9 +280,9 @@ fn require_ready_execution_plan(
         RemoteMirrorExecutionPlan::Unselected => {
             Err(RemoteConversationSnapshotImportError::Unselected)
         }
-        RemoteMirrorExecutionPlan::ProtocolBlocked(blocked) => {
-            Err(RemoteConversationSnapshotImportError::ProtocolBlocked(blocked))
-        }
+        RemoteMirrorExecutionPlan::ProtocolBlocked(blocked) => Err(
+            RemoteConversationSnapshotImportError::ProtocolBlocked(blocked),
+        ),
         RemoteMirrorExecutionPlan::RequiresAuthenticatedSession(ready) => Ok(ready),
     }
 }
@@ -457,9 +458,7 @@ mod tests {
     use crate::remote_read_audit::record_remote_read_observation;
     use crate::{JsonlEventStore, MemoryEventStore};
     use chatarium_core::remote::RemoteConversationBinding;
-    use chatarium_protocol::read::{
-        JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation,
-    };
+    use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -485,12 +484,8 @@ mod tests {
                         .map(|(key, value)| (key, materialize(value)))
                         .collect(),
                 ),
-                Value::Array(items) => {
-                    Value::Array(items.into_iter().map(materialize).collect())
-                }
-                Value::String(value) if value == "<empty-string>" => {
-                    Value::String(String::new())
-                }
+                Value::Array(items) => Value::Array(items.into_iter().map(materialize).collect()),
+                Value::String(value) if value == "<empty-string>" => Value::String(String::new()),
                 Value::String(value) if value == "<redacted-text>" => {
                     Value::String("fixture-redacted-text".to_owned())
                 }
@@ -502,9 +497,7 @@ mod tests {
                 Value::String(value) if value == "<url>" => {
                     Value::String("https://example.invalid/".to_owned())
                 }
-                Value::String(value)
-                    if value.starts_with("<id:") && value.ends_with('>') =>
-                {
+                Value::String(value) if value.starts_with("<id:") && value.ends_with('>') => {
                     let id = value.trim_start_matches("<id:").trim_end_matches('>');
                     Value::String(format!("fixture-id-{id}"))
                 }
@@ -519,7 +512,11 @@ mod tests {
         selected: bool,
         revision: &str,
         remote: &str,
-    ) -> (MemoryEventStore, LocalConversationId, RemoteReadObservationId) {
+    ) -> (
+        MemoryEventStore,
+        LocalConversationId,
+        RemoteReadObservationId,
+    ) {
         let mut store = MemoryEventStore::default();
         let local = LocalConversationId::new();
         let binding = RemoteConversationBinding::new(
@@ -537,10 +534,7 @@ mod tests {
             ReadExperiment::OpenConversation,
             ReadMethod::Get,
             "/backend-api/conversations/<id>",
-            vec![
-                "include_has_versions".to_owned(),
-                "num_turns".to_owned(),
-            ],
+            vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
             200,
             "application/json",
             false,
@@ -568,13 +562,11 @@ mod tests {
         let (mut store, local, read_observation_id) = ready_store(true, REVISION, REMOTE);
         let body = materialized_fixture();
 
-        let result =
-            import_validated_remote_conversation_snapshot(&mut store, local, &body)
-                .expect("import");
+        let result = import_validated_remote_conversation_snapshot(&mut store, local, &body)
+            .expect("import");
         assert!(result.appended);
 
-        let records =
-            replay_remote_conversation_snapshot_audit(store.events()).expect("replay");
+        let records = replay_remote_conversation_snapshot_audit(store.events()).expect("replay");
         assert_eq!(records.len(), 1);
         let record = &records[0];
         assert_eq!(record.local_conversation_id, local);
@@ -616,10 +608,7 @@ mod tests {
                 ReadExperiment::OpenConversation,
                 ReadMethod::Get,
                 "/backend-api/conversations/<id>",
-                vec![
-                    "include_has_versions".to_owned(),
-                    "num_turns".to_owned(),
-                ],
+                vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
                 200,
                 "application/json",
                 false,
@@ -635,16 +624,14 @@ mod tests {
             .unwrap();
 
             let first =
-                import_validated_remote_conversation_snapshot(&mut store, local, &body)
-                    .unwrap();
+                import_validated_remote_conversation_snapshot(&mut store, local, &body).unwrap();
             assert!(first.appended);
             first_sequence = first.sequence;
         }
 
         let mut reopened = JsonlEventStore::open(&path).unwrap();
         let second =
-            import_validated_remote_conversation_snapshot(&mut reopened, local, &body)
-                .unwrap();
+            import_validated_remote_conversation_snapshot(&mut reopened, local, &body).unwrap();
         assert!(!second.appended);
         assert_eq!(second.sequence, first_sequence);
         assert_eq!(
@@ -711,8 +698,7 @@ mod tests {
 
     #[test]
     fn stale_unvalidated_revision_remains_protocol_blocked() {
-        let (mut store, local, _) =
-            ready_store(true, "future-c02-observation", REMOTE);
+        let (mut store, local, _) = ready_store(true, "future-c02-observation", REMOTE);
         let before = store.events().len();
 
         assert!(matches!(
@@ -729,19 +715,14 @@ mod tests {
     #[test]
     fn sqlite_projection_rebuild_preserves_snapshot_as_replayable_journal_state() {
         let (mut store, local, _) = ready_store(true, REVISION, REMOTE);
-        import_validated_remote_conversation_snapshot(
-            &mut store,
-            local,
-            &materialized_fixture(),
-        )
-        .unwrap();
+        import_validated_remote_conversation_snapshot(&mut store, local, &materialized_fixture())
+            .unwrap();
 
         let path = temp_path("projection", "sqlite3");
         let mut projection = SqliteProjection::open(&path).unwrap();
         projection.rebuild(store.events()).unwrap();
         let projected_events = projection.events().unwrap();
-        let records =
-            replay_remote_conversation_snapshot_audit(&projected_events).unwrap();
+        let records = replay_remote_conversation_snapshot_audit(&projected_events).unwrap();
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].local_conversation_id, local);
@@ -777,8 +758,7 @@ mod tests {
             )
             .unwrap();
 
-        let error =
-            replay_remote_conversation_snapshot_audit(store.events()).unwrap_err();
+        let error = replay_remote_conversation_snapshot_audit(store.events()).unwrap_err();
         assert!(error.contains("binding sequence"));
     }
 }
