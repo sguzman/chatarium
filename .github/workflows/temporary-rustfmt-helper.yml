@@ -1,0 +1,33 @@
+name: temporary-rustfmt-helper
+
+on:
+  push:
+    branches:
+      - work/p3-c02-durable-mirror
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/p3-c02-durable-mirror
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Canonical rustfmt
+        run: cargo fmt --all
+      - name: Commit formatting if needed
+        shell: pwsh
+        run: |
+          if (-not (git diff --quiet)) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add --all
+            git commit -m "chore: apply canonical rustfmt"
+            git push origin HEAD:work/p3-c02-durable-mirror
+          }
