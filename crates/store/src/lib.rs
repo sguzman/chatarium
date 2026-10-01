@@ -17,6 +17,7 @@ pub mod remote_identity_audit;
 pub mod remote_mirror_execution;
 pub mod remote_mirror_readiness;
 pub mod remote_mirror_selection_audit;
+pub mod remote_mirror_snapshot_audit;
 pub mod remote_read_audit;
 pub mod routing_audit;
 pub mod session_audit;
