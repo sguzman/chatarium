@@ -275,6 +275,7 @@ impl TurnEvidence {
             | EventKind::RemoteConversationBound
             | EventKind::RemoteReadObservationRecorded
             | EventKind::RemoteMirrorSelectionChanged
+            | EventKind::RemoteConversationSnapshotImported
             | EventKind::ChatContainerCreated
             | EventKind::ChatSessionLifecycleTransitionRecorded
             | EventKind::ChatSessionSuccessorBound => {}
@@ -369,6 +370,8 @@ pub enum EventKind {
     RemoteReadObservationRecorded,
     /// User intent to include or exclude one bound conversation from future remote mirroring changed.
     RemoteMirrorSelectionChanged,
+    /// One validated remote conversation snapshot was imported into durable local mirror state.
+    RemoteConversationSnapshotImported,
     /// One logical chat container was created around an already-registered root session.
     ChatContainerCreated,
     /// One chat-container session advanced toward saturation.
@@ -418,6 +421,7 @@ impl EventKind {
             Self::RemoteConversationBound => "remote_conversation_bound",
             Self::RemoteReadObservationRecorded => "remote_read_observation_recorded",
             Self::RemoteMirrorSelectionChanged => "remote_mirror_selection_changed",
+            Self::RemoteConversationSnapshotImported => "remote_conversation_snapshot_imported",
             Self::ChatContainerCreated => "chat_container_created",
             Self::ChatSessionLifecycleTransitionRecorded => {
                 "chat_session_lifecycle_transition_recorded"
@@ -466,6 +470,9 @@ impl EventKind {
             "remote_conversation_bound" => Some(Self::RemoteConversationBound),
             "remote_read_observation_recorded" => Some(Self::RemoteReadObservationRecorded),
             "remote_mirror_selection_changed" => Some(Self::RemoteMirrorSelectionChanged),
+            "remote_conversation_snapshot_imported" => {
+                Some(Self::RemoteConversationSnapshotImported)
+            }
             "chat_container_created" => Some(Self::ChatContainerCreated),
             "chat_session_lifecycle_transition_recorded" => {
                 Some(Self::ChatSessionLifecycleTransitionRecorded)
