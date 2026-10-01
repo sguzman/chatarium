@@ -65,7 +65,7 @@ The protocol baseline includes complementary observations from a manual Edge/Lin
 
 The durable core now has typed local conversation/turn/message identities, fsync-backed user-message commits, an append-only JSONL authority, rebuildable schema-v2 SQLite projections, replayable evidence state, and a persistent crash-transition matrix. Once a typed local commit succeeds, later torn-tail recovery or stale projection state cannot erase authorship or fabricate remote certainty.
 
-Raw HAR and Flight Recorder exports remain private evidence. `chatarium-recorder snapshot-flight` remains the active evidence-ingestion path. The next active work is P3: acquire and encode read-side protocol evidence for conversation listing/fetching, then mirror selected remote conversations into the local durable model before enabling direct remote mutation.
+Raw HAR and Flight Recorder exports remain private evidence. `chatarium-recorder snapshot-flight` remains the active evidence-ingestion path. P3 now has a successful C02 conversation-fetch baseline in snapshot `2026-10-01.001`; the next active work is to interpret that observed conversation envelope into the durable local model and mirror selected remote conversations before enabling direct remote mutation. C01 conversation-list semantics remain deliberately unbaselined.
 
 Automated browser capture remains a longer-term goal rather than a prerequisite for protocol discovery. The existing Windows capture harness is parked; the active protocol workflow is cross-platform and Linux-friendly.
 
