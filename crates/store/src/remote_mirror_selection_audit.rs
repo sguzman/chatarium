@@ -516,7 +516,9 @@ mod tests {
 
         assert!(matches!(
             derive_selected_remote_mirror_plan(store.events(), local).unwrap(),
-            SelectedRemoteMirrorPlan::SelectedButBlocked(RemoteMirrorBlocked::ProtocolMismatch { .. })
+            SelectedRemoteMirrorPlan::SelectedButBlocked(
+                RemoteMirrorBlocked::ProtocolMismatch { .. }
+            )
         ));
     }
 
