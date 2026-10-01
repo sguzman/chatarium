@@ -1,0 +1,104 @@
+{
+  "schema": "chatarium-protocol-read-inventory",
+  "version": 1,
+  "snapshot": "2026-10-01.001",
+  "request_count": 1,
+  "response_count": 1,
+  "read_error_count": 0,
+  "response_status_counts": {
+    "200": 1
+  },
+  "endpoint_counts": {
+    "/backend-api/conversations/<id>": 1
+  },
+  "conversation_fetch": {
+    "method": "GET",
+    "query_keys": [
+      "include_has_versions",
+      "num_turns"
+    ],
+    "observed_response_statuses": [
+      200
+    ],
+    "successful_response_observed": true,
+    "response_top_level_type": "object",
+    "response_body_captured_bytes": 5081
+  },
+  "response_structure": {
+    "top_level_type": "object",
+    "top_level_keys": [
+      "title",
+      "create_time",
+      "update_time",
+      "moderation_results",
+      "plugin_ids",
+      "conversation_id",
+      "conversation_template_id",
+      "gizmo_id",
+      "gizmo_type",
+      "is_archived",
+      "is_starred",
+      "safe_urls",
+      "blocked_urls",
+      "default_model_slug",
+      "atlas_mode_enabled",
+      "conversation_origin",
+      "is_read_only",
+      "voice",
+      "async_status",
+      "disabled_tool_ids",
+      "is_temporary_chat",
+      "is_do_not_remember",
+      "memory_scope",
+      "context_scopes",
+      "sugar_item_id",
+      "sugar_item_visible",
+      "pinned_time",
+      "is_study_mode",
+      "owner",
+      "messages",
+      "current_node",
+      "page_info",
+      "context_truncation_continuation"
+    ],
+    "message_count": 5,
+    "message_item_keys": [
+      "author",
+      "channel",
+      "content",
+      "create_time",
+      "end_turn",
+      "id",
+      "metadata",
+      "recipient",
+      "status",
+      "update_time",
+      "weight"
+    ],
+    "message_content_key_variants": [
+      [
+        "content",
+        "content_type"
+      ],
+      [
+        "content_type",
+        "parts"
+      ]
+    ],
+    "message_parts_item_counts": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "page_info_keys": [
+      "start_cursor",
+      "end_cursor",
+      "has_previous_page",
+      "has_next_page"
+    ],
+    "page_info_has_previous_page": true,
+    "page_info_has_next_page": true,
+    "identity_placeholders_preserve_repeated_references": true
+  }
+}
