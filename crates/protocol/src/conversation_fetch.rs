@@ -144,7 +144,7 @@ pub fn parse_conversation_fetch_response(
     let object = body
         .as_object()
         .ok_or(ConversationFetchParseError::TopLevelNotObject)?;
-    let conversation_id = required_non_empty_string(object, "conversation_id")?;
+    let conversation_id = required_non_empty_string(object, "conversation_id")?.to_owned();
     if let Some(expected) = expected_remote_conversation_id {
         if expected != conversation_id {
             return Err(ConversationFetchParseError::IdentityMismatch {
