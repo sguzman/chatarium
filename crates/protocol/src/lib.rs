@@ -2,6 +2,7 @@
 //!
 //! This crate must not invent a protocol before evidence exists in `protocol/`.
 
+pub mod conversation_fetch;
 pub mod read;
 pub mod sse;
 pub mod stability;
