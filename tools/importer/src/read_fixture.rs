@@ -500,8 +500,8 @@ mod tests {
     }
 
     #[test]
-    fn committed_c02_rate_limited_fixture_is_importable_without_baseline_promotion() {
-        let dir = temp_dir("committed-c02");
+    fn committed_c02_rate_limited_fixture_remains_historical_without_baseline_promotion() {
+        let dir = temp_dir("committed-c02-rate-limited");
         let bytes =
             include_bytes!("../../../protocol/fixtures/2026-09-30.002/c02-open-conversation.json");
 
@@ -520,7 +520,38 @@ mod tests {
             "/backend-api/conversations/<id>"
         );
         assert_eq!(records[0].observation.status(), 429);
-        assert_eq!(records[0].compatibility, Compatibility::NoBaseline);
+        assert_eq!(records[0].compatibility, Compatibility::Mismatch {
+            expected_revision: "2026-10-01.001".to_owned(),
+            detail: "conversation_fetch observation revision "2026-09-30.002" differs from validated baseline "2026-10-01.001"".to_owned(),
+        });
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn committed_c02_successful_fixture_promotes_fetch_baseline_only() {
+        let dir = temp_dir("committed-c02-success");
+        let bytes =
+            include_bytes!("../../../protocol/fixtures/2026-10-01.001/c02-open-conversation.json");
+
+        let summary = import_bytes(bytes, 0, &dir).unwrap();
+        let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].observation_id, summary.observation_id);
+        assert_eq!(
+            records[0].observation.experiment(),
+            ReadExperiment::OpenConversation
+        );
+        assert_eq!(
+            records[0].observation.path(),
+            "/backend-api/conversations/<id>"
+        );
+        assert_eq!(records[0].observation.status(), 200);
+        assert_eq!(records[0].compatibility, Compatibility::ValidatedAgainst(
+            "2026-10-01.001".to_owned()
+        ));
 
         let _ = fs::remove_dir_all(dir);
     }
