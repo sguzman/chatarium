@@ -549,9 +549,10 @@ mod tests {
             "/backend-api/conversations/<id>"
         );
         assert_eq!(records[0].observation.status(), 200);
-        assert_eq!(records[0].compatibility, Compatibility::ValidatedAgainst(
-            "2026-10-01.001".to_owned()
-        ));
+        assert_eq!(
+            records[0].compatibility,
+            Compatibility::ValidatedAgainst("2026-10-01.001".to_owned())
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
