@@ -255,8 +255,12 @@ fn parse_page_info(value: &Value) -> Result<ConversationPageInfo, ConversationFe
     Ok(ConversationPageInfo {
         start_cursor: required_non_empty_string(object, "start_cursor")?.to_owned(),
         end_cursor: required_non_empty_string(object, "end_cursor")?.to_owned(),
-        has_previous_page: required_bool(object, "has_previous_page")?,
-        has_next_page: required_bool(object, "has_next_page")?,
+        has_previous_page: required_bool_at_path(
+            object,
+            "has_previous_page",
+            "page_info.has_previous_page",
+        )?,
+        has_next_page: required_bool_at_path(object, "has_next_page", "page_info.has_next_page")?,
     })
 }
 
@@ -390,14 +394,15 @@ fn optional_bool_at(
     }
 }
 
-fn required_bool(
+fn required_bool_at_path(
     object: &Map<String, Value>,
     field: &str,
+    diagnostic_path: &str,
 ) -> Result<bool, ConversationFetchParseError> {
     object
         .get(field)
         .and_then(Value::as_bool)
-        .ok_or_else(|| wrong_type(field, "a boolean"))
+        .ok_or_else(|| wrong_type(diagnostic_path, "a boolean"))
 }
 
 fn wrong_type(field: &str, expected: &'static str) -> ConversationFetchParseError {
