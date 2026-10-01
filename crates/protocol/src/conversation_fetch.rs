@@ -28,6 +28,11 @@ pub struct ConversationMessage {
     pub end_turn: Option<bool>,
     pub weight: f64,
     pub metadata: Map<String, Value>,
+    /// Optional parent relation exposed by the observed message metadata.
+    ///
+    /// The validated response does not provide this field for every message, so
+    /// absence remains meaningful rather than being inferred from array order.
+    pub parent_id: Option<String>,
     pub recipient: String,
     pub channel: Option<String>,
 }
@@ -147,6 +152,8 @@ pub fn parse_conversation_fetch_response(
 
 fn parse_message(index: usize, value: &Value) -> Result<ConversationMessage, ConversationFetchParseError> {
     let object = value.as_object().ok_or_else(|| wrong_type(&format!("messages[{index}]"), "an object"))?;
+    let metadata = required_object_at(object, "metadata", index)?.clone();
+    let parent_id = optional_parent_id(&metadata, index)?;
     Ok(ConversationMessage {
         id: required_non_empty_string(object, "id")?.to_owned(),
         author: parse_author(index, required_field(object, "author")?)?,
@@ -156,7 +163,8 @@ fn parse_message(index: usize, value: &Value) -> Result<ConversationMessage, Con
         status: required_string_at(object, "status", index)?.to_owned(),
         end_turn: optional_bool_at(object, "end_turn", index)?,
         weight: required_number_at(object, "weight", index)?,
-        metadata: required_object_at(object, "metadata", index)?.clone(),
+        metadata,
+        parent_id,
         recipient: required_string_at(object, "recipient", index)?.to_owned(),
         channel: optional_string_at(object, "channel", index)?,
     })
@@ -246,6 +254,21 @@ fn required_object_at<'a>(object: &'a Map<String, Value>, field: &str, index: us
     object.get(field).and_then(Value::as_object).ok_or_else(|| wrong_type(&format!("messages[{index}].{field}"), "an object"))
 }
 
+fn optional_parent_id(
+    metadata: &Map<String, Value>,
+    index: usize,
+) -> Result<Option<String>, ConversationFetchParseError> {
+    let field = format!("messages[{index}].metadata.parent_id");
+    match metadata.get("parent_id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if value.is_empty() => {
+            Err(ConversationFetchParseError::EmptyField(field))
+        }
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(wrong_type(&field, "a string or null")),
+    }
+}
+
 fn optional_bool_at(object: &Map<String, Value>, field: &str, index: usize) -> Result<Option<bool>, ConversationFetchParseError> {
     match object.get(field) {
         None | Some(Value::Null) => Ok(None),
@@ -306,6 +329,9 @@ mod tests {
         assert_eq!(parsed.page_info.has_next_page, true);
         assert!(matches!(parsed.messages[0].content, ConversationMessageContent::Parts { .. }));
         assert!(matches!(parsed.messages[3].content, ConversationMessageContent::Content { .. }));
+        assert_eq!(parsed.messages[0].parent_id, None);
+        assert_eq!(parsed.messages[2].parent_id.as_deref(), Some("fixture-id-7"));
+        assert_eq!(parsed.messages[4].parent_id.as_deref(), Some("fixture-id-8"));
     }
 
     #[test]
