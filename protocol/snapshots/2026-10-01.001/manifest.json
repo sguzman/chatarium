@@ -1,0 +1,63 @@
+{
+  "schema": "chatarium-protocol-snapshot",
+  "version": 1,
+  "revision": "2026-10-01.001",
+  "observation_kind": "flight_recorder_c02_conversation_fetch_successful",
+  "canonical_experiment": "C02-open-conversation",
+  "capture_start_utc": "2026-10-01T13:59:16.215Z",
+  "capture_end_utc": "2026-10-01T13:59:25.320Z",
+  "recorder": {
+    "name": "Chatarium Flight Recorder",
+    "version": "0.7.1"
+  },
+  "source": {
+    "kind": "flight-recorder-export",
+    "raw_sha256": "d204b5c6e26536cef112b1dce9b551613129f17b74f1b4e2235c2491b9081fc6",
+    "raw_bytes": 990898,
+    "committed_to_git": false
+  },
+  "controlled_action": {
+    "type": "open_existing_conversation",
+    "mutation": false,
+    "steps": [
+      "Arm protocol-read capture.",
+      "Navigate from one existing conversation to the controlled target conversation.",
+      "Wait for the target conversation fetch to complete.",
+      "Disarm protocol-read capture and export once."
+    ]
+  },
+  "selected_run": {
+    "request_count": 1,
+    "captured_responses": 1,
+    "captured_bytes": 5081,
+    "truncated_responses": 0,
+    "read_errors": 0
+  },
+  "observed_reads": {
+    "/backend-api/conversations/<id>": 1
+  },
+  "semantic_assessment": {
+    "conversation_fetch_request_path_observed": true,
+    "conversation_fetch_query_shape_observed": true,
+    "successful_conversation_fetch_response_observed": true,
+    "conversation_fetch_baseline_established": true,
+    "reason": "A controlled navigation from one existing conversation to another produced one GET conversation-fetch request followed by the target navigation event and a successful HTTP 200 JSON response containing the target conversation envelope. The committed evidence preserves only value-minimized structure."
+  },
+  "causal_selection": {
+    "request_sequence": 132,
+    "navigation_sequence": 133,
+    "response_sequence": 134,
+    "navigation_relation": "request observed while transitioning from one existing conversation to the controlled target; navigation event identified the target before the response completed."
+  },
+  "limitations": [
+    "One successful controlled observation does not establish cross-deployment stability.",
+    "The response body is committed only as placeholder-only structural evidence; message semantics are not yet imported.",
+    "The snapshot does not establish complete conversation-list enumeration; C01 remains NoBaseline.",
+    "The private raw export contains unrelated account and conversation material and is not publication-safe."
+  ],
+  "artifacts": {
+    "sanitized_observation": "evidence/C02.read-observation.json",
+    "derived_inventory": "derived/C02.read-inventory.json",
+    "regression_fixture": "../../fixtures/2026-10-01.001/c02-open-conversation.json"
+  }
+}
