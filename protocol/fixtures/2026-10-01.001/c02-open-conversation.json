@@ -68,7 +68,7 @@
               "request_id": "<id:3>",
               "message_source": null,
               "turn_exchange_id": "<id:4>",
-              "working_turn_id": "<id:4",
+              "working_turn_id": "<id:4>",
               "can_save": "<bool>"
             },
             "recipient": "<string>",
@@ -108,11 +108,138 @@
           {
             "id": "<id:6>",
             "author": {
-              "role": "<string>"
+              "role": "<string>",
+              "name": null,
+              "metadata": {}
             },
-            "name": null
+            "create_time": "<number>",
+            "update_time": "<number>",
+            "content": {
+              "content_type": "<string>",
+              "parts": [
+                "<empty-string>"
+              ]
+            },
+            "status": "<string>",
+            "end_turn": "<bool>",
+            "weight": "<number>",
+            "metadata": {
+              "exclusive_key": "<string>",
+              "rebase_developer_message": "<bool>",
+              "parent_id": "<id:7>",
+              "resolved_model_slug": "<string>",
+              "chime_version": "<number>",
+              "cot_version": "<string>",
+              "request_id": "<id:3>",
+              "message_type": "<string>",
+              "turn_exchange_id": "<id:4>",
+              "working_turn_id": "<id:4>",
+              "model_slug": "<string>",
+              "default_model_slug": "<string>",
+              "thinking_effort": "<string>",
+              "is_visually_hidden_from_conversation": "<bool>",
+              "can_save": "<bool>"
+            },
+            "recipient": "<string>",
+            "channel": null
+          },
+          {
+            "id": "<id:8>",
+            "author": {
+              "role": "<string>",
+              "name": null,
+              "metadata": {}
+            },
+            "create_time": "<number>",
+            "update_time": null,
+            "content": {
+              "content_type": "<string>",
+              "content": "<redacted-text>"
+            },
+            "status": "<string>",
+            "end_turn": "<bool>",
+            "weight": "<number>",
+            "metadata": {
+              "reasoning_status": "<string>",
+              "finished_duration_sec": "<number>",
+              "reasoning_start_time": "<number>",
+              "reasoning_end_time": "<number>",
+              "reasoning_recap_type": "<string>",
+              "cot_version": "<string>",
+              "conversation_followup_suggestions_eligible": "<bool>",
+              "request_id": "<id:3>",
+              "message_type": "<string>",
+              "turn_exchange_id": "<id:4>",
+              "working_turn_id": "<id:4>",
+              "resolved_model_slug": "<string>",
+              "model_slug": "<string>",
+              "default_model_slug": "<string>",
+              "thinking_effort": "<string>",
+              "can_save": "<bool>",
+              "parent_id": "<id:9>",
+              "hide_inline_actions": "<bool>",
+              "model_switcher_deny": []
+            },
+            "recipient": "<string>",
+            "channel": null
+          },
+          {
+            "id": "<id:10>",
+            "author": {
+              "role": "<string>",
+              "name": null,
+              "metadata": {}
+            },
+            "create_time": "<number>",
+            "update_time": "<number>",
+            "content": {
+              "content_type": "<string>",
+              "parts": [
+                "<redacted-text>"
+              ]
+            },
+            "status": "<string>",
+            "end_turn": "<bool>",
+            "weight": "<number>",
+            "metadata": {
+              "finish_details": {
+                "type": "<string>",
+                "stop_tokens": [
+                  "<number>"
+                ]
+              },
+              "is_complete": "<bool>",
+              "citations": [],
+              "content_references": [],
+              "story_events": [],
+              "resolved_model_slug": "<string>",
+              "search_result_groups": [],
+              "cot_version": "<string>",
+              "conversation_followup_suggestions_eligible": "<bool>",
+              "request_id": "<id:3>",
+              "message_type": "<string>",
+              "turn_exchange_id": "<id:4>",
+              "working_turn_id": "<id:4>",
+              "model_slug": "<string>",
+              "default_model_slug": "<string>",
+              "thinking_effort": "<string>",
+              "can_save": "<bool>",
+              "parent_id": "<id:8>",
+              "model_switcher_deny": [],
+              "hide_inline_actions": "<bool>"
+            },
+            "recipient": "<string>",
+            "channel": "<string>"
           }
-        ]
+        ],
+        "current_node": "<id:10>",
+        "page_info": {
+          "start_cursor": "<id:2>",
+          "end_cursor": "<id:10>",
+          "has_previous_page": "<bool>",
+          "has_next_page": "<bool>"
+        },
+        "context_truncation_continuation": null
       }
     }
   ]
