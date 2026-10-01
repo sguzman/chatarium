@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(records[0].observation.status(), 429);
         assert_eq!(records[0].compatibility, Compatibility::Mismatch {
             expected_revision: "2026-10-01.001".to_owned(),
-            detail: "conversation_fetch observation revision "2026-09-30.002" differs from validated baseline "2026-10-01.001"".to_owned(),
+            detail: r#"conversation_fetch observation revision "2026-09-30.002" differs from validated baseline "2026-10-01.001""#.to_owned(),
         });
 
         let _ = fs::remove_dir_all(dir);
