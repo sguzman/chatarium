@@ -238,7 +238,9 @@ mod tests {
 
         assert!(matches!(
             derive_remote_mirror_execution_plan(store.events(), local).unwrap(),
-            RemoteMirrorExecutionPlan::ProtocolBlocked(RemoteMirrorBlocked::ProtocolMismatch { .. })
+            RemoteMirrorExecutionPlan::ProtocolBlocked(
+                RemoteMirrorBlocked::ProtocolMismatch { .. }
+            )
         ));
     }
 
