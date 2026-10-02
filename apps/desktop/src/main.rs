@@ -1433,13 +1433,16 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
             .filter(|event| event.scope.as_deref() == Some(scope.as_str()))
             .map(|event| event.kind)
             .collect::<Vec<_>>();
+        let already_interrupted = kinds.contains(&EventKind::TransportInterrupted);
         let evidence = TurnEvidence::replay_event_kinds(kinds)
             .map_err(|error| format!("turn {turn_id} replay failed: {error}"))?;
 
-        let remote_still_live = matches!(
-            evidence.remote,
-            RemoteEvidence::Dispatching | RemoteEvidence::AcceptedObserved
-        ) && evidence.assistant != AssistantEvidence::CompletedObserved;
+        let remote_still_live = !already_interrupted
+            && matches!(
+                evidence.remote,
+                RemoteEvidence::Dispatching | RemoteEvidence::AcceptedObserved
+            )
+            && evidence.assistant != AssistantEvidence::CompletedObserved;
 
         if remote_still_live {
             interrupted.push(turn_id);
