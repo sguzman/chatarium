@@ -103,6 +103,7 @@ struct ChatariumApp {
     remote: siwc_bridge::BridgeRuntime,
     remote_session: siwc_bridge::SessionState,
     remote_models: Vec<siwc_bridge::Model>,
+    model_list_pending: bool,
     selected_model: Option<String>,
     remote_status: String,
     remote_runtime_ready: bool,
@@ -168,6 +169,7 @@ impl ChatariumApp {
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
+                        model_list_pending: false,
                         selected_model: None,
                         remote_status: "starting sign-in runtime…".to_owned(),
                         remote_runtime_ready: false,
@@ -224,6 +226,7 @@ impl ChatariumApp {
             remote: siwc_bridge::BridgeRuntime::start(repaint),
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
+            model_list_pending: false,
             selected_model: None,
             remote_status: "starting sign-in runtime…".to_owned(),
             remote_runtime_ready: false,
@@ -492,11 +495,34 @@ impl ChatariumApp {
                     }
                 }
                 siwc_bridge::BridgeEvent::Session(session) => {
+                    let was_connected = self.remote_connected();
+                    let account_changed = self.remote_session.email != session.email
+                        || self.remote_session.profile_label != session.profile_label;
+
                     self.sign_in_pending = session.status == "connecting";
                     self.remote_session = session;
+
                     if self.remote_session.status == "connected" && self.remote_session.sharing {
-                        self.remote_status = "ChatGPT plan connected".to_owned();
-                        let _ = self.remote.send(siwc_bridge::BridgeCommand::ListModels);
+                        if account_changed {
+                            self.remote_models.clear();
+                            self.selected_model = None;
+                            self.model_list_pending = false;
+                        }
+
+                        let needs_models = !was_connected || account_changed || self.remote_models.is_empty();
+                        if needs_models && !self.model_list_pending {
+                            match self.remote.send(siwc_bridge::BridgeCommand::ListModels) {
+                                Ok(()) => {
+                                    self.model_list_pending = true;
+                                    self.remote_status = "loading ChatGPT models…".to_owned();
+                                }
+                                Err(error) => {
+                                    self.remote_status = error;
+                                }
+                            }
+                        } else if !was_connected && !self.model_list_pending {
+                            self.remote_status = "ChatGPT plan connected".to_owned();
+                        }
                     } else if self.remote_session.status == "connecting" {
                         self.remote_status = "waiting for ChatGPT sign-in…".to_owned();
                     } else if let Some(error) = &self.remote_session.error_message {
@@ -507,10 +533,14 @@ impl ChatariumApp {
                     } else if self.remote_session.status == "reauth_required" {
                         self.remote_status = "ChatGPT sign-in needs renewal".to_owned();
                     } else {
+                        self.model_list_pending = false;
+                        self.remote_models.clear();
+                        self.selected_model = None;
                         self.remote_status = "not connected".to_owned();
                     }
                 }
                 siwc_bridge::BridgeEvent::Models(models) => {
+                    self.model_list_pending = false;
                     let keep_selected = self
                         .selected_model
                         .as_ref()
@@ -644,6 +674,9 @@ impl ChatariumApp {
                 }
                 siwc_bridge::BridgeEvent::Failed { request_id, error } => {
                     self.sign_in_pending = false;
+                    if request_id.as_deref() == Some("models") {
+                        self.model_list_pending = false;
+                    }
                     let mut handled_turn = false;
                     if let Some(request_id) = request_id.as_deref() {
                         if self
