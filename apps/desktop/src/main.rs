@@ -9,7 +9,7 @@ use chatarium_store::authored::{
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -314,7 +314,10 @@ impl ChatariumApp {
 
                         if let Some(model) = self.commit_remote_intents.remove(&request_id) {
                             let remote_request_id = message.turn_id.to_string();
-                            let input = responses_input(&projected_display_messages(&self.events));
+                            let input = responses_input(&projected_local_display_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ));
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
@@ -692,7 +695,8 @@ impl eframe::App for ChatariumApp {
         self.process_notices();
         self.process_remote_notices();
 
-        let display_messages = projected_display_messages(&self.events);
+        let display_messages =
+            projected_local_display_messages(&self.events, self.local_conversation_id);
         let conversation_title = derived_conversation_title(&display_messages);
 
         egui::SidePanel::left("sidebar")
@@ -1383,6 +1387,43 @@ fn default_journal_path() -> PathBuf {
         .join("journal.jsonl")
 }
 
+fn projected_local_display_messages(
+    events: &[EventEnvelope],
+    local_conversation_id: LocalConversationId,
+) -> Vec<DisplayMessage> {
+    let mut local_turn_scopes = HashSet::new();
+
+    for event in events {
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+            decode_user_message_commit(event)
+        else {
+            continue;
+        };
+        if message.conversation_id == local_conversation_id {
+            local_turn_scopes.insert(local_turn_scope(message.turn_id));
+        }
+    }
+
+    let relevant = events
+        .iter()
+        .filter(|event| match event.kind {
+            EventKind::UserMessageCommitted => matches!(
+                decode_user_message_commit(event),
+                Ok(Some(DecodedUserMessageCommit::Typed(message)))
+                    if message.conversation_id == local_conversation_id
+            ),
+            EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => event
+                .scope
+                .as_ref()
+                .is_some_and(|scope| local_turn_scopes.contains(scope)),
+            _ => false,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    projected_display_messages(&relevant)
+}
+
 fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
     let mut messages = Vec::<DisplayMessage>::new();
     let mut keyed = BTreeMap::<String, usize>::new();
@@ -1602,6 +1643,76 @@ mod tests {
         assert_eq!(projected[1].role, DisplayRole::Assistant);
         assert_eq!(projected[1].text, "hello there");
         assert_eq!(projected[1].sequence, 5);
+    }
+
+    #[test]
+    fn local_projection_never_leaks_other_conversation_history() {
+        let first_conversation = LocalConversationId::new();
+        let second_conversation = LocalConversationId::new();
+        let first_turn = LocalTurnId::new();
+        let second_turn = LocalTurnId::new();
+
+        let mut store = chatarium_store::MemoryEventStore::default();
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                first_conversation,
+                first_turn,
+                LocalMessageId::new(),
+                "first private conversation",
+            ),
+        )
+        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(first_turn)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(
+                    first_turn,
+                    "first-request",
+                    None,
+                    Some("first answer"),
+                    Some("complete"),
+                ),
+            )
+            .unwrap();
+
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                second_conversation,
+                second_turn,
+                LocalMessageId::new(),
+                "second conversation",
+            ),
+        )
+        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(second_turn)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(
+                    second_turn,
+                    "second-request",
+                    None,
+                    Some("second answer"),
+                    Some("complete"),
+                ),
+            )
+            .unwrap();
+
+        let projected =
+            projected_local_display_messages(store.events(), second_conversation);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].role, DisplayRole::User);
+        assert_eq!(projected[0].text, "second conversation");
+        assert_eq!(projected[1].role, DisplayRole::Assistant);
+        assert_eq!(projected[1].text, "second answer");
+
+        let input = responses_input(&projected);
+        let serialized = input.to_string();
+        assert!(!serialized.contains("first private conversation"));
+        assert!(!serialized.contains("first answer"));
     }
 
     #[test]
