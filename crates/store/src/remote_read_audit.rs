@@ -375,7 +375,10 @@ fn parse_query_parameters(
                 "v3 remote read observation at sequence {sequence} query parameter {index} must be an object"
             )
         })?;
-        if object.keys().any(|key| !matches!(key.as_str(), "key" | "value" | "unsupported")) {
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "value" | "unsupported"))
+        {
             return Err(format!(
                 "v3 remote read observation at sequence {sequence} query parameter {index} has unsupported fields"
             ));
