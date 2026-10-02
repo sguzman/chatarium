@@ -81,13 +81,15 @@ Chatarium is not a claim that ChatGPT exposes a supported public consumer API. I
 
 ## Development
 
-For the current desktop alpha, the shortest local launch path is:
+For the current desktop alpha, launch normally:
 
 ```sh
-node tools/run-desktop.mjs
+cargo run -p chatarium-desktop
 ```
 
-That command verifies Node.js 22+, initializes the pinned official Sign in with ChatGPT DevKit submodule if needed, installs its exact lockfile-resolved dependencies, builds only the local `@siwc/local` package, then launches `chatarium-desktop`. On Linux, authenticated use also requires a working Secret Service implementation plus the `secret-tool` helper; the launcher never installs OS packages automatically and will warn rather than silently modifying the system. Local-only Chatarium can still launch if the Secret Service helper is unavailable.
+The desktop now prepares the pinned official Sign in with ChatGPT DevKit automatically in a background worker before starting its credential-owning sidecar, so the user does not need to run a separate bootstrap command. The first authenticated launch requires Node.js 22+ and network access to initialize/install the exact lockfile-resolved DevKit dependencies; later launches reuse the verified build. On Linux, authenticated use also requires a working Secret Service implementation plus the `secret-tool` helper. Chatarium never installs OS packages automatically; if that protection backend is unavailable, authentication fails closed while the local-only application remains usable.
+
+`node tools/run-desktop.mjs` remains a development convenience wrapper, but it is no longer required for ordinary repository launches.
 
 The workspace is Rust-first. Some legacy capture/bootstrap machinery is Windows-specific, but protocol observation, ingestion, typed interpretation, and the durable core are not architecturally Windows-bound. The desktop shell uses `eframe`/`egui`; asynchronous and blocking work must remain off the render thread. Protocol captures are data, not hand-maintained folklore: when behavior changes, preserve a new observation and adapt against it.
 
