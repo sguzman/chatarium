@@ -81,6 +81,14 @@ Chatarium is not a claim that ChatGPT exposes a supported public consumer API. I
 
 ## Development
 
+For the current desktop alpha, the shortest local launch path is:
+
+```sh
+node tools/run-desktop.mjs
+```
+
+That command verifies Node.js 22+, initializes the pinned official Sign in with ChatGPT DevKit submodule if needed, installs its exact lockfile-resolved dependencies, builds only the local `@siwc/local` package, then launches `chatarium-desktop`. On Linux, authenticated use also requires a working Secret Service implementation plus the `secret-tool` helper; the launcher never installs OS packages automatically and will warn rather than silently modifying the system. Local-only Chatarium can still launch if the Secret Service helper is unavailable.
+
 The workspace is Rust-first. Some legacy capture/bootstrap machinery is Windows-specific, but protocol observation, ingestion, typed interpretation, and the durable core are not architecturally Windows-bound. The desktop shell uses `eframe`/`egui`; asynchronous and blocking work must remain off the render thread. Protocol captures are data, not hand-maintained folklore: when behavior changes, preserve a new observation and adapt against it.
 
 The repository is intentionally documentation-heavy because the hardest part of this system is not drawing a chat window. It is maintaining epistemic clarity across a mutable remote service, unreliable transport, local persistence, and recovery.
