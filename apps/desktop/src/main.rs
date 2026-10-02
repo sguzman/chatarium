@@ -1,4 +1,9 @@
-use chatarium_core::{EventKind, TurnEvidence};
+use chatarium_core::{
+    AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId, LocalTurnId, TurnEvidence,
+};
+use chatarium_store::authored::{
+    DecodedUserMessageCommit, commit_user_message, decode_user_message_commit,
+};
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
@@ -9,7 +14,10 @@ use std::time::Duration;
 
 enum PersistCommand {
     SaveDraft { revision: u64, text: String },
-    CommitMessage { request_id: u64, text: String },
+    CommitMessage {
+        request_id: u64,
+        message: AuthoredUserMessage,
+    },
     Shutdown,
 }
 
@@ -37,6 +45,7 @@ struct ChatariumApp {
     next_commit_request: u64,
     commit_in_flight: Option<u64>,
     evidence: TurnEvidence,
+    local_conversation_id: LocalConversationId,
     events: Vec<EventEnvelope>,
     journal_path: PathBuf,
     persist_tx: Option<Sender<PersistCommand>>,
@@ -52,6 +61,15 @@ impl ChatariumApp {
             Ok(store) => {
                 let events = store.events().to_vec();
                 let draft = projected_working_draft(&events);
+                let (local_conversation_id, startup_status) =
+                    match projected_local_conversation_id(&events) {
+                        Ok(Some(id)) => (id, "journal ready".to_owned()),
+                        Ok(None) => (LocalConversationId::new(), "journal ready".to_owned()),
+                        Err(error) => (
+                            LocalConversationId::new(),
+                            format!("journal ready; local identity replay warning: {error}"),
+                        ),
+                    };
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
                 let worker = thread::Builder::new()
@@ -66,12 +84,13 @@ impl ChatariumApp {
                         next_commit_request: 1,
                         commit_in_flight: None,
                         evidence: TurnEvidence::default(),
+                        local_conversation_id,
                         events,
                         journal_path,
                         persist_tx: Some(persist_tx),
                         notice_rx: Some(notice_rx),
                         worker: Some(worker),
-                        status: "journal ready".to_owned(),
+                        status: startup_status,
                     },
                     Err(error) => Self::without_persistence(
                         journal_path,
@@ -103,6 +122,10 @@ impl ChatariumApp {
             next_commit_request: 1,
             commit_in_flight: None,
             evidence: TurnEvidence::default(),
+            local_conversation_id: projected_local_conversation_id(&events)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
             events,
             journal_path,
             persist_tx: None,
@@ -139,8 +162,16 @@ impl ChatariumApp {
 
         let request_id = self.next_commit_request;
         self.next_commit_request = self.next_commit_request.saturating_add(1);
-        let text = self.draft.clone();
-        match sender.send(PersistCommand::CommitMessage { request_id, text }) {
+        let message = AuthoredUserMessage::new(
+            self.local_conversation_id,
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            self.draft.clone(),
+        );
+        match sender.send(PersistCommand::CommitMessage {
+            request_id,
+            message,
+        }) {
             Ok(()) => {
                 self.commit_in_flight = Some(request_id);
                 self.status = "committing exact user message to local journal…".to_owned();
@@ -317,6 +348,16 @@ impl eframe::App for ChatariumApp {
                             .monospace()
                             .size(10.0)
                             .color(egui::Color32::from_rgb(126, 130, 139)),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "local conversation\n{}",
+                            self.local_conversation_id
+                        ))
+                        .monospace()
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(126, 130, 139)),
                     );
                 });
             });
@@ -566,8 +607,11 @@ fn persistence_worker(
                     }
                 }
             }
-            PersistCommand::CommitMessage { request_id, text } => {
-                match store.append(EventKind::UserMessageCommitted, text) {
+            PersistCommand::CommitMessage {
+                request_id,
+                message,
+            } => {
+                match commit_user_message(&mut store, &message) {
                     Ok(_) => {
                         if let Some(event) = store.events().last().cloned() {
                             let _ =
@@ -597,7 +641,7 @@ fn projected_working_draft(events: &[EventEnvelope]) -> String {
     let latest_commit_sequence = events
         .iter()
         .rev()
-        .find(|event| event.scope.is_none() && event.kind == EventKind::UserMessageCommitted)
+        .find(|event| event.kind == EventKind::UserMessageCommitted)
         .map(|event| event.sequence)
         .unwrap_or_default();
 
@@ -605,6 +649,20 @@ fn projected_working_draft(events: &[EventEnvelope]) -> String {
         Some(event) if event.sequence > latest_commit_sequence => event_text(&event.payload),
         _ => String::new(),
     }
+}
+
+fn projected_local_conversation_id(
+    events: &[EventEnvelope],
+) -> Result<Option<LocalConversationId>, String> {
+    for event in events.iter().rev() {
+        match decode_user_message_commit(event)? {
+            Some(DecodedUserMessageCommit::Typed(message)) => {
+                return Ok(Some(message.conversation_id));
+            }
+            Some(DecodedUserMessageCommit::LegacyText(_)) | None => {}
+        }
+    }
+    Ok(None)
 }
 
 fn default_journal_path() -> PathBuf {
