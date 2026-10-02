@@ -29,6 +29,19 @@ function run(command, args, options = {}) {
   });
 }
 
+function runPackageTool(command, args, options = {}) {
+  if (process.platform === "win32") {
+    return run(process.env.ComSpec ?? "cmd.exe", [
+      "/d",
+      "/s",
+      "/c",
+      command,
+      ...args,
+    ], options);
+  }
+  return run(command, args, options);
+}
+
 function capture(command, args, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
@@ -78,8 +91,8 @@ if (commit !== expectedCommit) {
   );
 }
 
-await run(
-  process.platform === "win32" ? "npm.cmd" : "npm",
+await runPackageTool(
+  "npm",
   [
     "install",
     "--no-save",
@@ -91,8 +104,8 @@ await run(
   { cwd: localRoot },
 );
 
-await run(
-  process.platform === "win32" ? "npx.cmd" : "npx",
+await runPackageTool(
+  "npx",
   ["tsc", "-p", "tsconfig.json"],
   { cwd: localRoot },
 );
