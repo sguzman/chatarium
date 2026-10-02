@@ -1,3 +1,5 @@
+mod siwc_bridge;
+
 use chatarium_core::{
     AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId, LocalTurnId, TurnEvidence,
 };
@@ -69,6 +71,12 @@ struct ChatariumApp {
     notice_rx: Option<Receiver<PersistNotice>>,
     worker: Option<JoinHandle<()>>,
     status: String,
+    remote: siwc_bridge::BridgeRuntime,
+    remote_session: siwc_bridge::SessionState,
+    remote_models: Vec<siwc_bridge::Model>,
+    selected_model: Option<String>,
+    remote_status: String,
+    sign_in_pending: bool,
 }
 
 impl ChatariumApp {
@@ -108,6 +116,12 @@ impl ChatariumApp {
                         notice_rx: Some(notice_rx),
                         worker: Some(worker),
                         status: startup_status,
+                        remote: siwc_bridge::BridgeRuntime::start(),
+                        remote_session: siwc_bridge::SessionState::default(),
+                        remote_models: Vec::new(),
+                        selected_model: None,
+                        remote_status: "starting sign-in runtime…".to_owned(),
+                        sign_in_pending: false,
                     },
                     Err(error) => Self::without_persistence(
                         journal_path,
@@ -149,6 +163,12 @@ impl ChatariumApp {
             notice_rx: None,
             worker: None,
             status,
+            remote: siwc_bridge::BridgeRuntime::start(),
+            remote_session: siwc_bridge::SessionState::default(),
+            remote_models: Vec::new(),
+            selected_model: None,
+            remote_status: "starting sign-in runtime…".to_owned(),
+            sign_in_pending: false,
         }
     }
 
@@ -255,11 +275,93 @@ impl ChatariumApp {
             "saving…"
         }
     }
+
+    fn process_remote_notices(&mut self) {
+        for notice in self.remote.drain() {
+            match notice {
+                siwc_bridge::BridgeEvent::Ready => {
+                    self.remote_status = "sign-in runtime ready".to_owned();
+                    let _ = self
+                        .remote
+                        .send(siwc_bridge::BridgeCommand::RefreshSession);
+                }
+                siwc_bridge::BridgeEvent::Session(session) => {
+                    self.sign_in_pending = session.status == "connecting";
+                    self.remote_session = session;
+                    if self.remote_session.status == "connected" && self.remote_session.sharing {
+                        self.remote_status = "ChatGPT plan connected".to_owned();
+                        let _ = self.remote.send(siwc_bridge::BridgeCommand::ListModels);
+                    } else if self.remote_session.status == "connecting" {
+                        self.remote_status = "waiting for ChatGPT sign-in…".to_owned();
+                    } else if let Some(error) = &self.remote_session.error_message {
+                        self.remote_status = error.clone();
+                    } else {
+                        self.remote_status = "not connected".to_owned();
+                    }
+                }
+                siwc_bridge::BridgeEvent::Models(models) => {
+                    let keep_selected = self
+                        .selected_model
+                        .as_ref()
+                        .is_some_and(|selected| models.iter().any(|model| &model.slug == selected));
+                    if !keep_selected {
+                        self.selected_model = models.first().map(|model| model.slug.clone());
+                    }
+                    self.remote_models = models;
+                    self.remote_status = if self.remote_models.is_empty() {
+                        "connected; no models reported".to_owned()
+                    } else {
+                        format!("connected · {} models", self.remote_models.len())
+                    };
+                }
+                siwc_bridge::BridgeEvent::Failed { error, .. } => {
+                    self.sign_in_pending = false;
+                    self.remote_status = format!("{}: {}", error.code, error.message);
+                }
+                siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
+                    self.sign_in_pending = false;
+                    self.remote_status = detail;
+                }
+                siwc_bridge::BridgeEvent::Delta { .. }
+                | siwc_bridge::BridgeEvent::ResponseCompleted { .. }
+                | siwc_bridge::BridgeEvent::CommandSucceeded { .. } => {}
+            }
+        }
+    }
+
+    fn start_chatgpt_sign_in(&mut self) {
+        self.sign_in_pending = true;
+        self.remote_status = "opening ChatGPT sign-in…".to_owned();
+        if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::SignIn) {
+            self.sign_in_pending = false;
+            self.remote_status = error;
+        }
+    }
+
+    fn disconnect_chatgpt(&mut self) {
+        self.remote_status = "disconnecting ChatGPT…".to_owned();
+        if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::Disconnect) {
+            self.remote_status = error;
+        }
+    }
+
+    fn remote_connected(&self) -> bool {
+        self.remote_session.status == "connected" && self.remote_session.sharing
+    }
+
+    fn remote_identity_label(&self) -> String {
+        self.remote_session
+            .email
+            .clone()
+            .or_else(|| self.remote_session.profile_label.clone())
+            .unwrap_or_else(|| "ChatGPT account".to_owned())
+    }
 }
 
 impl eframe::App for ChatariumApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
+        self.process_remote_notices();
 
         let display_messages = projected_display_messages(&self.events);
         let conversation_title = derived_conversation_title(&display_messages);
@@ -327,7 +429,87 @@ impl eframe::App for ChatariumApp {
                 );
                 ui.add_space(7.0);
                 status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
-                status_row(ui, "Remote", "not connected", false);
+                status_row(
+                    ui,
+                    "ChatGPT",
+                    if self.remote_connected() {
+                        "connected"
+                    } else if self.sign_in_pending {
+                        "connecting…"
+                    } else {
+                        "not connected"
+                    },
+                    self.remote_connected(),
+                );
+
+                ui.add_space(14.0);
+                if self.remote_connected() {
+                    ui.label(
+                        egui::RichText::new(self.remote_identity_label())
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(186, 189, 197)),
+                    );
+                    if !self.remote_models.is_empty() {
+                        let selected_text = self
+                            .selected_model
+                            .as_ref()
+                            .and_then(|slug| {
+                                self.remote_models
+                                    .iter()
+                                    .find(|model| &model.slug == slug)
+                                    .map(|model| model.display_name.as_str())
+                            })
+                            .unwrap_or("Choose model");
+                        egui::ComboBox::from_id_salt("chatgpt_model")
+                            .selected_text(selected_text)
+                            .width(196.0)
+                            .show_ui(ui, |ui| {
+                                for model in &self.remote_models {
+                                    ui.selectable_value(
+                                        &mut self.selected_model,
+                                        Some(model.slug.clone()),
+                                        model.display_name.as_str(),
+                                    );
+                                }
+                            });
+                    }
+                    if ui
+                        .add_sized([196.0, 30.0], egui::Button::new("Disconnect ChatGPT"))
+                        .clicked()
+                    {
+                        self.disconnect_chatgpt();
+                    }
+                } else {
+                    if ui
+                        .add_enabled(
+                            !self.sign_in_pending,
+                            egui::Button::new(
+                                egui::RichText::new("Continue with ChatGPT").strong(),
+                            )
+                            .min_size(egui::vec2(196.0, 34.0)),
+                        )
+                        .clicked()
+                    {
+                        self.start_chatgpt_sign_in();
+                    }
+                    if self.sign_in_pending {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                egui::RichText::new("Finish in your browser")
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(151, 154, 163)),
+                            );
+                        });
+                    }
+                }
+
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new(self.remote_status.as_str())
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                );
 
                 ui.add_space(18.0);
                 egui::CollapsingHeader::new(
@@ -389,9 +571,11 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(238, 239, 244)),
                         );
                         ui.label(
-                            egui::RichText::new(
-                                "Durable on this machine · remote ChatGPT connection not wired yet",
-                            )
+                            egui::RichText::new(if self.remote_connected() {
+                                "Durable on this machine · authenticated with ChatGPT"
+                            } else {
+                                "Durable on this machine · connect ChatGPT to enable remote turns"
+                            })
                             .size(11.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
