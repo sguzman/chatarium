@@ -14,6 +14,10 @@ jobs:
           components: rustfmt, clippy
       - name: Browser recorder syntax
         run: node --check browser/flight-recorder.user.js
+      - name: Sign in with ChatGPT bridge syntax
+        run: |
+          node --check tools/siwc-bridge/bridge.mjs
+          node --check tools/siwc-bridge/bootstrap.mjs
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check
