@@ -978,8 +978,13 @@ impl eframe::App for ChatariumApp {
                     self.queue_draft_snapshot();
                 }
 
+                let remote_turn_idle =
+                    self.pending_remote_turn.is_none() && self.active_remote_turn.is_none();
+                let remote_ready_for_send = !self.remote_connected()
+                    || (self.selected_model.is_some() && remote_turn_idle);
                 let can_commit = self.persist_tx.is_some()
                     && self.commit_in_flight.is_none()
+                    && remote_ready_for_send
                     && !self.draft.trim().is_empty();
                 let commit_shortcut = can_commit
                     && ctx.input_mut(|input| {
@@ -1002,8 +1007,15 @@ impl eframe::App for ChatariumApp {
                         let clicked = ui
                             .add_enabled(
                                 can_commit,
-                                egui::Button::new(egui::RichText::new("Commit locally").strong())
-                                    .min_size(egui::vec2(124.0, 34.0)),
+                                egui::Button::new(
+                                    egui::RichText::new(if self.remote_connected() {
+                                        "Send"
+                                    } else {
+                                        "Commit locally"
+                                    })
+                                    .strong(),
+                                )
+                                .min_size(egui::vec2(124.0, 34.0)),
                             )
                             .clicked();
                         if clicked || (can_commit && commit_shortcut) {
@@ -1039,9 +1051,11 @@ impl eframe::App for ChatariumApp {
                                 );
                                 ui.add_space(8.0);
                                 ui.label(
-                                    egui::RichText::new(
-                                        "Messages committed here survive restarts. Remote ChatGPT transport is the next vertical slice.",
-                                    )
+                                    egui::RichText::new(if self.remote_connected() {
+                                        "Write below to send a durable turn through your ChatGPT plan."
+                                    } else {
+                                        "Messages committed here survive restarts. Connect ChatGPT to enable remote turns."
+                                    })
                                     .size(13.0)
                                     .color(egui::Color32::from_rgb(137, 141, 150)),
                                 );
@@ -1083,7 +1097,12 @@ impl eframe::App for ChatariumApp {
                     });
             });
 
-        if self.saved_revision < self.draft_revision || self.commit_in_flight.is_some() {
+        if self.saved_revision < self.draft_revision
+            || self.commit_in_flight.is_some()
+            || self.sign_in_pending
+            || self.pending_remote_turn.is_some()
+            || self.active_remote_turn.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
@@ -1378,7 +1397,7 @@ fn payload_message_identity(payload: &str, role: DisplayRole) -> Option<String> 
     let value = serde_json::from_str::<Value>(payload).ok()?;
     let paths: &[&str] = match role {
         DisplayRole::User => &["/details/observed_message_id", "/details/observed_id"],
-        DisplayRole::Assistant => &["/details/observed_id"],
+        DisplayRole::Assistant => &["/details/local_turn_id", "/details/observed_id"],
     };
 
     paths
