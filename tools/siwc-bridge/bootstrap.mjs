@@ -98,15 +98,20 @@ await runPackageTool(
     "--no-save",
     "--no-package-lock",
     "--include=dev",
+    "--workspaces=false",
     "typescript@7.0.2",
     "@types/node@24.0.0",
   ],
   { cwd: localRoot },
 );
 
-await runPackageTool(
-  "npx",
-  ["tsc", "-p", "tsconfig.json"],
+await run(
+  process.execPath,
+  [
+    resolve(localRoot, "node_modules/typescript/bin/tsc"),
+    "-p",
+    "tsconfig.json",
+  ],
   { cwd: localRoot },
 );
 
