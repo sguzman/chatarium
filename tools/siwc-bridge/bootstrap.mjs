@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { access } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
@@ -11,6 +11,11 @@ const devkitRoot = resolve(
 );
 const localRoot = resolve(devkitRoot, "packages/local");
 const expectedCommit = "f723814abdccec135b519c451fb6e1992ee5e933";
+const bootstrapStamp = resolve(
+  localRoot,
+  "dist",
+  ".chatarium-bootstrap-commit",
+);
 
 function run(command, args, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -97,6 +102,24 @@ if (commit !== expectedCommit || prefix !== " ") {
   );
 }
 
+let alreadyBuilt = false;
+try {
+  const [stamp] = await Promise.all([
+    readFile(bootstrapStamp, "utf8"),
+    access(resolve(localRoot, "dist", "index.js")),
+    access(resolve(devkitRoot, "node_modules", "jose", "package.json")),
+    access(resolve(devkitRoot, "node_modules", "proper-lockfile", "package.json")),
+  ]);
+  alreadyBuilt = stamp.trim() === expectedCommit;
+} catch {
+  alreadyBuilt = false;
+}
+
+if (alreadyBuilt) {
+  console.log("Chatarium Sign in with ChatGPT DevKit is already ready.");
+  process.exit(0);
+}
+
 await runPackageTool(
   "npm",
   [
@@ -114,4 +137,5 @@ await runPackageTool(
   { cwd: devkitRoot },
 );
 
+await writeFile(bootstrapStamp, `${expectedCommit}\n`, "utf8");
 console.log("Chatarium Sign in with ChatGPT DevKit is ready.");
