@@ -1705,13 +1705,7 @@ mod tests {
             .send(PersistCommand::AppendTurnEvent {
                 turn_id: message.turn_id,
                 kind: EventKind::DispatchAttempted,
-                payload: remote_turn_payload(
-                    message.turn_id,
-                    "request",
-                    Some("model"),
-                    None,
-                    None,
-                ),
+                payload: remote_turn_payload(message.turn_id, "request", Some("model"), None, None),
             })
             .unwrap();
 
@@ -1727,10 +1721,7 @@ mod tests {
         };
 
         assert!(commit_event.sequence < dispatch_event.sequence);
-        assert_eq!(
-            commit_event.scope,
-            Some(local_turn_scope(message.turn_id))
-        );
+        assert_eq!(commit_event.scope, Some(local_turn_scope(message.turn_id)));
         assert_eq!(
             dispatch_event.scope,
             Some(local_turn_scope(message.turn_id))
@@ -1747,7 +1738,10 @@ mod tests {
             .map(|event| event.kind)
             .collect::<Vec<_>>();
         let evidence = TurnEvidence::replay_event_kinds(scoped).expect("replay evidence");
-        assert_eq!(evidence.local, chatarium_core::LocalEvidence::MessageCommitted);
+        assert_eq!(
+            evidence.local,
+            chatarium_core::LocalEvidence::MessageCommitted
+        );
         assert_eq!(evidence.remote, chatarium_core::RemoteEvidence::Dispatching);
 
         let _ = fs::remove_file(path);
