@@ -268,16 +268,14 @@ fn optional_query_parameters(
     let Some(value) = read.get("query_parameters") else {
         return Ok(None);
     };
-    let parameters = value.as_array().ok_or_else(|| {
-        format!("read response {read_index} query_parameters must be an array")
-    })?;
+    let parameters = value
+        .as_array()
+        .ok_or_else(|| format!("read response {read_index} query_parameters must be an array"))?;
 
     let mut parsed = Vec::with_capacity(parameters.len());
     for (index, parameter) in parameters.iter().enumerate() {
         let object = parameter.as_object().ok_or_else(|| {
-            format!(
-                "read response {read_index} query parameter {index} must be an object"
-            )
+            format!("read response {read_index} query parameter {index} must be an object")
         })?;
         if object
             .keys()
@@ -676,17 +674,20 @@ mod tests {
     fn unsafe_query_value_in_any_read_fails_before_archive_without_echoing_value() {
         let dir = temp_dir("unsafe-query");
         let mut fixture: Value = serde_json::from_slice(&fixture_bytes()).unwrap();
-        fixture["read_responses"].as_array_mut().unwrap().push(serde_json::json!({
-            "method": "GET",
-            "path": "/backend-api/conversations/<id>",
-            "query_keys": ["num_turns"],
-            "query_parameters": [
-                {"key": "num_turns", "value": "PRIVATE-QUERY-SECRET"}
-            ],
-            "status": 200,
-            "content_type": "application/json",
-            "body": {"ok": "<bool>"}
-        }));
+        fixture["read_responses"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "method": "GET",
+                "path": "/backend-api/conversations/<id>",
+                "query_keys": ["num_turns"],
+                "query_parameters": [
+                    {"key": "num_turns", "value": "PRIVATE-QUERY-SECRET"}
+                ],
+                "status": 200,
+                "content_type": "application/json",
+                "body": {"ok": "<bool>"}
+            }));
         let bytes = serde_json::to_vec(&fixture).unwrap();
 
         let error = import_bytes(&bytes, 0, &dir).unwrap_err();
