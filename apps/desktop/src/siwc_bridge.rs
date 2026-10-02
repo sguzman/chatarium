@@ -179,8 +179,8 @@ fn bridge_worker(
     let prepared = ProcessCommand::new("node")
         .arg(&bootstrap)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .status();
 
     match prepared {
