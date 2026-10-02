@@ -1,5 +1,6 @@
 //! Validation for committed protocol snapshots and sanitized fixtures.
 
+use chatarium_protocol::read::ReadQueryParameterEvidence;
 use chatarium_protocol::sse::{SseFrame, TextTurnProjection, interpret_v1_frame};
 use chatarium_protocol::stability::validate_registry;
 use serde_json::Value;
@@ -250,6 +251,85 @@ fn validate_read_fixture(fixture: &Value) -> Result<(), String> {
 
         if let Some(body) = read.get("body") {
             validate_read_body_placeholders(body, &format!("/read_responses/{index}/body"))?;
+        }
+        validate_read_query_parameters(read, index)?;
+    }
+
+    Ok(())
+}
+
+fn validate_read_query_parameters(read: &Value, read_index: usize) -> Result<(), String> {
+    let Some(raw) = read.get("query_parameters") else {
+        return Ok(());
+    };
+    let path = read.get("path").and_then(Value::as_str).ok_or_else(|| {
+        format!("read response {read_index} query_parameters require a string path")
+    })?;
+    if path != "/backend-api/conversations/<id>" {
+        return Err(format!(
+            "read response {read_index} query_parameters are allowed only for the C02 conversation resource path"
+        ));
+    }
+
+    let query_keys = read
+        .get("query_keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            format!("read response {read_index} query_parameters require query_keys")
+        })?;
+    let query_keys = query_keys
+        .iter()
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                format!("read response {read_index} query_keys contains non-string")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let parameters = raw.as_array().ok_or_else(|| {
+        format!("read response {read_index} query_parameters must be an array")
+    })?;
+    for (index, parameter) in parameters.iter().enumerate() {
+        let object = parameter.as_object().ok_or_else(|| {
+            format!("read response {read_index} query parameter {index} must be an object")
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "value" | "unsupported"))
+        {
+            return Err(format!(
+                "read response {read_index} query parameter {index} contains unsupported fields"
+            ));
+        }
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!("read response {read_index} query parameter {index} is missing key")
+        })?;
+        if !query_keys.contains(&key) {
+            return Err(format!(
+                "read response {read_index} query parameter {index} key is absent from query_keys"
+            ));
+        }
+
+        match (object.get("value"), object.get("unsupported")) {
+            (Some(Value::String(literal)), None) => {
+                ReadQueryParameterEvidence::known(key, literal).map_err(|_| {
+                    format!(
+                        "read response {read_index} query parameter {index} violates the approved C02 query evidence boundary"
+                    )
+                })?;
+            }
+            (None, Some(Value::Bool(true))) => {
+                ReadQueryParameterEvidence::unsupported_redacted(key).map_err(|_| {
+                    format!(
+                        "read response {read_index} query parameter {index} violates the approved C02 query evidence boundary"
+                    )
+                })?;
+            }
+            _ => {
+                return Err(format!(
+                    "read response {read_index} query parameter {index} must contain exactly one safe value or unsupported=true marker"
+                ));
+            }
         }
     }
 
@@ -660,6 +740,63 @@ mod tests {
         let error = validate_corpus(&root).unwrap_err();
         assert!(error.contains("non-placeholder string content"));
         assert!(!error.contains("PRIVATE CONVERSATION TITLE"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c02_read_fixture_accepts_only_narrow_safe_query_parameters() {
+        let root = temp_protocol();
+        let fixture = json!({
+            "snapshot": "2026-09-29.002",
+            "experiment": C02_EXPERIMENT,
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations/<id>",
+                "query_keys": ["include_has_versions", "num_turns"],
+                "query_parameters": [
+                    {"key": "num_turns", "value": "4"},
+                    {"key": "include_has_versions", "value": "true"},
+                    {"key": "num_turns", "unsupported": true}
+                ],
+                "body": {"conversation_id": "<id:1>"}
+            }]
+        });
+        fs::write(
+            root.join("fixtures/2026-09-29.002/c02-query.json"),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let report = validate_corpus(&root).unwrap();
+        assert_eq!(report.read_fixtures, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c02_read_fixture_rejects_unsafe_query_value_without_echoing_it() {
+        let root = temp_protocol();
+        let fixture = json!({
+            "snapshot": "2026-09-29.002",
+            "experiment": C02_EXPERIMENT,
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations/<id>",
+                "query_keys": ["num_turns"],
+                "query_parameters": [
+                    {"key": "num_turns", "value": "PRIVATE QUERY SECRET"}
+                ],
+                "body": {"conversation_id": "<id:1>"}
+            }]
+        });
+        fs::write(
+            root.join("fixtures/2026-09-29.002/c02-query-private.json"),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let error = validate_corpus(&root).unwrap_err();
+        assert!(error.contains("approved C02 query evidence boundary"));
+        assert!(!error.contains("PRIVATE QUERY SECRET"));
         let _ = fs::remove_dir_all(root);
     }
 
