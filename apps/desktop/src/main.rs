@@ -262,12 +262,7 @@ impl ChatariumApp {
         }
     }
 
-    fn queue_turn_event(
-        &mut self,
-        turn_id: LocalTurnId,
-        kind: EventKind,
-        payload: String,
-    ) -> bool {
+    fn queue_turn_event(&mut self, turn_id: LocalTurnId, kind: EventKind, payload: String) -> bool {
         let Some(sender) = &self.persist_tx else {
             self.status = "cannot persist remote turn evidence: persistence unavailable".to_owned();
             return false;
@@ -378,10 +373,7 @@ impl ChatariumApp {
                                     cumulative_text: String::new(),
                                     observed_output: false,
                                 });
-                                self.remote_status = format!(
-                                    "sending with {}",
-                                    pending.model
-                                );
+                                self.remote_status = format!("sending with {}", pending.model);
                             }
                             Err(error) => {
                                 let payload = remote_turn_payload(
@@ -595,10 +587,7 @@ impl ChatariumApp {
                     );
                     self.remote_status = "ChatGPT response complete".to_owned();
                 }
-                siwc_bridge::BridgeEvent::Failed {
-                    request_id,
-                    error,
-                } => {
+                siwc_bridge::BridgeEvent::Failed { request_id, error } => {
                     self.sign_in_pending = false;
                     let mut handled_turn = false;
                     if let Some(request_id) = request_id.as_deref() {
@@ -632,8 +621,7 @@ impl ChatariumApp {
                     }
                     self.remote_status = format!("{}: {}", error.code, error.message);
                     if handled_turn {
-                        self.status =
-                            "remote turn ended without automatic retry".to_owned();
+                        self.status = "remote turn ended without automatic retry".to_owned();
                     }
                 }
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
@@ -980,8 +968,8 @@ impl eframe::App for ChatariumApp {
 
                 let remote_turn_idle =
                     self.pending_remote_turn.is_none() && self.active_remote_turn.is_none();
-                let remote_ready_for_send = !self.remote_connected()
-                    || (self.selected_model.is_some() && remote_turn_idle);
+                let remote_ready_for_send =
+                    !self.remote_connected() || (self.selected_model.is_some() && remote_turn_idle);
                 let can_commit = self.persist_tx.is_some()
                     && self.commit_in_flight.is_none()
                     && remote_ready_for_send
