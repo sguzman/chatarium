@@ -26,6 +26,8 @@ Purpose: identify list/pagination traffic.
 
 Action: open a controlled existing thread.
 
+The controlled thread does not need to be a particular historical C02 tab. If a previous test thread is inaccessible, create a fresh ordinary non-sensitive test conversation first, let it finish, navigate away, and use the later reopen as C02. The setup mutation must happen before read capture is armed; the capture itself should contain only the reopen action.
+
 Purpose: identify conversation retrieval and any lazy secondary requests. For the query-value follow-up, use Flight Recorder v0.7.2 or newer, arm reads immediately before opening the controlled thread, perform only that open action, then disarm. The recorder may retain literals only for the approved `include_has_versions` and `num_turns` keys on the exact conversation-resource request; do not inspect or transcribe query values manually. Older captures remain values-unknown.
 
 ### C03 — new text turn, complete
