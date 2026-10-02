@@ -174,7 +174,6 @@ const chatgpt = local.createChatGPT({
   appId: "chatarium",
   redirectPort: 0,
   credentialEncryption,
-  sendHostId: true,
 });
 
 chatgpt.subscribe((session) => {
