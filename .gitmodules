@@ -1,0 +1,3 @@
+[submodule "vendor/openai-sign-in-with-chatgpt-devkit"]
+	path = vendor/openai-sign-in-with-chatgpt-devkit
+	url = https://github.com/openai/sign-in-with-chatgpt-devkit.git
