@@ -253,6 +253,7 @@ impl eframe::App for ChatariumApp {
             .filter(|event| event.kind == EventKind::UserMessageCommitted)
             .cloned()
             .collect::<Vec<_>>();
+        let conversation_title = derived_conversation_title(&committed_messages);
 
         egui::SidePanel::left("sidebar")
             .exact_width(236.0)
@@ -292,7 +293,7 @@ impl eframe::App for ChatariumApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new("Local conversation")
+                                egui::RichText::new(conversation_title.as_str())
                                     .strong()
                                     .color(egui::Color32::from_rgb(229, 231, 236)),
                             );
@@ -377,7 +378,7 @@ impl eframe::App for ChatariumApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("Local conversation")
+                            egui::RichText::new(conversation_title.as_str())
                                 .size(19.0)
                                 .strong()
                                 .color(egui::Color32::from_rgb(238, 239, 244)),
@@ -678,6 +679,25 @@ fn default_journal_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(".chatarium")
         .join("journal.jsonl")
+}
+
+fn derived_conversation_title(events: &[EventEnvelope]) -> String {
+    let Some(first) = events.first() else {
+        return "New local conversation".to_owned();
+    };
+
+    let text = event_text(&first.payload);
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return "Local conversation".to_owned();
+    }
+
+    const LIMIT: usize = 42;
+    let mut title = normalized.chars().take(LIMIT).collect::<String>();
+    if normalized.chars().count() > LIMIT {
+        title.push('…');
+    }
+    title
 }
 
 fn event_text(payload: &str) -> String {
