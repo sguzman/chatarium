@@ -213,115 +213,336 @@ impl eframe::App for ChatariumApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
 
-        egui::TopBottomPanel::top("status").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong("Chatarium");
-                ui.separator();
-                ui.label("local journal active; remote protocol intentionally disabled");
-                ui.separator();
-                ui.monospace(self.draft_state());
-            });
-        });
+        let committed_messages = self
+            .events
+            .iter()
+            .filter(|event| event.kind == EventKind::UserMessageCommitted)
+            .collect::<Vec<_>>();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Local-first conversation surface");
-            ui.label(
-                "Nothing here is sent to ChatGPT yet. This surface is proving the durability contract before networking is allowed to depend on it.",
-            );
-            ui.add_space(8.0);
-            ui.small(format!("journal: {}", self.journal_path.display()));
-            ui.small(format!("status: {}", self.status));
-            ui.add_space(12.0);
+        egui::SidePanel::left("sidebar")
+            .exact_width(236.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(18, 19, 23))
+                    .inner_margin(egui::Margin::same(16)),
+            )
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("Chatarium")
+                        .size(24.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(238, 239, 244)),
+                );
+                ui.label(
+                    egui::RichText::new("Local-first workspace")
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                );
 
-            ui.heading("Locally committed messages");
-            egui::ScrollArea::vertical()
-                .max_height(220.0)
-                .show(ui, |ui| {
-                    let mut found = false;
-                    for event in self
-                        .events
-                        .iter()
-                        .filter(|event| event.kind == EventKind::UserMessageCommitted)
-                    {
-                        found = true;
-                        ui.group(|ui| {
-                            let scope = event.scope.as_deref().unwrap_or("native/unscoped");
-                            ui.strong(format!(
-                                "You · local event #{} · {scope}",
-                                event.sequence
-                            ));
-                            ui.label(event_text(&event.payload));
-                        });
-                        ui.add_space(4.0);
-                    }
-                    if !found {
-                        ui.weak("No committed local messages yet.");
-                    }
-                });
+                ui.add_space(26.0);
+                ui.label(
+                    egui::RichText::new("CONVERSATIONS")
+                        .size(10.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                );
+                ui.add_space(6.0);
 
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.heading("Composer");
-                ui.label(format!("draft: {}", self.draft_state()));
-            });
-
-            let editor = egui::TextEdit::multiline(&mut self.draft)
-                .desired_rows(8)
-                .hint_text("Type here. Every edit is queued immediately for the append-only journal.");
-            let response = ui.add_enabled(self.commit_in_flight.is_none(), editor);
-            if response.changed() {
-                self.evidence = TurnEvidence::default();
-                self.queue_draft_snapshot();
-            }
-
-            ui.horizontal(|ui| {
-                let can_commit = self.persist_tx.is_some()
-                    && self.commit_in_flight.is_none()
-                    && !self.draft.trim().is_empty();
-                if ui
-                    .add_enabled(can_commit, egui::Button::new("Commit locally (no network)"))
-                    .clicked()
-                {
-                    self.commit_current_message();
-                }
-                if self.commit_in_flight.is_some() {
-                    ui.spinner();
-                    ui.label("waiting for fsync acknowledgement");
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.monospace(format!("current turn evidence: {:?}", self.evidence));
-
-            ui.add_space(8.0);
-            egui::CollapsingHeader::new(format!(
-                "Durable event journal ({} events)",
-                self.events.len()
-            ))
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(260.0)
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(31, 33, 39))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(10, 9))
                     .show(ui, |ui| {
-                        for event in self.events.iter().rev().take(100).rev() {
-                            ui.horizontal_wrapped(|ui| {
-                                let scope = event.scope.as_deref().unwrap_or("-");
-                                ui.monospace(format!(
-                                    "#{:05} {:>13} {:>28} [{scope}]",
-                                    event.sequence,
-                                    event.at_unix_ms,
-                                    event.kind.stable_name()
-                                ));
-                                ui.label(payload_preview(&event.payload));
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("Local conversation")
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(229, 231, 236)),
+                            );
+                        });
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} committed message{}",
+                                committed_messages.len(),
+                                if committed_messages.len() == 1 { "" } else { "s" }
+                            ))
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                    });
+
+                ui.add_space(24.0);
+                ui.label(
+                    egui::RichText::new("STATUS")
+                        .size(10.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                );
+                ui.add_space(7.0);
+                status_row(
+                    ui,
+                    "Storage",
+                    self.draft_state(),
+                    self.persist_tx.is_some(),
+                );
+                status_row(ui, "Remote", "not connected", false);
+
+                ui.add_space(18.0);
+                egui::CollapsingHeader::new(
+                    egui::RichText::new("Diagnostics")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(151, 154, 163)),
+                )
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "journal\n{}",
+                            self.journal_path.display()
+                        ))
+                        .monospace()
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!("status\n{}", self.status))
+                            .monospace()
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(126, 130, 139)),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!("events: {}", self.events.len()))
+                            .monospace()
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(126, 130, 139)),
+                    );
+                });
+            });
+
+        egui::TopBottomPanel::top("conversation_header")
+            .resizable(false)
+            .exact_height(72.0)
+            .frame(
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(23, 24, 29))
+                    .inner_margin(egui::Margin::symmetric(22, 12)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("Local conversation")
+                                .size(19.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(238, 239, 244)),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "Durable on this machine · remote ChatGPT connection not wired yet",
+                            )
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                    });
+
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            egui::Frame::default()
+                                .fill(egui::Color32::from_rgb(48, 42, 26))
+                                .corner_radius(egui::CornerRadius::same(999))
+                                .inner_margin(egui::Margin::symmetric(10, 5))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new("LOCAL ONLY")
+                                            .size(10.0)
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(225, 194, 108)),
+                                    );
+                                });
+                        },
+                    );
+                });
+            });
+
+        egui::TopBottomPanel::bottom("composer_panel")
+            .resizable(false)
+            .frame(
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(23, 24, 29))
+                    .inner_margin(egui::Margin::symmetric(22, 14)),
+            )
+            .show(ctx, |ui| {
+                let composer_fill = if self.persist_tx.is_some() {
+                    egui::Color32::from_rgb(31, 33, 39)
+                } else {
+                    egui::Color32::from_rgb(45, 29, 31)
+                };
+
+                let response = egui::Frame::default()
+                    .fill(composer_fill)
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgb(54, 57, 66),
+                    ))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        let editor = egui::TextEdit::multiline(&mut self.draft)
+                            .desired_rows(4)
+                            .frame(false)
+                            .hint_text("Write a message…");
+                        ui.add_sized([ui.available_width(), 88.0], editor)
+                    })
+                    .inner;
+
+                if response.changed() {
+                    self.evidence = TurnEvidence::default();
+                    self.queue_draft_snapshot();
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(match self.draft_state() {
+                            "durable" => "Draft saved locally",
+                            "saving…" => "Saving draft…",
+                            _ => "Draft is not durable",
+                        })
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(132, 136, 145)),
+                    );
+
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let can_commit = self.persist_tx.is_some()
+                                && self.commit_in_flight.is_none()
+                                && !self.draft.trim().is_empty();
+                            if ui
+                                .add_enabled(
+                                    can_commit,
+                                    egui::Button::new(
+                                        egui::RichText::new("Commit locally").strong(),
+                                    )
+                                    .min_size(egui::vec2(124.0, 34.0)),
+                                )
+                                .clicked()
+                            {
+                                self.commit_current_message();
+                            }
+
+                            if self.commit_in_flight.is_some() {
+                                ui.spinner();
+                            }
+                        },
+                    );
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(23, 24, 29))
+                    .inner_margin(egui::Margin::symmetric(24, 18)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if committed_messages.is_empty() {
+                            ui.add_space(90.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Start a local conversation")
+                                        .size(24.0)
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(221, 223, 229)),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Messages committed here survive restarts. Remote ChatGPT transport is the next vertical slice.",
+                                    )
+                                    .size(13.0)
+                                    .color(egui::Color32::from_rgb(137, 141, 150)),
+                                );
                             });
+                        } else {
+                            ui.add_space(8.0);
+                            for event in committed_messages {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Min),
+                                    |ui| {
+                                        egui::Frame::default()
+                                            .fill(egui::Color32::from_rgb(38, 42, 52))
+                                            .corner_radius(egui::CornerRadius::same(12))
+                                            .inner_margin(egui::Margin::symmetric(14, 11))
+                                            .show(ui, |ui| {
+                                                ui.set_max_width(620.0);
+                                                ui.label(
+                                                    egui::RichText::new(event_text(&event.payload))
+                                                        .size(14.0)
+                                                        .color(egui::Color32::from_rgb(
+                                                            232, 234, 239,
+                                                        )),
+                                                );
+                                                ui.add_space(5.0);
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "local event #{}",
+                                                        event.sequence
+                                                    ))
+                                                    .size(10.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        126, 131, 143,
+                                                    )),
+                                                );
+                                            });
+                                    },
+                                );
+                                ui.add_space(12.0);
+                            }
                         }
                     });
             });
-        });
 
         if self.saved_revision < self.draft_revision || self.commit_in_flight.is_some() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
+}
+
+fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
+    ui.horizontal(|ui| {
+        let dot = if healthy {
+            egui::Color32::from_rgb(102, 190, 132)
+        } else {
+            egui::Color32::from_rgb(153, 157, 166)
+        };
+        ui.colored_label(dot, "●");
+        ui.label(
+            egui::RichText::new(label)
+                .size(11.0)
+                .color(egui::Color32::from_rgb(186, 189, 197)),
+        );
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new(value)
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                );
+            },
+        );
+    });
 }
 
 impl Drop for ChatariumApp {
@@ -437,11 +658,37 @@ fn payload_preview(payload: &str) -> String {
     preview.replace('\n', " ↵ ")
 }
 
+fn configure_ui(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+    visuals.panel_fill = egui::Color32::from_rgb(23, 24, 29);
+    visuals.window_fill = egui::Color32::from_rgb(23, 24, 29);
+    visuals.extreme_bg_color = egui::Color32::from_rgb(16, 17, 20);
+    visuals.faint_bg_color = egui::Color32::from_rgb(30, 32, 37);
+    visuals.selection.bg_fill = egui::Color32::from_rgb(66, 87, 145);
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(42, 45, 53);
+    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(51, 55, 64);
+    visuals.widgets.active.bg_fill = egui::Color32::from_rgb(61, 66, 77);
+    ctx.set_visuals(visuals);
+
+    ctx.style_mut(|style| {
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(12.0, 7.0);
+    });
+}
+
 fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1180.0, 760.0])
+            .with_min_inner_size([860.0, 560.0]),
+        ..Default::default()
+    };
     eframe::run_native(
         "Chatarium",
         options,
-        Box::new(|_creation_context| Ok(Box::new(ChatariumApp::new()))),
+        Box::new(|creation_context| {
+            configure_ui(&creation_context.egui_ctx);
+            Ok(Box::new(ChatariumApp::new()))
+        }),
     )
 }
