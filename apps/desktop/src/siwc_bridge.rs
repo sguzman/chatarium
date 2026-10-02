@@ -132,6 +132,39 @@ fn bridge_worker(
     events: Sender<BridgeEvent>,
     repaint: egui::Context,
 ) {
+    let bootstrap = bootstrap_script_path();
+    let prepared = ProcessCommand::new("node")
+        .arg(&bootstrap)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match prepared {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            send_event(
+                &events,
+                &repaint,
+                BridgeEvent::RuntimeUnavailable(format!(
+                    "could not prepare the pinned Sign in with ChatGPT runtime (bootstrap exited with {status})"
+                )),
+            );
+            return;
+        }
+        Err(error) => {
+            send_event(
+                &events,
+                &repaint,
+                BridgeEvent::RuntimeUnavailable(format!(
+                    "could not run Node.js for the Sign in with ChatGPT runtime at {}: {error}",
+                    bootstrap.display()
+                )),
+            );
+            return;
+        }
+    }
+
     let script = bridge_script_path();
     let child = ProcessCommand::new("node")
         .arg(&script)
@@ -237,6 +270,10 @@ fn send_event(events: &Sender<BridgeEvent>, repaint: &egui::Context, event: Brid
     if events.send(event).is_ok() {
         repaint.request_repaint();
     }
+}
+
+fn bootstrap_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/siwc-bridge/bootstrap.mjs")
 }
 
 fn bridge_script_path() -> PathBuf {
