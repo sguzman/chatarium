@@ -111,7 +111,7 @@ struct ChatariumApp {
 }
 
 impl ChatariumApp {
-    fn new() -> Self {
+    fn new(repaint: &egui::Context) -> Self {
         let journal_path = default_journal_path();
         match JsonlEventStore::open(&journal_path) {
             Ok(store) => {
@@ -147,7 +147,7 @@ impl ChatariumApp {
                         notice_rx: Some(notice_rx),
                         worker: Some(worker),
                         status: startup_status,
-                        remote: siwc_bridge::BridgeRuntime::start(),
+                        remote: siwc_bridge::BridgeRuntime::start(repaint),
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
                         selected_model: None,
@@ -158,6 +158,7 @@ impl ChatariumApp {
                         commit_remote_intents: BTreeMap::new(),
                     },
                     Err(error) => Self::without_persistence(
+                        repaint,
                         journal_path,
                         draft,
                         events,
@@ -166,6 +167,7 @@ impl ChatariumApp {
                 }
             }
             Err(error) => Self::without_persistence(
+                repaint,
                 journal_path,
                 String::new(),
                 Vec::new(),
@@ -175,6 +177,7 @@ impl ChatariumApp {
     }
 
     fn without_persistence(
+        repaint: &egui::Context,
         journal_path: PathBuf,
         draft: String,
         events: Vec<EventEnvelope>,
@@ -197,7 +200,7 @@ impl ChatariumApp {
             notice_rx: None,
             worker: None,
             status,
-            remote: siwc_bridge::BridgeRuntime::start(),
+            remote: siwc_bridge::BridgeRuntime::start(repaint),
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
             selected_model: None,
@@ -1508,7 +1511,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|creation_context| {
             configure_ui(&creation_context.egui_ctx);
-            Ok(Box::new(ChatariumApp::new()))
+            Ok(Box::new(ChatariumApp::new(&creation_context.egui_ctx)))
         }),
     )
 }
