@@ -11,7 +11,35 @@ const devkitEntry = resolve(
   "vendor/openai-sign-in-with-chatgpt-devkit/packages/local/dist/index.js",
 );
 
+const credentialKeyPattern =
+  /^(?:access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie|cookies)$/i;
+
+function hasCredentialField(value) {
+  if (Array.isArray(value)) return value.some(hasCredentialField);
+  if (!value || typeof value !== "object") return false;
+
+  for (const [key, nested] of Object.entries(value)) {
+    if (credentialKeyPattern.test(key)) return true;
+    if (hasCredentialField(nested)) return true;
+  }
+  return false;
+}
+
 function emit(value) {
+  if (hasCredentialField(value)) {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "fatal",
+        error: {
+          code: "credential_boundary_violation",
+          message:
+            "The Sign in with ChatGPT runtime attempted to expose credential-bearing state. Chatarium stopped the bridge.",
+          retryable: false,
+        },
+      })}\n`,
+    );
+    process.exit(70);
+  }
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
