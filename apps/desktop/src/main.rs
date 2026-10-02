@@ -266,7 +266,11 @@ impl eframe::App for ChatariumApp {
                             egui::RichText::new(format!(
                                 "{} committed message{}",
                                 committed_messages.len(),
-                                if committed_messages.len() == 1 { "" } else { "s" }
+                                if committed_messages.len() == 1 {
+                                    ""
+                                } else {
+                                    "s"
+                                }
                             ))
                             .size(11.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -281,12 +285,7 @@ impl eframe::App for ChatariumApp {
                         .color(egui::Color32::from_rgb(112, 116, 126)),
                 );
                 ui.add_space(7.0);
-                status_row(
-                    ui,
-                    "Storage",
-                    self.draft_state(),
-                    self.persist_tx.is_some(),
-                );
+                status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
                 status_row(ui, "Remote", "not connected", false);
 
                 ui.add_space(18.0);
@@ -299,13 +298,10 @@ impl eframe::App for ChatariumApp {
                 .show(ui, |ui| {
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(format!(
-                            "journal\n{}",
-                            self.journal_path.display()
-                        ))
-                        .monospace()
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                        egui::RichText::new(format!("journal\n{}", self.journal_path.display()))
+                            .monospace()
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(126, 130, 139)),
                     );
                     ui.add_space(6.0);
                     ui.label(
@@ -350,23 +346,20 @@ impl eframe::App for ChatariumApp {
                         );
                     });
 
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            egui::Frame::default()
-                                .fill(egui::Color32::from_rgb(48, 42, 26))
-                                .corner_radius(egui::CornerRadius::same(999))
-                                .inner_margin(egui::Margin::symmetric(10, 5))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new("LOCAL ONLY")
-                                            .size(10.0)
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(225, 194, 108)),
-                                    );
-                                });
-                        },
-                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::Frame::default()
+                            .fill(egui::Color32::from_rgb(48, 42, 26))
+                            .corner_radius(egui::CornerRadius::same(12))
+                            .inner_margin(egui::Margin::symmetric(10, 5))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new("LOCAL ONLY")
+                                        .size(10.0)
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(225, 194, 108)),
+                                );
+                            });
+                    });
                 });
             });
 
@@ -386,10 +379,7 @@ impl eframe::App for ChatariumApp {
 
                 let response = egui::Frame::default()
                     .fill(composer_fill)
-                    .stroke(egui::Stroke::new(
-                        1.0,
-                        egui::Color32::from_rgb(54, 57, 66),
-                    ))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(54, 57, 66)))
                     .corner_radius(egui::CornerRadius::same(12))
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
@@ -418,30 +408,25 @@ impl eframe::App for ChatariumApp {
                         .color(egui::Color32::from_rgb(132, 136, 145)),
                     );
 
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            let can_commit = self.persist_tx.is_some()
-                                && self.commit_in_flight.is_none()
-                                && !self.draft.trim().is_empty();
-                            if ui
-                                .add_enabled(
-                                    can_commit,
-                                    egui::Button::new(
-                                        egui::RichText::new("Commit locally").strong(),
-                                    )
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let can_commit = self.persist_tx.is_some()
+                            && self.commit_in_flight.is_none()
+                            && !self.draft.trim().is_empty();
+                        if ui
+                            .add_enabled(
+                                can_commit,
+                                egui::Button::new(egui::RichText::new("Commit locally").strong())
                                     .min_size(egui::vec2(124.0, 34.0)),
-                                )
-                                .clicked()
-                            {
-                                self.commit_current_message();
-                            }
+                            )
+                            .clicked()
+                        {
+                            self.commit_current_message();
+                        }
 
-                            if self.commit_in_flight.is_some() {
-                                ui.spinner();
-                            }
-                        },
-                    );
+                        if self.commit_in_flight.is_some() {
+                            ui.spinner();
+                        }
+                    });
                 });
             });
 
@@ -532,16 +517,13 @@ fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
                 .size(11.0)
                 .color(egui::Color32::from_rgb(186, 189, 197)),
         );
-        ui.with_layout(
-            egui::Layout::right_to_left(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new(value)
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(126, 130, 139)),
-                );
-            },
-        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(value)
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(126, 130, 139)),
+            );
+        });
     });
 }
 
