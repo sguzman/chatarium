@@ -1,7 +1,8 @@
 //! Evidence-gated read-side protocol observations for P3.
 //!
-//! This module describes only the safe structural metadata that Flight Recorder
-//! v0.7.0 is allowed to expose. It deliberately does not interpret a read
+//! This module describes only the publication-safe structural metadata that Flight Recorder
+//! v0.7.x is allowed to expose. v0.7.2 additionally permits a tiny, explicitly approved C02
+//! query-literal grammar. It deliberately does not interpret a read
 //! response as a conversation list or conversation fetch until a committed
 //! controlled observation establishes that semantic baseline.
 
@@ -115,6 +116,116 @@ impl ReadMethod {
     }
 }
 
+
+/// Maximum decimal digits accepted for one publication-safe integer query literal.
+pub const MAX_SAFE_QUERY_INTEGER_DIGITS: usize = 10;
+
+/// Query keys whose literal values may be retained for the validated C02 resource shape.
+pub const APPROVED_C02_QUERY_KEYS: [&str; 2] = ["include_has_versions", "num_turns"];
+
+/// Publication-safe literal value observed for one approved C02 query occurrence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadQueryLiteral {
+    /// Present with an empty value.
+    Empty,
+    /// Lowercase ASCII boolean literal.
+    Boolean(bool),
+    /// Bounded ASCII integer text, preserved exactly.
+    Integer(String),
+}
+
+impl ReadQueryLiteral {
+    /// Parse the deliberately tiny value grammar allowed into public evidence.
+    pub fn from_safe_literal(value: &str) -> Result<Self, ReadObservationError> {
+        if value.is_empty() {
+            return Ok(Self::Empty);
+        }
+        if value == "true" {
+            return Ok(Self::Boolean(true));
+        }
+        if value == "false" {
+            return Ok(Self::Boolean(false));
+        }
+
+        let digits = value.strip_prefix('-').unwrap_or(value);
+        if digits.is_empty()
+            || digits.len() > MAX_SAFE_QUERY_INTEGER_DIGITS
+            || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(ReadObservationError::UnsafeQueryParameterLiteral);
+        }
+
+        Ok(Self::Integer(value.to_owned()))
+    }
+
+    /// Reconstruct the exact safe literal represented by this value.
+    #[must_use]
+    pub fn literal(&self) -> String {
+        match self {
+            Self::Empty => String::new(),
+            Self::Boolean(true) => "true".to_owned(),
+            Self::Boolean(false) => "false".to_owned(),
+            Self::Integer(value) => value.clone(),
+        }
+    }
+}
+
+/// One approved C02 query occurrence, preserving request order and duplicates.
+///
+/// A missing literal means the recorder observed the approved key but deliberately
+/// redacted an unsupported value shape rather than copying the raw value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadQueryParameterEvidence {
+    key: String,
+    literal: Option<ReadQueryLiteral>,
+}
+
+impl ReadQueryParameterEvidence {
+    /// Construct one occurrence whose value passed the publication-safe grammar.
+    pub fn known(
+        key: impl Into<String>,
+        literal: &str,
+    ) -> Result<Self, ReadObservationError> {
+        let key = key.into();
+        validate_approved_c02_query_key(&key)?;
+        Ok(Self {
+            key,
+            literal: Some(ReadQueryLiteral::from_safe_literal(literal)?),
+        })
+    }
+
+    /// Construct one occurrence whose raw value was deliberately not retained.
+    pub fn unsupported_redacted(
+        key: impl Into<String>,
+    ) -> Result<Self, ReadObservationError> {
+        let key = key.into();
+        validate_approved_c02_query_key(&key)?;
+        Ok(Self { key, literal: None })
+    }
+
+    /// Approved query-key name.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Safe literal when known; None is the explicit unsupported/redacted marker.
+    #[must_use]
+    pub const fn literal_evidence(&self) -> Option<&ReadQueryLiteral> {
+        self.literal.as_ref()
+    }
+}
+
+fn validate_approved_c02_query_key(key: &str) -> Result<(), ReadObservationError> {
+    if APPROVED_C02_QUERY_KEYS.contains(&key) {
+        Ok(())
+    } else {
+        Err(ReadObservationError::UnapprovedQueryParameterKey(
+            key.to_owned(),
+        ))
+    }
+}
+
 /// JSON top-level shape observed after structural reduction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonTopLevelType {
@@ -164,6 +275,10 @@ pub enum ReadObservationError {
     InvalidStatus(u16),
     EmptyQueryKey,
     DuplicateQueryKey(String),
+    UnapprovedQueryParameterKey(String),
+    UnsafeQueryParameterLiteral,
+    QueryParameterEvidenceOutsideC02Fetch,
+    QueryParameterKeyMissingFromQueryKeys(String),
     HeadCannotHaveBody,
     TopLevelTypeWithoutBody,
     TruncatedBodyCannotClaimTopLevelType,
@@ -199,6 +314,18 @@ impl fmt::Display for ReadObservationError {
             Self::DuplicateQueryKey(key) => {
                 write!(formatter, "duplicate read observation query key {key:?}")
             }
+            Self::UnapprovedQueryParameterKey(key) => {
+                write!(formatter, "query parameter key {key:?} is not approved for C02 literal evidence")
+            }
+            Self::UnsafeQueryParameterLiteral => {
+                write!(formatter, "query parameter literal is outside the publication-safe grammar")
+            }
+            Self::QueryParameterEvidenceOutsideC02Fetch => {
+                write!(formatter, "query parameter evidence is allowed only for C02 /backend-api/conversations/<id> reads")
+            }
+            Self::QueryParameterKeyMissingFromQueryKeys(key) => {
+                write!(formatter, "query parameter evidence key {key:?} is absent from query_keys")
+            }
             Self::HeadCannotHaveBody => write!(formatter, "HEAD observation cannot have a body"),
             Self::TopLevelTypeWithoutBody => {
                 write!(formatter, "top-level JSON type requires an observed body")
@@ -218,7 +345,8 @@ impl std::error::Error for ReadObservationError {}
 /// Safe structural metadata for one P3 read observation.
 ///
 /// No raw response body, title, message text, cookie, header, authorization
-/// value, query value, or request body belongs in this type.
+/// material, arbitrary query value, or request body belongs in this type. The
+/// optional C02 query evidence is restricted to two approved keys and a tiny safe grammar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadObservation {
     protocol_revision: String,
@@ -226,6 +354,7 @@ pub struct ReadObservation {
     method: ReadMethod,
     path: String,
     query_keys: Vec<String>,
+    query_parameters: Option<Vec<ReadQueryParameterEvidence>>,
     status: u16,
     content_type: String,
     truncated: bool,
@@ -241,6 +370,36 @@ impl ReadObservation {
         method: ReadMethod,
         path: impl Into<String>,
         query_keys: Vec<String>,
+        status: u16,
+        content_type: impl Into<String>,
+        truncated: bool,
+        body_present: bool,
+        top_level_type: Option<JsonTopLevelType>,
+    ) -> Result<Self, ReadObservationError> {
+        Self::new_with_query_parameters(
+            protocol_revision,
+            experiment,
+            method,
+            path,
+            query_keys,
+            None,
+            status,
+            content_type,
+            truncated,
+            body_present,
+            top_level_type,
+        )
+    }
+
+    /// Construct a read observation with optional ordered C02 query-value evidence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_query_parameters(
+        protocol_revision: impl Into<String>,
+        experiment: ReadExperiment,
+        method: ReadMethod,
+        path: impl Into<String>,
+        query_keys: Vec<String>,
+        query_parameters: Option<Vec<ReadQueryParameterEvidence>>,
         status: u16,
         content_type: impl Into<String>,
         truncated: bool,
@@ -277,6 +436,22 @@ impl ReadObservation {
         }
         let query_keys = unique.into_iter().collect::<Vec<_>>();
 
+        if let Some(parameters) = &query_parameters {
+            if experiment != ReadExperiment::OpenConversation
+                || path != "/backend-api/conversations/<id>"
+            {
+                return Err(ReadObservationError::QueryParameterEvidenceOutsideC02Fetch);
+            }
+            for parameter in parameters {
+                validate_approved_c02_query_key(parameter.key())?;
+                if !query_keys.iter().any(|key| key == parameter.key()) {
+                    return Err(ReadObservationError::QueryParameterKeyMissingFromQueryKeys(
+                        parameter.key().to_owned(),
+                    ));
+                }
+            }
+        }
+
         if method == ReadMethod::Head && body_present {
             return Err(ReadObservationError::HeadCannotHaveBody);
         }
@@ -293,6 +468,7 @@ impl ReadObservation {
             method,
             path,
             query_keys,
+            query_parameters,
             status,
             content_type,
             truncated,
@@ -329,6 +505,14 @@ impl ReadObservation {
     #[must_use]
     pub fn query_keys(&self) -> &[String] {
         &self.query_keys
+    }
+
+    /// Ordered approved C02 query occurrences when value-bearing evidence was captured.
+    ///
+    /// None means the historical observation did not capture query values.
+    #[must_use]
+    pub fn query_parameters(&self) -> Option<&[ReadQueryParameterEvidence]> {
+        self.query_parameters.as_deref()
     }
 
     #[must_use]
@@ -487,6 +671,105 @@ mod tests {
                 Some(JsonTopLevelType::Object),
             ),
             Err(ReadObservationError::EmptyQueryKey)
+        ));
+    }
+
+    #[test]
+    fn approved_c02_query_literals_preserve_order_duplicates_and_unknown_values() {
+        let parameters = vec![
+            ReadQueryParameterEvidence::known("include_has_versions", "true").unwrap(),
+            ReadQueryParameterEvidence::known("num_turns", "12").unwrap(),
+            ReadQueryParameterEvidence::known("num_turns", "12").unwrap(),
+            ReadQueryParameterEvidence::unsupported_redacted("num_turns").unwrap(),
+        ];
+        let observation = ReadObservation::new_with_query_parameters(
+            "rev",
+            ReadExperiment::OpenConversation,
+            ReadMethod::Get,
+            "/backend-api/conversations/<id>",
+            vec!["num_turns".to_owned(), "include_has_versions".to_owned()],
+            Some(parameters.clone()),
+            200,
+            "application/json",
+            false,
+            true,
+            Some(JsonTopLevelType::Object),
+        )
+        .unwrap();
+
+        assert_eq!(observation.query_parameters(), Some(parameters.as_slice()));
+        assert_eq!(
+            observation.query_parameters().unwrap()[0]
+                .literal_evidence()
+                .unwrap()
+                .literal(),
+            "true"
+        );
+        assert_eq!(
+            observation.query_parameters().unwrap()[1]
+                .literal_evidence()
+                .unwrap()
+                .literal(),
+            "12"
+        );
+        assert!(
+            observation.query_parameters().unwrap()[3]
+                .literal_evidence()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn query_literal_grammar_is_deliberately_tiny() {
+        for literal in ["", "true", "false", "0", "-12", "0007", "1234567890"] {
+            assert!(ReadQueryParameterEvidence::known("num_turns", literal).is_ok());
+        }
+        for literal in ["TRUE", "+1", "1.0", "1e3", "12345678901", "secret-value"] {
+            assert!(matches!(
+                ReadQueryParameterEvidence::known("num_turns", literal),
+                Err(ReadObservationError::UnsafeQueryParameterLiteral)
+            ));
+        }
+        assert!(matches!(
+            ReadQueryParameterEvidence::known("other", "1"),
+            Err(ReadObservationError::UnapprovedQueryParameterKey(_))
+        ));
+    }
+
+    #[test]
+    fn query_parameter_evidence_is_c02_resource_only_and_must_match_query_keys() {
+        let parameter = ReadQueryParameterEvidence::known("num_turns", "2").unwrap();
+        assert!(matches!(
+            ReadObservation::new_with_query_parameters(
+                "rev",
+                ReadExperiment::ConversationList,
+                ReadMethod::Get,
+                "/backend-api/conversations/<id>",
+                vec!["num_turns".to_owned()],
+                Some(vec![parameter.clone()]),
+                200,
+                "application/json",
+                false,
+                true,
+                Some(JsonTopLevelType::Object),
+            ),
+            Err(ReadObservationError::QueryParameterEvidenceOutsideC02Fetch)
+        ));
+        assert!(matches!(
+            ReadObservation::new_with_query_parameters(
+                "rev",
+                ReadExperiment::OpenConversation,
+                ReadMethod::Get,
+                "/backend-api/conversations/<id>",
+                vec![],
+                Some(vec![parameter]),
+                200,
+                "application/json",
+                false,
+                true,
+                Some(JsonTopLevelType::Object),
+            ),
+            Err(ReadObservationError::QueryParameterKeyMissingFromQueryKeys(_))
         ));
     }
 
