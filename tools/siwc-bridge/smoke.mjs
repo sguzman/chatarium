@@ -75,7 +75,7 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
       if (!requestedSession) {
         requestedSession = true;
         child.stdin.write(
-          JSON.stringify({ type: "session", request_id: "smoke-session" }) + "\\n",
+          JSON.stringify({ type: "session", request_id: "smoke-session" }) + "\n",
         );
       }
       return;
