@@ -205,8 +205,7 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
 }
 
 fn bridge_script_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tools/siwc-bridge/bridge.mjs")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/siwc-bridge/bridge.mjs")
 }
 
 fn command_json(command: BridgeCommand) -> Value {
@@ -260,10 +259,7 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
                 return Some(BridgeEvent::Session(session));
             }
             if let Some(models) = result.get("models").and_then(Value::as_array) {
-                let models = models
-                    .iter()
-                    .filter_map(parse_model)
-                    .collect::<Vec<_>>();
+                let models = models.iter().filter_map(parse_model).collect::<Vec<_>>();
                 return Some(BridgeEvent::Models(models));
             }
             if let Some(text) = result.get("text").and_then(Value::as_str) {
@@ -381,10 +377,8 @@ mod tests {
             }])
         );
 
-        let delta = parse_bridge_event(
-            r#"{"type":"delta","request_id":"turn-1","delta":"hello"}"#,
-        )
-        .unwrap();
+        let delta = parse_bridge_event(r#"{"type":"delta","request_id":"turn-1","delta":"hello"}"#)
+            .unwrap();
         assert_eq!(
             delta,
             BridgeEvent::Delta {
