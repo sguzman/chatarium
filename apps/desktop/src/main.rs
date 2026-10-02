@@ -105,6 +105,7 @@ struct ChatariumApp {
     remote_models: Vec<siwc_bridge::Model>,
     selected_model: Option<String>,
     remote_status: String,
+    remote_runtime_ready: bool,
     sign_in_pending: bool,
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
@@ -167,6 +168,7 @@ impl ChatariumApp {
                         remote_models: Vec::new(),
                         selected_model: None,
                         remote_status: "starting sign-in runtime…".to_owned(),
+                        remote_runtime_ready: false,
                         sign_in_pending: false,
                         pending_remote_turn: None,
                         active_remote_turn: None,
@@ -220,6 +222,7 @@ impl ChatariumApp {
             remote_models: Vec::new(),
             selected_model: None,
             remote_status: "starting sign-in runtime…".to_owned(),
+            remote_runtime_ready: false,
             sign_in_pending: false,
             pending_remote_turn: None,
             active_remote_turn: None,
@@ -459,8 +462,14 @@ impl ChatariumApp {
         for notice in self.remote.drain() {
             match notice {
                 siwc_bridge::BridgeEvent::Ready => {
+                    self.remote_runtime_ready = true;
                     self.remote_status = "sign-in runtime ready".to_owned();
-                    let _ = self.remote.send(siwc_bridge::BridgeCommand::RefreshSession);
+                    if let Err(error) =
+                        self.remote.send(siwc_bridge::BridgeCommand::RefreshSession)
+                    {
+                        self.remote_runtime_ready = false;
+                        self.remote_status = error;
+                    }
                 }
                 siwc_bridge::BridgeEvent::Session(session) => {
                     self.sign_in_pending = session.status == "connecting";
@@ -681,6 +690,7 @@ impl ChatariumApp {
                     }
                 }
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
+                    self.remote_runtime_ready = false;
                     self.sign_in_pending = false;
                     if let Some(active) = self.active_remote_turn.take() {
                         let payload = remote_turn_payload(
@@ -705,6 +715,9 @@ impl ChatariumApp {
     }
 
     fn start_chatgpt_sign_in(&mut self) {
+        if !self.remote_runtime_ready {
+            return;
+        }
         self.sign_in_pending = true;
         self.remote_status = "opening ChatGPT sign-in…".to_owned();
         if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::SignIn) {
@@ -819,6 +832,8 @@ impl eframe::App for ChatariumApp {
                         "connected"
                     } else if self.sign_in_pending {
                         "connecting…"
+                    } else if !self.remote_runtime_ready {
+                        "runtime unavailable"
                     } else {
                         "not connected"
                     },
@@ -865,7 +880,7 @@ impl eframe::App for ChatariumApp {
                 } else {
                     if ui
                         .add_enabled(
-                            !self.sign_in_pending,
+                            self.remote_runtime_ready && !self.sign_in_pending,
                             egui::Button::new(
                                 egui::RichText::new("Continue with ChatGPT").strong(),
                             )
