@@ -1373,9 +1373,7 @@ fn projected_working_draft(events: &[EventEnvelope]) -> String {
     }
 }
 
-fn recover_interrupted_remote_turns(
-    store: &mut impl EventStore,
-) -> Result<usize, String> {
+fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize, String> {
     let mut authored_turns = HashSet::new();
     for event in store.events() {
         let Some(decoded) = decode_user_message_commit(event)? else {
@@ -1864,26 +1862,14 @@ mod tests {
             .append_scoped(
                 Some(local_turn_scope(turn_id)),
                 EventKind::DispatchAttempted,
-                remote_turn_payload(
-                    turn_id,
-                    &turn_id.to_string(),
-                    Some("model"),
-                    None,
-                    None,
-                ),
+                remote_turn_payload(turn_id, &turn_id.to_string(), Some("model"), None, None),
             )
             .unwrap();
         store
             .append_scoped(
                 Some(local_turn_scope(turn_id)),
                 EventKind::RemoteAcceptanceObserved,
-                remote_turn_payload(
-                    turn_id,
-                    &turn_id.to_string(),
-                    None,
-                    None,
-                    Some("accepted"),
-                ),
+                remote_turn_payload(turn_id, &turn_id.to_string(), None, None, Some("accepted")),
             )
             .unwrap();
         store
@@ -1955,10 +1941,12 @@ mod tests {
         }
 
         assert_eq!(recover_interrupted_remote_turns(&mut store).unwrap(), 0);
-        assert!(!store
-            .events()
-            .iter()
-            .any(|event| event.kind == EventKind::TransportInterrupted));
+        assert!(
+            !store
+                .events()
+                .iter()
+                .any(|event| event.kind == EventKind::TransportInterrupted)
+        );
     }
 
     #[test]
