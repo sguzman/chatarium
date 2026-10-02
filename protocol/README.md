@@ -82,6 +82,8 @@ The parser also supports exact identity correlation: a caller may provide the re
 
 The committed sanitized C02 fixture is used as the parser regression source. Tests materialize its typed placeholders into deterministic non-private values at test time, so the repository exercises the observed structure without committing real conversation content.
 
+The successful 2026-10-01.001 fixture was captured with Flight Recorder v0.7.1 and therefore establishes only the query-key names `include_has_versions` and `num_turns`; their values remain unknown. Flight Recorder v0.7.2 introduces a narrowly approved query-evidence channel for a future C02 run. Only those two keys on an exact conversation-resource GET/HEAD may retain occurrence-ordered literals, and only empty/lowercase-boolean/bounded-decimal forms are publishable. Unsupported shapes become explicit redacted markers. The corpus validator, fixture importer, typed read model, and durable V3 audit all enforce the same boundary so no later implementation can retroactively invent values for the v0.7.1 observation.
+
 
 ## Corpus validation
 
