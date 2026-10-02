@@ -18,6 +18,8 @@ jobs:
         run: |
           node --check tools/siwc-bridge/bridge.mjs
           node --check tools/siwc-bridge/bootstrap.mjs
+      - name: Build pinned Sign in with ChatGPT DevKit
+        run: node tools/siwc-bridge/bootstrap.mjs
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check
