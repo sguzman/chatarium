@@ -4,7 +4,10 @@
 //! read_responses index explicitly after protocol evidence has been reviewed.
 
 use chatarium_core::RemoteReadObservationId;
-use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
+use chatarium_protocol::read::{
+    JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation, ReadQueryParameter,
+    ReadQueryValue,
+};
 use chatarium_store::remote_read_audit::{
     RemoteReadObservationProvenance, record_remote_read_observation_from_fixture,
     replay_remote_read_audit,
@@ -24,6 +27,7 @@ const ALLOWED_READ_FIELDS: &[&str] = &[
     "method",
     "path",
     "query_keys",
+    "query_parameters",
     "status",
     "content_type",
     "captured_bytes",
@@ -174,6 +178,7 @@ fn observation_from_fixture(
     })?;
     let path = required_string(read, "path")?.to_owned();
     let query_keys = optional_string_array(read, "query_keys")?;
+    let query_parameters = optional_query_parameters(read, selected_index)?;
     let status = required_u16(read, "status")?;
     let content_type = required_string(read, "content_type")?.to_owned();
     let truncated = optional_bool(read, "truncated")?.unwrap_or(false);
@@ -201,12 +206,13 @@ fn observation_from_fixture(
     }
     let top_level_type = explicit_top_level_type.or(derived_top_level_type);
 
-    ReadObservation::new(
+    ReadObservation::new_with_query_parameters(
         protocol_revision,
         experiment,
         method,
         path,
         query_keys,
+        query_parameters,
         status,
         content_type,
         truncated,
@@ -247,12 +253,91 @@ fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
                 ));
             }
         }
+        if let Some(parameters) = read.get("query_parameters") {
+            validate_public_query_parameters(parameters, index)?;
+        }
         if let Some(body) = read.get("body") {
             validate_placeholder_body(body, &format!("/read_responses/{index}/body"))?;
         }
     }
 
     Ok(())
+}
+
+fn validate_public_query_parameters(value: &Value, read_index: usize) -> Result<(), String> {
+    let parameters = value.as_array().ok_or_else(|| {
+        format!("read response {read_index} query_parameters must be an array")
+    })?;
+    for parameter in parameters {
+        let object = parameter.as_object().ok_or_else(|| {
+            format!("read response {read_index} query parameter must be an object")
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "kind" | "value"))
+        {
+            return Err(format!(
+                "read response {read_index} query parameter contains unsupported field"
+            ));
+        }
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!("read response {read_index} query parameter is missing string key")
+        })?;
+        if !matches!(key, "include_has_versions" | "num_turns") {
+            return Err(format!(
+                "read response {read_index} query parameter uses unapproved key"
+            ));
+        }
+        let kind = object.get("kind").and_then(Value::as_str).ok_or_else(|| {
+            format!("read response {read_index} query parameter is missing string kind")
+        })?;
+        let raw = object.get("value");
+        match kind {
+            "empty" if raw.and_then(Value::as_str) == Some("") => {}
+            "boolean" if matches!(raw.and_then(Value::as_str), Some("true" | "false")) => {}
+            "integer"
+                if raw
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_safe_query_integer) => {}
+            "redacted" if raw.is_none() => {}
+            "empty" | "boolean" | "integer" | "redacted" => {
+                return Err(format!(
+                    "read response {read_index} query parameter has invalid safe value evidence"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "read response {read_index} query parameter has unsupported kind"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_safe_query_integer(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 11 || !bytes.is_ascii() {
+        return false;
+    }
+    let digits = if bytes[0] == b'-' {
+        if bytes.len() == 1 {
+            return false;
+        }
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    if digits.len() > 10 || !digits.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    if digits.len() > 1 && digits[0] == b'0' {
+        return false;
+    }
+    if bytes[0] == b'-' && digits == b"0" {
+        return false;
+    }
+    true
 }
 
 fn validate_placeholder_body(value: &Value, pointer: &str) -> Result<(), String> {
@@ -335,6 +420,60 @@ fn optional_bool(value: &Value, field: &str) -> Result<Option<bool>, String> {
             "selected read response field {field:?} must be boolean when present"
         )),
     }
+}
+
+fn optional_query_parameters(
+    value: &Value,
+    read_index: usize,
+) -> Result<Option<Vec<ReadQueryParameter>>, String> {
+    let Some(raw_parameters) = value.get("query_parameters") else {
+        return Ok(None);
+    };
+    let parameters = raw_parameters.as_array().ok_or_else(|| {
+        format!("read response {read_index} query_parameters must be an array")
+    })?;
+    parameters
+        .iter()
+        .map(|parameter| {
+            let object = parameter.as_object().ok_or_else(|| {
+                format!("read response {read_index} query parameter must be an object")
+            })?;
+            let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+                format!("read response {read_index} query parameter is missing key")
+            })?;
+            let kind = object.get("kind").and_then(Value::as_str).ok_or_else(|| {
+                format!("read response {read_index} query parameter is missing kind")
+            })?;
+            let typed = match kind {
+                "empty" => ReadQueryValue::Empty,
+                "boolean" => match object.get("value").and_then(Value::as_str) {
+                    Some("true") => ReadQueryValue::Boolean(true),
+                    Some("false") => ReadQueryValue::Boolean(false),
+                    _ => {
+                        return Err(format!(
+                            "read response {read_index} has invalid boolean query evidence"
+                        ));
+                    }
+                },
+                "integer" => {
+                    let raw = object.get("value").and_then(Value::as_str).ok_or_else(|| {
+                        format!(
+                            "read response {read_index} is missing integer query evidence"
+                        )
+                    })?;
+                    ReadQueryValue::Integer(raw.to_owned())
+                }
+                "redacted" => ReadQueryValue::Redacted,
+                _ => {
+                    return Err(format!(
+                        "read response {read_index} query parameter has unsupported kind"
+                    ));
+                }
+            };
+            Ok(ReadQueryParameter::new(key, typed))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn optional_string_array(value: &Value, field: &str) -> Result<Vec<String>, String> {
@@ -549,12 +688,88 @@ mod tests {
             "/backend-api/conversations/<id>"
         );
         assert_eq!(records[0].observation.status(), 200);
+        assert_eq!(records[0].observation.query_parameters(), None);
         assert_eq!(
             records[0].compatibility,
             Compatibility::ValidatedAgainst("2026-10-01.001".to_owned())
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sanitized_c02_query_parameters_import_and_replay_exactly() {
+        let dir = temp_dir("c02-query-values");
+        let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "snapshot": "2026-10-01.001",
+            "experiment": "C02-open-conversation",
+            "status": "observed_success",
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations/<id>",
+                "query_keys": ["include_has_versions", "num_turns"],
+                "query_parameters": [
+                    {"key": "include_has_versions", "kind": "boolean", "value": "true"},
+                    {"key": "num_turns", "kind": "integer", "value": "33"},
+                    {"key": "num_turns", "kind": "redacted"}
+                ],
+                "status": 200,
+                "content_type": "application/json",
+                "body": {"messages": []}
+            }]
+        }))
+        .unwrap();
+
+        let summary = import_bytes(&bytes, 0, &dir).unwrap();
+        assert!(summary.appended);
+        let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+        let parameters = records[0].observation.query_parameters().unwrap();
+        assert_eq!(parameters.len(), 3);
+        assert_eq!(parameters[0].key(), "include_has_versions");
+        assert!(matches!(parameters[0].value(), ReadQueryValue::Boolean(true)));
+        assert_eq!(parameters[1].key(), "num_turns");
+        assert!(matches!(
+            parameters[1].value(),
+            ReadQueryValue::Integer(value) if value == "33"
+        ));
+        assert!(matches!(parameters[2].value(), ReadQueryValue::Redacted));
+        assert!(store.events()[0].payload.contains("approved_query_parameters"));
+        assert!(!store.events()[0].payload.contains("query_values"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unsafe_query_parameter_evidence_fails_before_archive_without_echoing_value() {
+        for parameter in [
+            serde_json::json!({"key": "secret_key", "kind": "integer", "value": "33"}),
+            serde_json::json!({"key": "num_turns", "kind": "integer", "value": "PRIVATE-QUERY-SECRET"}),
+            serde_json::json!({"key": "num_turns", "kind": "redacted", "value": "PRIVATE-QUERY-SECRET"}),
+        ] {
+            let dir = temp_dir("unsafe-query-values");
+            let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+                "snapshot": "2026-10-01.001",
+                "experiment": "C02-open-conversation",
+                "status": "observed_success",
+                "read_responses": [{
+                    "method": "GET",
+                    "path": "/backend-api/conversations/<id>",
+                    "query_keys": ["include_has_versions", "num_turns", "secret_key"],
+                    "query_parameters": [parameter],
+                    "status": 200,
+                    "content_type": "application/json",
+                    "body": {"messages": []}
+                }]
+            }))
+            .unwrap();
+
+            let error = import_bytes(&bytes, 0, &dir).unwrap_err();
+            assert!(!error.contains("PRIVATE-QUERY-SECRET"));
+            assert!(!error.contains("secret_key"));
+            assert!(!dir.join("imports").exists());
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     #[test]
