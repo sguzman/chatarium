@@ -1517,6 +1517,15 @@ fn main() -> eframe::Result<()> {
 mod tests {
     use super::*;
 
+    fn persist_notice_name(notice: &PersistNotice) -> &'static str {
+        match notice {
+            PersistNotice::DraftSaved { .. } => "draft_saved",
+            PersistNotice::MessageCommitted { .. } => "message_committed",
+            PersistNotice::TurnEventAppended { .. } => "turn_event_appended",
+            PersistNotice::Failed { .. } => "failed",
+        }
+    }
+
     fn imported_event(
         sequence: u64,
         kind: EventKind,
@@ -1651,6 +1660,97 @@ mod tests {
         ];
 
         assert_eq!(projected_working_draft(&events), "");
+    }
+
+    #[test]
+    fn persistence_worker_orders_commit_before_remote_dispatch() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-desktop-remote-order-{}-{nonce}.jsonl",
+            std::process::id()
+        ));
+        let store = JsonlEventStore::open(&path).expect("open journal");
+        let (command_tx, command_rx) = mpsc::channel();
+        let (notice_tx, notice_rx) = mpsc::channel();
+        let worker = thread::spawn(move || persistence_worker(store, command_rx, notice_tx));
+
+        let message = AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "durable before dispatch",
+        );
+        command_tx
+            .send(PersistCommand::CommitMessage {
+                request_id: 1,
+                message: message.clone(),
+            })
+            .unwrap();
+
+        let commit_event = match notice_rx.recv().unwrap() {
+            PersistNotice::MessageCommitted { event, .. } => event,
+            other => panic!(
+                "expected commit notice, got {}",
+                persist_notice_name(&other)
+            ),
+        };
+
+        command_tx
+            .send(PersistCommand::AppendTurnEvent {
+                turn_id: message.turn_id,
+                kind: EventKind::DispatchAttempted,
+                payload: remote_turn_payload(
+                    message.turn_id,
+                    "request",
+                    Some("model"),
+                    None,
+                    None,
+                ),
+            })
+            .unwrap();
+
+        let dispatch_event = match notice_rx.recv().unwrap() {
+            PersistNotice::TurnEventAppended { event, kind, .. } => {
+                assert_eq!(kind, EventKind::DispatchAttempted);
+                event
+            }
+            other => panic!(
+                "expected turn-event notice, got {}",
+                persist_notice_name(&other)
+            ),
+        };
+
+        assert!(commit_event.sequence < dispatch_event.sequence);
+        assert_eq!(
+            commit_event.scope,
+            Some(local_turn_scope(message.turn_id))
+        );
+        assert_eq!(
+            dispatch_event.scope,
+            Some(local_turn_scope(message.turn_id))
+        );
+
+        command_tx.send(PersistCommand::Shutdown).unwrap();
+        worker.join().unwrap();
+
+        let reopened = JsonlEventStore::open(&path).expect("reopen journal");
+        let scoped = reopened
+            .events()
+            .iter()
+            .filter(|event| event.scope == Some(local_turn_scope(message.turn_id)))
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        let evidence = TurnEvidence::replay_event_kinds(scoped).expect("replay evidence");
+        assert_eq!(evidence.local, chatarium_core::LocalEvidence::MessageCommitted);
+        assert_eq!(evidence.remote, chatarium_core::RemoteEvidence::Dispatching);
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
