@@ -621,22 +621,52 @@ impl ChatariumApp {
                                 .active_remote_turn
                                 .take()
                                 .expect("matched active remote turn");
-                            let kind = if active.observed_output
-                                || !remote_error_is_observed_failure(&error)
-                            {
-                                EventKind::TransportInterrupted
+                            let detail = format!("{}: {}", error.code, error.message);
+                            if remote_error_is_observed_failure(&error) {
+                                let failure = remote_turn_payload(
+                                    active.turn_id,
+                                    request_id,
+                                    None,
+                                    (!active.cumulative_text.is_empty())
+                                        .then_some(active.cumulative_text.as_str()),
+                                    Some(&detail),
+                                );
+                                let _ = self.queue_turn_event(
+                                    active.turn_id,
+                                    EventKind::RemoteFailureObserved,
+                                    failure,
+                                );
+                                if active.observed_output {
+                                    let interrupted = remote_turn_payload(
+                                        active.turn_id,
+                                        request_id,
+                                        None,
+                                        Some(active.cumulative_text.as_str()),
+                                        Some(
+                                            "assistant output ended before completion after a definitive remote failure",
+                                        ),
+                                    );
+                                    let _ = self.queue_turn_event(
+                                        active.turn_id,
+                                        EventKind::TransportInterrupted,
+                                        interrupted,
+                                    );
+                                }
                             } else {
-                                EventKind::RemoteFailureObserved
-                            };
-                            let payload = remote_turn_payload(
-                                active.turn_id,
-                                request_id,
-                                None,
-                                (!active.cumulative_text.is_empty())
-                                    .then_some(active.cumulative_text.as_str()),
-                                Some(&format!("{}: {}", error.code, error.message)),
-                            );
-                            let _ = self.queue_turn_event(active.turn_id, kind, payload);
+                                let interrupted = remote_turn_payload(
+                                    active.turn_id,
+                                    request_id,
+                                    None,
+                                    (!active.cumulative_text.is_empty())
+                                        .then_some(active.cumulative_text.as_str()),
+                                    Some(&detail),
+                                );
+                                let _ = self.queue_turn_event(
+                                    active.turn_id,
+                                    EventKind::TransportInterrupted,
+                                    interrupted,
+                                );
+                            }
                             handled_turn = true;
                         }
                     }
@@ -1314,6 +1344,11 @@ fn remote_error_is_observed_failure(error: &siwc_bridge::BridgeError) -> bool {
                 | "invalid_token"
                 | "invalid_api_key"
                 | "invalid_client"
+                | "sign_in_required"
+                | "sharing_not_enabled"
+                | "refresh_not_ready"
+                | "connection_busy"
+                | "response_incomplete"
         )
 }
 
@@ -2103,6 +2138,22 @@ mod tests {
             &siwc_bridge::BridgeError {
                 code: "model_not_found".to_owned(),
                 message: "bad model".to_owned(),
+                retryable: false,
+                status: None,
+            }
+        ));
+        assert!(remote_error_is_observed_failure(
+            &siwc_bridge::BridgeError {
+                code: "response_incomplete".to_owned(),
+                message: "server reported incomplete".to_owned(),
+                retryable: true,
+                status: None,
+            }
+        ));
+        assert!(remote_error_is_observed_failure(
+            &siwc_bridge::BridgeError {
+                code: "sharing_not_enabled".to_owned(),
+                message: "sharing disabled before request".to_owned(),
                 retryable: false,
                 status: None,
             }
