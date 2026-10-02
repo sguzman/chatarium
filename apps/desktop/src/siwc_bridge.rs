@@ -179,18 +179,30 @@ fn bridge_worker(
     let prepared = ProcessCommand::new("node")
         .arg(&bootstrap)
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
 
     match prepared {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = [stdout.trim(), stderr.trim()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let detail = if detail.is_empty() {
+                format!("bootstrap exited with {}", output.status)
+            } else {
+                detail
+            };
             send_event(
                 &events,
                 &repaint,
                 BridgeEvent::RuntimeUnavailable(format!(
-                    "could not prepare the pinned Sign in with ChatGPT runtime (bootstrap exited with {status})"
+                    "could not prepare the pinned Sign in with ChatGPT runtime: {detail}"
                 )),
             );
             return;
