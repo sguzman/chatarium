@@ -1,3 +1,4 @@
+use eframe::egui;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -86,12 +87,13 @@ pub struct BridgeRuntime {
 
 impl BridgeRuntime {
     #[must_use]
-    pub fn start() -> Self {
+    pub fn start(repaint: &egui::Context) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
+        let repaint = repaint.clone();
         let worker = thread::Builder::new()
             .name("chatarium-siwc-bridge".to_owned())
-            .spawn(move || bridge_worker(command_rx, event_tx))
+            .spawn(move || bridge_worker(command_rx, event_tx, repaint))
             .ok();
 
         Self {
@@ -125,7 +127,11 @@ impl Drop for BridgeRuntime {
     }
 }
 
-fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>) {
+fn bridge_worker(
+    commands: Receiver<BridgeCommand>,
+    events: Sender<BridgeEvent>,
+    repaint: egui::Context,
+) {
     let script = bridge_script_path();
     let child = ProcessCommand::new("node")
         .arg(&script)
@@ -137,7 +143,7 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
     let mut child = match child {
         Ok(child) => child,
         Err(error) => {
-            let _ = events.send(BridgeEvent::RuntimeUnavailable(format!(
+            send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(format!(
                 "could not start Node.js Sign in with ChatGPT bridge at {}: {error}",
                 script.display()
             )));
@@ -146,7 +152,7 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
     };
 
     let Some(stdout) = child.stdout.take() else {
-        let _ = events.send(BridgeEvent::RuntimeUnavailable(
+        send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(
             "Sign in with ChatGPT bridge did not expose stdout".to_owned(),
         ));
         let _ = child.kill();
@@ -154,7 +160,7 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
         return;
     };
     let Some(mut stdin) = child.stdin.take() else {
-        let _ = events.send(BridgeEvent::RuntimeUnavailable(
+        send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(
             "Sign in with ChatGPT bridge did not expose stdin".to_owned(),
         ));
         let _ = child.kill();
@@ -163,6 +169,7 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
     };
 
     let reader_events = events.clone();
+    let reader_repaint = repaint.clone();
     let reader = thread::Builder::new()
         .name("chatarium-siwc-reader".to_owned())
         .spawn(move || {
@@ -171,11 +178,11 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
                 match line {
                     Ok(line) => {
                         if let Some(event) = parse_bridge_event(&line) {
-                            let _ = reader_events.send(event);
+                            send_event(&reader_events, &reader_repaint, event);
                         }
                     }
                     Err(error) => {
-                        let _ = reader_events.send(BridgeEvent::RuntimeUnavailable(format!(
+                        send_event(&reader_events, &reader_repaint, BridgeEvent::RuntimeUnavailable(format!(
                             "Sign in with ChatGPT bridge output failed: {error}"
                         )));
                         break;
@@ -191,7 +198,7 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
 
         let value = command_json(command);
         if writeln!(stdin, "{value}").is_err() || stdin.flush().is_err() {
-            let _ = events.send(BridgeEvent::RuntimeUnavailable(
+            send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(
                 "Sign in with ChatGPT bridge input closed".to_owned(),
             ));
             break;
@@ -203,6 +210,16 @@ fn bridge_worker(commands: Receiver<BridgeCommand>, events: Sender<BridgeEvent>)
     let _ = child.wait();
     if let Ok(reader) = reader {
         let _ = reader.join();
+    }
+}
+
+fn send_event(
+    events: &Sender<BridgeEvent>,
+    repaint: &egui::Context,
+    event: BridgeEvent,
+) {
+    if events.send(event).is_ok() {
+        repaint.request_repaint();
     }
 }
 
