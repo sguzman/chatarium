@@ -1160,8 +1160,7 @@ impl Drop for ChatariumApp {
                     active.turn_id,
                     &active.request_id,
                     None,
-                    (!active.cumulative_text.is_empty())
-                        .then_some(active.cumulative_text.as_str()),
+                    (!active.cumulative_text.is_empty()).then_some(active.cumulative_text.as_str()),
                     Some("Chatarium closed while the remote turn was active"),
                 );
                 let _ = sender.send(PersistCommand::AppendTurnEvent {
@@ -1679,26 +1678,14 @@ mod tests {
             at_unix_ms: 1,
             scope: Some(local_turn_scope(turn_id)),
             kind: EventKind::AssistantSnapshotObserved,
-            payload: remote_turn_payload(
-                turn_id,
-                "request",
-                None,
-                Some("hel"),
-                Some("snapshot"),
-            ),
+            payload: remote_turn_payload(turn_id, "request", None, Some("hel"), Some("snapshot")),
         };
         let second = EventEnvelope {
             sequence: 2,
             at_unix_ms: 2,
             scope: Some(local_turn_scope(turn_id)),
             kind: EventKind::AssistantCompletionObserved,
-            payload: remote_turn_payload(
-                turn_id,
-                "request",
-                None,
-                Some("hello"),
-                Some("complete"),
-            ),
+            payload: remote_turn_payload(turn_id, "request", None, Some("hello"), Some("complete")),
         };
 
         let projected = projected_display_messages(&[first, second]);
@@ -1710,24 +1697,29 @@ mod tests {
 
     #[test]
     fn only_positive_http_or_typed_api_errors_count_as_observed_failure() {
-        assert!(remote_error_is_observed_failure(&siwc_bridge::BridgeError {
-            code: "api_error".to_owned(),
-            message: "rejected".to_owned(),
-            retryable: false,
-            status: Some(429),
-        }));
-        assert!(remote_error_is_observed_failure(&siwc_bridge::BridgeError {
-            code: "model_not_found".to_owned(),
-            message: "bad model".to_owned(),
-            retryable: false,
-            status: None,
-        }));
-        assert!(!remote_error_is_observed_failure(&siwc_bridge::BridgeError {
-            code: "network_error".to_owned(),
-            message: "socket closed".to_owned(),
-            retryable: true,
-            status: None,
-        }));
+        assert!(remote_error_is_observed_failure(
+            &siwc_bridge::BridgeError {
+                code: "api_error".to_owned(),
+                message: "rejected".to_owned(),
+                retryable: false,
+                status: Some(429),
+            }
+        ));
+        assert!(remote_error_is_observed_failure(
+            &siwc_bridge::BridgeError {
+                code: "model_not_found".to_owned(),
+                message: "bad model".to_owned(),
+                retryable: false,
+                status: None,
+            }
+        ));
+        assert!(!remote_error_is_observed_failure(
+            &siwc_bridge::BridgeError {
+                code: "network_error".to_owned(),
+                message: "socket closed".to_owned(),
+                retryable: true,
+                status: None,
+            }
+        ));
     }
-
 }
