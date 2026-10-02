@@ -134,9 +134,9 @@ fn bridge_worker(
 ) {
     let node_version = ProcessCommand::new("node").arg("--version").output();
     let node_version = match node_version {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_owned(),
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
         Ok(output) => {
             send_event(
                 &events,
