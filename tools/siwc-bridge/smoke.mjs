@@ -16,10 +16,14 @@ const lines = createInterface({
   crlfDelay: Infinity,
 });
 
+let ready = false;
+let requestedSession = false;
 const result = await new Promise((resolvePromise, rejectPromise) => {
   const timeout = setTimeout(() => {
     lines.close();
-    rejectPromise(new Error("Sign in with ChatGPT bridge did not become ready."));
+    rejectPromise(
+      new Error("Sign in with ChatGPT bridge did not complete startup smoke."),
+    );
   }, 10_000);
 
   child.once("error", (error) => {
@@ -39,6 +43,20 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
       return;
     }
 
+    const serialized = JSON.stringify(value);
+    if (
+      /access[_-]?token|refresh[_-]?token|id[_-]?token|authorization/i.test(
+        serialized,
+      )
+    ) {
+      clearTimeout(timeout);
+      lines.close();
+      rejectPromise(
+        new Error("Sign in with ChatGPT bridge exposed credential-shaped output."),
+      );
+      return;
+    }
+
     // The official DevKit subscription immediately publishes its initial
     // disconnected session snapshot before Chatarium emits its own ready marker.
     if (value?.type === "session") return;
@@ -53,9 +71,29 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
     }
 
     if (value?.type === "ready" && value?.protocol === 1) {
+      ready = true;
+      if (!requestedSession) {
+        requestedSession = true;
+        child.stdin.write(
+          JSON.stringify({ type: "session", request_id: "smoke-session" }) + "\\n",
+        );
+      }
+      return;
+    }
+
+    if (
+      ready &&
+      value?.type === "result" &&
+      value?.request_id === "smoke-session" &&
+      typeof value?.result?.session?.status === "string" &&
+      typeof value?.result?.session?.sharing === "boolean"
+    ) {
       clearTimeout(timeout);
       lines.close();
-      resolvePromise(value);
+      resolvePromise({
+        protocol: 1,
+        sessionStatus: value.result.session.status,
+      });
     }
   });
 });
@@ -69,4 +107,6 @@ await new Promise((resolvePromise) => {
   }, 5_000).unref();
 });
 
-console.log(`Chatarium SIWC bridge ready: protocol ${result.protocol}`);
+console.log(
+  `Chatarium SIWC bridge ready: protocol ${result.protocol}; session ${result.sessionStatus}`,
+);
