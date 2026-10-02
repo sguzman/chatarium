@@ -853,3 +853,142 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn imported_event(
+        sequence: u64,
+        kind: EventKind,
+        text: &str,
+        identity_field: &str,
+        identity: &str,
+    ) -> EventEnvelope {
+        EventEnvelope {
+            sequence,
+            at_unix_ms: sequence,
+            scope: Some("conversation:test".to_owned()),
+            kind,
+            payload: serde_json::json!({
+                "text": text,
+                "details": {
+                    identity_field: identity,
+                },
+            })
+            .to_string(),
+        }
+    }
+
+    #[test]
+    fn display_projection_collapses_observed_updates_into_one_message() {
+        let events = vec![
+            imported_event(
+                1,
+                EventKind::TranscriptUserMessageObserved,
+                "hello",
+                "observed_id",
+                "user-1",
+            ),
+            imported_event(
+                2,
+                EventKind::UserMessageCommitted,
+                "hello",
+                "observed_message_id",
+                "user-1",
+            ),
+            imported_event(
+                3,
+                EventKind::AssistantSnapshotObserved,
+                "hel",
+                "observed_id",
+                "assistant-1",
+            ),
+            imported_event(
+                4,
+                EventKind::AssistantSnapshotObserved,
+                "hello there",
+                "observed_id",
+                "assistant-1",
+            ),
+            imported_event(
+                5,
+                EventKind::AssistantCompletionObserved,
+                "hello there",
+                "observed_id",
+                "assistant-1",
+            ),
+        ];
+
+        let projected = projected_display_messages(&events);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].role, DisplayRole::User);
+        assert_eq!(projected[0].text, "hello");
+        assert_eq!(projected[0].sequence, 2);
+        assert_eq!(projected[1].role, DisplayRole::Assistant);
+        assert_eq!(projected[1].text, "hello there");
+        assert_eq!(projected[1].sequence, 5);
+    }
+
+    #[test]
+    fn conversation_title_comes_from_first_user_message() {
+        let messages = vec![
+            DisplayMessage {
+                role: DisplayRole::Assistant,
+                text: "system-like preface".to_owned(),
+                sequence: 1,
+            },
+            DisplayMessage {
+                role: DisplayRole::User,
+                text: "  a useful local title\nwith whitespace  ".to_owned(),
+                sequence: 2,
+            },
+        ];
+
+        assert_eq!(
+            derived_conversation_title(&messages),
+            "a useful local title with whitespace"
+        );
+    }
+
+    #[test]
+    fn typed_message_commit_restores_same_local_conversation_identity() {
+        let conversation_id = LocalConversationId::new();
+        let message = AuthoredUserMessage::new(
+            conversation_id,
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "hello",
+        );
+        let mut store = chatarium_store::MemoryEventStore::default();
+        commit_user_message(&mut store, &message).unwrap();
+
+        assert_eq!(
+            projected_local_conversation_id(store.events()).unwrap(),
+            Some(conversation_id)
+        );
+    }
+
+    #[test]
+    fn scoped_typed_commit_prevents_older_draft_from_reappearing() {
+        let events = vec![
+            EventEnvelope {
+                sequence: 1,
+                at_unix_ms: 1,
+                scope: None,
+                kind: EventKind::DraftChanged,
+                payload: "old draft".to_owned(),
+            },
+            EventEnvelope {
+                sequence: 2,
+                at_unix_ms: 2,
+                scope: Some("local-turn:test".to_owned()),
+                kind: EventKind::UserMessageCommitted,
+                payload: "committed".to_owned(),
+            },
+        ];
+
+        assert_eq!(projected_working_draft(&events), "");
+    }
+}
