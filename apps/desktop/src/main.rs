@@ -311,11 +311,7 @@ impl eframe::App for ChatariumApp {
                             egui::RichText::new(format!(
                                 "{} transcript message{}",
                                 display_messages.len(),
-                                if display_messages.len() == 1 {
-                                    ""
-                                } else {
-                                    "s"
-                                }
+                                if display_messages.len() == 1 { "" } else { "s" }
                             ))
                             .size(11.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -853,7 +849,6 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
-
 
 #[cfg(test)]
 mod tests {
