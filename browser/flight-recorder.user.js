@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.7.1
+// @version      0.7.2
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -17,7 +17,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.7.1';
+  const VERSION = '0.7.2';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -142,6 +142,43 @@
     });
   }
 
+  const APPROVED_C02_QUERY_VALUE_KEYS = new Set([
+    'include_has_versions',
+    'num_turns',
+  ]);
+
+  function safeApprovedC02QueryValue(value) {
+    if (value === '') return { kind: 'empty', value: '' };
+    if (value === 'true' || value === 'false') {
+      return { kind: 'boolean', value };
+    }
+    if (/^-?(?:0|[1-9][0-9]{0,9})$/.test(value) && value !== '-0') {
+      return { kind: 'integer', value };
+    }
+    return { kind: 'redacted' };
+  }
+
+  function approvedC02QueryParameters(url, method) {
+    if (
+      !url
+      || !['GET', 'HEAD'].includes(method)
+      || url.origin !== location.origin
+      || !/^\/backend-api\/conversations\/[^/]+$/.test(url.pathname)
+    ) {
+      return [];
+    }
+
+    const parameters = [];
+    for (const [key, value] of url.searchParams.entries()) {
+      if (!APPROVED_C02_QUERY_VALUE_KEYS.has(key)) continue;
+      parameters.push({
+        key,
+        ...safeApprovedC02QueryValue(value),
+      });
+    }
+    return parameters;
+  }
+
   function networkRequestInfo(input, init) {
     try {
       const requestUrl = input instanceof Request
@@ -156,6 +193,7 @@
         url,
         method,
         queryKeys: [...new Set([...url.searchParams.keys()])].sort(),
+        approvedQueryParameters: approvedC02QueryParameters(url, method),
         captureStream: method === 'POST'
           && url.origin === location.origin
           && url.pathname === '/backend-api/f/conversation',
@@ -166,6 +204,7 @@
         url: null,
         method: null,
         queryKeys: [],
+        approvedQueryParameters: [],
         captureStream: false,
         readEligible: false,
       };
@@ -270,6 +309,7 @@
       method: requestInfo.method,
       endpoint: requestInfo.url?.pathname ?? '<unknown>',
       queryKeys: requestInfo.queryKeys,
+      approvedQueryParameters: requestInfo.approvedQueryParameters,
     });
     scheduleStatusRefresh();
     return run;
@@ -626,6 +666,7 @@
       method: requestInfo.method,
       endpoint,
       queryKeys: requestInfo.queryKeys,
+      approvedQueryParameters: requestInfo.approvedQueryParameters,
       status: response.status,
       contentType,
       privateEvidence: true,
@@ -896,6 +937,7 @@
                   method: requestInfo.method,
                   endpoint: requestInfo.url?.pathname ?? '<unknown>',
                   queryKeys: requestInfo.queryKeys,
+                  approvedQueryParameters: requestInfo.approvedQueryParameters,
                   capturedBytes: 0,
                   message: `clone response: ${String(error?.message ?? error)}`,
                 });
@@ -921,6 +963,7 @@
                 method: requestInfo.method,
                 endpoint: requestInfo.url?.pathname ?? '<unknown>',
                 queryKeys: requestInfo.queryKeys,
+                approvedQueryParameters: requestInfo.approvedQueryParameters,
                 message: String(error?.message ?? error),
               });
               scheduleStatusRefresh();
