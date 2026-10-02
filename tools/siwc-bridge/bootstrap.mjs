@@ -102,6 +102,17 @@ if (commit !== expectedCommit || prefix !== " ") {
   );
 }
 
+const trackedChanges = await capture(
+  "git",
+  ["status", "--porcelain", "--untracked-files=no"],
+  { cwd: devkitRoot },
+);
+if (trackedChanges) {
+  throw new Error(
+    "Pinned Sign in with ChatGPT DevKit has tracked local modifications; refusing to execute modified credential-owning source.",
+  );
+}
+
 let alreadyBuilt = false;
 try {
   const [stamp] = await Promise.all([
