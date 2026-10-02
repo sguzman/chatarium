@@ -1008,6 +1008,7 @@ fn persistence_worker(
                             operation: "draft save",
                             revision: Some(revision),
                             request_id: None,
+                            turn_id: None,
                             error: error.to_string(),
                         });
                     }
@@ -1017,9 +1018,13 @@ fn persistence_worker(
                 request_id,
                 message,
             } => match commit_user_message(&mut store, &message) {
-                Ok(_) => {
+                Ok(receipt) => {
                     if let Some(event) = store.events().last().cloned() {
-                        let _ = notices.send(PersistNotice::MessageCommitted { request_id, event });
+                        let _ = notices.send(PersistNotice::MessageCommitted {
+                            request_id,
+                            message: receipt.message,
+                            event,
+                        });
                     }
                 }
                 Err(error) => {
@@ -1027,6 +1032,31 @@ fn persistence_worker(
                         operation: "message commit",
                         revision: None,
                         request_id: Some(request_id),
+                        turn_id: Some(message.turn_id),
+                        error: error.to_string(),
+                    });
+                }
+            },
+            PersistCommand::AppendTurnEvent {
+                turn_id,
+                kind,
+                payload,
+            } => match store.append_scoped(Some(local_turn_scope(turn_id)), kind, payload) {
+                Ok(_) => {
+                    if let Some(event) = store.events().last().cloned() {
+                        let _ = notices.send(PersistNotice::TurnEventAppended {
+                            turn_id,
+                            kind,
+                            event,
+                        });
+                    }
+                }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "turn evidence append",
+                        revision: None,
+                        request_id: None,
+                        turn_id: Some(turn_id),
                         error: error.to_string(),
                     });
                 }
@@ -1034,6 +1064,44 @@ fn persistence_worker(
             PersistCommand::Shutdown => break,
         }
     }
+}
+
+fn remote_turn_payload(
+    turn_id: LocalTurnId,
+    request_id: &str,
+    model: Option<&str>,
+    text: Option<&str>,
+    detail: Option<&str>,
+) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "schema": "chatarium-responses-turn-observation",
+        "version": 1,
+        "text": text,
+        "details": {
+            "local_turn_id": turn_id.to_string(),
+            "request_id": request_id,
+            "model": model,
+            "detail": detail,
+        }
+    }))
+    .expect("remote turn observation is JSON-serializable")
+}
+
+fn responses_input(messages: &[DisplayMessage]) -> Value {
+    Value::Array(
+        messages
+            .iter()
+            .map(|message| {
+                serde_json::json!({
+                    "role": match message.role {
+                        DisplayRole::User => "user",
+                        DisplayRole::Assistant => "assistant",
+                    },
+                    "content": message.text,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn projected_working_draft(events: &[EventEnvelope]) -> String {
