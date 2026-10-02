@@ -657,6 +657,13 @@ impl ChatariumApp {
         }
     }
 
+    fn cancel_chatgpt_sign_in(&mut self) {
+        self.remote_status = "cancelling ChatGPT sign-in…".to_owned();
+        if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::CancelSignIn) {
+            self.remote_status = error;
+        }
+    }
+
     fn disconnect_chatgpt(&mut self) {
         self.remote_status = "disconnecting ChatGPT…".to_owned();
         if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::Disconnect) {
@@ -820,6 +827,12 @@ impl eframe::App for ChatariumApp {
                                     .color(egui::Color32::from_rgb(151, 154, 163)),
                             );
                         });
+                        if ui
+                            .add_sized([196.0, 28.0], egui::Button::new("Cancel sign-in"))
+                            .clicked()
+                        {
+                            self.cancel_chatgpt_sign_in();
+                        }
                     }
                 }
 
