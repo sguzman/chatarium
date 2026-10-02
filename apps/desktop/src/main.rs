@@ -453,9 +453,10 @@ impl eframe::App for ChatariumApp {
                 let can_commit = self.persist_tx.is_some()
                     && self.commit_in_flight.is_none()
                     && !self.draft.trim().is_empty();
-                let commit_shortcut = ctx.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
-                });
+                let commit_shortcut = can_commit
+                    && ctx.input_mut(|input| {
+                        input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+                    });
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
