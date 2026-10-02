@@ -1,7 +1,8 @@
 mod siwc_bridge;
 
 use chatarium_core::{
-    AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId, LocalTurnId, TurnEvidence,
+    AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
+    LocalTurnId, RemoteEvidence, TurnEvidence,
 };
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
@@ -114,10 +115,11 @@ impl ChatariumApp {
     fn new(repaint: &egui::Context) -> Self {
         let journal_path = default_journal_path();
         match JsonlEventStore::open(&journal_path) {
-            Ok(store) => {
+            Ok(mut store) => {
+                let recovery = recover_interrupted_remote_turns(&mut store);
                 let events = store.events().to_vec();
                 let draft = projected_working_draft(&events);
-                let (local_conversation_id, startup_status) =
+                let (local_conversation_id, mut startup_status) =
                     match projected_local_conversation_id(&events) {
                         Ok(Some(id)) => (id, "journal ready".to_owned()),
                         Ok(None) => (LocalConversationId::new(), "journal ready".to_owned()),
@@ -126,6 +128,19 @@ impl ChatariumApp {
                             format!("journal ready; local identity replay warning: {error}"),
                         ),
                     };
+                match recovery {
+                    Ok(0) => {}
+                    Ok(count) => {
+                        startup_status = format!(
+                            "{startup_status}; recovered {count} interrupted remote turn{}",
+                            if count == 1 { "" } else { "s" }
+                        );
+                    }
+                    Err(error) => {
+                        startup_status =
+                            format!("{startup_status}; remote-turn recovery warning: {error}");
+                    }
+                }
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
                 let worker = thread::Builder::new()
@@ -1358,6 +1373,65 @@ fn projected_working_draft(events: &[EventEnvelope]) -> String {
     }
 }
 
+fn recover_interrupted_remote_turns(
+    store: &mut impl EventStore,
+) -> Result<usize, String> {
+    let mut authored_turns = HashSet::new();
+    for event in store.events() {
+        let Some(decoded) = decode_user_message_commit(event)? else {
+            continue;
+        };
+        if let DecodedUserMessageCommit::Typed(message) = decoded {
+            authored_turns.insert(message.turn_id);
+        }
+    }
+
+    let mut interrupted = Vec::new();
+    for turn_id in authored_turns {
+        let scope = local_turn_scope(turn_id);
+        let kinds = store
+            .events()
+            .iter()
+            .filter(|event| event.scope.as_deref() == Some(scope.as_str()))
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        let evidence = TurnEvidence::replay_event_kinds(kinds)
+            .map_err(|error| format!("turn {turn_id} replay failed: {error}"))?;
+
+        let remote_still_live = matches!(
+            evidence.remote,
+            RemoteEvidence::Dispatching | RemoteEvidence::AcceptedObserved
+        ) && evidence.assistant != AssistantEvidence::CompletedObserved;
+
+        if remote_still_live {
+            interrupted.push(turn_id);
+        }
+    }
+
+    for turn_id in &interrupted {
+        let request_id = turn_id.to_string();
+        store
+            .append_scoped(
+                Some(local_turn_scope(*turn_id)),
+                EventKind::TransportInterrupted,
+                remote_turn_payload(
+                    *turn_id,
+                    &request_id,
+                    None,
+                    None,
+                    Some(
+                        "Chatarium restarted without a durable terminal outcome for this remote turn",
+                    ),
+                ),
+            )
+            .map_err(|error| {
+                format!("failed to persist restart interruption for turn {turn_id}: {error}")
+            })?;
+    }
+
+    Ok(interrupted.len())
+}
+
 fn projected_local_conversation_id(
     events: &[EventEnvelope],
 ) -> Result<Option<LocalConversationId>, String> {
@@ -1772,6 +1846,119 @@ mod tests {
         ];
 
         assert_eq!(projected_working_draft(&events), "");
+    }
+
+    #[test]
+    fn restart_recovery_marks_incomplete_remote_turn_once_without_retrying() {
+        let conversation_id = LocalConversationId::new();
+        let turn_id = LocalTurnId::new();
+        let message = AuthoredUserMessage::new(
+            conversation_id,
+            turn_id,
+            LocalMessageId::new(),
+            "survive restart",
+        );
+        let mut store = chatarium_store::MemoryEventStore::default();
+        commit_user_message(&mut store, &message).unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn_id)),
+                EventKind::DispatchAttempted,
+                remote_turn_payload(
+                    turn_id,
+                    &turn_id.to_string(),
+                    Some("model"),
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn_id)),
+                EventKind::RemoteAcceptanceObserved,
+                remote_turn_payload(
+                    turn_id,
+                    &turn_id.to_string(),
+                    None,
+                    None,
+                    Some("accepted"),
+                ),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn_id)),
+                EventKind::AssistantSnapshotObserved,
+                remote_turn_payload(
+                    turn_id,
+                    &turn_id.to_string(),
+                    None,
+                    Some("partial"),
+                    Some("snapshot"),
+                ),
+            )
+            .unwrap();
+
+        assert_eq!(recover_interrupted_remote_turns(&mut store).unwrap(), 1);
+        assert_eq!(recover_interrupted_remote_turns(&mut store).unwrap(), 0);
+
+        let scoped = store
+            .events()
+            .iter()
+            .filter(|event| event.scope.as_deref() == Some(local_turn_scope(turn_id).as_str()))
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        let evidence = TurnEvidence::replay_event_kinds(scoped).unwrap();
+        assert_eq!(evidence.remote, RemoteEvidence::AcceptedObserved);
+        assert_eq!(evidence.assistant, AssistantEvidence::PartialInterrupted);
+        assert_eq!(
+            store
+                .events()
+                .iter()
+                .filter(|event| event.kind == EventKind::TransportInterrupted)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn restart_recovery_leaves_completed_turns_unchanged() {
+        let turn_id = LocalTurnId::new();
+        let message = AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            turn_id,
+            LocalMessageId::new(),
+            "complete",
+        );
+        let mut store = chatarium_store::MemoryEventStore::default();
+        commit_user_message(&mut store, &message).unwrap();
+        for kind in [
+            EventKind::DispatchAttempted,
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::AssistantCompletionObserved,
+        ] {
+            store
+                .append_scoped(
+                    Some(local_turn_scope(turn_id)),
+                    kind,
+                    remote_turn_payload(
+                        turn_id,
+                        &turn_id.to_string(),
+                        None,
+                        (kind == EventKind::AssistantCompletionObserved).then_some("done"),
+                        None,
+                    ),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(recover_interrupted_remote_turns(&mut store).unwrap(), 0);
+        assert!(!store
+            .events()
+            .iter()
+            .any(|event| event.kind == EventKind::TransportInterrupted));
     }
 
     #[test]
