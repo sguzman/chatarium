@@ -285,15 +285,15 @@ fn validate_read_query_parameters(
     let query_keys = query_keys
         .iter()
         .map(|value| {
-            value.as_str().ok_or_else(|| {
-                format!("read response {read_index} query_keys contains non-string")
-            })
+            value
+                .as_str()
+                .ok_or_else(|| format!("read response {read_index} query_keys contains non-string"))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let parameters = parameters.as_array().ok_or_else(|| {
-        format!("read response {read_index} query_parameters must be an array")
-    })?;
+    let parameters = parameters
+        .as_array()
+        .ok_or_else(|| format!("read response {read_index} query_parameters must be an array"))?;
     for parameter in parameters {
         let object = parameter.as_object().ok_or_else(|| {
             format!("read response {read_index} query parameter must be an object")
@@ -325,8 +325,7 @@ fn validate_read_query_parameters(
         let value = object.get("value");
         match kind {
             "empty" if value.and_then(Value::as_str) == Some("") => {}
-            "boolean"
-                if matches!(value.and_then(Value::as_str), Some("true" | "false")) => {}
+            "boolean" if matches!(value.and_then(Value::as_str), Some("true" | "false")) => {}
             "integer"
                 if value
                     .and_then(Value::as_str)
