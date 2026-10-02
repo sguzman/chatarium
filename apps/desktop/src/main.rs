@@ -217,6 +217,7 @@ impl eframe::App for ChatariumApp {
             .events
             .iter()
             .filter(|event| event.kind == EventKind::UserMessageCommitted)
+            .cloned()
             .collect::<Vec<_>>();
 
         egui::SidePanel::left("sidebar")
@@ -379,7 +380,7 @@ impl eframe::App for ChatariumApp {
 
                 let response = egui::Frame::default()
                     .fill(composer_fill)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(54, 57, 66)))
+                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(54, 57, 66)))
                     .corner_radius(egui::CornerRadius::same(12))
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
