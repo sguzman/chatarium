@@ -107,6 +107,7 @@ struct ChatariumApp {
     remote_status: String,
     remote_runtime_ready: bool,
     remote_runtime_failed: bool,
+    sign_in_requested: bool,
     sign_in_pending: bool,
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
@@ -171,6 +172,7 @@ impl ChatariumApp {
                         remote_status: "starting sign-in runtime…".to_owned(),
                         remote_runtime_ready: false,
                         remote_runtime_failed: false,
+                        sign_in_requested: false,
                         sign_in_pending: false,
                         pending_remote_turn: None,
                         active_remote_turn: None,
@@ -226,6 +228,7 @@ impl ChatariumApp {
             remote_status: "starting sign-in runtime…".to_owned(),
             remote_runtime_ready: false,
             remote_runtime_failed: false,
+            sign_in_requested: false,
             sign_in_pending: false,
             pending_remote_turn: None,
             active_remote_turn: None,
@@ -467,12 +470,25 @@ impl ChatariumApp {
                 siwc_bridge::BridgeEvent::Ready => {
                     self.remote_runtime_ready = true;
                     self.remote_runtime_failed = false;
-                    self.remote_status = "sign-in runtime ready".to_owned();
-                    if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::RefreshSession)
-                    {
-                        self.remote_runtime_ready = false;
-                        self.remote_runtime_failed = true;
-                        self.remote_status = error;
+                    if self.sign_in_requested {
+                        self.sign_in_requested = false;
+                        self.sign_in_pending = true;
+                        self.remote_status = "opening ChatGPT sign-in…".to_owned();
+                        if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::SignIn) {
+                            self.sign_in_pending = false;
+                            self.remote_runtime_ready = false;
+                            self.remote_runtime_failed = true;
+                            self.remote_status = error;
+                        }
+                    } else {
+                        self.remote_status = "sign-in runtime ready".to_owned();
+                        if let Err(error) =
+                            self.remote.send(siwc_bridge::BridgeCommand::RefreshSession)
+                        {
+                            self.remote_runtime_ready = false;
+                            self.remote_runtime_failed = true;
+                            self.remote_status = error;
+                        }
                     }
                 }
                 siwc_bridge::BridgeEvent::Session(session) => {
@@ -696,6 +712,7 @@ impl ChatariumApp {
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
                     self.remote_runtime_ready = false;
                     self.remote_runtime_failed = true;
+                    self.sign_in_requested = false;
                     self.sign_in_pending = false;
                     if let Some(active) = self.active_remote_turn.take() {
                         let payload = remote_turn_payload(
@@ -719,14 +736,29 @@ impl ChatariumApp {
         }
     }
 
-    fn start_chatgpt_sign_in(&mut self) {
-        if !self.remote_runtime_ready {
+    fn start_chatgpt_sign_in(&mut self, repaint: &egui::Context) {
+        if self.remote_runtime_failed {
+            self.remote = siwc_bridge::BridgeRuntime::start(repaint);
+            self.remote_runtime_ready = false;
+            self.remote_runtime_failed = false;
+            self.sign_in_requested = true;
+            self.sign_in_pending = false;
+            self.remote_status = "restarting ChatGPT sign-in runtime…".to_owned();
             return;
         }
+
+        if !self.remote_runtime_ready {
+            self.sign_in_requested = true;
+            self.remote_status = "preparing ChatGPT sign-in runtime…".to_owned();
+            return;
+        }
+
         self.sign_in_pending = true;
         self.remote_status = "opening ChatGPT sign-in…".to_owned();
         if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::SignIn) {
             self.sign_in_pending = false;
+            self.remote_runtime_ready = false;
+            self.remote_runtime_failed = true;
             self.remote_status = error;
         }
     }
@@ -837,6 +869,8 @@ impl eframe::App for ChatariumApp {
                         "connected"
                     } else if self.sign_in_pending {
                         "connecting…"
+                    } else if self.sign_in_requested {
+                        "preparing sign-in…"
                     } else if self.remote_runtime_failed {
                         "runtime unavailable"
                     } else if !self.remote_runtime_ready {
@@ -885,19 +919,26 @@ impl eframe::App for ChatariumApp {
                         self.disconnect_chatgpt();
                     }
                 } else {
+                    let sign_in_label = if self.remote_runtime_failed {
+                        "Retry ChatGPT"
+                    } else if self.sign_in_requested {
+                        "Preparing ChatGPT…"
+                    } else if self.sign_in_pending {
+                        "Opening sign-in…"
+                    } else {
+                        "Continue with ChatGPT"
+                    };
                     if ui
                         .add_enabled(
-                            self.remote_runtime_ready && !self.sign_in_pending,
-                            egui::Button::new(
-                                egui::RichText::new("Continue with ChatGPT").strong(),
-                            )
-                            .min_size(egui::vec2(196.0, 34.0)),
+                            !self.sign_in_pending && !self.sign_in_requested,
+                            egui::Button::new(egui::RichText::new(sign_in_label).strong())
+                                .min_size(egui::vec2(196.0, 34.0)),
                         )
                         .clicked()
                     {
-                        self.start_chatgpt_sign_in();
+                        self.start_chatgpt_sign_in(ctx);
                     }
-                    if self.sign_in_pending {
+                    if self.sign_in_pending || self.sign_in_requested {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label(
