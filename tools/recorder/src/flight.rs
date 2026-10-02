@@ -931,14 +931,8 @@ fn sanitize_read_response_event(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let approved_query_parameters = sanitize_approved_c02_query_parameters(
-        payload,
-        raw_path,
-        method,
-        &query_keys,
-        seq,
-        stats,
-    )?;
+    let approved_query_parameters =
+        sanitize_approved_c02_query_parameters(payload, raw_path, method, &query_keys, seq, stats)?;
 
     let content_type = payload
         .get("contentType")
@@ -1053,9 +1047,9 @@ fn sanitize_approved_c02_query_parameters(
             "seq {seq}: approved query-value evidence appeared outside the C02 conversation-fetch boundary"
         ));
     }
-    let raw_parameters = raw_parameters.as_array().ok_or_else(|| {
-        format!("seq {seq}: approved C02 query parameters must be an array")
-    })?;
+    let raw_parameters = raw_parameters
+        .as_array()
+        .ok_or_else(|| format!("seq {seq}: approved C02 query parameters must be an array"))?;
 
     let mut output = Vec::with_capacity(raw_parameters.len());
     for raw in raw_parameters {
@@ -2827,8 +2821,7 @@ data: [DONE]
         let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
         event["payload"]["endpoint"] =
             json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
-        event["payload"]["queryKeys"] =
-            json!(["include_has_versions", "num_turns", "unapproved"]);
+        event["payload"]["queryKeys"] = json!(["include_has_versions", "num_turns", "unapproved"]);
         event["payload"]["approvedQueryParameters"] = json!([
             {"key": "include_has_versions", "kind": "boolean", "value": "true"},
             {"key": "num_turns", "kind": "integer", "value": "33"},
@@ -2836,13 +2829,9 @@ data: [DONE]
         ]);
 
         let selected = select_latest_run(&export).unwrap();
-        let derived = derive_sanitized_run(
-            &export,
-            &selected,
-            &c02_read_experiment(),
-            &BTreeSet::new(),
-        )
-        .unwrap();
+        let derived =
+            derive_sanitized_run(&export, &selected, &c02_read_experiment(), &BTreeSet::new())
+                .unwrap();
 
         let expected = json!([
             {"key": "include_has_versions", "kind": "boolean", "value": "true"},
@@ -2861,7 +2850,11 @@ data: [DONE]
             derived.pointer("/sanitization_report/counts/read_query_parameters_retained"),
             Some(&json!(3))
         );
-        assert!(!serde_json::to_string(&derived).unwrap().contains("unapproved="));
+        assert!(
+            !serde_json::to_string(&derived)
+                .unwrap()
+                .contains("unapproved=")
+        );
     }
 
     #[test]
@@ -2876,13 +2869,9 @@ data: [DONE]
             json!([{"key": "include_has_versions", "kind": "redacted"}]);
 
         let selected = select_latest_run(&export).unwrap();
-        let derived = derive_sanitized_run(
-            &export,
-            &selected,
-            &c02_read_experiment(),
-            &BTreeSet::new(),
-        )
-        .unwrap();
+        let derived =
+            derive_sanitized_run(&export, &selected, &c02_read_experiment(), &BTreeSet::new())
+                .unwrap();
 
         assert_eq!(
             derived.pointer("/sanitized/read_responses/0/query_parameters/0"),
@@ -2911,13 +2900,9 @@ data: [DONE]
             event["payload"]["approvedQueryParameters"] = json!([unsafe_parameter]);
 
             let selected = select_latest_run(&export).unwrap();
-            let error = derive_sanitized_run(
-                &export,
-                &selected,
-                &c02_read_experiment(),
-                &BTreeSet::new(),
-            )
-            .unwrap_err();
+            let error =
+                derive_sanitized_run(&export, &selected, &c02_read_experiment(), &BTreeSet::new())
+                    .unwrap_err();
 
             assert!(!error.contains("PRIVATE-QUERY-SECRET"));
             assert!(!error.contains("secret_parameter"));
@@ -2928,13 +2913,8 @@ data: [DONE]
     fn historical_read_without_query_value_evidence_remains_value_unknown() {
         let export = export_with_read_body("{\"messages\":[]}", false);
         let selected = select_latest_run(&export).unwrap();
-        let derived = derive_sanitized_run(
-            &export,
-            &selected,
-            &read_experiment(),
-            &BTreeSet::new(),
-        )
-        .unwrap();
+        let derived =
+            derive_sanitized_run(&export, &selected, &read_experiment(), &BTreeSet::new()).unwrap();
 
         assert_eq!(
             derived.pointer("/sanitized/read_responses/0/query_parameters"),
