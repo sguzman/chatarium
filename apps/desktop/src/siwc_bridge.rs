@@ -168,6 +168,9 @@ fn bridge_worker(
     let script = bridge_script_path();
     let child = ProcessCommand::new("node")
         .arg(&script)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENAI_ORG_ID")
+        .env_remove("OPENAI_PROJECT_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
