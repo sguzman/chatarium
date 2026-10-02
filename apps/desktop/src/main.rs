@@ -866,6 +866,11 @@ mod tests {
         identity_field: &str,
         identity: &str,
     ) -> EventEnvelope {
+        let mut details = serde_json::Map::new();
+        details.insert(
+            identity_field.to_owned(),
+            Value::String(identity.to_owned()),
+        );
         EventEnvelope {
             sequence,
             at_unix_ms: sequence,
@@ -873,9 +878,7 @@ mod tests {
             kind,
             payload: serde_json::json!({
                 "text": text,
-                "details": {
-                    identity_field: identity,
-                },
+                "details": details,
             })
             .to_string(),
         }
