@@ -61,6 +61,7 @@ Chatarium is a reliability project first and a UI project second.
 ## Development environment
 
 - Rust-first, Windows-first initially. The official Sign in with ChatGPT DevKit is an intentional trusted Node sidecar exception for OAuth/model discovery/Responses streaming rather than a reason to migrate the desktop out of Rust.
+- Salvador's Node package manager is **pnpm**. Prefer pnpm in local setup/bootstrap paths and user-facing commands. Do not default to npm in handoffs. If an upstream artifact requires npm-specific lockfile semantics, invoke that compatibility path through pnpm rather than requiring Salvador to install or operate npm.
 - Prefer normal Cargo dependencies. For project tooling on Windows, document Scoop commands rather than silently installing tools.
 - Do not download or execute opaque external payloads as part of build/bootstrap scripts.
 - Keep documentation current when architectural or protocol assumptions change.
