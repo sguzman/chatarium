@@ -5,6 +5,7 @@
 //! receives only the exact durable remote identity plus the validated protocol
 //! revision. Durable import independently rechecks journal-backed readiness.
 
+use crate::EventStore;
 use crate::remote_mirror_execution::{
     RemoteMirrorAuthorizationError, RemoteMirrorExecutionPlan, authorize_remote_mirror_read,
     derive_remote_mirror_execution_plan,
@@ -14,12 +15,11 @@ use crate::remote_mirror_snapshot_audit::{
     RemoteConversationSnapshotImportError, RemoteConversationSnapshotImportResult,
     import_validated_remote_conversation_snapshot,
 };
-use crate::EventStore;
+use chatarium_core::LocalConversationId;
 use chatarium_core::authenticated_session::{
     AuthenticatedSessionLease, SessionLeaseError, UserAuthenticatedSessionProvider,
 };
 use chatarium_core::remote::{ProtocolObservationRevision, RemoteConversationId};
-use chatarium_core::LocalConversationId;
 use serde_json::Value;
 
 /// Mechanism-agnostic runtime provider for one remote conversation read.
@@ -92,8 +92,8 @@ where
         RemoteMirrorExecutionPlan::RequiresAuthenticatedSession(ready) => ready,
     };
 
-    let lease =
-        AuthenticatedSessionLease::acquire(provider).map_err(RemoteMirrorFetchImportError::Session)?;
+    let lease = AuthenticatedSessionLease::acquire(provider)
+        .map_err(RemoteMirrorFetchImportError::Session)?;
     let mut authorized = authorize_remote_mirror_read(
         RemoteMirrorExecutionPlan::RequiresAuthenticatedSession(ready),
         lease,
@@ -125,9 +125,7 @@ mod tests {
     use chatarium_core::authenticated_session::SessionAuthenticationEvidence;
     use chatarium_core::remote::RemoteConversationBinding;
     use chatarium_protocol::conversation_fetch::ConversationFetchParseError;
-    use chatarium_protocol::read::{
-        JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation,
-    };
+    use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
     use serde_json::json;
     use std::collections::VecDeque;
     use std::fs;
@@ -213,9 +211,7 @@ mod tests {
                         .map(|(key, value)| (key, materialize(value)))
                         .collect(),
                 ),
-                Value::Array(items) => {
-                    Value::Array(items.into_iter().map(materialize).collect())
-                }
+                Value::Array(items) => Value::Array(items.into_iter().map(materialize).collect()),
                 Value::String(value) if value == "<empty-string>" => Value::String(String::new()),
                 Value::String(value) if value == "<redacted-text>" => {
                     Value::String("fixture-redacted-text".to_owned())
@@ -260,10 +256,7 @@ mod tests {
             ReadExperiment::OpenConversation,
             ReadMethod::Get,
             "/backend-api/conversations/<id>",
-            vec![
-                "include_has_versions".to_owned(),
-                "num_turns".to_owned(),
-            ],
+            vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
             200,
             "application/json",
             false,
@@ -271,12 +264,8 @@ mod tests {
             Some(JsonTopLevelType::Object),
         )
         .unwrap();
-        record_remote_read_observation(
-            &mut store,
-            RemoteReadObservationId::new(),
-            &observation,
-        )
-        .unwrap();
+        record_remote_read_observation(&mut store, RemoteReadObservationId::new(), &observation)
+            .unwrap();
         (store, local)
     }
 
@@ -343,8 +332,7 @@ mod tests {
         assert_eq!(provider.observed_remote_ids, vec![REMOTE.to_owned()]);
         assert_eq!(provider.observed_revisions, vec![REVISION.to_owned()]);
 
-        let records =
-            replay_remote_conversation_snapshot_audit(store.events()).expect("replay");
+        let records = replay_remote_conversation_snapshot_audit(store.events()).expect("replay");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].remote_conversation_id.as_str(), REMOTE);
     }
@@ -362,7 +350,9 @@ mod tests {
 
         assert!(matches!(
             fetch_and_import_selected_remote_conversation(&mut store, local, &mut provider),
-            Err(RemoteMirrorFetchImportError::Session(SessionLeaseError::Unknown))
+            Err(RemoteMirrorFetchImportError::Session(
+                SessionLeaseError::Unknown
+            ))
         ));
         assert_eq!(provider.authentication_probes, 2);
         assert_eq!(provider.fetches, 0);
@@ -460,9 +450,8 @@ mod tests {
             Ok(body),
         );
 
-        let first =
-            fetch_and_import_selected_remote_conversation(&mut store, local, &mut provider)
-                .unwrap();
+        let first = fetch_and_import_selected_remote_conversation(&mut store, local, &mut provider)
+            .unwrap();
         let second =
             fetch_and_import_selected_remote_conversation(&mut store, local, &mut provider)
                 .unwrap();
@@ -475,7 +464,8 @@ mod tests {
             store
                 .events()
                 .iter()
-                .filter(|event| event.kind == chatarium_core::EventKind::RemoteConversationSnapshotImported)
+                .filter(|event| event.kind
+                    == chatarium_core::EventKind::RemoteConversationSnapshotImported)
                 .count(),
             1
         );
@@ -502,10 +492,7 @@ mod tests {
                 ReadExperiment::OpenConversation,
                 ReadMethod::Get,
                 "/backend-api/conversations/<id>",
-                vec![
-                    "include_has_versions".to_owned(),
-                    "num_turns".to_owned(),
-                ],
+                vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
                 200,
                 "application/json",
                 false,
@@ -532,8 +519,7 @@ mod tests {
         }
 
         let reopened = JsonlEventStore::open(&path).unwrap();
-        let records =
-            replay_remote_conversation_snapshot_audit(reopened.events()).expect("replay");
+        let records = replay_remote_conversation_snapshot_audit(reopened.events()).expect("replay");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].local_conversation_id, local);
         assert_eq!(records[0].raw_body, body);
