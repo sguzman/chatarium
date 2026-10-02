@@ -116,7 +116,6 @@ impl ReadMethod {
     }
 }
 
-
 /// Maximum decimal digits accepted for one publication-safe integer query literal.
 pub const MAX_SAFE_QUERY_INTEGER_DIGITS: usize = 10;
 
@@ -182,10 +181,7 @@ pub struct ReadQueryParameterEvidence {
 
 impl ReadQueryParameterEvidence {
     /// Construct one occurrence whose value passed the publication-safe grammar.
-    pub fn known(
-        key: impl Into<String>,
-        literal: &str,
-    ) -> Result<Self, ReadObservationError> {
+    pub fn known(key: impl Into<String>, literal: &str) -> Result<Self, ReadObservationError> {
         let key = key.into();
         validate_approved_c02_query_key(&key)?;
         Ok(Self {
@@ -195,9 +191,7 @@ impl ReadQueryParameterEvidence {
     }
 
     /// Construct one occurrence whose raw value was deliberately not retained.
-    pub fn unsupported_redacted(
-        key: impl Into<String>,
-    ) -> Result<Self, ReadObservationError> {
+    pub fn unsupported_redacted(key: impl Into<String>) -> Result<Self, ReadObservationError> {
         let key = key.into();
         validate_approved_c02_query_key(&key)?;
         Ok(Self { key, literal: None })
@@ -315,16 +309,28 @@ impl fmt::Display for ReadObservationError {
                 write!(formatter, "duplicate read observation query key {key:?}")
             }
             Self::UnapprovedQueryParameterKey(key) => {
-                write!(formatter, "query parameter key {key:?} is not approved for C02 literal evidence")
+                write!(
+                    formatter,
+                    "query parameter key {key:?} is not approved for C02 literal evidence"
+                )
             }
             Self::UnsafeQueryParameterLiteral => {
-                write!(formatter, "query parameter literal is outside the publication-safe grammar")
+                write!(
+                    formatter,
+                    "query parameter literal is outside the publication-safe grammar"
+                )
             }
             Self::QueryParameterEvidenceOutsideC02Fetch => {
-                write!(formatter, "query parameter evidence is allowed only for C02 /backend-api/conversations/<id> reads")
+                write!(
+                    formatter,
+                    "query parameter evidence is allowed only for C02 /backend-api/conversations/<id> reads"
+                )
             }
             Self::QueryParameterKeyMissingFromQueryKeys(key) => {
-                write!(formatter, "query parameter evidence key {key:?} is absent from query_keys")
+                write!(
+                    formatter,
+                    "query parameter evidence key {key:?} is absent from query_keys"
+                )
             }
             Self::HeadCannotHaveBody => write!(formatter, "HEAD observation cannot have a body"),
             Self::TopLevelTypeWithoutBody => {
@@ -769,7 +775,9 @@ mod tests {
                 true,
                 Some(JsonTopLevelType::Object),
             ),
-            Err(ReadObservationError::QueryParameterKeyMissingFromQueryKeys(_))
+            Err(ReadObservationError::QueryParameterKeyMissingFromQueryKeys(
+                _
+            ))
         ));
     }
 
