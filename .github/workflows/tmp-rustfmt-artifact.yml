@@ -1,0 +1,26 @@
+name: temporary-rustfmt-artifact
+
+on:
+  push:
+    branches:
+      - tmp/p3-c02-query-rustfmt
+
+jobs:
+  rustfmt:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Canonical rustfmt
+        run: cargo fmt --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formatted-rust
+          path: |
+            crates/protocol/src/read.rs
+            crates/store/src/remote_read_audit.rs
+            tools/recorder/src/flight.rs
+            tools/recorder/src/corpus.rs
+            tools/importer/src/read_fixture.rs
