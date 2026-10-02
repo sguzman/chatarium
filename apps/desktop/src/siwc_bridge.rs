@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 pub enum BridgeCommand {
     RefreshSession,
     SignIn,
+    CancelSignIn,
     ListModels,
     StreamResponse {
         request_id: String,
@@ -218,6 +219,10 @@ fn command_json(command: BridgeCommand) -> Value {
         BridgeCommand::SignIn => json!({
             "type": "sign_in",
             "request_id": "sign-in"
+        }),
+        BridgeCommand::CancelSignIn => json!({
+            "type": "cancel_sign_in",
+            "request_id": "cancel-sign-in"
         }),
         BridgeCommand::ListModels => json!({
             "type": "models",
