@@ -1394,8 +1394,7 @@ fn projected_local_display_messages(
     let mut local_turn_scopes = HashSet::new();
 
     for event in events {
-        let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
-            decode_user_message_commit(event)
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) = decode_user_message_commit(event)
         else {
             continue;
         };
@@ -1701,8 +1700,7 @@ mod tests {
             )
             .unwrap();
 
-        let projected =
-            projected_local_display_messages(store.events(), second_conversation);
+        let projected = projected_local_display_messages(store.events(), second_conversation);
         assert_eq!(projected.len(), 2);
         assert_eq!(projected[0].role, DisplayRole::User);
         assert_eq!(projected[0].text, "second conversation");
