@@ -464,8 +464,7 @@ impl ChatariumApp {
                 siwc_bridge::BridgeEvent::Ready => {
                     self.remote_runtime_ready = true;
                     self.remote_status = "sign-in runtime ready".to_owned();
-                    if let Err(error) =
-                        self.remote.send(siwc_bridge::BridgeCommand::RefreshSession)
+                    if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::RefreshSession)
                     {
                         self.remote_runtime_ready = false;
                         self.remote_status = error;
