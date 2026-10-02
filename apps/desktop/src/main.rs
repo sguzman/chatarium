@@ -107,6 +107,7 @@ struct ChatariumApp {
     sign_in_pending: bool,
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
+    commit_remote_intents: BTreeMap<u64, String>,
 }
 
 impl ChatariumApp {
@@ -154,6 +155,7 @@ impl ChatariumApp {
                         sign_in_pending: false,
                         pending_remote_turn: None,
                         active_remote_turn: None,
+                        commit_remote_intents: BTreeMap::new(),
                     },
                     Err(error) => Self::without_persistence(
                         journal_path,
@@ -203,6 +205,7 @@ impl ChatariumApp {
             sign_in_pending: false,
             pending_remote_turn: None,
             active_remote_turn: None,
+            commit_remote_intents: BTreeMap::new(),
         }
     }
 
@@ -239,6 +242,11 @@ impl ChatariumApp {
             LocalMessageId::new(),
             self.draft.clone(),
         );
+        if self.remote_connected() {
+            if let Some(model) = self.selected_model.clone() {
+                self.commit_remote_intents.insert(request_id, model);
+            }
+        }
         match sender.send(PersistCommand::CommitMessage {
             request_id,
             message,
@@ -248,6 +256,7 @@ impl ChatariumApp {
                 self.status = "committing exact user message to local journal…".to_owned();
             }
             Err(error) => {
+                self.commit_remote_intents.remove(&request_id);
                 self.status = format!("failed to queue commit: {error}");
             }
         }
