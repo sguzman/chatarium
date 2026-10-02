@@ -26,7 +26,7 @@ Purpose: identify list/pagination traffic.
 
 Action: open a controlled existing thread.
 
-Purpose: identify conversation retrieval and any lazy secondary requests.
+Purpose: identify conversation retrieval and any lazy secondary requests. For the query-value follow-up, use Flight Recorder v0.7.2 or newer, arm reads immediately before opening the controlled thread, perform only that open action, then disarm. The recorder may retain literals only for the approved `include_has_versions` and `num_turns` keys on the exact conversation-resource request; do not inspect or transcribe query values manually. Older captures remain values-unknown.
 
 ### C03 — new text turn, complete
 
