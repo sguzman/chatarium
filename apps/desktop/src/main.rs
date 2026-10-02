@@ -13,7 +13,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 enum PersistCommand {
-    SaveDraft { revision: u64, text: String },
+    SaveDraft {
+        revision: u64,
+        text: String,
+    },
     CommitMessage {
         request_id: u64,
         message: AuthoredUserMessage,
@@ -610,24 +613,21 @@ fn persistence_worker(
             PersistCommand::CommitMessage {
                 request_id,
                 message,
-            } => {
-                match commit_user_message(&mut store, &message) {
-                    Ok(_) => {
-                        if let Some(event) = store.events().last().cloned() {
-                            let _ =
-                                notices.send(PersistNotice::MessageCommitted { request_id, event });
-                        }
-                    }
-                    Err(error) => {
-                        let _ = notices.send(PersistNotice::Failed {
-                            operation: "message commit",
-                            revision: None,
-                            request_id: Some(request_id),
-                            error: error.to_string(),
-                        });
+            } => match commit_user_message(&mut store, &message) {
+                Ok(_) => {
+                    if let Some(event) = store.events().last().cloned() {
+                        let _ = notices.send(PersistNotice::MessageCommitted { request_id, event });
                     }
                 }
-            }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "message commit",
+                        revision: None,
+                        request_id: Some(request_id),
+                        error: error.to_string(),
+                    });
+                }
+            },
             PersistCommand::Shutdown => break,
         }
     }
