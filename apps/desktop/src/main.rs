@@ -7,6 +7,7 @@ use chatarium_store::authored::{
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -39,6 +40,19 @@ enum PersistNotice {
         request_id: Option<u64>,
         error: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone)]
+struct DisplayMessage {
+    role: DisplayRole,
+    text: String,
+    sequence: u64,
 }
 
 struct ChatariumApp {
@@ -247,13 +261,8 @@ impl eframe::App for ChatariumApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
 
-        let committed_messages = self
-            .events
-            .iter()
-            .filter(|event| event.kind == EventKind::UserMessageCommitted)
-            .cloned()
-            .collect::<Vec<_>>();
-        let conversation_title = derived_conversation_title(&committed_messages);
+        let display_messages = projected_display_messages(&self.events);
+        let conversation_title = derived_conversation_title(&display_messages);
 
         egui::SidePanel::left("sidebar")
             .exact_width(236.0)
@@ -300,9 +309,9 @@ impl eframe::App for ChatariumApp {
                         });
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} committed message{}",
-                                committed_messages.len(),
-                                if committed_messages.len() == 1 {
+                                "{} transcript message{}",
+                                display_messages.len(),
+                                if display_messages.len() == 1 {
                                     ""
                                 } else {
                                     "s"
@@ -490,7 +499,7 @@ impl eframe::App for ChatariumApp {
                     .stick_to_bottom(true)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if committed_messages.is_empty() {
+                        if display_messages.is_empty() {
                             ui.add_space(90.0);
                             ui.vertical_centered(|ui| {
                                 ui.label(
@@ -510,37 +519,35 @@ impl eframe::App for ChatariumApp {
                             });
                         } else {
                             ui.add_space(8.0);
-                            for event in committed_messages {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Min),
-                                    |ui| {
-                                        egui::Frame::default()
-                                            .fill(egui::Color32::from_rgb(38, 42, 52))
-                                            .corner_radius(egui::CornerRadius::same(12))
-                                            .inner_margin(egui::Margin::symmetric(14, 11))
-                                            .show(ui, |ui| {
-                                                ui.set_max_width(620.0);
-                                                ui.label(
-                                                    egui::RichText::new(event_text(&event.payload))
-                                                        .size(14.0)
-                                                        .color(egui::Color32::from_rgb(
-                                                            232, 234, 239,
-                                                        )),
+                            for message in display_messages {
+                                match message.role {
+                                    DisplayRole::User => {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Min),
+                                            |ui| {
+                                                transcript_bubble(
+                                                    ui,
+                                                    &message,
+                                                    egui::Color32::from_rgb(38, 42, 52),
+                                                    "You",
                                                 );
-                                                ui.add_space(5.0);
-                                                ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "local event #{}",
-                                                        event.sequence
-                                                    ))
-                                                    .size(10.0)
-                                                    .color(egui::Color32::from_rgb(
-                                                        126, 131, 143,
-                                                    )),
+                                            },
+                                        );
+                                    }
+                                    DisplayRole::Assistant => {
+                                        ui.with_layout(
+                                            egui::Layout::left_to_right(egui::Align::Min),
+                                            |ui| {
+                                                transcript_bubble(
+                                                    ui,
+                                                    &message,
+                                                    egui::Color32::from_rgb(29, 31, 36),
+                                                    "Assistant",
                                                 );
-                                            });
-                                    },
-                                );
+                                            },
+                                        );
+                                    }
+                                }
                                 ui.add_space(12.0);
                             }
                         }
@@ -551,6 +558,39 @@ impl eframe::App for ChatariumApp {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
+}
+
+fn transcript_bubble(
+    ui: &mut egui::Ui,
+    message: &DisplayMessage,
+    fill: egui::Color32,
+    label: &str,
+) {
+    egui::Frame::default()
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(14, 11))
+        .show(ui, |ui| {
+            ui.set_max_width(660.0);
+            ui.label(
+                egui::RichText::new(label)
+                    .size(10.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(133, 138, 149)),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(&message.text)
+                    .size(14.0)
+                    .color(egui::Color32::from_rgb(232, 234, 239)),
+            );
+            ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new(format!("event #{}", message.sequence))
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(116, 121, 133)),
+            );
+        });
 }
 
 fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
@@ -681,13 +721,70 @@ fn default_journal_path() -> PathBuf {
         .join("journal.jsonl")
 }
 
-fn derived_conversation_title(events: &[EventEnvelope]) -> String {
-    let Some(first) = events.first() else {
+fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
+    let mut messages = Vec::<DisplayMessage>::new();
+    let mut keyed = BTreeMap::<String, usize>::new();
+
+    for event in events {
+        let role = match event.kind {
+            EventKind::UserMessageCommitted | EventKind::TranscriptUserMessageObserved => {
+                DisplayRole::User
+            }
+            EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => {
+                DisplayRole::Assistant
+            }
+            _ => continue,
+        };
+
+        let text = event_text(&event.payload);
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let key = payload_message_identity(&event.payload, role)
+            .map(|identity| format!("{role:?}:{identity}"))
+            .unwrap_or_else(|| format!("event:{}", event.sequence));
+
+        if let Some(index) = keyed.get(&key).copied() {
+            messages[index].text = text;
+            messages[index].sequence = event.sequence;
+            continue;
+        }
+
+        keyed.insert(key, messages.len());
+        messages.push(DisplayMessage {
+            role,
+            text,
+            sequence: event.sequence,
+        });
+    }
+
+    messages
+}
+
+fn payload_message_identity(payload: &str, role: DisplayRole) -> Option<String> {
+    let value = serde_json::from_str::<Value>(payload).ok()?;
+    let paths: &[&str] = match role {
+        DisplayRole::User => &["/details/observed_message_id", "/details/observed_id"],
+        DisplayRole::Assistant => &["/details/observed_id"],
+    };
+
+    paths
+        .iter()
+        .find_map(|path| value.pointer(path).and_then(Value::as_str))
+        .filter(|identity| !identity.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn derived_conversation_title(messages: &[DisplayMessage]) -> String {
+    let Some(first) = messages
+        .iter()
+        .find(|message| message.role == DisplayRole::User)
+    else {
         return "New local conversation".to_owned();
     };
 
-    let text = event_text(&first.payload);
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = first.text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return "Local conversation".to_owned();
     }
