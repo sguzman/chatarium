@@ -472,6 +472,11 @@ impl ChatariumApp {
                         self.remote_status = "waiting for ChatGPT sign-in…".to_owned();
                     } else if let Some(error) = &self.remote_session.error_message {
                         self.remote_status = error.clone();
+                    } else if self.remote_session.status == "connected" {
+                        self.remote_status =
+                            "ChatGPT connected, but token sharing is not enabled".to_owned();
+                    } else if self.remote_session.status == "reauth_required" {
+                        self.remote_status = "ChatGPT sign-in needs renewal".to_owned();
                     } else {
                         self.remote_status = "not connected".to_owned();
                     }
