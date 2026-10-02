@@ -79,7 +79,7 @@ if (commit !== expectedCommit) {
 }
 
 await run(
-  "npm",
+  process.platform === "win32" ? "npm.cmd" : "npm",
   [
     "install",
     "--no-save",
