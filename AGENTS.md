@@ -54,13 +54,13 @@ Chatarium is a reliability project first and a UI project second.
 
 ## Scope boundaries
 
-- Chatarium targets the consumer ChatGPT service used through the official web client; public OpenAI API billing is not the architectural premise.
+- For new conversations, Chatarium targets the user's eligible ChatGPT plan through OpenAI's official Sign in with ChatGPT + Responses route; a separate OpenAI API-key subscription is not the architectural premise. Undocumented chatgpt.com web-client protocol work is now optional compatibility/import research rather than the primary chat transport.
 - Do not bypass authentication, access controls, rate limits, anti-abuse systems, or other service protections.
 - Do not add mechanisms whose purpose is credential theft, session hijacking, or access to another user's account.
 
 ## Development environment
 
-- Rust-first, Windows-first initially.
+- Rust-first, Windows-first initially. The official Sign in with ChatGPT DevKit is an intentional trusted Node sidecar exception for OAuth/model discovery/Responses streaming rather than a reason to migrate the desktop out of Rust.
 - Prefer normal Cargo dependencies. For project tooling on Windows, document Scoop commands rather than silently installing tools.
 - Do not download or execute opaque external payloads as part of build/bootstrap scripts.
 - Keep documentation current when architectural or protocol assumptions change.
