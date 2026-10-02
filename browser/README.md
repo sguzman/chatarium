@@ -14,7 +14,7 @@ This directory contains Chatarium's **P0 emergency durability layer** for the of
 
 The userscript runs only on `chatgpt.com`.
 
-## What version 0.7.1 protects
+## What version 0.7.2 protects
 
 - **Per-conversation draft WAL.** Composer text is synchronously copied into `localStorage` and then archived into IndexedDB. Navigating to another chat does not intentionally overwrite another conversation's synchronous draft record.
 - **Separate send-intent WAL.** A send attempt is synchronously journaled *before* the site's normal bubbling send handler runs. Later draft mutations cannot erase this record.
@@ -99,7 +99,7 @@ A timeout, disconnect, page crash, or frontend exception between the middle stat
 
 This remains a browser flight recorder rather than a complete network-protocol recorder. DOM selectors can change when ChatGPT changes. Assistant text is observational and may miss content that never reached/rendered in the page. A DOM transcript is not treated as canonical remote state.
 
-Version 0.6 added one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. Version 0.7 adds an operator-armed read-only observation surface for same-origin `GET`/`HEAD` `/backend-api/` traffic, and v0.7.1 gives every armed interval an isolated run identity plus per-run diagnostics. Read capture remains OFF after each page load. Neither mode captures request bodies, request headers, authentication material, browser storage, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; read responses are bounded to 1,000,000 bytes each and 4,000,000 bytes per run. Exceeding a limit is recorded explicitly and only Chatarium's observation branch is cancelled.
+Version 0.6 added one deliberately narrow protocol observation: response-stream capture for `POST /backend-api/f/conversation`. Version 0.7 adds an operator-armed read-only observation surface for same-origin `GET`/`HEAD` `/backend-api/` traffic, and v0.7.1 gives every armed interval an isolated run identity plus per-run diagnostics. Version 0.7.2 adds one narrower exception to the previous query-values-unknown rule: only on exact same-origin `GET`/`HEAD` `/backend-api/conversations/<id>` reads, only the keys `include_has_versions` and `num_turns` are inspected. Their occurrence order and duplicates are preserved. A value is retained only when it is empty, lowercase `true`/`false`, or an optional-minus decimal integer of at most 10 digits; any other value shape becomes `unsupported: true` without copying the raw value. Other query keys remain names only. Read capture remains OFF after each page load. Neither mode captures request bodies, request headers, authentication material, browser storage, WebSocket frames, or frontend assets. The stream clone is bounded to 8,000,000 captured bytes; read responses are bounded to 1,000,000 bytes each and 4,000,000 bytes per run. Exceeding a limit is recorded explicitly and only Chatarium's observation branch is cancelled.
 
 Version 0.6 intentionally **does not auto-inject recovered text into the composer**. Copying recovered text is safe; mutating a React-controlled editor without a verified adapter can create a second class of data-loss bugs. Automatic restore belongs behind a tested site adapter.
 
@@ -109,6 +109,6 @@ Visible-error capture is intentionally conservative: it observes `role="alert"` 
 
 ## Privacy
 
-The local archive contains conversation text. Version 0.7.1 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
+The local archive contains conversation text. Version 0.7.2 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
 
-Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed.
+Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed. A v0.7.2 private export may contain the narrowly approved C02 query literals above; older v0.7.0/v0.7.1 exports contain only query-key names, so their query values remain unknown and must never be backfilled from assumption.
