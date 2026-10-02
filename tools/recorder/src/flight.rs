@@ -1,5 +1,6 @@
 //! Flight Recorder export ingestion and fail-closed public evidence derivation.
 
+use chatarium_protocol::read::ReadQueryParameterEvidence;
 use chatarium_protocol::sse::{SseDecoder, SseFrame};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -39,6 +40,8 @@ struct FlightSanitizationStats {
     read_identity_values_placeholdered: u64,
     read_truncated_bodies_omitted: u64,
     malformed_read_json_fail_closed: u64,
+    read_query_literals_retained: u64,
+    read_query_values_redacted: u64,
 }
 
 impl FlightSanitizationStats {
@@ -70,6 +73,8 @@ impl FlightSanitizationStats {
                 "read_identity_values_placeholdered": self.read_identity_values_placeholdered,
                 "read_truncated_bodies_omitted": self.read_truncated_bodies_omitted,
                 "malformed_read_json_fail_closed": self.malformed_read_json_fail_closed,
+                "read_query_literals_retained": self.read_query_literals_retained,
+                "read_query_values_redacted": self.read_query_values_redacted,
             },
             "raw_sensitive_values_retained": false,
             "raw_network_stream_chunks_copied": false,
@@ -926,6 +931,8 @@ fn sanitize_read_response_event(
                 .ok_or_else(|| format!("seq {seq}: protocol read query key is not a string"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let query_parameters =
+        sanitize_read_query_evidence(payload, raw_path, method, &query_keys, seq, stats)?;
 
     let content_type = payload
         .get("contentType")
@@ -979,7 +986,7 @@ fn sanitize_read_response_event(
         (reduced, Some(top), shape, None)
     };
 
-    let sanitized = json!({
+    let mut sanitized = json!({
         "read": public_id,
         "method": method,
         "path": path,
@@ -991,8 +998,11 @@ fn sanitize_read_response_event(
         "body_present": body_present,
         "body": body,
     });
+    if let Some(parameters) = query_parameters.clone() {
+        sanitized["query_parameters"] = parameters;
+    }
 
-    let inventory = json!({
+    let mut inventory = json!({
         "read": public_id,
         "method": method,
         "path": sanitized.get("path"),
@@ -1005,8 +1015,100 @@ fn sanitize_read_response_event(
         "shape": shape,
         "warning": body_warning,
     });
+    if let Some(parameters) = query_parameters {
+        inventory["query_parameters"] = parameters;
+    }
 
     Ok((sanitized, inventory))
+}
+
+fn sanitize_read_query_evidence(
+    payload: &Map<String, Value>,
+    raw_path: &str,
+    method: &str,
+    query_keys: &[String],
+    seq: u64,
+    stats: &mut FlightSanitizationStats,
+) -> Result<Option<Value>, String> {
+    let Some(raw) = payload.get("queryEvidence") else {
+        return Ok(None);
+    };
+
+    if !matches!(method, "GET" | "HEAD") || !is_c02_conversation_resource_path(raw_path) {
+        return Err(format!(
+            "seq {seq}: queryEvidence is allowed only for C02 conversation-resource reads"
+        ));
+    }
+
+    let entries = raw
+        .as_array()
+        .ok_or_else(|| format!("seq {seq}: queryEvidence must be an array"))?;
+    let mut sanitized = Vec::with_capacity(entries.len());
+
+    for (index, entry) in entries.iter().enumerate() {
+        let object = entry.as_object().ok_or_else(|| {
+            format!("seq {seq}: queryEvidence entry {index} must be an object")
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "value" | "unsupported"))
+        {
+            return Err(format!(
+                "seq {seq}: queryEvidence entry {index} contains unsupported fields"
+            ));
+        }
+
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!("seq {seq}: queryEvidence entry {index} is missing key")
+        })?;
+        if !query_keys.iter().any(|candidate| candidate == key) {
+            return Err(format!(
+                "seq {seq}: queryEvidence entry {index} key is absent from queryKeys"
+            ));
+        }
+
+        match (object.get("value"), object.get("unsupported")) {
+            (Some(Value::String(literal)), None) => {
+                let evidence = ReadQueryParameterEvidence::known(key, literal).map_err(|_| {
+                    format!(
+                        "seq {seq}: queryEvidence entry {index} violates the approved safe-literal boundary"
+                    )
+                })?;
+                stats.read_query_literals_retained =
+                    stats.read_query_literals_retained.saturating_add(1);
+                sanitized.push(json!({
+                    "key": evidence.key(),
+                    "value": evidence.literal_evidence().expect("known literal").literal(),
+                }));
+            }
+            (None, Some(Value::Bool(true))) => {
+                let evidence =
+                    ReadQueryParameterEvidence::unsupported_redacted(key).map_err(|_| {
+                        format!(
+                            "seq {seq}: queryEvidence entry {index} violates the approved-key boundary"
+                        )
+                    })?;
+                stats.read_query_values_redacted =
+                    stats.read_query_values_redacted.saturating_add(1);
+                sanitized.push(json!({
+                    "key": evidence.key(),
+                    "unsupported": true,
+                }));
+            }
+            _ => {
+                return Err(format!(
+                    "seq {seq}: queryEvidence entry {index} must contain exactly one safe value or unsupported=true marker"
+                ));
+            }
+        }
+    }
+
+    Ok(Some(Value::Array(sanitized)))
+}
+
+fn is_c02_conversation_resource_path(path: &str) -> bool {
+    path.strip_prefix("/backend-api/conversations/")
+        .is_some_and(|tail| !tail.is_empty() && !tail.contains('/'))
 }
 
 fn json_content_type(content_type: &str) -> bool {
@@ -2626,6 +2728,78 @@ data: [DONE]
             derived.pointer("/sanitization_report/counts/raw_read_response_bodies_copied"),
             Some(&json!(0))
         );
+    }
+
+    #[test]
+    fn v072_c02_safe_query_values_survive_sanitization_in_order() {
+        let mut export = export_with_read_body(r#"{"conversation_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}"#, false);
+        export["recorderVersion"] = json!("0.7.2");
+        let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
+        event["payload"]["endpoint"] =
+            json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
+        event["payload"]["queryKeys"] = json!(["include_has_versions", "num_turns"]);
+        event["payload"]["queryEvidence"] = json!([
+            {"key": "num_turns", "value": "4"},
+            {"key": "include_has_versions", "value": "true"},
+            {"key": "num_turns", "value": "4"}
+        ]);
+
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = read_experiment();
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+
+        assert_eq!(
+            derived.pointer("/sanitized/read_responses/0/query_parameters"),
+            Some(&json!([
+                {"key": "num_turns", "value": "4"},
+                {"key": "include_has_versions", "value": "true"},
+                {"key": "num_turns", "value": "4"}
+            ]))
+        );
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/query_parameters"),
+            derived.pointer("/sanitized/read_responses/0/query_parameters")
+        );
+    }
+
+    #[test]
+    fn v071_read_evidence_keeps_query_values_unknown() {
+        let export = export_with_read_body(r#"{"items":[]}"#, false);
+        let selected = select_latest_run(&export).unwrap();
+        let experiment = read_experiment();
+        let derived =
+            derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap();
+
+        assert!(
+            derived
+                .pointer("/sanitized/read_responses/0/query_parameters")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unsafe_or_unapproved_query_evidence_fails_closed_without_echoing_value() {
+        for query_evidence in [
+            json!([{"key": "num_turns", "value": "PRIVATE-QUERY-SECRET"}]),
+            json!([{"key": "unapproved", "value": "123"}]),
+        ] {
+            let mut export = export_with_read_body(r#"{"items":[]}"#, false);
+            export["recorderVersion"] = json!("0.7.2");
+            let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
+            event["payload"]["endpoint"] =
+                json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
+            event["payload"]["queryKeys"] = json!(["include_has_versions", "num_turns", "unapproved"]);
+            event["payload"]["queryEvidence"] = query_evidence;
+
+            let selected = select_latest_run(&export).unwrap();
+            let experiment = read_experiment();
+            let error =
+                derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap_err();
+
+            assert!(error.contains("queryEvidence"));
+            assert!(!error.contains("PRIVATE-QUERY-SECRET"));
+        }
     }
 
     #[test]
