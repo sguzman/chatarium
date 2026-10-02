@@ -576,7 +576,7 @@ fn transcript_bubble(
             );
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(&message.text)
+                egui::RichText::new(message.text.as_str())
                     .size(14.0)
                     .color(egui::Color32::from_rgb(232, 234, 239)),
             );
