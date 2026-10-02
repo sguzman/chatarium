@@ -364,6 +364,11 @@ fn command_json(command: BridgeCommand) -> Value {
 
 fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
     let value = serde_json::from_str::<Value>(line).ok()?;
+    if contains_credential_field(&value) {
+        return Some(BridgeEvent::RuntimeUnavailable(
+            "Sign in with ChatGPT bridge output violated the credential boundary".to_owned(),
+        ));
+    }
     match value.get("type")?.as_str()? {
         "ready" => Some(BridgeEvent::Ready),
         "session" => parse_session(value.get("session")?).map(BridgeEvent::Session),
@@ -407,6 +412,29 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
             }
         }
         _ => None,
+    }
+}
+
+fn contains_credential_field(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(contains_credential_field),
+        Value::Object(object) => object.iter().any(|(key, nested)| {
+            let normalized = key
+                .chars()
+                .filter(|character| *character != '_' && *character != '-')
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            matches!(
+                normalized.as_str(),
+                "accesstoken"
+                    | "refreshtoken"
+                    | "idtoken"
+                    | "authorization"
+                    | "cookie"
+                    | "cookies"
+            ) || contains_credential_field(nested)
+        }),
+        _ => false,
     }
 }
 
@@ -511,6 +539,20 @@ mod tests {
                 request_id: "turn-1".to_owned(),
                 delta: "hello".to_owned(),
             }
+        );
+    }
+
+    #[test]
+    fn rejects_credential_bearing_output_even_if_sidecar_regresses() {
+        let event = parse_bridge_event(
+            r#"{"type":"session","session":{"status":"connected","sharing":true,"access_token":"secret"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            event,
+            BridgeEvent::RuntimeUnavailable(
+                "Sign in with ChatGPT bridge output violated the credential boundary".to_owned()
+            )
         );
     }
 
