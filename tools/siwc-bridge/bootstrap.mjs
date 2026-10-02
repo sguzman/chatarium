@@ -68,13 +68,9 @@ function packageToolAvailable(command) {
 const fallbackNpmVersion = "11.6.2";
 
 async function runPinnedNpm(args, options = {}) {
-  const forcePnpm = process.env.CHATARIUM_FORCE_PNPM_NPM === "1";
-  if (!forcePnpm && (await packageToolAvailable("npm"))) {
-    return runPackageTool("npm", args, options);
-  }
   if (await packageToolAvailable("pnpm")) {
     console.log(
-      `npm is not installed; using pnpm to run pinned npm@${fallbackNpmVersion}.`,
+      `Using pnpm to run pinned npm@${fallbackNpmVersion} for the upstream DevKit package-lock.`,
     );
     return runPackageTool(
       "pnpm",
@@ -82,8 +78,11 @@ async function runPinnedNpm(args, options = {}) {
       options,
     );
   }
+  if (await packageToolAvailable("npm")) {
+    return runPackageTool("npm", args, options);
+  }
   throw new Error(
-    "Chatarium needs npm or pnpm to prepare the pinned Sign in with ChatGPT runtime. Neither command is available.",
+    "Chatarium needs pnpm (preferred) or npm to prepare the pinned Sign in with ChatGPT runtime. Neither command is available.",
   );
 }
 
