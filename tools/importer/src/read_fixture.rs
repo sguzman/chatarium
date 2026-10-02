@@ -4,7 +4,9 @@
 //! read_responses index explicitly after protocol evidence has been reviewed.
 
 use chatarium_core::RemoteReadObservationId;
-use chatarium_protocol::read::{JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation};
+use chatarium_protocol::read::{
+    JsonTopLevelType, ReadExperiment, ReadMethod, ReadObservation, ReadQueryParameterEvidence,
+};
 use chatarium_store::remote_read_audit::{
     RemoteReadObservationProvenance, record_remote_read_observation_from_fixture,
     replay_remote_read_audit,
@@ -24,6 +26,7 @@ const ALLOWED_READ_FIELDS: &[&str] = &[
     "method",
     "path",
     "query_keys",
+    "query_parameters",
     "status",
     "content_type",
     "captured_bytes",
@@ -174,6 +177,7 @@ fn observation_from_fixture(
     })?;
     let path = required_string(read, "path")?.to_owned();
     let query_keys = optional_string_array(read, "query_keys")?;
+    let query_parameters = optional_query_parameters(read, selected_index)?;
     let status = required_u16(read, "status")?;
     let content_type = required_string(read, "content_type")?.to_owned();
     let truncated = optional_bool(read, "truncated")?.unwrap_or(false);
@@ -201,12 +205,13 @@ fn observation_from_fixture(
     }
     let top_level_type = explicit_top_level_type.or(derived_top_level_type);
 
-    ReadObservation::new(
+    ReadObservation::new_with_query_parameters(
         protocol_revision,
         experiment,
         method,
         path,
         query_keys,
+        query_parameters,
         status,
         content_type,
         truncated,
@@ -250,9 +255,65 @@ fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
         if let Some(body) = read.get("body") {
             validate_placeholder_body(body, &format!("/read_responses/{index}/body"))?;
         }
+        optional_query_parameters(read, index)?;
     }
 
     Ok(())
+}
+
+fn optional_query_parameters(
+    read: &Value,
+    read_index: usize,
+) -> Result<Option<Vec<ReadQueryParameterEvidence>>, String> {
+    let Some(value) = read.get("query_parameters") else {
+        return Ok(None);
+    };
+    let parameters = value.as_array().ok_or_else(|| {
+        format!("read response {read_index} query_parameters must be an array")
+    })?;
+
+    let mut parsed = Vec::with_capacity(parameters.len());
+    for (index, parameter) in parameters.iter().enumerate() {
+        let object = parameter.as_object().ok_or_else(|| {
+            format!(
+                "read response {read_index} query parameter {index} must be an object"
+            )
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "value" | "unsupported"))
+        {
+            return Err(format!(
+                "read response {read_index} query parameter {index} contains unsupported fields"
+            ));
+        }
+
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!("read response {read_index} query parameter {index} is missing key")
+        })?;
+
+        let evidence = match (object.get("value"), object.get("unsupported")) {
+            (Some(Value::String(literal)), None) => {
+                ReadQueryParameterEvidence::known(key, literal)
+            }
+            (None, Some(Value::Bool(true))) => {
+                ReadQueryParameterEvidence::unsupported_redacted(key)
+            }
+            _ => {
+                return Err(format!(
+                    "read response {read_index} query parameter {index} must contain exactly one safe value or unsupported=true marker"
+                ));
+            }
+        }
+        .map_err(|_| {
+            format!(
+                "read response {read_index} query parameter {index} violates the approved C02 query evidence boundary"
+            )
+        })?;
+        parsed.push(evidence);
+    }
+
+    Ok(Some(parsed))
 }
 
 fn validate_placeholder_body(value: &Value, pointer: &str) -> Result<(), String> {
@@ -553,6 +614,85 @@ mod tests {
             records[0].compatibility,
             Compatibility::ValidatedAgainst("2026-10-01.001".to_owned())
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn v071_fixture_keeps_query_values_unknown() {
+        let dir = temp_dir("legacy-query-unknown");
+        let bytes =
+            include_bytes!("../../../protocol/fixtures/2026-10-01.001/c02-open-conversation.json");
+
+        import_bytes(bytes, 0, &dir).unwrap();
+        let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].observation.query_parameters(), None);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn v072_safe_query_parameters_survive_fixture_import_and_replay() {
+        let dir = temp_dir("query-values");
+        let fixture = serde_json::json!({
+            "snapshot": "2026-10-01.001",
+            "experiment": "C02-open-conversation",
+            "status": "success",
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations/<id>",
+                "query_keys": ["include_has_versions", "num_turns"],
+                "query_parameters": [
+                    {"key": "num_turns", "value": "4"},
+                    {"key": "include_has_versions", "value": "true"},
+                    {"key": "num_turns", "value": "4"}
+                ],
+                "status": 200,
+                "content_type": "application/json",
+                "body": {"conversation_id": "<id:1>"}
+            }]
+        });
+        let bytes = serde_json::to_vec(&fixture).unwrap();
+
+        import_bytes(&bytes, 0, &dir).unwrap();
+        let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+        let parameters = records[0].observation.query_parameters().unwrap();
+
+        assert_eq!(parameters.len(), 3);
+        assert_eq!(parameters[0].key(), "num_turns");
+        assert_eq!(parameters[0].literal_evidence().unwrap().literal(), "4");
+        assert_eq!(parameters[1].key(), "include_has_versions");
+        assert_eq!(parameters[1].literal_evidence().unwrap().literal(), "true");
+        assert_eq!(parameters[2].key(), "num_turns");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unsafe_query_value_in_any_read_fails_before_archive_without_echoing_value() {
+        let dir = temp_dir("unsafe-query");
+        let mut fixture: Value = serde_json::from_slice(&fixture_bytes()).unwrap();
+        fixture["read_responses"].as_array_mut().unwrap().push(serde_json::json!({
+            "method": "GET",
+            "path": "/backend-api/conversations/<id>",
+            "query_keys": ["num_turns"],
+            "query_parameters": [
+                {"key": "num_turns", "value": "PRIVATE-QUERY-SECRET"}
+            ],
+            "status": 200,
+            "content_type": "application/json",
+            "body": {"ok": "<bool>"}
+        }));
+        let bytes = serde_json::to_vec(&fixture).unwrap();
+
+        let error = import_bytes(&bytes, 0, &dir).unwrap_err();
+        assert!(error.contains("approved C02 query evidence boundary"));
+        assert!(!error.contains("PRIVATE-QUERY-SECRET"));
+        assert!(!dir.join("imports").exists());
 
         let _ = fs::remove_dir_all(dir);
     }
