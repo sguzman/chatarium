@@ -426,12 +426,7 @@ fn contains_credential_field(value: &Value) -> bool {
                 .collect::<String>();
             matches!(
                 normalized.as_str(),
-                "accesstoken"
-                    | "refreshtoken"
-                    | "idtoken"
-                    | "authorization"
-                    | "cookie"
-                    | "cookies"
+                "accesstoken" | "refreshtoken" | "idtoken" | "authorization" | "cookie" | "cookies"
             ) || contains_credential_field(nested)
         }),
         _ => false,
