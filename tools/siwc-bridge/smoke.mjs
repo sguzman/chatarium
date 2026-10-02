@@ -18,30 +18,45 @@ const lines = createInterface({
 
 const result = await new Promise((resolvePromise, rejectPromise) => {
   const timeout = setTimeout(() => {
+    lines.close();
     rejectPromise(new Error("Sign in with ChatGPT bridge did not become ready."));
   }, 10_000);
 
   child.once("error", (error) => {
     clearTimeout(timeout);
+    lines.close();
     rejectPromise(error);
   });
 
-  lines.once("line", (line) => {
-    clearTimeout(timeout);
+  lines.on("line", (line) => {
     let value;
     try {
       value = JSON.parse(line);
     } catch {
+      clearTimeout(timeout);
+      lines.close();
       rejectPromise(new Error("Sign in with ChatGPT bridge emitted invalid JSON."));
       return;
     }
-    if (value?.type !== "ready" || value?.protocol !== 1) {
+
+    // The official DevKit subscription immediately publishes its initial
+    // disconnected session snapshot before Chatarium emits its own ready marker.
+    if (value?.type === "session") return;
+
+    if (value?.type === "fatal") {
+      clearTimeout(timeout);
+      lines.close();
       rejectPromise(
-        new Error("Sign in with ChatGPT bridge did not emit the expected ready event."),
+        new Error(value?.error?.message ?? "Sign in with ChatGPT bridge failed to start."),
       );
       return;
     }
-    resolvePromise(value);
+
+    if (value?.type === "ready" && value?.protocol === 1) {
+      clearTimeout(timeout);
+      lines.close();
+      resolvePromise(value);
+    }
   });
 });
 
