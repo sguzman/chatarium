@@ -106,6 +106,7 @@ struct ChatariumApp {
     selected_model: Option<String>,
     remote_status: String,
     remote_runtime_ready: bool,
+    remote_runtime_failed: bool,
     sign_in_pending: bool,
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
@@ -169,6 +170,7 @@ impl ChatariumApp {
                         selected_model: None,
                         remote_status: "starting sign-in runtime…".to_owned(),
                         remote_runtime_ready: false,
+                        remote_runtime_failed: false,
                         sign_in_pending: false,
                         pending_remote_turn: None,
                         active_remote_turn: None,
@@ -223,6 +225,7 @@ impl ChatariumApp {
             selected_model: None,
             remote_status: "starting sign-in runtime…".to_owned(),
             remote_runtime_ready: false,
+            remote_runtime_failed: false,
             sign_in_pending: false,
             pending_remote_turn: None,
             active_remote_turn: None,
@@ -463,10 +466,12 @@ impl ChatariumApp {
             match notice {
                 siwc_bridge::BridgeEvent::Ready => {
                     self.remote_runtime_ready = true;
+                    self.remote_runtime_failed = false;
                     self.remote_status = "sign-in runtime ready".to_owned();
                     if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::RefreshSession)
                     {
                         self.remote_runtime_ready = false;
+                        self.remote_runtime_failed = true;
                         self.remote_status = error;
                     }
                 }
@@ -690,6 +695,7 @@ impl ChatariumApp {
                 }
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
                     self.remote_runtime_ready = false;
+                    self.remote_runtime_failed = true;
                     self.sign_in_pending = false;
                     if let Some(active) = self.active_remote_turn.take() {
                         let payload = remote_turn_payload(
@@ -831,8 +837,10 @@ impl eframe::App for ChatariumApp {
                         "connected"
                     } else if self.sign_in_pending {
                         "connecting…"
-                    } else if !self.remote_runtime_ready {
+                    } else if self.remote_runtime_failed {
                         "runtime unavailable"
+                    } else if !self.remote_runtime_ready {
+                        "starting…"
                     } else {
                         "not connected"
                     },
