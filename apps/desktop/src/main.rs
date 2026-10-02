@@ -582,16 +582,29 @@ impl eframe::App for ChatariumApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let connected = self.remote_connected();
                         egui::Frame::default()
-                            .fill(egui::Color32::from_rgb(48, 42, 26))
+                            .fill(if connected {
+                                egui::Color32::from_rgb(24, 52, 37)
+                            } else {
+                                egui::Color32::from_rgb(48, 42, 26)
+                            })
                             .corner_radius(egui::CornerRadius::same(12))
                             .inner_margin(egui::Margin::symmetric(10, 5))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new("LOCAL ONLY")
-                                        .size(10.0)
-                                        .strong()
-                                        .color(egui::Color32::from_rgb(225, 194, 108)),
+                                    egui::RichText::new(if connected {
+                                        "CHATGPT CONNECTED"
+                                    } else {
+                                        "LOCAL ONLY"
+                                    })
+                                    .size(10.0)
+                                    .strong()
+                                    .color(if connected {
+                                        egui::Color32::from_rgb(126, 210, 156)
+                                    } else {
+                                        egui::Color32::from_rgb(225, 194, 108)
+                                    }),
                                 );
                             });
                     });
