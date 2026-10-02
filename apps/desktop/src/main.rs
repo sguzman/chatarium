@@ -281,9 +281,7 @@ impl ChatariumApp {
             match notice {
                 siwc_bridge::BridgeEvent::Ready => {
                     self.remote_status = "sign-in runtime ready".to_owned();
-                    let _ = self
-                        .remote
-                        .send(siwc_bridge::BridgeCommand::RefreshSession);
+                    let _ = self.remote.send(siwc_bridge::BridgeCommand::RefreshSession);
                 }
                 siwc_bridge::BridgeEvent::Session(session) => {
                     self.sign_in_pending = session.status == "connecting";
