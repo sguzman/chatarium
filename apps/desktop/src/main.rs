@@ -450,11 +450,18 @@ impl eframe::App for ChatariumApp {
                     self.queue_draft_snapshot();
                 }
 
+                let can_commit = self.persist_tx.is_some()
+                    && self.commit_in_flight.is_none()
+                    && !self.draft.trim().is_empty();
+                let commit_shortcut = ctx.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+                });
+
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(match self.draft_state() {
-                            "durable" => "Draft saved locally",
+                            "durable" => "Draft saved locally · Ctrl+Enter to commit",
                             "saving…" => "Saving draft…",
                             _ => "Draft is not durable",
                         })
@@ -463,17 +470,14 @@ impl eframe::App for ChatariumApp {
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let can_commit = self.persist_tx.is_some()
-                            && self.commit_in_flight.is_none()
-                            && !self.draft.trim().is_empty();
-                        if ui
+                        let clicked = ui
                             .add_enabled(
                                 can_commit,
                                 egui::Button::new(egui::RichText::new("Commit locally").strong())
                                     .min_size(egui::vec2(124.0, 34.0)),
                             )
-                            .clicked()
-                        {
+                            .clicked();
+                        if clicked || (can_commit && commit_shortcut) {
                             self.commit_current_message();
                         }
 
