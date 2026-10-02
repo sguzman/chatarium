@@ -1,15 +1,16 @@
 //! Durable safe metadata for P3 read observations.
 //!
-//! This journal layer stores structural read metadata only. Raw remote response
-//! bodies, headers, cookies, authorization values, query values, titles, and
-//! message text are deliberately outside this typed durable record.
+//! This journal layer stores publication-safe read metadata only. Raw remote
+//! response bodies, headers, cookies, authorization material, arbitrary query
+//! values, titles, and message text are deliberately outside this typed durable
+//! record. V3 can retain only the narrowly typed approved C02 query grammar.
 
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::{EventKind, RemoteReadObservationId};
 use chatarium_protocol::Compatibility;
 use chatarium_protocol::read::{
-    JsonTopLevelType, ReadExperiment, ReadFlow, ReadMethod, ReadObservation,
-    compatibility_for_read_flow,
+    JsonTopLevelType, ReadExperiment, ReadFlow, ReadMethod, ReadObservation, ReadQueryParameter,
+    ReadQueryValue, compatibility_for_read_flow,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -17,6 +18,7 @@ use std::collections::BTreeMap;
 const REMOTE_READ_SCHEMA: &str = "chatarium-remote-read-observation";
 const REMOTE_READ_VERSION_V1: u64 = 1;
 const REMOTE_READ_VERSION_V2: u64 = 2;
+const REMOTE_READ_VERSION_V3: u64 = 3;
 const SANITIZED_READ_FIXTURE_SOURCE: &str = "sanitized_read_fixture";
 
 const FORBIDDEN_PAYLOAD_FIELDS: &[&str] = &[
@@ -29,6 +31,8 @@ const FORBIDDEN_PAYLOAD_FIELDS: &[&str] = &[
     "cookies",
     "authorization",
     "query_values",
+    "query_parameters",
+    "approvedQueryParameters",
     "request_body",
     "title",
     "messages",
@@ -84,9 +88,14 @@ pub fn record_remote_read_observation(
     observation_id: RemoteReadObservationId,
     observation: &ReadObservation,
 ) -> std::io::Result<u64> {
-    let payload = serde_json::to_string(&json!({
+    let version = if observation.query_parameters().is_some() {
+        REMOTE_READ_VERSION_V3
+    } else {
+        REMOTE_READ_VERSION_V1
+    };
+    let mut value = json!({
         "schema": REMOTE_READ_SCHEMA,
-        "version": REMOTE_READ_VERSION_V1,
+        "version": version,
         "record": "remote_read_observation",
         "observation_id": observation_id.to_string(),
         "protocol_revision": observation.protocol_revision(),
@@ -100,8 +109,9 @@ pub fn record_remote_read_observation(
         "truncated": observation.truncated(),
         "body_present": observation.body_present(),
         "top_level_type": observation.top_level_type().map(JsonTopLevelType::stable_name),
-    }))
-    .map_err(invalid_data)?;
+    });
+    insert_query_parameters(&mut value, observation)?;
+    let payload = serde_json::to_string(&value).map_err(invalid_data)?;
 
     store.append_scoped(
         Some(remote_read_observation_scope(observation_id)),
@@ -117,9 +127,14 @@ pub fn record_remote_read_observation_from_fixture(
     observation: &ReadObservation,
     provenance: &RemoteReadObservationProvenance,
 ) -> std::io::Result<u64> {
-    let payload = serde_json::to_string(&json!({
+    let version = if observation.query_parameters().is_some() {
+        REMOTE_READ_VERSION_V3
+    } else {
+        REMOTE_READ_VERSION_V2
+    };
+    let mut value = json!({
         "schema": REMOTE_READ_SCHEMA,
-        "version": REMOTE_READ_VERSION_V2,
+        "version": version,
         "record": "remote_read_observation",
         "observation_id": observation_id.to_string(),
         "protocol_revision": observation.protocol_revision(),
@@ -138,8 +153,9 @@ pub fn record_remote_read_observation_from_fixture(
             "source_sha256": provenance.source_sha256.as_str(),
             "source_read_index": provenance.source_read_index,
         },
-    }))
-    .map_err(invalid_data)?;
+    });
+    insert_query_parameters(&mut value, observation)?;
+    let payload = serde_json::to_string(&value).map_err(invalid_data)?;
 
     store.append_scoped(
         Some(remote_read_observation_scope(observation_id)),
@@ -219,13 +235,15 @@ pub fn replay_remote_read_audit(
         let truncated = required_bool(&payload, "truncated")?;
         let body_present = required_bool(&payload, "body_present")?;
         let top_level_type = optional_top_level_type(&payload, event.sequence)?;
+        let query_parameters = parse_query_parameters(&payload, version, event.sequence)?;
 
-        let observation = ReadObservation::new(
+        let observation = ReadObservation::new_with_query_parameters(
             protocol_revision.clone(),
             experiment,
             method,
             path,
             query_keys,
+            query_parameters,
             status,
             content_type,
             truncated,
@@ -288,7 +306,10 @@ fn typed_payload(event: &EventEnvelope) -> Result<(Value, u64), String> {
                 event.sequence
             )
         })?;
-    if !matches!(version, REMOTE_READ_VERSION_V1 | REMOTE_READ_VERSION_V2) {
+    if !matches!(
+        version,
+        REMOTE_READ_VERSION_V1 | REMOTE_READ_VERSION_V2 | REMOTE_READ_VERSION_V3
+    ) {
         return Err(format!(
             "unsupported remote read observation version {version} at sequence {}",
             event.sequence
@@ -319,18 +340,21 @@ fn parse_provenance(
         return Ok(None);
     }
 
-    let provenance = payload
-        .get("provenance")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            format!(
-                "v2 remote read observation at sequence {sequence} is missing provenance object"
-            )
-        })?;
+    let Some(provenance_value) = payload.get("provenance") else {
+        if version == REMOTE_READ_VERSION_V3 {
+            return Ok(None);
+        }
+        return Err(format!(
+            "v2 remote read observation at sequence {sequence} is missing provenance object"
+        ));
+    };
+    let provenance = provenance_value.as_object().ok_or_else(|| {
+        format!("remote read observation at sequence {sequence} has invalid provenance object")
+    })?;
     if provenance.get("source_kind").and_then(Value::as_str) != Some(SANITIZED_READ_FIXTURE_SOURCE)
     {
         return Err(format!(
-            "v2 remote read observation at sequence {sequence} has unsupported provenance source_kind"
+            "remote read observation at sequence {sequence} has unsupported provenance source_kind"
         ));
     }
     let source_sha256 = provenance
@@ -338,7 +362,7 @@ fn parse_provenance(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             format!(
-                "v2 remote read observation at sequence {sequence} is missing provenance source_sha256"
+                "remote read observation at sequence {sequence} is missing provenance source_sha256"
             )
         })?;
     let source_read_index = provenance
@@ -346,15 +370,140 @@ fn parse_provenance(
         .and_then(Value::as_u64)
         .ok_or_else(|| {
             format!(
-                "v2 remote read observation at sequence {sequence} is missing provenance source_read_index"
+                "remote read observation at sequence {sequence} is missing provenance source_read_index"
             )
         })?;
 
     RemoteReadObservationProvenance::sanitized_read_fixture(source_sha256, source_read_index)
         .map(Some)
         .map_err(|error| {
-            format!("invalid v2 remote read observation provenance at sequence {sequence}: {error}")
+            format!("invalid remote read observation provenance at sequence {sequence}: {error}")
         })
+}
+
+fn insert_query_parameters(
+    payload: &mut Value,
+    observation: &ReadObservation,
+) -> std::io::Result<()> {
+    let Some(parameters) = observation.query_parameters() else {
+        return Ok(());
+    };
+    let encoded = parameters
+        .iter()
+        .map(encode_query_parameter)
+        .collect::<Vec<_>>();
+    payload
+        .as_object_mut()
+        .ok_or_else(|| invalid_data("remote read payload must be an object"))?
+        .insert("approved_query_parameters".to_owned(), Value::Array(encoded));
+    Ok(())
+}
+
+fn encode_query_parameter(parameter: &ReadQueryParameter) -> Value {
+    match parameter.value() {
+        ReadQueryValue::Empty => {
+            json!({"key": parameter.key(), "kind": "empty", "value": ""})
+        }
+        ReadQueryValue::Boolean(value) => json!({
+            "key": parameter.key(),
+            "kind": "boolean",
+            "value": if *value { "true" } else { "false" },
+        }),
+        ReadQueryValue::Integer(value) => {
+            json!({"key": parameter.key(), "kind": "integer", "value": value})
+        }
+        ReadQueryValue::Redacted => {
+            json!({"key": parameter.key(), "kind": "redacted"})
+        }
+    }
+}
+
+fn parse_query_parameters(
+    payload: &Value,
+    version: u64,
+    sequence: u64,
+) -> Result<Option<Vec<ReadQueryParameter>>, String> {
+    let field = payload.get("approved_query_parameters");
+    if version < REMOTE_READ_VERSION_V3 {
+        if field.is_some() {
+            return Err(format!(
+                "pre-v3 remote read observation at sequence {sequence} must not contain approved query parameters"
+            ));
+        }
+        return Ok(None);
+    }
+
+    let values = field.and_then(Value::as_array).ok_or_else(|| {
+        format!(
+            "v3 remote read observation at sequence {sequence} is missing approved_query_parameters array"
+        )
+    })?;
+    let mut parameters = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value.as_object().ok_or_else(|| {
+            format!(
+                "v3 remote read observation at sequence {sequence} has non-object query parameter"
+            )
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "kind" | "value"))
+        {
+            return Err(format!(
+                "v3 remote read observation at sequence {sequence} has unsupported query-parameter field"
+            ));
+        }
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "v3 remote read observation at sequence {sequence} query parameter is missing key"
+            )
+        })?;
+        if !matches!(key, "include_has_versions" | "num_turns") {
+            return Err(format!(
+                "v3 remote read observation at sequence {sequence} uses unapproved query-parameter key"
+            ));
+        }
+        let kind = object.get("kind").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "v3 remote read observation at sequence {sequence} query parameter is missing kind"
+            )
+        })?;
+        let parameter_value = match kind {
+            "empty" if object.get("value").and_then(Value::as_str) == Some("") => {
+                ReadQueryValue::Empty
+            }
+            "boolean" => match object.get("value").and_then(Value::as_str) {
+                Some("true") => ReadQueryValue::Boolean(true),
+                Some("false") => ReadQueryValue::Boolean(false),
+                _ => {
+                    return Err(format!(
+                        "v3 remote read observation at sequence {sequence} has invalid boolean query evidence"
+                    ));
+                }
+            },
+            "integer" => {
+                let value = object.get("value").and_then(Value::as_str).ok_or_else(|| {
+                    format!(
+                        "v3 remote read observation at sequence {sequence} is missing integer query evidence"
+                    )
+                })?;
+                ReadQueryValue::Integer(value.to_owned())
+            }
+            "redacted" if object.get("value").is_none() => ReadQueryValue::Redacted,
+            "empty" | "redacted" => {
+                return Err(format!(
+                    "v3 remote read observation at sequence {sequence} has invalid query evidence"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "v3 remote read observation at sequence {sequence} has unsupported query evidence kind"
+                ));
+            }
+        };
+        parameters.push(ReadQueryParameter::new(key, parameter_value));
+    }
+    Ok(Some(parameters))
 }
 
 fn reject_forbidden_fields(event: &EventEnvelope, payload: &Value) -> Result<(), String> {
@@ -541,6 +690,83 @@ mod tests {
     }
 
     #[test]
+    fn approved_query_parameters_round_trip_in_v3_without_raw_query_fields() {
+        let mut store = MemoryEventStore::default();
+        let id = RemoteReadObservationId::new();
+        let observation = ReadObservation::new_with_query_parameters(
+            "2026-10-01.001",
+            ReadExperiment::OpenConversation,
+            ReadMethod::Get,
+            "/backend-api/conversations/<id>",
+            vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
+            Some(vec![
+                ReadQueryParameter::new(
+                    "include_has_versions",
+                    ReadQueryValue::Boolean(true),
+                ),
+                ReadQueryParameter::new(
+                    "num_turns",
+                    ReadQueryValue::Integer("33".to_owned()),
+                ),
+                ReadQueryParameter::new("num_turns", ReadQueryValue::Redacted),
+            ]),
+            200,
+            "application/json",
+            false,
+            true,
+            Some(JsonTopLevelType::Object),
+        )
+        .unwrap();
+        let provenance = RemoteReadObservationProvenance::sanitized_read_fixture(
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            0,
+        )
+        .unwrap();
+
+        record_remote_read_observation_from_fixture(
+            &mut store,
+            id,
+            &observation,
+            &provenance,
+        )
+        .unwrap();
+
+        assert!(store.events()[0].payload.contains("approved_query_parameters"));
+        assert!(!store.events()[0].payload.contains("query_values"));
+        let records = replay_remote_read_audit(store.events()).unwrap();
+        assert_eq!(records[0].observation.query_parameters(), observation.query_parameters());
+        assert_eq!(records[0].provenance, Some(provenance));
+    }
+
+    #[test]
+    fn v3_without_fixture_provenance_round_trips_for_native_observation() {
+        let mut store = MemoryEventStore::default();
+        let id = RemoteReadObservationId::new();
+        let observation = ReadObservation::new_with_query_parameters(
+            "rev",
+            ReadExperiment::OpenConversation,
+            ReadMethod::Get,
+            "/backend-api/conversations/<id>",
+            vec!["num_turns".to_owned()],
+            Some(vec![ReadQueryParameter::new(
+                "num_turns",
+                ReadQueryValue::Integer("33".to_owned()),
+            )]),
+            200,
+            "application/json",
+            false,
+            true,
+            Some(JsonTopLevelType::Object),
+        )
+        .unwrap();
+
+        record_remote_read_observation(&mut store, id, &observation).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+        assert_eq!(records[0].observation.query_parameters(), observation.query_parameters());
+        assert_eq!(records[0].provenance, None);
+    }
+
+    #[test]
     fn legacy_v1_observation_replays_without_fixture_provenance() {
         let mut store = MemoryEventStore::default();
         let id = RemoteReadObservationId::new();
@@ -613,6 +839,44 @@ mod tests {
             assert!(error.contains("forbidden private field"));
             assert!(!error.contains("PRIVATE"));
         }
+    }
+
+    #[test]
+    fn broad_or_raw_query_value_fields_are_rejected() {
+        for field in ["query_values", "query_parameters", "approvedQueryParameters"] {
+            let mut store = MemoryEventStore::default();
+            let id = RemoteReadObservationId::new();
+            let mut payload = base_payload(id);
+            payload
+                .as_object_mut()
+                .unwrap()
+                .insert(field.to_owned(), Value::String("PRIVATE".to_owned()));
+            append_raw(&mut store, id, payload);
+
+            let error = replay_remote_read_audit(store.events()).unwrap_err();
+            assert!(error.contains("forbidden private field"));
+            assert!(!error.contains("PRIVATE"));
+        }
+    }
+
+    #[test]
+    fn v3_rejects_unapproved_query_parameter_without_echoing_value() {
+        let mut store = MemoryEventStore::default();
+        let id = RemoteReadObservationId::new();
+        let mut payload = base_payload(id);
+        payload["version"] = json!(REMOTE_READ_VERSION_V3);
+        payload["experiment"] = json!("C02-open-conversation");
+        payload["flow"] = json!("conversation_fetch");
+        payload["path"] = json!("/backend-api/conversations/<id>");
+        payload["query_keys"] = json!(["secret_key"]);
+        payload["approved_query_parameters"] = json!([
+            {"key": "secret_key", "kind": "integer", "value": "PRIVATE-QUERY-SECRET"}
+        ]);
+        append_raw(&mut store, id, payload);
+
+        let error = replay_remote_read_audit(store.events()).unwrap_err();
+        assert!(!error.contains("PRIVATE-QUERY-SECRET"));
+        assert!(!error.contains("secret_key"));
     }
 
     #[test]
