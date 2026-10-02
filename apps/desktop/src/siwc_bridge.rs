@@ -132,6 +132,49 @@ fn bridge_worker(
     events: Sender<BridgeEvent>,
     repaint: egui::Context,
 ) {
+    let node_version = ProcessCommand::new("node").arg("--version").output();
+    let node_version = match node_version {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_owned(),
+        Ok(output) => {
+            send_event(
+                &events,
+                &repaint,
+                BridgeEvent::RuntimeUnavailable(format!(
+                    "Node.js could not report its version (exit status {})",
+                    output.status
+                )),
+            );
+            return;
+        }
+        Err(error) => {
+            send_event(
+                &events,
+                &repaint,
+                BridgeEvent::RuntimeUnavailable(format!(
+                    "Node.js 22 or newer is required for Sign in with ChatGPT: {error}"
+                )),
+            );
+            return;
+        }
+    };
+    let node_major = node_version
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|major| major.parse::<u64>().ok());
+    if !node_major.is_some_and(|major| major >= 22) {
+        send_event(
+            &events,
+            &repaint,
+            BridgeEvent::RuntimeUnavailable(format!(
+                "Node.js 22 or newer is required for Sign in with ChatGPT; found {node_version}"
+            )),
+        );
+        return;
+    }
+
     let bootstrap = bootstrap_script_path();
     let prepared = ProcessCommand::new("node")
         .arg(&bootstrap)
