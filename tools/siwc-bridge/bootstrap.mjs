@@ -47,6 +47,45 @@ function runPackageTool(command, args, options = {}) {
   return run(command, args, options);
 }
 
+function packageToolAvailable(command) {
+  return new Promise((resolvePromise) => {
+    const executable =
+      process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : command;
+    const args =
+      process.platform === "win32"
+        ? ["/d", "/s", "/c", command, "--version"]
+        : ["--version"];
+    const child = spawn(executable, args, {
+      cwd: repoRoot,
+      stdio: "ignore",
+      shell: false,
+    });
+    child.once("error", () => resolvePromise(false));
+    child.once("exit", (code) => resolvePromise(code === 0));
+  });
+}
+
+const fallbackNpmVersion = "11.6.2";
+
+async function runPinnedNpm(args, options = {}) {
+  if (await packageToolAvailable("npm")) {
+    return runPackageTool("npm", args, options);
+  }
+  if (await packageToolAvailable("pnpm")) {
+    console.log(
+      `npm is not installed; using pnpm to run pinned npm@${fallbackNpmVersion}.`,
+    );
+    return runPackageTool(
+      "pnpm",
+      ["dlx", `npm@${fallbackNpmVersion}`, ...args],
+      options,
+    );
+  }
+  throw new Error(
+    "Chatarium needs npm or pnpm to prepare the pinned Sign in with ChatGPT runtime. Neither command is available.",
+  );
+}
+
 function capture(command, args, options = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
@@ -156,8 +195,7 @@ if (alreadyBuilt) {
   process.exit(0);
 }
 
-await runPackageTool(
-  "npm",
+await runPinnedNpm(
   [
     "ci",
     "--workspace",
@@ -167,8 +205,7 @@ await runPackageTool(
   { cwd: devkitRoot },
 );
 
-await runPackageTool(
-  "npm",
+await runPinnedNpm(
   ["run", "build", "--workspace", "@siwc/local"],
   { cwd: devkitRoot },
 );
