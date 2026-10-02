@@ -82,12 +82,18 @@ try {
   ]);
 }
 
-const commit = await capture("git", ["rev-parse", "HEAD"], {
-  cwd: devkitRoot,
-});
-if (commit !== expectedCommit) {
+const submoduleStatus = await capture("git", [
+  "submodule",
+  "status",
+  "--",
+  "vendor/openai-sign-in-with-chatgpt-devkit",
+]);
+const statusMatch = submoduleStatus.match(/^([ +\-U])?([0-9a-f]{40})\s/);
+const commit = statusMatch?.[2];
+const prefix = statusMatch?.[1] ?? " ";
+if (commit !== expectedCommit || prefix !== " ") {
   throw new Error(
-    `Pinned Sign in with ChatGPT DevKit mismatch: expected ${expectedCommit}, got ${commit}`,
+    `Pinned Sign in with ChatGPT DevKit mismatch: expected checked-out ${expectedCommit}, got ${commit ?? "unknown"} (status ${JSON.stringify(prefix)})`,
   );
 }
 
