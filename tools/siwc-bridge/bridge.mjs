@@ -278,7 +278,8 @@ const input = createInterface({
   crlfDelay: Infinity,
 });
 
-let queue = Promise.resolve();
+const inFlight = new Set();
+
 input.on("line", (line) => {
   let command;
   try {
@@ -294,12 +295,16 @@ input.on("line", (line) => {
     });
     return;
   }
-  queue = queue.then(() => handle(command));
+
+  const operation = handle(command).finally(() => {
+    inFlight.delete(operation);
+  });
+  inFlight.add(operation);
 });
 
 input.once("close", async () => {
   try {
-    await queue;
+    await Promise.allSettled([...inFlight]);
   } finally {
     process.exit(0);
   }
