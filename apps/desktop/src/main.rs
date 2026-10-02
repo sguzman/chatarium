@@ -262,6 +262,27 @@ impl ChatariumApp {
         }
     }
 
+    fn queue_turn_event(
+        &mut self,
+        turn_id: LocalTurnId,
+        kind: EventKind,
+        payload: String,
+    ) -> bool {
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot persist remote turn evidence: persistence unavailable".to_owned();
+            return false;
+        };
+        if let Err(error) = sender.send(PersistCommand::AppendTurnEvent {
+            turn_id,
+            kind,
+            payload,
+        }) {
+            self.status = format!("failed to queue remote turn evidence: {error}");
+            return false;
+        }
+        true
+    }
+
     fn process_notices(&mut self) {
         let notices = self
             .notice_rx
@@ -274,34 +295,136 @@ impl ChatariumApp {
                 PersistNotice::DraftSaved { revision, event } => {
                     self.saved_revision = self.saved_revision.max(revision);
                     self.events.push(event);
-                    if self.saved_revision == self.draft_revision && self.commit_in_flight.is_none()
+                    if self.saved_revision == self.draft_revision
+                        && self.commit_in_flight.is_none()
+                        && self.active_remote_turn.is_none()
                     {
                         self.status = "draft durable".to_owned();
                     }
                 }
-                PersistNotice::MessageCommitted { request_id, event } => {
+                PersistNotice::MessageCommitted {
+                    request_id,
+                    message,
+                    event,
+                } => {
                     let sequence = event.sequence;
                     self.events.push(event);
                     if self.commit_in_flight == Some(request_id) {
                         self.commit_in_flight = None;
                         self.evidence.commit_local_message();
-                        self.status =
-                            format!("user message durably committed as event #{sequence}");
                         self.draft.clear();
+
+                        if let Some(model) = self.commit_remote_intents.remove(&request_id) {
+                            let remote_request_id = message.turn_id.to_string();
+                            let input = responses_input(&projected_display_messages(&self.events));
+                            self.pending_remote_turn = Some(PendingRemoteTurn {
+                                turn_id: message.turn_id,
+                                request_id: remote_request_id.clone(),
+                                model: model.clone(),
+                                input,
+                            });
+                            let payload = remote_turn_payload(
+                                message.turn_id,
+                                &remote_request_id,
+                                Some(&model),
+                                None,
+                                None,
+                            );
+                            if self.queue_turn_event(
+                                message.turn_id,
+                                EventKind::DispatchAttempted,
+                                payload,
+                            ) {
+                                self.status = format!(
+                                    "message durable as event #{sequence}; preparing ChatGPT dispatch"
+                                );
+                            } else {
+                                self.pending_remote_turn = None;
+                            }
+                        } else {
+                            self.status =
+                                format!("user message durably committed as event #{sequence}");
+                        }
+
                         self.queue_draft_snapshot();
+                    }
+                }
+                PersistNotice::TurnEventAppended {
+                    turn_id,
+                    kind,
+                    event,
+                } => {
+                    self.events.push(event);
+                    if kind == EventKind::DispatchAttempted
+                        && self
+                            .pending_remote_turn
+                            .as_ref()
+                            .is_some_and(|pending| pending.turn_id == turn_id)
+                    {
+                        let pending = self
+                            .pending_remote_turn
+                            .take()
+                            .expect("checked pending remote turn");
+                        let command = siwc_bridge::BridgeCommand::StreamResponse {
+                            request_id: pending.request_id.clone(),
+                            model: pending.model.clone(),
+                            input: pending.input,
+                        };
+                        match self.remote.send(command) {
+                            Ok(()) => {
+                                self.active_remote_turn = Some(ActiveRemoteTurn {
+                                    turn_id,
+                                    request_id: pending.request_id,
+                                    cumulative_text: String::new(),
+                                    observed_output: false,
+                                });
+                                self.remote_status = format!(
+                                    "sending with {}",
+                                    pending.model
+                                );
+                            }
+                            Err(error) => {
+                                let payload = remote_turn_payload(
+                                    turn_id,
+                                    &pending.request_id,
+                                    Some(&pending.model),
+                                    None,
+                                    Some("bridge command channel closed before outcome"),
+                                );
+                                let _ = self.queue_turn_event(
+                                    turn_id,
+                                    EventKind::TransportInterrupted,
+                                    payload,
+                                );
+                                self.remote_status = error;
+                            }
+                        }
                     }
                 }
                 PersistNotice::Failed {
                     operation,
                     revision,
                     request_id,
+                    turn_id,
                     error,
                 } => {
                     if request_id.is_some() && request_id == self.commit_in_flight {
+                        if let Some(request_id) = request_id {
+                            self.commit_remote_intents.remove(&request_id);
+                        }
                         self.commit_in_flight = None;
                     }
                     if let Some(revision) = revision {
                         self.saved_revision = self.saved_revision.min(revision.saturating_sub(1));
+                    }
+                    if let Some(turn_id) = turn_id {
+                        if self
+                            .pending_remote_turn
+                            .as_ref()
+                            .is_some_and(|pending| pending.turn_id == turn_id)
+                        {
+                            self.pending_remote_turn = None;
+                        }
                     }
                     self.status = format!("{operation} failed: {error}");
                 }
