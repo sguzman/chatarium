@@ -219,6 +219,9 @@ async function handle(command) {
         break;
       }
       case "sign_in": {
+        // Fail before opening an OAuth flow if Chatarium cannot protect the
+        // rotating credentials that a successful sign-in would create.
+        await loadCredentialKey();
         const session = await chatgpt.signIn({
           ...(command.new_profile ? { newProfile: true } : {}),
           ...(typeof command.profile_id === "string"
