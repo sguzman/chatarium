@@ -380,7 +380,10 @@ impl eframe::App for ChatariumApp {
 
                 let response = egui::Frame::default()
                     .fill(composer_fill)
-                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(54, 57, 66)))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(54, 57, 66),
+                    ))
                     .corner_radius(egui::CornerRadius::same(12))
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
