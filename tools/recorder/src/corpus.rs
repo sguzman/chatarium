@@ -214,6 +214,10 @@ fn validate_fixture(path: &Path, revision: &str) -> Result<FixtureValidationKind
 }
 
 fn validate_read_fixture(fixture: &Value) -> Result<(), String> {
+    let experiment = fixture
+        .get("experiment")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "C01/C02 read fixture is missing experiment".to_owned())?;
     let reads = fixture
         .get("read_responses")
         .and_then(Value::as_array)
@@ -248,12 +252,131 @@ fn validate_read_fixture(fixture: &Value) -> Result<(), String> {
             ));
         }
 
+        if let Some(parameters) = read.get("query_parameters") {
+            validate_read_query_parameters(experiment, path, read, parameters, index)?;
+        }
+
         if let Some(body) = read.get("body") {
             validate_read_body_placeholders(body, &format!("/read_responses/{index}/body"))?;
         }
     }
 
     Ok(())
+}
+
+fn validate_read_query_parameters(
+    experiment: &str,
+    path: &str,
+    read: &Value,
+    parameters: &Value,
+    read_index: usize,
+) -> Result<(), String> {
+    if experiment != C02_EXPERIMENT || !sanitized_c02_path(path) {
+        return Err(format!(
+            "read response {read_index} contains query-value evidence outside C02 conversation fetch"
+        ));
+    }
+    let query_keys = read
+        .get("query_keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            format!("read response {read_index} with query-value evidence is missing query_keys")
+        })?;
+    let query_keys = query_keys
+        .iter()
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                format!("read response {read_index} query_keys contains non-string")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let parameters = parameters.as_array().ok_or_else(|| {
+        format!("read response {read_index} query_parameters must be an array")
+    })?;
+    for parameter in parameters {
+        let object = parameter.as_object().ok_or_else(|| {
+            format!("read response {read_index} query parameter must be an object")
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "kind" | "value"))
+        {
+            return Err(format!(
+                "read response {read_index} query parameter has unsupported field"
+            ));
+        }
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!("read response {read_index} query parameter is missing string key")
+        })?;
+        if !matches!(key, "include_has_versions" | "num_turns") {
+            return Err(format!(
+                "read response {read_index} query parameter uses unapproved key"
+            ));
+        }
+        if !query_keys.contains(&key) {
+            return Err(format!(
+                "read response {read_index} query parameter key is absent from query_keys"
+            ));
+        }
+        let kind = object.get("kind").and_then(Value::as_str).ok_or_else(|| {
+            format!("read response {read_index} query parameter is missing string kind")
+        })?;
+        let value = object.get("value");
+        match kind {
+            "empty" if value.and_then(Value::as_str) == Some("") => {}
+            "boolean"
+                if matches!(value.and_then(Value::as_str), Some("true" | "false")) => {}
+            "integer"
+                if value
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_safe_query_integer) => {}
+            "redacted" if value.is_none() => {}
+            "empty" | "boolean" | "integer" | "redacted" => {
+                return Err(format!(
+                    "read response {read_index} query parameter has invalid safe value evidence"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "read response {read_index} query parameter has unsupported kind"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sanitized_c02_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/backend-api/conversations/") else {
+        return false;
+    };
+    !rest.is_empty() && !rest.contains('/')
+}
+
+fn valid_safe_query_integer(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 11 || !bytes.is_ascii() {
+        return false;
+    }
+    let digits = if bytes[0] == b'-' {
+        if bytes.len() == 1 {
+            return false;
+        }
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    if digits.len() > 10 || !digits.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    if digits.len() > 1 && digits[0] == b'0' {
+        return false;
+    }
+    if bytes[0] == b'-' && digits == b"0" {
+        return false;
+    }
+    true
 }
 
 fn validate_read_body_placeholders(value: &Value, path: &str) -> Result<(), String> {
@@ -661,6 +784,67 @@ mod tests {
         assert!(error.contains("non-placeholder string content"));
         assert!(!error.contains("PRIVATE CONVERSATION TITLE"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c02_read_fixture_accepts_only_narrow_safe_query_value_evidence() {
+        let root = temp_protocol();
+        let fixture = json!({
+            "snapshot": "2026-09-29.002",
+            "experiment": C02_EXPERIMENT,
+            "read_responses": [{
+                "method": "GET",
+                "path": "/backend-api/conversations/<id:1>",
+                "query_keys": ["include_has_versions", "num_turns"],
+                "query_parameters": [
+                    {"key": "include_has_versions", "kind": "boolean", "value": "true"},
+                    {"key": "num_turns", "kind": "integer", "value": "33"},
+                    {"key": "num_turns", "kind": "redacted"}
+                ],
+                "body": {"messages": []}
+            }]
+        });
+        fs::write(
+            root.join("fixtures/2026-09-29.002/c02-query.json"),
+            serde_json::to_vec_pretty(&fixture).unwrap(),
+        )
+        .unwrap();
+
+        let report = validate_corpus(&root).unwrap();
+        assert_eq!(report.read_fixtures, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c02_read_fixture_rejects_unsafe_query_values_without_echoing_them() {
+        for parameter in [
+            json!({"key": "secret_key", "kind": "integer", "value": "33"}),
+            json!({"key": "num_turns", "kind": "integer", "value": "PRIVATE-QUERY-SECRET"}),
+            json!({"key": "num_turns", "kind": "redacted", "value": "PRIVATE-QUERY-SECRET"}),
+        ] {
+            let root = temp_protocol();
+            let fixture = json!({
+                "snapshot": "2026-09-29.002",
+                "experiment": C02_EXPERIMENT,
+                "read_responses": [{
+                    "method": "GET",
+                    "path": "/backend-api/conversations/<id:1>",
+                    "query_keys": ["include_has_versions", "num_turns", "secret_key"],
+                    "query_parameters": [parameter],
+                    "body": {"messages": []}
+                }]
+            });
+            fs::write(
+                root.join("fixtures/2026-09-29.002/c02-query-private.json"),
+                serde_json::to_vec_pretty(&fixture).unwrap(),
+            )
+            .unwrap();
+
+            let error = validate_corpus(&root).unwrap_err();
+            assert!(!error.contains("PRIVATE-QUERY-SECRET"));
+            assert!(!error.contains("secret_key"));
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
