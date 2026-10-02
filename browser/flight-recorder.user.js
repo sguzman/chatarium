@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Flight Recorder
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.7.1
+// @version      0.7.2
 // @description  Local durability layer for ChatGPT drafts, send intents, assistant output, and visible failures.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -17,7 +17,7 @@
   // independent Chatarium surfaces. Running the recorder in them polluted the event stream.
   if (window.top !== window.self) return;
 
-  const VERSION = '0.7.1';
+  const VERSION = '0.7.2';
   const DB_NAME = 'chatarium-flight-recorder';
   const DB_VERSION = 1;
   const DRAFT_WAL_PREFIX = 'chatarium:p0:draft-wal:';
@@ -31,6 +31,9 @@
   const MAX_NETWORK_STREAM_BYTES = 8_000_000;
   const MAX_READ_RESPONSE_BYTES = 1_000_000;
   const MAX_READ_RUN_BYTES = 4_000_000;
+  const APPROVED_C02_QUERY_KEYS = new Set(['include_has_versions', 'num_turns']);
+  const MAX_APPROVED_QUERY_INTEGER_DIGITS = 10;
+  const C02_CONVERSATION_READ_PATH = /^\/backend-api\/conversations\/[^/]+$/;
   const COMPOSER_POLL_MS = 250;
   const EXPORT_HOTKEY = { ctrlKey: true, shiftKey: true, altKey: true, code: 'KeyE' };
 
@@ -142,6 +145,35 @@
     });
   }
 
+  function approvedC02QueryEvidence(url, method) {
+    if (
+      (method !== 'GET' && method !== 'HEAD')
+      || url.origin !== location.origin
+      || !C02_CONVERSATION_READ_PATH.test(url.pathname)
+    ) {
+      return null;
+    }
+
+    const evidence = [];
+    for (const [key, value] of url.searchParams.entries()) {
+      if (!APPROVED_C02_QUERY_KEYS.has(key)) continue;
+
+      const integerMatch = /^-?\d+$/.test(value);
+      const integerDigits = integerMatch ? value.replace(/^-/, '').length : 0;
+      const safeLiteral = value === ''
+        || value === 'true'
+        || value === 'false'
+        || (integerMatch
+          && integerDigits >= 1
+          && integerDigits <= MAX_APPROVED_QUERY_INTEGER_DIGITS);
+
+      evidence.push(safeLiteral
+        ? { key, value }
+        : { key, unsupported: true });
+    }
+    return evidence;
+  }
+
   function networkRequestInfo(input, init) {
     try {
       const requestUrl = input instanceof Request
@@ -156,6 +188,7 @@
         url,
         method,
         queryKeys: [...new Set([...url.searchParams.keys()])].sort(),
+        queryEvidence: approvedC02QueryEvidence(url, method),
         captureStream: method === 'POST'
           && url.origin === location.origin
           && url.pathname === '/backend-api/f/conversation',
@@ -166,6 +199,7 @@
         url: null,
         method: null,
         queryKeys: [],
+        queryEvidence: null,
         captureStream: false,
         readEligible: false,
       };
@@ -270,6 +304,7 @@
       method: requestInfo.method,
       endpoint: requestInfo.url?.pathname ?? '<unknown>',
       queryKeys: requestInfo.queryKeys,
+      ...(requestInfo.queryEvidence === null ? {} : { queryEvidence: requestInfo.queryEvidence }),
     });
     scheduleStatusRefresh();
     return run;
@@ -626,6 +661,7 @@
       method: requestInfo.method,
       endpoint,
       queryKeys: requestInfo.queryKeys,
+      ...(requestInfo.queryEvidence === null ? {} : { queryEvidence: requestInfo.queryEvidence }),
       status: response.status,
       contentType,
       privateEvidence: true,
@@ -896,6 +932,7 @@
                   method: requestInfo.method,
                   endpoint: requestInfo.url?.pathname ?? '<unknown>',
                   queryKeys: requestInfo.queryKeys,
+                  ...(requestInfo.queryEvidence === null ? {} : { queryEvidence: requestInfo.queryEvidence }),
                   capturedBytes: 0,
                   message: `clone response: ${String(error?.message ?? error)}`,
                 });
@@ -921,6 +958,7 @@
                 method: requestInfo.method,
                 endpoint: requestInfo.url?.pathname ?? '<unknown>',
                 queryKeys: requestInfo.queryKeys,
+                ...(requestInfo.queryEvidence === null ? {} : { queryEvidence: requestInfo.queryEvidence }),
                 message: String(error?.message ?? error),
               });
               scheduleStatusRefresh();
