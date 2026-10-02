@@ -37,6 +37,8 @@ struct FlightSanitizationStats {
     read_responses_reduced: u64,
     read_string_values_generalized: u64,
     read_identity_values_placeholdered: u64,
+    read_query_parameters_retained: u64,
+    read_query_parameters_redacted: u64,
     read_truncated_bodies_omitted: u64,
     malformed_read_json_fail_closed: u64,
 }
@@ -68,6 +70,8 @@ impl FlightSanitizationStats {
                 "read_responses_reduced": self.read_responses_reduced,
                 "read_string_values_generalized": self.read_string_values_generalized,
                 "read_identity_values_placeholdered": self.read_identity_values_placeholdered,
+                "read_query_parameters_retained": self.read_query_parameters_retained,
+                "read_query_parameters_redacted": self.read_query_parameters_redacted,
                 "read_truncated_bodies_omitted": self.read_truncated_bodies_omitted,
                 "malformed_read_json_fail_closed": self.malformed_read_json_fail_closed,
             },
@@ -927,6 +931,15 @@ fn sanitize_read_response_event(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let approved_query_parameters = sanitize_approved_c02_query_parameters(
+        payload,
+        raw_path,
+        method,
+        &query_keys,
+        seq,
+        stats,
+    )?;
+
     let content_type = payload
         .get("contentType")
         .and_then(Value::as_str)
@@ -979,7 +992,7 @@ fn sanitize_read_response_event(
         (reduced, Some(top), shape, None)
     };
 
-    let sanitized = json!({
+    let mut sanitized = json!({
         "read": public_id,
         "method": method,
         "path": path,
@@ -991,8 +1004,17 @@ fn sanitize_read_response_event(
         "body_present": body_present,
         "body": body,
     });
+    if let Some(parameters) = approved_query_parameters.as_ref() {
+        sanitized
+            .as_object_mut()
+            .expect("sanitized read is an object")
+            .insert(
+                "query_parameters".to_owned(),
+                Value::Array(parameters.clone()),
+            );
+    }
 
-    let inventory = json!({
+    let mut inventory = json!({
         "read": public_id,
         "method": method,
         "path": sanitized.get("path"),
@@ -1005,8 +1027,161 @@ fn sanitize_read_response_event(
         "shape": shape,
         "warning": body_warning,
     });
+    if let Some(parameters) = approved_query_parameters {
+        inventory
+            .as_object_mut()
+            .expect("read inventory is an object")
+            .insert("query_parameters".to_owned(), Value::Array(parameters));
+    }
 
     Ok((sanitized, inventory))
+}
+
+fn sanitize_approved_c02_query_parameters(
+    payload: &Map<String, Value>,
+    raw_path: &str,
+    method: &str,
+    query_keys: &[String],
+    seq: u64,
+    stats: &mut FlightSanitizationStats,
+) -> Result<Option<Vec<Value>>, String> {
+    let Some(raw_parameters) = payload.get("approvedQueryParameters") else {
+        return Ok(None);
+    };
+    if !matches!(method, "GET" | "HEAD") || !raw_c02_conversation_path(raw_path) {
+        return Err(format!(
+            "seq {seq}: approved query-value evidence appeared outside the C02 conversation-fetch boundary"
+        ));
+    }
+    let raw_parameters = raw_parameters.as_array().ok_or_else(|| {
+        format!("seq {seq}: approved C02 query parameters must be an array")
+    })?;
+
+    let mut output = Vec::with_capacity(raw_parameters.len());
+    for raw in raw_parameters {
+        let object = raw.as_object().ok_or_else(|| {
+            format!("seq {seq}: approved C02 query parameter entry must be an object")
+        })?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "key" | "kind" | "value"))
+        {
+            return Err(format!(
+                "seq {seq}: approved C02 query parameter entry contains an unsupported field"
+            ));
+        }
+
+        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
+            format!("seq {seq}: approved C02 query parameter entry is missing string key")
+        })?;
+        if !matches!(key, "include_has_versions" | "num_turns") {
+            return Err(format!(
+                "seq {seq}: approved C02 query parameter entry uses an unapproved key"
+            ));
+        }
+        if !query_keys.iter().any(|observed| observed == key) {
+            return Err(format!(
+                "seq {seq}: approved C02 query parameter entry was not present in queryKeys"
+            ));
+        }
+
+        let kind = object.get("kind").and_then(Value::as_str).ok_or_else(|| {
+            format!("seq {seq}: approved C02 query parameter entry is missing string kind")
+        })?;
+        let value = object.get("value");
+        let sanitized = match kind {
+            "empty" => {
+                if value.and_then(Value::as_str) != Some("") {
+                    return Err(format!(
+                        "seq {seq}: approved C02 empty query parameter has invalid value evidence"
+                    ));
+                }
+                stats.read_query_parameters_retained =
+                    stats.read_query_parameters_retained.saturating_add(1);
+                json!({"key": key, "kind": "empty", "value": ""})
+            }
+            "boolean" => {
+                let Some(value) = value.and_then(Value::as_str) else {
+                    return Err(format!(
+                        "seq {seq}: approved C02 boolean query parameter is missing safe value evidence"
+                    ));
+                };
+                if !matches!(value, "true" | "false") {
+                    return Err(format!(
+                        "seq {seq}: approved C02 boolean query parameter has invalid value evidence"
+                    ));
+                }
+                stats.read_query_parameters_retained =
+                    stats.read_query_parameters_retained.saturating_add(1);
+                json!({"key": key, "kind": "boolean", "value": value})
+            }
+            "integer" => {
+                let Some(value) = value.and_then(Value::as_str) else {
+                    return Err(format!(
+                        "seq {seq}: approved C02 integer query parameter is missing safe value evidence"
+                    ));
+                };
+                if !valid_safe_query_integer(value) {
+                    return Err(format!(
+                        "seq {seq}: approved C02 integer query parameter has invalid value evidence"
+                    ));
+                }
+                stats.read_query_parameters_retained =
+                    stats.read_query_parameters_retained.saturating_add(1);
+                json!({"key": key, "kind": "integer", "value": value})
+            }
+            "redacted" => {
+                if value.is_some() {
+                    return Err(format!(
+                        "seq {seq}: redacted C02 query parameter must not contain a value"
+                    ));
+                }
+                stats.read_query_parameters_redacted =
+                    stats.read_query_parameters_redacted.saturating_add(1);
+                json!({"key": key, "kind": "redacted"})
+            }
+            _ => {
+                return Err(format!(
+                    "seq {seq}: approved C02 query parameter has unsupported kind"
+                ));
+            }
+        };
+        output.push(sanitized);
+    }
+
+    Ok(Some(output))
+}
+
+fn raw_c02_conversation_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/backend-api/conversations/") else {
+        return false;
+    };
+    !rest.is_empty() && !rest.contains('/')
+}
+
+fn valid_safe_query_integer(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 11 || !bytes.is_ascii() {
+        return false;
+    }
+    let digits = if bytes[0] == b'-' {
+        if bytes.len() == 1 {
+            return false;
+        }
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    if digits.len() > 10 || !digits.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    if digits.len() > 1 && digits[0] == b'0' {
+        return false;
+    }
+    if bytes[0] == b'-' && digits == b"0" {
+        return false;
+    }
+    true
 }
 
 fn json_content_type(content_type: &str) -> bool {
@@ -1797,6 +1972,23 @@ type = "observe_conversation_list"
 
 [success]
 type = "conversation_list_visible"
+"#,
+        )
+        .unwrap()
+    }
+
+    fn c02_read_experiment() -> ExperimentDefinition {
+        toml::from_str(
+            r#"
+schema = "chatarium-experiment"
+version = 1
+id = "C02-open-conversation"
+
+[action]
+type = "open_existing_conversation"
+
+[success]
+type = "conversation_visible"
 "#,
         )
         .unwrap()
@@ -2625,6 +2817,132 @@ data: [DONE]
         assert_eq!(
             derived.pointer("/sanitization_report/counts/raw_read_response_bodies_copied"),
             Some(&json!(0))
+        );
+    }
+
+    #[test]
+    fn c02_safe_query_value_evidence_survives_public_sanitization_exactly() {
+        let mut export = export_with_read_body("{\"messages\":[]}", false);
+        export["recorderVersion"] = json!("0.7.2");
+        let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
+        event["payload"]["endpoint"] =
+            json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
+        event["payload"]["queryKeys"] =
+            json!(["include_has_versions", "num_turns", "unapproved"]);
+        event["payload"]["approvedQueryParameters"] = json!([
+            {"key": "include_has_versions", "kind": "boolean", "value": "true"},
+            {"key": "num_turns", "kind": "integer", "value": "33"},
+            {"key": "num_turns", "kind": "integer", "value": "64"}
+        ]);
+
+        let selected = select_latest_run(&export).unwrap();
+        let derived = derive_sanitized_run(
+            &export,
+            &selected,
+            &c02_read_experiment(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        let expected = json!([
+            {"key": "include_has_versions", "kind": "boolean", "value": "true"},
+            {"key": "num_turns", "kind": "integer", "value": "33"},
+            {"key": "num_turns", "kind": "integer", "value": "64"}
+        ]);
+        assert_eq!(
+            derived.pointer("/sanitized/read_responses/0/query_parameters"),
+            Some(&expected)
+        );
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/query_parameters"),
+            Some(&expected)
+        );
+        assert_eq!(
+            derived.pointer("/sanitization_report/counts/read_query_parameters_retained"),
+            Some(&json!(3))
+        );
+        assert!(!serde_json::to_string(&derived).unwrap().contains("unapproved="));
+    }
+
+    #[test]
+    fn c02_redacted_query_value_preserves_presence_without_raw_value() {
+        let mut export = export_with_read_body("{\"messages\":[]}", false);
+        export["recorderVersion"] = json!("0.7.2");
+        let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
+        event["payload"]["endpoint"] =
+            json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
+        event["payload"]["queryKeys"] = json!(["include_has_versions"]);
+        event["payload"]["approvedQueryParameters"] =
+            json!([{"key": "include_has_versions", "kind": "redacted"}]);
+
+        let selected = select_latest_run(&export).unwrap();
+        let derived = derive_sanitized_run(
+            &export,
+            &selected,
+            &c02_read_experiment(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            derived.pointer("/sanitized/read_responses/0/query_parameters/0"),
+            Some(&json!({"key": "include_has_versions", "kind": "redacted"}))
+        );
+        assert_eq!(
+            derived.pointer("/sanitization_report/counts/read_query_parameters_redacted"),
+            Some(&json!(1))
+        );
+    }
+
+    #[test]
+    fn malformed_or_overbroad_query_value_evidence_fails_without_echoing_raw_value() {
+        for unsafe_parameter in [
+            json!({"key": "secret_parameter", "kind": "integer", "value": "123"}),
+            json!({"key": "num_turns", "kind": "integer", "value": "PRIVATE-QUERY-SECRET"}),
+            json!({"key": "num_turns", "kind": "redacted", "value": "PRIVATE-QUERY-SECRET"}),
+        ] {
+            let mut export = export_with_read_body("{\"messages\":[]}", false);
+            export["recorderVersion"] = json!("0.7.2");
+            let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
+            event["payload"]["endpoint"] =
+                json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
+            event["payload"]["queryKeys"] =
+                json!(["include_has_versions", "num_turns", "secret_parameter"]);
+            event["payload"]["approvedQueryParameters"] = json!([unsafe_parameter]);
+
+            let selected = select_latest_run(&export).unwrap();
+            let error = derive_sanitized_run(
+                &export,
+                &selected,
+                &c02_read_experiment(),
+                &BTreeSet::new(),
+            )
+            .unwrap_err();
+
+            assert!(!error.contains("PRIVATE-QUERY-SECRET"));
+            assert!(!error.contains("secret_parameter"));
+        }
+    }
+
+    #[test]
+    fn historical_read_without_query_value_evidence_remains_value_unknown() {
+        let export = export_with_read_body("{\"messages\":[]}", false);
+        let selected = select_latest_run(&export).unwrap();
+        let derived = derive_sanitized_run(
+            &export,
+            &selected,
+            &read_experiment(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            derived.pointer("/sanitized/read_responses/0/query_parameters"),
+            None
+        );
+        assert_eq!(
+            derived.pointer("/inventory/read_responses/0/query_parameters"),
+            None
         );
     }
 
