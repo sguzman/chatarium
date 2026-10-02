@@ -476,14 +476,21 @@ fn escape_pointer_segment(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_PROTOCOL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn temp_protocol() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("chatarium-corpus-test-{nonce}"));
+        let sequence = TEMP_PROTOCOL_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-corpus-test-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         write_test_snapshot(&root, "2026-09-29.001");
         write_test_snapshot(&root, "2026-09-29.002");
         fs::create_dir_all(root.join("fixtures/2026-09-29.002")).unwrap();
