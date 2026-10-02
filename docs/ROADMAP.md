@@ -79,6 +79,8 @@ Local and remote conversation identity are separate first-class domains, with re
 
 Exit criterion: Chatarium can mirror selected existing conversations into local durable state and explain incompatibilities against a named protocol snapshot.
 
+A product-shaped native desktop shell has been pulled forward as a local test surface while P3 completes. It is not counted as P5 completion: it currently exercises durable composition, typed local authored-message identity, restart recovery, and durable transcript rendering without claiming remote connectivity. This keeps the reliability work continuously visible/testable instead of waiting for all remote phases before exposing the application surface.
+
 ## P4 — direct text turns
 
 Add controlled remote mutation support.
