@@ -94,25 +94,18 @@ if (commit !== expectedCommit) {
 await runPackageTool(
   "npm",
   [
-    "install",
-    "--no-save",
-    "--no-package-lock",
-    "--include=dev",
-    "--workspaces=false",
-    "typescript@7.0.2",
-    "@types/node@24.0.0",
+    "ci",
+    "--workspace",
+    "@siwc/local",
+    "--include-workspace-root",
   ],
-  { cwd: localRoot },
+  { cwd: devkitRoot },
 );
 
-await run(
-  process.execPath,
-  [
-    resolve(localRoot, "node_modules/typescript/bin/tsc"),
-    "-p",
-    "tsconfig.json",
-  ],
-  { cwd: localRoot },
+await runPackageTool(
+  "npm",
+  ["run", "build", "--workspace", "@siwc/local"],
+  { cwd: devkitRoot },
 );
 
 console.log("Chatarium Sign in with ChatGPT DevKit is ready.");
