@@ -68,7 +68,8 @@ function packageToolAvailable(command) {
 const fallbackNpmVersion = "11.6.2";
 
 async function runPinnedNpm(args, options = {}) {
-  if (await packageToolAvailable("npm")) {
+  const forcePnpm = process.env.CHATARIUM_FORCE_PNPM_NPM === "1";
+  if (!forcePnpm && (await packageToolAvailable("npm"))) {
     return runPackageTool("npm", args, options);
   }
   if (await packageToolAvailable("pnpm")) {
