@@ -1046,9 +1046,9 @@ fn sanitize_read_query_evidence(
     let mut sanitized = Vec::with_capacity(entries.len());
 
     for (index, entry) in entries.iter().enumerate() {
-        let object = entry.as_object().ok_or_else(|| {
-            format!("seq {seq}: queryEvidence entry {index} must be an object")
-        })?;
+        let object = entry
+            .as_object()
+            .ok_or_else(|| format!("seq {seq}: queryEvidence entry {index} must be an object"))?;
         if object
             .keys()
             .any(|key| !matches!(key.as_str(), "key" | "value" | "unsupported"))
@@ -1058,9 +1058,10 @@ fn sanitize_read_query_evidence(
             ));
         }
 
-        let key = object.get("key").and_then(Value::as_str).ok_or_else(|| {
-            format!("seq {seq}: queryEvidence entry {index} is missing key")
-        })?;
+        let key = object
+            .get("key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("seq {seq}: queryEvidence entry {index} is missing key"))?;
         if !query_keys.iter().any(|candidate| candidate == key) {
             return Err(format!(
                 "seq {seq}: queryEvidence entry {index} key is absent from queryKeys"
@@ -2732,7 +2733,10 @@ data: [DONE]
 
     #[test]
     fn v072_c02_safe_query_values_survive_sanitization_in_order() {
-        let mut export = export_with_read_body(r#"{"conversation_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}"#, false);
+        let mut export = export_with_read_body(
+            r#"{"conversation_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}"#,
+            false,
+        );
         export["recorderVersion"] = json!("0.7.2");
         let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
         event["payload"]["endpoint"] =
@@ -2789,13 +2793,14 @@ data: [DONE]
             let event = export["events"].as_array_mut().unwrap().last_mut().unwrap();
             event["payload"]["endpoint"] =
                 json!("/backend-api/conversations/12345678-abcd-1234-abcd-1234567890ab");
-            event["payload"]["queryKeys"] = json!(["include_has_versions", "num_turns", "unapproved"]);
+            event["payload"]["queryKeys"] =
+                json!(["include_has_versions", "num_turns", "unapproved"]);
             event["payload"]["queryEvidence"] = query_evidence;
 
             let selected = select_latest_run(&export).unwrap();
             let experiment = read_experiment();
-            let error =
-                derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new()).unwrap_err();
+            let error = derive_sanitized_run(&export, &selected, &experiment, &BTreeSet::new())
+                .unwrap_err();
 
             assert!(error.contains("queryEvidence"));
             assert!(!error.contains("PRIVATE-QUERY-SECRET"));
