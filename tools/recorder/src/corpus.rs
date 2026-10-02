@@ -274,21 +274,19 @@ fn validate_read_query_parameters(read: &Value, read_index: usize) -> Result<(),
     let query_keys = read
         .get("query_keys")
         .and_then(Value::as_array)
-        .ok_or_else(|| {
-            format!("read response {read_index} query_parameters require query_keys")
-        })?;
+        .ok_or_else(|| format!("read response {read_index} query_parameters require query_keys"))?;
     let query_keys = query_keys
         .iter()
         .map(|value| {
-            value.as_str().ok_or_else(|| {
-                format!("read response {read_index} query_keys contains non-string")
-            })
+            value
+                .as_str()
+                .ok_or_else(|| format!("read response {read_index} query_keys contains non-string"))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let parameters = raw.as_array().ok_or_else(|| {
-        format!("read response {read_index} query_parameters must be an array")
-    })?;
+    let parameters = raw
+        .as_array()
+        .ok_or_else(|| format!("read response {read_index} query_parameters must be an array"))?;
     for (index, parameter) in parameters.iter().enumerate() {
         let object = parameter.as_object().ok_or_else(|| {
             format!("read response {read_index} query parameter {index} must be an object")
