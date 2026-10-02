@@ -143,26 +143,38 @@ fn bridge_worker(
     let mut child = match child {
         Ok(child) => child,
         Err(error) => {
-            send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(format!(
-                "could not start Node.js Sign in with ChatGPT bridge at {}: {error}",
-                script.display()
-            )));
+            send_event(
+                &events,
+                &repaint,
+                BridgeEvent::RuntimeUnavailable(format!(
+                    "could not start Node.js Sign in with ChatGPT bridge at {}: {error}",
+                    script.display()
+                )),
+            );
             return;
         }
     };
 
     let Some(stdout) = child.stdout.take() else {
-        send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(
-            "Sign in with ChatGPT bridge did not expose stdout".to_owned(),
-        ));
+        send_event(
+            &events,
+            &repaint,
+            BridgeEvent::RuntimeUnavailable(
+                "Sign in with ChatGPT bridge did not expose stdout".to_owned(),
+            ),
+        );
         let _ = child.kill();
         let _ = child.wait();
         return;
     };
     let Some(mut stdin) = child.stdin.take() else {
-        send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(
-            "Sign in with ChatGPT bridge did not expose stdin".to_owned(),
-        ));
+        send_event(
+            &events,
+            &repaint,
+            BridgeEvent::RuntimeUnavailable(
+                "Sign in with ChatGPT bridge did not expose stdin".to_owned(),
+            ),
+        );
         let _ = child.kill();
         let _ = child.wait();
         return;
@@ -182,9 +194,13 @@ fn bridge_worker(
                         }
                     }
                     Err(error) => {
-                        send_event(&reader_events, &reader_repaint, BridgeEvent::RuntimeUnavailable(format!(
-                            "Sign in with ChatGPT bridge output failed: {error}"
-                        )));
+                        send_event(
+                            &reader_events,
+                            &reader_repaint,
+                            BridgeEvent::RuntimeUnavailable(format!(
+                                "Sign in with ChatGPT bridge output failed: {error}"
+                            )),
+                        );
                         break;
                     }
                 }
@@ -198,9 +214,13 @@ fn bridge_worker(
 
         let value = command_json(command);
         if writeln!(stdin, "{value}").is_err() || stdin.flush().is_err() {
-            send_event(&events, &repaint, BridgeEvent::RuntimeUnavailable(
-                "Sign in with ChatGPT bridge input closed".to_owned(),
-            ));
+            send_event(
+                &events,
+                &repaint,
+                BridgeEvent::RuntimeUnavailable(
+                    "Sign in with ChatGPT bridge input closed".to_owned(),
+                ),
+            );
             break;
         }
     }
@@ -213,11 +233,7 @@ fn bridge_worker(
     }
 }
 
-fn send_event(
-    events: &Sender<BridgeEvent>,
-    repaint: &egui::Context,
-    event: BridgeEvent,
-) {
+fn send_event(events: &Sender<BridgeEvent>, repaint: &egui::Context, event: BridgeEvent) {
     if events.send(event).is_ok() {
         repaint.request_repaint();
     }
