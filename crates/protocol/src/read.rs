@@ -678,18 +678,9 @@ mod tests {
     #[test]
     fn approved_c02_query_parameters_preserve_order_and_repetition() {
         let parameters = vec![
-            ReadQueryParameter::new(
-                "include_has_versions",
-                ReadQueryValue::Boolean(true),
-            ),
-            ReadQueryParameter::new(
-                "num_turns",
-                ReadQueryValue::Integer("33".to_owned()),
-            ),
-            ReadQueryParameter::new(
-                "num_turns",
-                ReadQueryValue::Integer("64".to_owned()),
-            ),
+            ReadQueryParameter::new("include_has_versions", ReadQueryValue::Boolean(true)),
+            ReadQueryParameter::new("num_turns", ReadQueryValue::Integer("33".to_owned())),
+            ReadQueryParameter::new("num_turns", ReadQueryValue::Integer("64".to_owned())),
         ];
         let observation = ReadObservation::new_with_query_parameters(
             "future-c02-observation",

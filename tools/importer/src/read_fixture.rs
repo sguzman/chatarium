@@ -265,9 +265,9 @@ fn validate_fixture_publication_safety(fixture: &Value) -> Result<(), String> {
 }
 
 fn validate_public_query_parameters(value: &Value, read_index: usize) -> Result<(), String> {
-    let parameters = value.as_array().ok_or_else(|| {
-        format!("read response {read_index} query_parameters must be an array")
-    })?;
+    let parameters = value
+        .as_array()
+        .ok_or_else(|| format!("read response {read_index} query_parameters must be an array"))?;
     for parameter in parameters {
         let object = parameter.as_object().ok_or_else(|| {
             format!("read response {read_index} query parameter must be an object")
@@ -429,9 +429,9 @@ fn optional_query_parameters(
     let Some(raw_parameters) = value.get("query_parameters") else {
         return Ok(None);
     };
-    let parameters = raw_parameters.as_array().ok_or_else(|| {
-        format!("read response {read_index} query_parameters must be an array")
-    })?;
+    let parameters = raw_parameters
+        .as_array()
+        .ok_or_else(|| format!("read response {read_index} query_parameters must be an array"))?;
     parameters
         .iter()
         .map(|parameter| {
@@ -457,9 +457,7 @@ fn optional_query_parameters(
                 },
                 "integer" => {
                     let raw = object.get("value").and_then(Value::as_str).ok_or_else(|| {
-                        format!(
-                            "read response {read_index} is missing integer query evidence"
-                        )
+                        format!("read response {read_index} is missing integer query evidence")
                     })?;
                     ReadQueryValue::Integer(raw.to_owned())
                 }
@@ -727,14 +725,21 @@ mod tests {
         let parameters = records[0].observation.query_parameters().unwrap();
         assert_eq!(parameters.len(), 3);
         assert_eq!(parameters[0].key(), "include_has_versions");
-        assert!(matches!(parameters[0].value(), ReadQueryValue::Boolean(true)));
+        assert!(matches!(
+            parameters[0].value(),
+            ReadQueryValue::Boolean(true)
+        ));
         assert_eq!(parameters[1].key(), "num_turns");
         assert!(matches!(
             parameters[1].value(),
             ReadQueryValue::Integer(value) if value == "33"
         ));
         assert!(matches!(parameters[2].value(), ReadQueryValue::Redacted));
-        assert!(store.events()[0].payload.contains("approved_query_parameters"));
+        assert!(
+            store.events()[0]
+                .payload
+                .contains("approved_query_parameters")
+        );
         assert!(!store.events()[0].payload.contains("query_values"));
 
         let _ = fs::remove_dir_all(dir);

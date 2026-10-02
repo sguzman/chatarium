@@ -395,7 +395,10 @@ fn insert_query_parameters(
     payload
         .as_object_mut()
         .ok_or_else(|| invalid_data("remote read payload must be an object"))?
-        .insert("approved_query_parameters".to_owned(), Value::Array(encoded));
+        .insert(
+            "approved_query_parameters".to_owned(),
+            Value::Array(encoded),
+        );
     Ok(())
 }
 
@@ -700,14 +703,8 @@ mod tests {
             "/backend-api/conversations/<id>",
             vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
             Some(vec![
-                ReadQueryParameter::new(
-                    "include_has_versions",
-                    ReadQueryValue::Boolean(true),
-                ),
-                ReadQueryParameter::new(
-                    "num_turns",
-                    ReadQueryValue::Integer("33".to_owned()),
-                ),
+                ReadQueryParameter::new("include_has_versions", ReadQueryValue::Boolean(true)),
+                ReadQueryParameter::new("num_turns", ReadQueryValue::Integer("33".to_owned())),
                 ReadQueryParameter::new("num_turns", ReadQueryValue::Redacted),
             ]),
             200,
@@ -723,18 +720,20 @@ mod tests {
         )
         .unwrap();
 
-        record_remote_read_observation_from_fixture(
-            &mut store,
-            id,
-            &observation,
-            &provenance,
-        )
-        .unwrap();
+        record_remote_read_observation_from_fixture(&mut store, id, &observation, &provenance)
+            .unwrap();
 
-        assert!(store.events()[0].payload.contains("approved_query_parameters"));
+        assert!(
+            store.events()[0]
+                .payload
+                .contains("approved_query_parameters")
+        );
         assert!(!store.events()[0].payload.contains("query_values"));
         let records = replay_remote_read_audit(store.events()).unwrap();
-        assert_eq!(records[0].observation.query_parameters(), observation.query_parameters());
+        assert_eq!(
+            records[0].observation.query_parameters(),
+            observation.query_parameters()
+        );
         assert_eq!(records[0].provenance, Some(provenance));
     }
 
@@ -762,7 +761,10 @@ mod tests {
 
         record_remote_read_observation(&mut store, id, &observation).unwrap();
         let records = replay_remote_read_audit(store.events()).unwrap();
-        assert_eq!(records[0].observation.query_parameters(), observation.query_parameters());
+        assert_eq!(
+            records[0].observation.query_parameters(),
+            observation.query_parameters()
+        );
         assert_eq!(records[0].provenance, None);
     }
 
@@ -843,7 +845,11 @@ mod tests {
 
     #[test]
     fn broad_or_raw_query_value_fields_are_rejected() {
-        for field in ["query_values", "query_parameters", "approvedQueryParameters"] {
+        for field in [
+            "query_values",
+            "query_parameters",
+            "approvedQueryParameters",
+        ] {
             let mut store = MemoryEventStore::default();
             let id = RemoteReadObservationId::new();
             let mut payload = base_payload(id);
