@@ -4,7 +4,7 @@ use chatarium_core::{
     AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId, LocalTurnId, TurnEvidence,
 };
 use chatarium_store::authored::{
-    DecodedUserMessageCommit, commit_user_message, decode_user_message_commit,
+    DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
@@ -24,6 +24,11 @@ enum PersistCommand {
         request_id: u64,
         message: AuthoredUserMessage,
     },
+    AppendTurnEvent {
+        turn_id: LocalTurnId,
+        kind: EventKind,
+        payload: String,
+    },
     Shutdown,
 }
 
@@ -34,12 +39,19 @@ enum PersistNotice {
     },
     MessageCommitted {
         request_id: u64,
+        message: AuthoredUserMessage,
+        event: EventEnvelope,
+    },
+    TurnEventAppended {
+        turn_id: LocalTurnId,
+        kind: EventKind,
         event: EventEnvelope,
     },
     Failed {
         operation: &'static str,
         revision: Option<u64>,
         request_id: Option<u64>,
+        turn_id: Option<LocalTurnId>,
         error: String,
     },
 }
@@ -55,6 +67,22 @@ struct DisplayMessage {
     role: DisplayRole,
     text: String,
     sequence: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PendingRemoteTurn {
+    turn_id: LocalTurnId,
+    request_id: String,
+    model: String,
+    input: Value,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveRemoteTurn {
+    turn_id: LocalTurnId,
+    request_id: String,
+    cumulative_text: String,
+    observed_output: bool,
 }
 
 struct ChatariumApp {
@@ -77,6 +105,8 @@ struct ChatariumApp {
     selected_model: Option<String>,
     remote_status: String,
     sign_in_pending: bool,
+    pending_remote_turn: Option<PendingRemoteTurn>,
+    active_remote_turn: Option<ActiveRemoteTurn>,
 }
 
 impl ChatariumApp {
@@ -122,6 +152,8 @@ impl ChatariumApp {
                         selected_model: None,
                         remote_status: "starting sign-in runtime…".to_owned(),
                         sign_in_pending: false,
+                        pending_remote_turn: None,
+                        active_remote_turn: None,
                     },
                     Err(error) => Self::without_persistence(
                         journal_path,
@@ -169,6 +201,8 @@ impl ChatariumApp {
             selected_model: None,
             remote_status: "starting sign-in runtime…".to_owned(),
             sign_in_pending: false,
+            pending_remote_turn: None,
+            active_remote_turn: None,
         }
     }
 
