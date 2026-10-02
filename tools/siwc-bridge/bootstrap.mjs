@@ -74,9 +74,46 @@ if (major < 22) {
   throw new Error("Chatarium Sign in with ChatGPT requires Node.js 22 or newer.");
 }
 
-try {
-  await access(resolve(devkitRoot, "packages/local/package.json"));
-} catch {
+async function submoduleStatus() {
+  const output = await capture("git", [
+    "submodule",
+    "status",
+    "--",
+    "vendor/openai-sign-in-with-chatgpt-devkit",
+  ]);
+  const match = output.match(/^([ +\-U])?([0-9a-f]{40})\s/);
+  return {
+    prefix: match?.[1] ?? " ",
+    commit: match?.[2] ?? null,
+  };
+}
+
+async function trackedDevkitChanges() {
+  try {
+    return await capture(
+      "git",
+      ["status", "--porcelain", "--untracked-files=no"],
+      { cwd: devkitRoot },
+    );
+  } catch {
+    return "";
+  }
+}
+
+let status = await submoduleStatus();
+if (status.prefix !== "-" && status.commit && status.commit !== expectedCommit) {
+  const trackedChanges = await trackedDevkitChanges();
+  if (trackedChanges) {
+    throw new Error(
+      "Pinned Sign in with ChatGPT DevKit is on the wrong commit and has tracked local modifications; refusing to overwrite credential-owning source.",
+    );
+  }
+}
+
+if (status.prefix !== " " || status.commit !== expectedCommit) {
+  console.log(
+    "Synchronizing pinned Sign in with ChatGPT DevKit to the commit recorded by Chatarium...",
+  );
   await run("git", [
     "submodule",
     "update",
@@ -85,28 +122,16 @@ try {
     "1",
     "vendor/openai-sign-in-with-chatgpt-devkit",
   ]);
+  status = await submoduleStatus();
 }
 
-const submoduleStatus = await capture("git", [
-  "submodule",
-  "status",
-  "--",
-  "vendor/openai-sign-in-with-chatgpt-devkit",
-]);
-const statusMatch = submoduleStatus.match(/^([ +\-U])?([0-9a-f]{40})\s/);
-const commit = statusMatch?.[2];
-const prefix = statusMatch?.[1] ?? " ";
-if (commit !== expectedCommit || prefix !== " ") {
+if (status.commit !== expectedCommit || status.prefix !== " ") {
   throw new Error(
-    `Pinned Sign in with ChatGPT DevKit mismatch: expected checked-out ${expectedCommit}, got ${commit ?? "unknown"} (status ${JSON.stringify(prefix)})`,
+    `Pinned Sign in with ChatGPT DevKit mismatch after synchronization: expected checked-out ${expectedCommit}, got ${status.commit ?? "unknown"} (status ${JSON.stringify(status.prefix)})`,
   );
 }
 
-const trackedChanges = await capture(
-  "git",
-  ["status", "--porcelain", "--untracked-files=no"],
-  { cwd: devkitRoot },
-);
+const trackedChanges = await trackedDevkitChanges();
 if (trackedChanges) {
   throw new Error(
     "Pinned Sign in with ChatGPT DevKit has tracked local modifications; refusing to execute modified credential-owning source.",
