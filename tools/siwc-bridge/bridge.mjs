@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { writeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -27,7 +28,8 @@ function hasCredentialField(value) {
 
 function emit(value) {
   if (hasCredentialField(value)) {
-    process.stdout.write(
+    writeSync(
+      1,
       `${JSON.stringify({
         type: "fatal",
         error: {
