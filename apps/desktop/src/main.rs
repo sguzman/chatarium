@@ -1640,4 +1640,94 @@ mod tests {
 
         assert_eq!(projected_working_draft(&events), "");
     }
+
+    #[test]
+    fn responses_input_uses_durable_transcript_order() {
+        let messages = vec![
+            DisplayMessage {
+                role: DisplayRole::User,
+                text: "one".to_owned(),
+                sequence: 1,
+            },
+            DisplayMessage {
+                role: DisplayRole::Assistant,
+                text: "two".to_owned(),
+                sequence: 2,
+            },
+            DisplayMessage {
+                role: DisplayRole::User,
+                text: "three".to_owned(),
+                sequence: 3,
+            },
+        ];
+
+        assert_eq!(
+            responses_input(&messages),
+            serde_json::json!([
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": "two"},
+                {"role": "user", "content": "three"},
+            ])
+        );
+    }
+
+    #[test]
+    fn local_remote_snapshots_collapse_by_turn_identity() {
+        let turn_id = LocalTurnId::new();
+        let first = EventEnvelope {
+            sequence: 1,
+            at_unix_ms: 1,
+            scope: Some(local_turn_scope(turn_id)),
+            kind: EventKind::AssistantSnapshotObserved,
+            payload: remote_turn_payload(
+                turn_id,
+                "request",
+                None,
+                Some("hel"),
+                Some("snapshot"),
+            ),
+        };
+        let second = EventEnvelope {
+            sequence: 2,
+            at_unix_ms: 2,
+            scope: Some(local_turn_scope(turn_id)),
+            kind: EventKind::AssistantCompletionObserved,
+            payload: remote_turn_payload(
+                turn_id,
+                "request",
+                None,
+                Some("hello"),
+                Some("complete"),
+            ),
+        };
+
+        let projected = projected_display_messages(&[first, second]);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].role, DisplayRole::Assistant);
+        assert_eq!(projected[0].text, "hello");
+        assert_eq!(projected[0].sequence, 2);
+    }
+
+    #[test]
+    fn only_positive_http_or_typed_api_errors_count_as_observed_failure() {
+        assert!(remote_error_is_observed_failure(&siwc_bridge::BridgeError {
+            code: "api_error".to_owned(),
+            message: "rejected".to_owned(),
+            retryable: false,
+            status: Some(429),
+        }));
+        assert!(remote_error_is_observed_failure(&siwc_bridge::BridgeError {
+            code: "model_not_found".to_owned(),
+            message: "bad model".to_owned(),
+            retryable: false,
+            status: None,
+        }));
+        assert!(!remote_error_is_observed_failure(&siwc_bridge::BridgeError {
+            code: "network_error".to_owned(),
+            message: "socket closed".to_owned(),
+            retryable: true,
+            status: None,
+        }));
+    }
+
 }
