@@ -478,17 +478,184 @@ impl ChatariumApp {
                         format!("connected · {} models", self.remote_models.len())
                     };
                 }
-                siwc_bridge::BridgeEvent::Failed { error, .. } => {
+                siwc_bridge::BridgeEvent::Delta { request_id, delta } => {
+                    let Some(active) = self
+                        .active_remote_turn
+                        .as_mut()
+                        .filter(|active| active.request_id == request_id)
+                    else {
+                        continue;
+                    };
+
+                    let first_output = !active.observed_output;
+                    active.observed_output = true;
+                    active.cumulative_text.push_str(&delta);
+                    let turn_id = active.turn_id;
+                    let cumulative_text = active.cumulative_text.clone();
+
+                    if first_output {
+                        let acceptance = remote_turn_payload(
+                            turn_id,
+                            &request_id,
+                            None,
+                            None,
+                            Some("Responses stream produced assistant output"),
+                        );
+                        let _ = self.queue_turn_event(
+                            turn_id,
+                            EventKind::RemoteAcceptanceObserved,
+                            acceptance,
+                        );
+                        let started = remote_turn_payload(
+                            turn_id,
+                            &request_id,
+                            None,
+                            None,
+                            Some("assistant output stream started"),
+                        );
+                        let _ = self.queue_turn_event(
+                            turn_id,
+                            EventKind::AssistantStreamStarted,
+                            started,
+                        );
+                    }
+
+                    let snapshot = remote_turn_payload(
+                        turn_id,
+                        &request_id,
+                        None,
+                        Some(&cumulative_text),
+                        Some("cumulative Responses stream text"),
+                    );
+                    let _ = self.queue_turn_event(
+                        turn_id,
+                        EventKind::AssistantSnapshotObserved,
+                        snapshot,
+                    );
+                    self.remote_status = "ChatGPT is responding…".to_owned();
+                }
+                siwc_bridge::BridgeEvent::ResponseCompleted { request_id, text } => {
+                    if !self
+                        .active_remote_turn
+                        .as_ref()
+                        .is_some_and(|active| active.request_id == request_id)
+                    {
+                        continue;
+                    }
+                    let active = self
+                        .active_remote_turn
+                        .take()
+                        .expect("matched active remote turn");
+                    let final_text = if text.is_empty() {
+                        active.cumulative_text
+                    } else {
+                        text
+                    };
+
+                    if !active.observed_output {
+                        let acceptance = remote_turn_payload(
+                            active.turn_id,
+                            &request_id,
+                            None,
+                            None,
+                            Some("Responses stream completed"),
+                        );
+                        let _ = self.queue_turn_event(
+                            active.turn_id,
+                            EventKind::RemoteAcceptanceObserved,
+                            acceptance,
+                        );
+                        if !final_text.is_empty() {
+                            let started = remote_turn_payload(
+                                active.turn_id,
+                                &request_id,
+                                None,
+                                None,
+                                Some("completed response contained assistant output"),
+                            );
+                            let _ = self.queue_turn_event(
+                                active.turn_id,
+                                EventKind::AssistantStreamStarted,
+                                started,
+                            );
+                        }
+                    }
+
+                    let completed = remote_turn_payload(
+                        active.turn_id,
+                        &request_id,
+                        None,
+                        Some(&final_text),
+                        Some("response.completed observed"),
+                    );
+                    let _ = self.queue_turn_event(
+                        active.turn_id,
+                        EventKind::AssistantCompletionObserved,
+                        completed,
+                    );
+                    self.remote_status = "ChatGPT response complete".to_owned();
+                }
+                siwc_bridge::BridgeEvent::Failed {
+                    request_id,
+                    error,
+                } => {
                     self.sign_in_pending = false;
+                    let mut handled_turn = false;
+                    if let Some(request_id) = request_id.as_deref() {
+                        if self
+                            .active_remote_turn
+                            .as_ref()
+                            .is_some_and(|active| active.request_id == request_id)
+                        {
+                            let active = self
+                                .active_remote_turn
+                                .take()
+                                .expect("matched active remote turn");
+                            let kind = if active.observed_output
+                                || !remote_error_is_observed_failure(&error)
+                            {
+                                EventKind::TransportInterrupted
+                            } else {
+                                EventKind::RemoteFailureObserved
+                            };
+                            let payload = remote_turn_payload(
+                                active.turn_id,
+                                request_id,
+                                None,
+                                (!active.cumulative_text.is_empty())
+                                    .then_some(active.cumulative_text.as_str()),
+                                Some(&format!("{}: {}", error.code, error.message)),
+                            );
+                            let _ = self.queue_turn_event(active.turn_id, kind, payload);
+                            handled_turn = true;
+                        }
+                    }
                     self.remote_status = format!("{}: {}", error.code, error.message);
+                    if handled_turn {
+                        self.status =
+                            "remote turn ended without automatic retry".to_owned();
+                    }
                 }
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
                     self.sign_in_pending = false;
+                    if let Some(active) = self.active_remote_turn.take() {
+                        let payload = remote_turn_payload(
+                            active.turn_id,
+                            &active.request_id,
+                            None,
+                            (!active.cumulative_text.is_empty())
+                                .then_some(active.cumulative_text.as_str()),
+                            Some("Sign in with ChatGPT runtime became unavailable"),
+                        );
+                        let _ = self.queue_turn_event(
+                            active.turn_id,
+                            EventKind::TransportInterrupted,
+                            payload,
+                        );
+                    }
                     self.remote_status = detail;
                 }
-                siwc_bridge::BridgeEvent::Delta { .. }
-                | siwc_bridge::BridgeEvent::ResponseCompleted { .. }
-                | siwc_bridge::BridgeEvent::CommandSucceeded { .. } => {}
+                siwc_bridge::BridgeEvent::CommandSucceeded { .. } => {}
             }
         }
     }
@@ -1064,6 +1231,21 @@ fn persistence_worker(
             PersistCommand::Shutdown => break,
         }
     }
+}
+
+fn remote_error_is_observed_failure(error: &siwc_bridge::BridgeError) -> bool {
+    error.status.is_some()
+        || error.code.starts_with("subscription_sharing_")
+        || error.code.starts_with("chatpass_")
+        || matches!(
+            error.code.as_str(),
+            "invalid_request"
+                | "invalid_request_error"
+                | "model_not_found"
+                | "invalid_token"
+                | "invalid_api_key"
+                | "invalid_client"
+        )
 }
 
 fn remote_turn_payload(
