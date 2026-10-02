@@ -1,9 +1,10 @@
 //! Evidence-gated read-side protocol observations for P3.
 //!
-//! This module describes only the safe structural metadata that Flight Recorder
-//! v0.7.0 is allowed to expose. It deliberately does not interpret a read
-//! response as a conversation list or conversation fetch until a committed
-//! controlled observation establishes that semantic baseline.
+//! This module describes the publication-safe structural metadata exposed by the
+//! Flight Recorder read boundary. Historical v0.7.0/v0.7.1 observations know
+//! query-key names only. v0.7.2 may additionally preserve narrowly approved C02
+//! query values whose grammar cannot carry arbitrary credential/text material.
+//! Semantic support still requires committed controlled evidence.
 
 use crate::Compatibility;
 use std::collections::BTreeSet;
@@ -126,6 +127,68 @@ pub enum JsonTopLevelType {
     Null,
 }
 
+/// C02 query keys whose values may be retained by the narrow v0.7.2 evidence boundary.
+pub const APPROVED_C02_QUERY_KEYS: [&str; 2] = ["include_has_versions", "num_turns"];
+
+/// Publication-safe value evidence for one approved C02 query parameter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadQueryValue {
+    /// The parameter was present with an empty value.
+    Empty,
+    /// Exact ASCII boolean literal.
+    Boolean(bool),
+    /// Canonical bounded ASCII integer text.
+    Integer(String),
+    /// The parameter existed but its value did not match the safe literal grammar.
+    Redacted,
+}
+
+impl ReadQueryValue {
+    /// Stable representation kind used by sanitized fixtures and durable audit records.
+    #[must_use]
+    pub const fn stable_kind(&self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Boolean(_) => "boolean",
+            Self::Integer(_) => "integer",
+            Self::Redacted => "redacted",
+        }
+    }
+}
+
+/// One occurrence of an approved C02 query parameter.
+///
+/// Order and repeated occurrences are preserved because they are empirical request
+/// semantics. This is separate from query_keys, which remains the historical
+/// de-duplicated structural view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadQueryParameter {
+    key: String,
+    value: ReadQueryValue,
+}
+
+impl ReadQueryParameter {
+    /// Construct one typed parameter occurrence. Full context validation happens
+    /// when the parameter is attached to a ReadObservation.
+    #[must_use]
+    pub fn new(key: impl Into<String>, value: ReadQueryValue) -> Self {
+        Self {
+            key: key.into(),
+            value,
+        }
+    }
+
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> &ReadQueryValue {
+        &self.value
+    }
+}
+
 impl JsonTopLevelType {
     /// Stable structural type name.
     #[must_use]
@@ -164,6 +227,10 @@ pub enum ReadObservationError {
     InvalidStatus(u16),
     EmptyQueryKey,
     DuplicateQueryKey(String),
+    QueryParametersOutsideConversationFetch,
+    UnsupportedQueryParameterKey(String),
+    QueryParameterKeyNotObserved(String),
+    InvalidQueryParameterInteger(String),
     HeadCannotHaveBody,
     TopLevelTypeWithoutBody,
     TruncatedBodyCannotClaimTopLevelType,
@@ -199,6 +266,22 @@ impl fmt::Display for ReadObservationError {
             Self::DuplicateQueryKey(key) => {
                 write!(formatter, "duplicate read observation query key {key:?}")
             }
+            Self::QueryParametersOutsideConversationFetch => write!(
+                formatter,
+                "approved query-value evidence is allowed only for C02 conversation fetches"
+            ),
+            Self::UnsupportedQueryParameterKey(key) => write!(
+                formatter,
+                "query-value evidence uses unsupported key {key:?}"
+            ),
+            Self::QueryParameterKeyNotObserved(key) => write!(
+                formatter,
+                "query-value evidence key {key:?} is absent from observed query keys"
+            ),
+            Self::InvalidQueryParameterInteger(key) => write!(
+                formatter,
+                "query-value evidence for key {key:?} is not a canonical bounded ASCII integer"
+            ),
             Self::HeadCannotHaveBody => write!(formatter, "HEAD observation cannot have a body"),
             Self::TopLevelTypeWithoutBody => {
                 write!(formatter, "top-level JSON type requires an observed body")
@@ -218,7 +301,9 @@ impl std::error::Error for ReadObservationError {}
 /// Safe structural metadata for one P3 read observation.
 ///
 /// No raw response body, title, message text, cookie, header, authorization
-/// value, query value, or request body belongs in this type.
+/// material, arbitrary query value, or request body belongs in this type.
+/// Optional query-value evidence is limited to APPROVED_C02_QUERY_KEYS and
+/// the closed ReadQueryValue grammar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadObservation {
     protocol_revision: String,
@@ -226,6 +311,7 @@ pub struct ReadObservation {
     method: ReadMethod,
     path: String,
     query_keys: Vec<String>,
+    query_parameters: Option<Vec<ReadQueryParameter>>,
     status: u16,
     content_type: String,
     truncated: bool,
@@ -241,6 +327,39 @@ impl ReadObservation {
         method: ReadMethod,
         path: impl Into<String>,
         query_keys: Vec<String>,
+        status: u16,
+        content_type: impl Into<String>,
+        truncated: bool,
+        body_present: bool,
+        top_level_type: Option<JsonTopLevelType>,
+    ) -> Result<Self, ReadObservationError> {
+        Self::new_with_query_parameters(
+            protocol_revision,
+            experiment,
+            method,
+            path,
+            query_keys,
+            None,
+            status,
+            content_type,
+            truncated,
+            body_present,
+            top_level_type,
+        )
+    }
+
+    /// Construct a read observation with optional narrowly approved C02
+    /// query-value evidence. None means the historical capture did not observe
+    /// values; Some(empty) means a value-capable capture observed no approved
+    /// parameter occurrences.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_query_parameters(
+        protocol_revision: impl Into<String>,
+        experiment: ReadExperiment,
+        method: ReadMethod,
+        path: impl Into<String>,
+        query_keys: Vec<String>,
+        query_parameters: Option<Vec<ReadQueryParameter>>,
         status: u16,
         content_type: impl Into<String>,
         truncated: bool,
@@ -277,6 +396,31 @@ impl ReadObservation {
         }
         let query_keys = unique.into_iter().collect::<Vec<_>>();
 
+        if let Some(parameters) = query_parameters.as_ref() {
+            if experiment != ReadExperiment::OpenConversation || !conversation_fetch_path(&path) {
+                return Err(ReadObservationError::QueryParametersOutsideConversationFetch);
+            }
+            for parameter in parameters {
+                if !APPROVED_C02_QUERY_KEYS.contains(&parameter.key.as_str()) {
+                    return Err(ReadObservationError::UnsupportedQueryParameterKey(
+                        parameter.key.clone(),
+                    ));
+                }
+                if !query_keys.iter().any(|key| key == &parameter.key) {
+                    return Err(ReadObservationError::QueryParameterKeyNotObserved(
+                        parameter.key.clone(),
+                    ));
+                }
+                if let ReadQueryValue::Integer(value) = &parameter.value {
+                    if !valid_safe_query_integer(value) {
+                        return Err(ReadObservationError::InvalidQueryParameterInteger(
+                            parameter.key.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
         if method == ReadMethod::Head && body_present {
             return Err(ReadObservationError::HeadCannotHaveBody);
         }
@@ -293,6 +437,7 @@ impl ReadObservation {
             method,
             path,
             query_keys,
+            query_parameters,
             status,
             content_type,
             truncated,
@@ -329,6 +474,13 @@ impl ReadObservation {
     #[must_use]
     pub fn query_keys(&self) -> &[String] {
         &self.query_keys
+    }
+
+    /// Exact approved parameter occurrences when the capture supported value
+    /// evidence. Historical captures return None.
+    #[must_use]
+    pub fn query_parameters(&self) -> Option<&[ReadQueryParameter]> {
+        self.query_parameters.as_deref()
     }
 
     #[must_use]
@@ -382,6 +534,39 @@ pub fn compatibility_for_read_flow(flow: ReadFlow, observed_revision: &str) -> C
             ),
         },
     }
+}
+
+fn conversation_fetch_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/backend-api/conversations/") else {
+        return false;
+    };
+    !rest.is_empty() && !rest.contains('/')
+}
+
+fn valid_safe_query_integer(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 11 || !bytes.is_ascii() {
+        return false;
+    }
+
+    let digits = if bytes[0] == b'-' {
+        if bytes.len() == 1 {
+            return false;
+        }
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    if digits.len() > 10 || !digits.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    if digits.len() > 1 && digits[0] == b'0' {
+        return false;
+    }
+    if bytes[0] == b'-' && digits == b"0" {
+        return false;
+    }
+    true
 }
 
 fn json_content_type(value: &str) -> bool {
@@ -487,6 +672,164 @@ mod tests {
                 Some(JsonTopLevelType::Object),
             ),
             Err(ReadObservationError::EmptyQueryKey)
+        ));
+    }
+
+    #[test]
+    fn approved_c02_query_parameters_preserve_order_and_repetition() {
+        let parameters = vec![
+            ReadQueryParameter::new(
+                "include_has_versions",
+                ReadQueryValue::Boolean(true),
+            ),
+            ReadQueryParameter::new(
+                "num_turns",
+                ReadQueryValue::Integer("33".to_owned()),
+            ),
+            ReadQueryParameter::new(
+                "num_turns",
+                ReadQueryValue::Integer("64".to_owned()),
+            ),
+        ];
+        let observation = ReadObservation::new_with_query_parameters(
+            "future-c02-observation",
+            ReadExperiment::OpenConversation,
+            ReadMethod::Get,
+            "/backend-api/conversations/<id>",
+            vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
+            Some(parameters.clone()),
+            200,
+            "application/json",
+            false,
+            true,
+            Some(JsonTopLevelType::Object),
+        )
+        .unwrap();
+
+        assert_eq!(observation.query_parameters(), Some(parameters.as_slice()));
+    }
+
+    #[test]
+    fn historical_observation_keeps_query_values_unknown() {
+        let observation = ReadObservation::new(
+            "2026-10-01.001",
+            ReadExperiment::OpenConversation,
+            ReadMethod::Get,
+            "/backend-api/conversations/<id>",
+            vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
+            200,
+            "application/json",
+            false,
+            true,
+            Some(JsonTopLevelType::Object),
+        )
+        .unwrap();
+
+        assert_eq!(observation.query_parameters(), None);
+    }
+
+    #[test]
+    fn query_value_evidence_fails_closed_outside_narrow_c02_boundary() {
+        let parameter =
+            ReadQueryParameter::new("num_turns", ReadQueryValue::Integer("33".to_owned()));
+
+        assert!(matches!(
+            ReadObservation::new_with_query_parameters(
+                "rev",
+                ReadExperiment::ConversationList,
+                ReadMethod::Get,
+                "/backend-api/gizmos/snorlax/sidebar",
+                vec!["num_turns".to_owned()],
+                Some(vec![parameter.clone()]),
+                200,
+                "application/json",
+                false,
+                true,
+                Some(JsonTopLevelType::Object),
+            ),
+            Err(ReadObservationError::QueryParametersOutsideConversationFetch)
+        ));
+        assert!(matches!(
+            ReadObservation::new_with_query_parameters(
+                "rev",
+                ReadExperiment::OpenConversation,
+                ReadMethod::Get,
+                "/backend-api/conversations/<id>",
+                vec!["num_turns".to_owned()],
+                Some(vec![ReadQueryParameter::new(
+                    "secret",
+                    ReadQueryValue::Redacted,
+                )]),
+                200,
+                "application/json",
+                false,
+                true,
+                Some(JsonTopLevelType::Object),
+            ),
+            Err(ReadObservationError::UnsupportedQueryParameterKey(_))
+        ));
+        assert!(matches!(
+            ReadObservation::new_with_query_parameters(
+                "rev",
+                ReadExperiment::OpenConversation,
+                ReadMethod::Get,
+                "/backend-api/conversations/<id>",
+                vec!["num_turns".to_owned()],
+                Some(vec![ReadQueryParameter::new(
+                    "include_has_versions",
+                    ReadQueryValue::Boolean(true),
+                )]),
+                200,
+                "application/json",
+                false,
+                true,
+                Some(JsonTopLevelType::Object),
+            ),
+            Err(ReadObservationError::QueryParameterKeyNotObserved(_))
+        ));
+        assert!(matches!(
+            ReadObservation::new_with_query_parameters(
+                "rev",
+                ReadExperiment::OpenConversation,
+                ReadMethod::Get,
+                "/backend-api/conversations/<id>",
+                vec!["num_turns".to_owned()],
+                Some(vec![ReadQueryParameter::new(
+                    "num_turns",
+                    ReadQueryValue::Integer("00033".to_owned()),
+                )]),
+                200,
+                "application/json",
+                false,
+                true,
+                Some(JsonTopLevelType::Object),
+            ),
+            Err(ReadObservationError::InvalidQueryParameterInteger(_))
+        ));
+    }
+
+    #[test]
+    fn redacted_approved_query_parameter_retains_presence_without_raw_value() {
+        let observation = ReadObservation::new_with_query_parameters(
+            "rev",
+            ReadExperiment::OpenConversation,
+            ReadMethod::Get,
+            "/backend-api/conversations/<id>",
+            vec!["include_has_versions".to_owned()],
+            Some(vec![ReadQueryParameter::new(
+                "include_has_versions",
+                ReadQueryValue::Redacted,
+            )]),
+            200,
+            "application/json",
+            false,
+            true,
+            Some(JsonTopLevelType::Object),
+        )
+        .unwrap();
+        assert!(matches!(
+            observation.query_parameters().unwrap()[0].value(),
+            ReadQueryValue::Redacted
         ));
     }
 
