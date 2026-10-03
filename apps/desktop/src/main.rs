@@ -752,32 +752,37 @@ impl ChatariumApp {
                     self.remote_conversation_total = Some(observation.page.total);
                     self.remote_conversation_catalog = observation.page.items;
 
-                    let contradicts_local_history = observation.page.total == 0
-                        && (!self.historical_catalog.is_empty()
-                            || !self.live_mirror_catalog.is_empty());
-                    if contradicts_local_history {
-                        self.history_bridge_proven = false;
-                        self.account_bridge_status = format!(
-                            "PROOF FAILED: {} · auth=yes · HTTP {} · parser=yes · semantic=contradiction(remote total=0 while local history exists)",
-                            browser_proof_label(&observation.proof),
-                            observation.http_status,
-                        );
-                    } else if observation.page.total == 0 {
-                        self.history_bridge_proven = false;
-                        self.account_bridge_status = format!(
-                            "PROOF PARTIAL: {} · auth=yes · HTTP {} · parser=yes · semantic=unconfirmed-zero · items=0 · total=0",
-                            browser_proof_label(&observation.proof),
-                            observation.http_status,
-                        );
-                    } else {
-                        self.history_bridge_proven = true;
-                        self.account_bridge_status = format!(
-                            "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=yes · items={} · total={}",
-                            browser_proof_label(&observation.proof),
-                            observation.http_status,
-                            self.remote_conversation_catalog.len(),
-                            self.remote_conversation_total.unwrap_or(0),
-                        );
+                    let semantic = classify_history_list_semantics(
+                        observation.page.total,
+                        !self.historical_catalog.is_empty() || !self.live_mirror_catalog.is_empty(),
+                    );
+                    match semantic {
+                        HistoryListSemanticVerdict::Contradiction => {
+                            self.history_bridge_proven = false;
+                            self.account_bridge_status = format!(
+                                "PROOF FAILED: {} · auth=yes · HTTP {} · parser=yes · semantic=contradiction(remote total=0 while local history exists)",
+                                browser_proof_label(&observation.proof),
+                                observation.http_status,
+                            );
+                        }
+                        HistoryListSemanticVerdict::UnconfirmedZero => {
+                            self.history_bridge_proven = false;
+                            self.account_bridge_status = format!(
+                                "PROOF PARTIAL: {} · auth=yes · HTTP {} · parser=yes · semantic=unconfirmed-zero · items=0 · total=0",
+                                browser_proof_label(&observation.proof),
+                                observation.http_status,
+                            );
+                        }
+                        HistoryListSemanticVerdict::Valid => {
+                            self.history_bridge_proven = true;
+                            self.account_bridge_status = format!(
+                                "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=yes · items={} · total={}",
+                                browser_proof_label(&observation.proof),
+                                observation.http_status,
+                                self.remote_conversation_catalog.len(),
+                                self.remote_conversation_total.unwrap_or(0),
+                            );
+                        }
                     }
                 }
                 LiveMirrorFetchNotice::HistoryListFailed { error } => {
@@ -2565,6 +2570,26 @@ fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
     ui.add_space(5.0);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryListSemanticVerdict {
+    Valid,
+    UnconfirmedZero,
+    Contradiction,
+}
+
+fn classify_history_list_semantics(
+    remote_total: u64,
+    local_history_exists: bool,
+) -> HistoryListSemanticVerdict {
+    if remote_total > 0 {
+        HistoryListSemanticVerdict::Valid
+    } else if local_history_exists {
+        HistoryListSemanticVerdict::Contradiction
+    } else {
+        HistoryListSemanticVerdict::UnconfirmedZero
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
@@ -3353,6 +3378,22 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn history_list_zero_is_not_silently_promoted_to_success() {
+        assert_eq!(
+            classify_history_list_semantics(0, true),
+            HistoryListSemanticVerdict::Contradiction
+        );
+        assert_eq!(
+            classify_history_list_semantics(0, false),
+            HistoryListSemanticVerdict::UnconfirmedZero
+        );
+        assert_eq!(
+            classify_history_list_semantics(1, true),
+            HistoryListSemanticVerdict::Valid
+        );
     }
 
     #[test]
