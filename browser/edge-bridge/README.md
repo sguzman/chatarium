@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.5 first-party CDP observation
+## Current architecture: 0.4.6 first-party CDP observation
 
 ```text
 Chatarium Desktop
@@ -86,6 +86,22 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.6 MV3 worker lifecycle repair
+
+A later live run exposed a separate transport regression after the extension had been idle for hours: Chatarium's localhost listener was ready, but every `probe_auth` command timed out because the Manifest V3 service worker was no longer alive to poll `/v1/next`.
+
+The 0.4.4 -> 0.4.5 diff did not modify the bridge loop. The failure was the browser lifecycle boundary itself. Chromium normally retires an MV3 extension service worker after roughly 30 seconds of inactivity, and ordinary timers/fetch polling are not a durable wake source once the worker is gone.
+
+0.4.6 therefore installs a 20-second local keepalive heartbeat using `chrome.runtime.getPlatformInfo()`. Calling an extension API resets the MV3 idle timer. The heartbeat:
+
+- does not contact ChatGPT or OpenAI;
+- does not read account/session data;
+- does not alter history discovery;
+- does not alter mirror request semantics;
+- exists only to keep the localhost bridge event loop alive while Edge is running.
+
+This bridge is intentionally long-lived because the desktop process cannot externally wake a dormant MV3 service worker. The invariant is covered by the extension package check.
 
 ### 0.4.5 bounded exact-read rate-limit recovery
 
@@ -189,7 +205,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.5 manifest contains only:
+The 0.4.6 manifest contains only:
 
 - `debugger`
 - `scripting`
