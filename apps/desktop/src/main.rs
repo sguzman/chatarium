@@ -533,7 +533,8 @@ impl ChatariumApp {
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
         self.history_list_pending = true;
-        self.account_bridge_status = "listener ready · checking browser…".to_owned();
+        self.history_bridge_proven = false;
+        self.account_bridge_status = "listener ready · checking Edge extension…".to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-history-discovery".to_owned())
@@ -598,7 +599,9 @@ impl ChatariumApp {
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
         self.remote_discovery_pending = Some(remote_conversation_id.clone());
-        self.status = "fetching exact remote ChatGPT conversation…".to_owned();
+        self.pending_history_fetch_proof = None;
+        self.history_bridge_proven = false;
+        self.status = "fetching exact remote ChatGPT conversation through Edge extension…".to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-remote-history-open".to_owned())
@@ -671,7 +674,9 @@ impl ChatariumApp {
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
         self.live_mirror_pending = Some(local_conversation_id);
-        self.status = "fetching exact ChatGPT conversation through browser session…".to_owned();
+        self.pending_history_fetch_proof = None;
+        self.history_bridge_proven = false;
+        self.status = "fetching exact ChatGPT conversation through Edge extension…".to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-live-mirror-fetch".to_owned())
@@ -797,6 +802,10 @@ impl ChatariumApp {
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.remote_discovery_pending = None;
+                        self.history_bridge_proven = false;
+                        self.account_bridge_status =
+                            "PROOF FAILED: exact read succeeded but persistence is unavailable"
+                                .to_owned();
                         self.status = "remote conversation fetched, but persistence is unavailable"
                             .to_owned();
                         continue;
@@ -844,6 +853,10 @@ impl ChatariumApp {
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.live_mirror_pending = None;
+                        self.history_bridge_proven = false;
+                        self.account_bridge_status =
+                            "PROOF FAILED: exact read succeeded but persistence is unavailable"
+                                .to_owned();
                         self.status =
                             "live conversation fetched, but persistence is unavailable".to_owned();
                         continue;
@@ -1139,6 +1152,35 @@ impl ChatariumApp {
                         self.live_mirror_pending = None;
                     }
 
+                    match self.pending_history_fetch_proof.take() {
+                        Some(pending)
+                            if pending.local_conversation_id == Some(local_conversation_id) =>
+                        {
+                            self.history_bridge_proven = true;
+                            self.account_bridge_status = format!(
+                                "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=exact-id · durable-mirror=yes · event=#{}",
+                                browser_proof_label(&pending.proof),
+                                pending.http_status,
+                                snapshot_sequence,
+                            );
+                        }
+                        Some(pending) => {
+                            self.history_bridge_proven = false;
+                            self.account_bridge_status = format!(
+                                "PROOF FAILED: durable mirror event #{} has no matching browser proof (pending remote id {})",
+                                snapshot_sequence,
+                                pending.remote_conversation_id,
+                            );
+                        }
+                        None => {
+                            self.history_bridge_proven = false;
+                            self.account_bridge_status = format!(
+                                "PROOF PARTIAL: durable mirror event #{} committed without a current browser proof chain",
+                                snapshot_sequence,
+                            );
+                        }
+                    }
+
                     if self.selected_historical_conversation == Some(local_conversation_id) {
                         self.historical_load_pending = None;
                         self.loaded_historical_conversation = Some(local_conversation_id);
@@ -1167,6 +1209,10 @@ impl ChatariumApp {
                     if self.live_mirror_pending == Some(local_conversation_id) {
                         self.live_mirror_pending = None;
                     }
+                    self.pending_history_fetch_proof = None;
+                    self.history_bridge_proven = false;
+                    self.account_bridge_status =
+                        format!("PROOF FAILED at durable mirror commit: {error}");
                     self.status = format!("live mirror promotion failed: {error}");
                 }
                 PersistNotice::DiscoveredLiveMirrorPromoted {
@@ -1190,6 +1236,36 @@ impl ChatariumApp {
                     self.historical_load_pending = None;
                     self.live_mirror_truncated_before = truncated_before;
 
+                    match self.pending_history_fetch_proof.take() {
+                        Some(pending)
+                            if pending.local_conversation_id.is_none()
+                                && pending.remote_conversation_id == remote_conversation_id =>
+                        {
+                            self.history_bridge_proven = true;
+                            self.account_bridge_status = format!(
+                                "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=exact-id · durable-mirror=yes · event=#{}",
+                                browser_proof_label(&pending.proof),
+                                pending.http_status,
+                                snapshot_sequence,
+                            );
+                        }
+                        Some(pending) => {
+                            self.history_bridge_proven = false;
+                            self.account_bridge_status = format!(
+                                "PROOF FAILED: durable mirror event #{} does not match pending browser proof for remote id {}",
+                                snapshot_sequence,
+                                pending.remote_conversation_id,
+                            );
+                        }
+                        None => {
+                            self.history_bridge_proven = false;
+                            self.account_bridge_status = format!(
+                                "PROOF PARTIAL: durable mirror event #{} committed without a current browser proof chain",
+                                snapshot_sequence,
+                            );
+                        }
+                    }
+
                     if let Some(error) = projection_error {
                         self.historical_messages.clear();
                         self.status = format!(
@@ -1212,6 +1288,10 @@ impl ChatariumApp {
                     {
                         self.remote_discovery_pending = None;
                     }
+                    self.pending_history_fetch_proof = None;
+                    self.history_bridge_proven = false;
+                    self.account_bridge_status =
+                        format!("PROOF FAILED at durable mirror commit: {error}");
                     self.status = format!("remote mirror creation failed: {error}");
                 }
                 PersistNotice::Failed {
@@ -1887,7 +1967,7 @@ impl eframe::App for ChatariumApp {
                             ui,
                             "History bridge",
                             self.account_bridge_status.as_str(),
-                            self.history_bridge_authenticated,
+                            self.history_bridge_proven,
                         );
                         status_row(
                             ui,
@@ -2493,13 +2573,29 @@ fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
     ui.add_space(5.0);
 }
 
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
+    format!(
+        "extension={} · roundtrip={} · tab={} · MAIN={} · account-context={} · profile={}",
+        proof.extension_version,
+        yes_no(proof.desktop_roundtrip),
+        yes_no(proof.chatgpt_tab_found),
+        yes_no(proof.main_world_execution),
+        yes_no(proof.account_context),
+        proof.request_profile,
+    )
+}
+
 fn history_probe_failure_status(error: &account_bridge::BrowserBridgeError) -> String {
     match error {
         account_bridge::BrowserBridgeError::Timeout => {
-            "userscript did not reach the loopback listener. Edge 153 + Tampermonkey 5.5.0 has a known GM networking stall; bridge v0.3 also tries direct page loopback, which may require allowing ChatGPT local network access in Edge."
+            "listener ready · Edge extension did not complete a typed roundtrip before timeout"
                 .to_owned()
         }
-        _ => format!("listener ready · browser not confirmed: {error}"),
+        _ => format!("listener ready · extension proof failed: {error}"),
     }
 }
 
@@ -2769,7 +2865,7 @@ fn start_account_bridge() -> (
             (
                 Some(runtime),
                 Some(provider),
-                "listener ready · waiting for browser".to_owned(),
+                "listener ready · waiting for Edge extension".to_owned(),
             )
         }
         Err(error) => (
@@ -3268,12 +3364,11 @@ mod tests {
     }
 
     #[test]
-    fn history_probe_timeout_explains_dual_loopback_recovery() {
+    fn history_probe_timeout_names_extension_roundtrip_boundary() {
         let status = history_probe_failure_status(&account_bridge::BrowserBridgeError::Timeout);
-        assert!(status.contains("Tampermonkey 5.5.0"));
-        assert!(status.contains("Edge 153"));
-        assert!(status.contains("direct page loopback"));
-        assert!(status.contains("local network access"));
+        assert!(status.contains("Edge extension"));
+        assert!(status.contains("typed roundtrip"));
+        assert!(!status.contains("Tampermonkey"));
     }
 
     #[test]
