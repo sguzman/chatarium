@@ -580,8 +580,8 @@ mod tests {
         );
         assert_eq!(records[0].observation.status(), 429);
         assert_eq!(records[0].compatibility, Compatibility::Mismatch {
-            expected_revision: "2026-10-01.001".to_owned(),
-            detail: r#"conversation_fetch observation revision "2026-09-30.002" differs from validated baseline "2026-10-01.001""#.to_owned(),
+            expected_revision: "2026-10-03.001".to_owned(),
+            detail: r#"conversation_fetch observation revision "2026-09-30.002" is not one of the validated revisions; newest is "2026-10-03.001""#.to_owned(),
         });
 
         let _ = fs::remove_dir_all(dir);
@@ -611,6 +611,47 @@ mod tests {
         assert_eq!(
             records[0].compatibility,
             Compatibility::ValidatedAgainst("2026-10-01.001".to_owned())
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn committed_latest_c02_fixture_preserves_safe_query_literals() {
+        let dir = temp_dir("committed-c02-latest");
+        let bytes =
+            include_bytes!("../../../protocol/fixtures/2026-10-03.001/c02-open-conversation.json");
+
+        let summary = import_bytes(bytes, 0, &dir).unwrap();
+        let store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
+        let records = replay_remote_read_audit(store.events()).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].observation_id, summary.observation_id);
+        assert_eq!(
+            records[0].compatibility,
+            Compatibility::ValidatedAgainst("2026-10-03.001".to_owned())
+        );
+        let parameters = records[0]
+            .observation
+            .query_parameters()
+            .expect("latest C02 fixture should retain safe query evidence");
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters[0].key(), "num_turns");
+        assert_eq!(
+            parameters[0]
+                .literal_evidence()
+                .expect("known num_turns")
+                .literal(),
+            "10"
+        );
+        assert_eq!(parameters[1].key(), "include_has_versions");
+        assert_eq!(
+            parameters[1]
+                .literal_evidence()
+                .expect("known include_has_versions")
+                .literal(),
+            "true"
         );
 
         let _ = fs::remove_dir_all(dir);
