@@ -2,7 +2,7 @@
 
 const BRIDGE_ORIGIN = 'http://127.0.0.1:43117';
 const BRIDGE_HEADER = 'X-Chatarium-Bridge';
-const BRIDGE_HEADER_VALUE = '1';
+const BRIDGE_HEADER_VALUE = 'edge-mv3-v1';
 const PROTOCOL_VERSION = 1;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const ACCOUNT_HEADER = 'ChatGPT-Account-ID';
