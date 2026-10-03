@@ -27,6 +27,42 @@ Chatarium owns everything else:
 
 Human QA exists only for state or perception that cannot reasonably be automated.
 
+## Request-completeness requirement
+
+The capture harness exists to prevent the exact failure documented in `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`: implementing an undocumented consumer-web request from partial path/query evidence while missing semantic account context carried elsewhere in the request.
+
+For a target network operation, private capture must preserve enough information to classify the complete first-party request:
+
+- method/URL/query including safe literal values where needed;
+- request body/content type;
+- request headers before sanitization;
+- credentials/origin/referrer mode where observable;
+- request initiator and ordering/dependencies;
+- response status/content type/body;
+- pagination/identity metadata.
+
+Committed sanitized evidence must not leak credentials. It should, however, record the **classification and presence** of context-bearing headers so implementation cannot accidentally erase them from the protocol model.
+
+At minimum, each relevant first-party request header is classified privately as:
+
+- semantic account/workspace/project context;
+- credential/private authentication material;
+- anti-abuse/challenge material;
+- incidental client telemetry;
+- unknown.
+
+The sanitizer may replace a private value with a typed presence marker or placeholder while retaining the fact that the first-party request requires that class of context.
+
+A capture that knows only a path and response shape is not "request complete."
+
+## Manual HAR fallback is legitimate evidence
+
+Automation is preferred because it reduces operator burden, but the absence or incompleteness of the harness must never be used as a reason to discourage a useful manual HAR.
+
+If current protocol work is blocked on undocumented request semantics and the automated harness cannot yet capture them, request one controlled raw HAR immediately rather than guessing. Treat the raw HAR as private evidence, hash it, sanitize it offline, and then improve the harness so the same manual burden is unnecessary next time.
+
+The 2026-10-03 Edge HAR was load-bearing evidence and should have been requested earlier.
+
 ## Why CDP
 
 Microsoft Edge exposes the Chromium DevTools Protocol to custom tooling. A client can discover page targets through the local DevTools HTTP endpoints and attach to a target's DevTools WebSocket. The protocol exposes browser/network/runtime events that are sufficient for a first-party-page observation harness.
