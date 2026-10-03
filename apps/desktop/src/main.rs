@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 enum PersistCommand {
     SaveDraft {
@@ -239,6 +239,7 @@ struct ChatariumApp {
     live_mirror_pending: Option<LocalConversationId>,
     remote_discovery_pending: Option<String>,
     remote_mirror_failures: BTreeMap<String, String>,
+    remote_mirror_retry_after: BTreeMap<String, Instant>,
     mirror_status: String,
     live_mirror_truncated_before: bool,
     remote_conversation_catalog: Vec<ConversationListItem>,
@@ -374,6 +375,7 @@ impl ChatariumApp {
                         live_mirror_pending: None,
                         remote_discovery_pending: None,
                         remote_mirror_failures: BTreeMap::new(),
+                        remote_mirror_retry_after: BTreeMap::new(),
                         mirror_status: "idle · no mirror in progress".to_owned(),
                         live_mirror_truncated_before: false,
                         remote_conversation_catalog: Vec::new(),
@@ -463,6 +465,7 @@ impl ChatariumApp {
             live_mirror_pending: None,
             remote_discovery_pending: None,
             remote_mirror_failures: BTreeMap::new(),
+            remote_mirror_retry_after: BTreeMap::new(),
             mirror_status: "idle · no mirror in progress".to_owned(),
             live_mirror_truncated_before: false,
             remote_conversation_catalog: Vec::new(),
@@ -679,6 +682,29 @@ impl ChatariumApp {
     ) {
         if self.remote_discovery_pending.is_some() || self.live_mirror_pending.is_some() {
             return;
+        }
+        if let Some(retry_after) = self
+            .remote_mirror_retry_after
+            .get(&remote_conversation_id)
+            .copied()
+        {
+            let now = Instant::now();
+            if retry_after > now {
+                let remaining = retry_after.saturating_duration_since(now).as_secs().max(1);
+                diagnostics::warn(
+                    "mirror",
+                    format!(
+                        "rate-limit cooldown active for {}; retry in about {remaining}s",
+                        diagnostics::short_id(&remote_conversation_id)
+                    ),
+                );
+                self.mirror_status =
+                    format!("RATE LIMITED · retry available in about {remaining}s");
+                self.status =
+                    "remote mirror is cooling down after ChatGPT HTTP 429".to_owned();
+                return;
+            }
+            self.remote_mirror_retry_after.remove(&remote_conversation_id);
         }
         let Some(mut provider) = self.account_bridge_provider.clone() else {
             self.status = "cannot open remote chat: history bridge unavailable".to_owned();
@@ -1083,7 +1109,16 @@ impl ChatariumApp {
                     self.pending_history_fetch_proof = None;
                     self.remote_mirror_failures
                         .insert(remote_conversation_id.clone(), error.clone());
-                    self.mirror_status = format!("FAILED · mirror fetch: {error}");
+                    if error.contains("HTTP 429") {
+                        self.remote_mirror_retry_after.insert(
+                            remote_conversation_id.clone(),
+                            Instant::now() + Duration::from_secs(60),
+                        );
+                        self.mirror_status =
+                            "RATE LIMITED · ChatGPT returned HTTP 429 · cooldown 60s".to_owned();
+                    } else {
+                        self.mirror_status = format!("FAILED · mirror fetch: {error}");
+                    }
                     self.status = format!("remote ChatGPT conversation fetch failed: {error}");
                 }
                 LiveMirrorFetchNotice::Fetched {
@@ -1487,6 +1522,7 @@ impl ChatariumApp {
                     self.live_mirror_truncated_before = truncated_before;
 
                     self.remote_mirror_failures.remove(&remote_conversation_id);
+                    self.remote_mirror_retry_after.remove(&remote_conversation_id);
                     match self.pending_history_fetch_proof.take() {
                         Some(pending)
                             if pending.local_conversation_id.is_none()
@@ -2124,16 +2160,21 @@ impl eframe::App for ChatariumApp {
                                     == Some(entry.id.as_str());
                                 let mirror_failed =
                                     self.remote_mirror_failures.contains_key(&entry.id);
+                                let rate_limited = self
+                                    .remote_mirror_retry_after
+                                    .get(&entry.id)
+                                    .is_some_and(|until| *until > Instant::now());
                                 let remote_state = remote_history_entry_state_label(
                                     live_local.is_some(),
                                     partial,
                                     imported_local.is_some(),
                                     mirror_pending,
+                                    rate_limited,
                                     mirror_failed,
                                 );
                                 let remote_state_color = if live_local.is_some() {
                                     egui::Color32::from_rgb(112, 176, 137)
-                                } else if mirror_pending {
+                                } else if mirror_pending || rate_limited {
                                     egui::Color32::from_rgb(225, 194, 108)
                                 } else if mirror_failed {
                                     egui::Color32::from_rgb(214, 128, 128)
@@ -2843,6 +2884,7 @@ fn remote_history_entry_state_label(
     partial: bool,
     imported: bool,
     pending: bool,
+    rate_limited: bool,
     failed: bool,
 ) -> &'static str {
     if mirrored {
@@ -2855,6 +2897,8 @@ fn remote_history_entry_state_label(
         "remote · historical backup available"
     } else if pending {
         "remote · mirroring…"
+    } else if rate_limited {
+        "remote · rate limited · cooling down"
     } else if failed {
         "remote · mirror failed · click to retry"
     } else {
@@ -3819,23 +3863,27 @@ mod tests {
     #[test]
     fn remote_history_entry_statuses_are_stage_explicit() {
         assert_eq!(
-            remote_history_entry_state_label(false, false, false, false, false),
+            remote_history_entry_state_label(false, false, false, false, false, false),
             "remote · discovered · click to mirror"
         );
         assert_eq!(
-            remote_history_entry_state_label(false, false, false, true, false),
+            remote_history_entry_state_label(false, false, false, true, false, false),
             "remote · mirroring…"
         );
         assert_eq!(
-            remote_history_entry_state_label(false, false, false, false, true),
+            remote_history_entry_state_label(false, false, false, false, true, true),
+            "remote · rate limited · cooling down"
+        );
+        assert_eq!(
+            remote_history_entry_state_label(false, false, false, false, false, true),
             "remote · mirror failed · click to retry"
         );
         assert_eq!(
-            remote_history_entry_state_label(true, false, false, false, false),
+            remote_history_entry_state_label(true, false, false, false, false, false),
             "remote · fully mirrored locally"
         );
         assert_eq!(
-            remote_history_entry_state_label(true, true, false, false, false),
+            remote_history_entry_state_label(true, true, false, false, false, false),
             "remote · mirrored locally · partial"
         );
     }
