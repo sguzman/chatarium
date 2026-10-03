@@ -164,7 +164,7 @@ This layer is intentionally disposable once the native client supersedes it, but
 
 ## Browser integration boundary
 
-The 2026-10-03 account-history incident established a hard architectural distinction between **browser observation prototypes** and **critical runtime interoperability**.
+The 2026-10-03 account-history incident established a hard architectural distinction between **browser observation prototypes**, **request replay**, and **critical runtime interoperability**.
 
 Tampermonkey remains valid for:
 
@@ -172,35 +172,50 @@ Tampermonkey remains valid for:
 - disposable protocol experiments;
 - temporary observation/instrumentation.
 
-Tampermonkey is **not** the production account-history transport. The retired `account-bridge.user.js` remains in the repository as evidence of the experiment, not as the intended runtime boundary.
+Tampermonkey is **not** the production account-history transport. The retired `account-bridge.user.js` remains as historical evidence.
 
-The replacement account-history integration is a purpose-built Edge/Chromium extension. Its job is narrow:
+The first purpose-built Edge extension established that the extension boundary itself is viable: typed localhost transport, exact ChatGPT-tab selection, MAIN-world execution, authentication probing, browser-local account context, and exact C02 reads can all be represented with explicit proof.
 
-- identify the intended `https://chatgpt.com` tab;
-- execute evidence-backed first-party reads in the correct page execution context;
-- observe required first-party account/workspace request context without exporting reusable credentials;
-- exchange typed commands/results with Chatarium over a local transport;
-- emit proof-level diagnostics for each boundary;
-- never become an arbitrary browser/HTTP proxy.
+However, Edge Bridge 0.1/0.2 **exact-C01 replay is also retired**. 0.1 reconstructed a frozen ordinary-history request and received a semantically implausible empty result. 0.2 then waited for the exact first-party frozen request so it could replay observed context, but the final validation showed that the current frontend did not emit that request even after a full reload. A critical runtime path therefore cannot depend on one historical request shape appearing.
 
-The extension transport remains subordinate to the existing protocol/store layers. It must reuse:
+The active account-history discovery boundary is Edge Bridge 0.3:
 
-- evidence-gated C01/C02 request models;
-- exact remote-ID validation;
-- live-mirror durability;
-- active-branch transcript projection;
-- explicit pagination uncertainty;
-- local/remote/historical provenance classes.
+```text
+Chatarium desktop
+        ↕ typed loopback
+MV3 service worker
+        ↕ bounded chrome.debugger attachment
+selected authenticated ChatGPT tab
+        ↕ CDP Network events / getResponseBody
+actual current first-party backend traffic
+```
 
-The browser component does **not** decide that a result is semantically trustworthy merely because HTTP succeeded. The desktop/protocol layer must still perform schema, identity, and contradiction checks.
+For a bounded discovery interval the extension:
 
-Before first human QA, the extension must self-report distinct evidence for:
+- attaches only to the selected `chatgpt.com` tab;
+- enables the Network domain;
+- reloads that tab itself;
+- observes successful current first-party `/backend-api/*` responses;
+- reads completed JSON bodies only for list-like conversation/sidebar/pin candidate paths;
+- applies explicit body-size and traversal bounds;
+- reduces private response bodies to typed conversation summaries and structural pagination/cursor evidence;
+- detaches in a `finally` path.
 
-`extension alive -> ChatGPT tab found -> desktop roundtrip -> page MAIN-world execution -> authenticated session -> account context -> target HTTP result -> parser result -> semantic sanity -> durable mirror`.
+The extension does not export raw cookies, authorization values, complete request-header sets, or browser storage to Rust. Any observed `ChatGPT-Account-ID` remains browser-local in extension session storage and exists only to support separately evidenced exact C02 reads.
 
-No aggregate `connected` state substitutes for that chain.
+The `debugger` permission is deliberately powerful. It is accepted here because the architectural goal is to observe the browser's own successful first-party network behavior rather than simulate it. This permission is bounded by implementation policy to one selected ChatGPT tab and one short discovery interval.
 
-See `docs/postmortems/2026-10-03-chatgpt-history-bridge.md` for the failure history that created this boundary.
+A CDP discovery result is **not automatically a ConversationList result**. The browser layer returns candidate surfaces plus proof such as:
+
+`extension -> desktop roundtrip -> ChatGPT tab -> debugger attach -> Network enabled -> automatic reload -> responses observed -> successful backend responses -> JSON candidates -> bounded body reads`.
+
+Rust then classifies candidate summaries. The desktop renders this as partial evidence and must preserve `completeness=unproven` until pagination and account-wide coverage have separate evidence. `ConversationList` therefore remains `Compatibility::NoBaseline`.
+
+The exact C02 path remains independently evidence-gated. It still requires browser-local account context and exact remote-identity validation before durable mirror import.
+
+The browser component never decides that a result is semantically trustworthy merely because HTTP or CDP succeeded. Protocol/store layers still own schema, identity, contradiction, completeness, and durability claims.
+
+See `docs/postmortems/2026-10-03-chatgpt-history-bridge.md` and issue #103 for the failure history and current discovery gate.
 
 ## Protocol revisions
 
