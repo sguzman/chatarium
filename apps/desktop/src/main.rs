@@ -920,6 +920,15 @@ impl ChatariumApp {
                         format!("PROOF FAILED after authenticated extension path: {error}");
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation } => {
+                    diagnostics::info(
+                        "history",
+                        format!(
+                            "UI received discovery result: surfaces={} responses={} backend-200={}",
+                            observation.candidates.len(),
+                            observation.proof.responses_seen,
+                            observation.proof.backend_http_200_seen
+                        ),
+                    );
                     self.history_list_pending = false;
                     self.remote_conversation_total = None;
 
@@ -951,6 +960,12 @@ impl ChatariumApp {
                         .map(|(path, count)| format!("{path} ({count})"))
                         .unwrap_or_else(|| "none".to_owned());
                     if current_pass_observed == 0 {
+                        diagnostics::warn(
+                            "history",
+                            format!(
+                                "discovery completed with zero current-pass items; retained-items={previously_observed}"
+                            ),
+                        );
                         self.history_bridge_proven = false;
                         self.account_bridge_status = format!(
                             "DISCOVERY INCOMPLETE: {} · candidates={} · current-pass-items=0 · retained-items={} · best-surface={} · coverage=unknown",
@@ -960,6 +975,13 @@ impl ChatariumApp {
                             best_surface,
                         );
                     } else {
+                        diagnostics::info(
+                            "history",
+                            format!(
+                                "history catalog ready: current-pass-items={current_pass_observed} accumulated-items={} best-surface={best_surface}",
+                                self.remote_conversation_catalog.len()
+                            ),
+                        );
                         self.history_bridge_proven = true;
                         self.account_bridge_status = format!(
                             "DISCOVERED: {} · candidates={} · current-pass-items={} · accumulated-items={} · best-surface={} · coverage=unknown",
@@ -972,6 +994,7 @@ impl ChatariumApp {
                     }
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryFailed { error } => {
+                    diagnostics::error("history", format!("UI received discovery failure: {error}"));
                     self.history_list_pending = false;
                     self.history_bridge_proven = false;
                     self.account_bridge_status =
@@ -983,6 +1006,13 @@ impl ChatariumApp {
                     proof,
                     http_status,
                 } => {
+                    diagnostics::info(
+                        "mirror",
+                        format!(
+                            "exact response arrived remote={} HTTP={http_status}; queuing validation/persistence",
+                            diagnostics::short_id(&remote_conversation_id)
+                        ),
+                    );
                     let Some(sender) = &self.persist_tx else {
                         self.remote_discovery_pending = None;
                         self.remote_mirror_failures.insert(
@@ -1026,6 +1056,13 @@ impl ChatariumApp {
                     remote_conversation_id,
                     error,
                 } => {
+                    diagnostics::error(
+                        "mirror",
+                        format!(
+                            "mirror fetch failed remote={}: {error}",
+                            diagnostics::short_id(&remote_conversation_id)
+                        ),
+                    );
                     if self.remote_discovery_pending.as_deref()
                         == Some(remote_conversation_id.as_str())
                     {
@@ -1418,6 +1455,13 @@ impl ChatariumApp {
                     messages,
                     projection_error,
                 } => {
+                    diagnostics::info(
+                        "mirror",
+                        format!(
+                            "durable mirror notice remote={} local={local_conversation_id} event=#{snapshot_sequence} partial={truncated_before}",
+                            diagnostics::short_id(&remote_conversation_id)
+                        ),
+                    );
                     self.events.extend(appended_events);
                     self.refresh_live_mirror_catalog();
                     if self.remote_discovery_pending.as_deref()
@@ -1479,6 +1523,13 @@ impl ChatariumApp {
                     remote_conversation_id,
                     error,
                 } => {
+                    diagnostics::error(
+                        "mirror",
+                        format!(
+                            "durable mirror commit failed remote={}: {error}",
+                            diagnostics::short_id(&remote_conversation_id)
+                        ),
+                    );
                     if self.remote_discovery_pending.as_deref()
                         == Some(remote_conversation_id.as_str())
                     {
@@ -2949,6 +3000,10 @@ fn persistence_worker(
     commands: Receiver<PersistCommand>,
     notices: Sender<PersistNotice>,
 ) {
+    diagnostics::info(
+        "persist",
+        format!("persistence worker ready: {} existing events", store.events().len()),
+    );
     while let Ok(command) = commands.recv() {
         match command {
             PersistCommand::SaveDraft { revision, text } => {
@@ -3074,6 +3129,13 @@ fn persistence_worker(
                 expected_remote_conversation_id,
                 body,
             } => {
+                diagnostics::info(
+                    "persist",
+                    format!(
+                        "validating imported mirror remote={} local={local_conversation_id}",
+                        diagnostics::short_id(&expected_remote_conversation_id)
+                    ),
+                );
                 let before = store.events().len();
                 match promote_historical_live_mirror_body(
                     &mut store,
@@ -3083,6 +3145,14 @@ fn persistence_worker(
                 ) {
                     Ok(result) => {
                         let appended_events = store.events()[before..].to_vec();
+                        diagnostics::info(
+                            "persist",
+                            format!(
+                                "imported mirror durable: local={local_conversation_id} event=#{} appended-events={}",
+                                result.snapshot.sequence,
+                                appended_events.len()
+                            ),
+                        );
                         let projection = latest_live_transcript(
                             store.events(),
                             local_conversation_id,
@@ -3104,6 +3174,12 @@ fn persistence_worker(
                         });
                     }
                     Err(error) => {
+                        diagnostics::error(
+                            "persist",
+                            format!(
+                                "imported mirror validation/persist failed local={local_conversation_id}: {error}"
+                            ),
+                        );
                         let _ = notices.send(PersistNotice::HistoricalLiveMirrorPromotionFailed {
                             local_conversation_id,
                             error: error.to_string(),
@@ -3115,6 +3191,13 @@ fn persistence_worker(
                 expected_remote_conversation_id,
                 body,
             } => {
+                diagnostics::info(
+                    "persist",
+                    format!(
+                        "validating discovered mirror remote={}",
+                        diagnostics::short_id(&expected_remote_conversation_id)
+                    ),
+                );
                 let before = store.events().len();
                 match promote_discovered_live_mirror_body(
                     &mut store,
@@ -3123,6 +3206,16 @@ fn persistence_worker(
                 ) {
                     Ok(result) => {
                         let appended_events = store.events()[before..].to_vec();
+                        diagnostics::info(
+                            "persist",
+                            format!(
+                                "discovered mirror durable: remote={} local={} event=#{} appended-events={}",
+                                diagnostics::short_id(result.remote_conversation_id.as_str()),
+                                result.local_conversation_id,
+                                result.snapshot.sequence,
+                                appended_events.len()
+                            ),
+                        );
                         let projection = latest_live_transcript(
                             store.events(),
                             result.local_conversation_id,
@@ -3148,6 +3241,13 @@ fn persistence_worker(
                         });
                     }
                     Err(error) => {
+                        diagnostics::error(
+                            "persist",
+                            format!(
+                                "discovered mirror validation/persist failed remote={}: {error}",
+                                diagnostics::short_id(&expected_remote_conversation_id)
+                            ),
+                        );
                         let _ = notices.send(PersistNotice::DiscoveredLiveMirrorPromotionFailed {
                             remote_conversation_id: expected_remote_conversation_id,
                             error: error.to_string(),
@@ -3155,7 +3255,10 @@ fn persistence_worker(
                     }
                 }
             }
-            PersistCommand::Shutdown => break,
+            PersistCommand::Shutdown => {
+                diagnostics::info("persist", "shutdown requested");
+                break;
+            }
         }
     }
 }
