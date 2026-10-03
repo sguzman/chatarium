@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Account Bridge
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.2.0
+// @version      0.3.0
 // @description  Narrow credential-contained bridge from Chatarium Desktop to the authenticated ChatGPT web session.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -28,7 +28,7 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function loopbackRequest(method, path, body = null, timeout = 30_000) {
+  function gmLoopbackRequest(method, path, body = null, timeout = 30_000) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method,
@@ -39,12 +39,75 @@
         },
         data: body === null ? undefined : JSON.stringify(body),
         timeout,
-        onload: resolve,
-        onerror: () => reject(new Error('loopback request failed')),
-        ontimeout: () => reject(new Error('loopback request timed out')),
-        onabort: () => reject(new Error('loopback request aborted')),
+        onload: (response) => resolve({
+          status: response.status,
+          responseText: response.responseText ?? '',
+          transport: 'tampermonkey',
+        }),
+        onerror: () => reject(new Error('Tampermonkey loopback request failed')),
+        ontimeout: () => reject(new Error('Tampermonkey loopback request timed out')),
+        onabort: () => reject(new Error('Tampermonkey loopback request aborted')),
       });
     });
+  }
+
+  async function pageLoopbackRequest(method, path, body = null, timeout = 30_000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort('Chatarium page loopback timeout'), timeout);
+    try {
+      const init = {
+        method,
+        headers: {
+          [BRIDGE_HEADER]: BRIDGE_HEADER_VALUE,
+          ...(body === null ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body === null ? undefined : JSON.stringify(body),
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: controller.signal,
+        targetAddressSpace: 'loopback',
+      };
+      const response = await unsafeWindow.fetch(`${BRIDGE_ORIGIN}${path}`, init);
+      return {
+        status: response.status,
+        responseText: await response.text(),
+        transport: 'page',
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function affectedTampermonkeyChromium153() {
+    const tampermonkeyVersion =
+      typeof GM_info === 'object' && typeof GM_info.version === 'string'
+        ? GM_info.version
+        : '';
+    return tampermonkeyVersion === '5.5.0'
+      && /(?:Chrome|Chromium|Edg)\/153\./.test(navigator.userAgent);
+  }
+
+  async function loopbackRequest(method, path, body = null, timeout = 30_000) {
+    let pageError;
+    try {
+      return await pageLoopbackRequest(method, path, body, timeout);
+    } catch (error) {
+      pageError = error instanceof Error ? error.message : 'page loopback request failed';
+    }
+
+    if (affectedTampermonkeyChromium153()) {
+      throw new Error(
+        `page loopback failed: ${pageError}; Tampermonkey 5.5.0 / Chromium 153 GM fallback is disabled because that combination has a known background networking stall`,
+      );
+    }
+
+    try {
+      return await gmLoopbackRequest(method, path, body, timeout);
+    } catch (error) {
+      const gmError = error instanceof Error ? error.message : 'Tampermonkey loopback request failed';
+      throw new Error(`page loopback failed: ${pageError}; GM fallback failed: ${gmError}`);
+    }
   }
 
   function parseLoopbackJson(response) {
@@ -336,6 +399,7 @@
   }
 
   async function main() {
+    main.lastError = '';
     for (;;) {
       try {
         const response = await loopbackRequest('GET', '/v1/next', null, 30_000);
@@ -356,7 +420,12 @@
         if (posted.status !== 204) {
           await sleep(ERROR_RETRY_MS);
         }
-      } catch {
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (detail !== main.lastError) {
+          console.warn('[Chatarium account bridge]', detail);
+          main.lastError = detail;
+        }
         await sleep(ERROR_RETRY_MS);
       }
     }
