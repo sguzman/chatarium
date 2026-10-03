@@ -12,6 +12,10 @@ use chatarium_core::remote::{ProtocolObservationRevision, RemoteConversationId};
 use chatarium_protocol::conversation_fetch_request::{
     CONVERSATION_FETCH_REQUEST_OBSERVATION, conversation_fetch_resource,
 };
+use chatarium_protocol::conversation_list::{
+    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, ConversationListPage,
+    parse_conversation_list_first_page,
+};
 use chatarium_store::remote_mirror_runtime::RemoteConversationFetchProvider;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -56,9 +60,9 @@ impl fmt::Display for BrowserBridgeError {
                 )
             }
             Self::HttpStatus(status) => {
-                write!(formatter, "remote conversation GET returned HTTP {status}")
+                write!(formatter, "browser-backed ChatGPT request returned HTTP {status}")
             }
-            Self::RateLimited => write!(formatter, "remote conversation GET returned HTTP 429"),
+            Self::RateLimited => write!(formatter, "browser-backed ChatGPT request returned HTTP 429"),
             Self::Unauthenticated => {
                 write!(formatter, "browser ChatGPT session is unauthenticated")
             }
@@ -166,6 +170,62 @@ pub struct BrowserBridgeProvider {
 }
 
 impl BrowserBridgeProvider {
+    /// Probe whether the userscript is connected to an authenticated ChatGPT browser session.
+    pub fn probe_authentication(
+        &mut self,
+    ) -> Result<SessionAuthenticationEvidence, BrowserBridgeError> {
+        self.authentication_evidence()
+    }
+
+    /// Fetch and validate the single evidence-backed first page of ordinary account history.
+    pub fn list_recent_conversations(
+        &mut self,
+    ) -> Result<ConversationListPage, BrowserBridgeError> {
+        let mut lease =
+            AuthenticatedSessionLease::acquire(self).map_err(map_session_lease_error)?;
+        lease
+            .with_authenticated_provider(|provider| provider.fetch_history_first_page())
+            .map_err(map_session_lease_error)?
+    }
+
+    fn fetch_history_first_page(&self) -> Result<ConversationListPage, BrowserBridgeError> {
+        let result = self.call(
+            "list_conversations",
+            |object| {
+                object.insert(
+                    "resource".to_owned(),
+                    json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE),
+                );
+            },
+            FETCH_RESULT_WAIT,
+        )?;
+
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+
+        let status = result
+            .get("http_status")
+            .and_then(Value::as_u64)
+            .and_then(|status| u16::try_from(status).ok())
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "successful conversation-list result is missing HTTP status".to_owned(),
+                )
+            })?;
+        if status != 200 {
+            return Err(status_error(status));
+        }
+
+        let body = result.get("body").ok_or_else(|| {
+            BrowserBridgeError::Protocol(
+                "successful conversation-list result is missing body".to_owned(),
+            )
+        })?;
+        parse_conversation_list_first_page(body)
+            .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))
+    }
+
     /// Fetch one exact existing conversation using only the live browser-held session.
     ///
     /// Reusable authentication material never crosses this boundary. Authentication is probed
@@ -714,6 +774,72 @@ mod tests {
             SessionAuthenticationEvidence::Authenticated
         );
         browser.join().unwrap();
+    }
+
+    #[test]
+    fn c01_command_uses_exact_first_page_resource_and_parses_response() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+
+        let auth = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(command["kind"], json!("probe_auth"));
+            },
+            |command| {
+                json!({
+                    "version": 1,
+                    "id": command["id"],
+                    "kind": "probe_auth",
+                    "ok": true,
+                    "authentication": "authenticated",
+                    "http_status": 200
+                })
+            },
+        );
+
+        let list = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(command["kind"], json!("list_conversations"));
+                assert_eq!(
+                    command["resource"],
+                    json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE)
+                );
+                assert_eq!(command.as_object().unwrap().len(), 4);
+            },
+            |command| {
+                json!({
+                    "version": 1,
+                    "id": command["id"],
+                    "kind": "list_conversations",
+                    "ok": true,
+                    "http_status": 200,
+                    "content_type": "application/json",
+                    "body": {
+                        "items": [
+                            {
+                                "id": "remote-1",
+                                "title": "One",
+                                "create_time": "2026-09-30T18:32:58Z",
+                                "update_time": "2026-09-30T21:04:06Z"
+                            }
+                        ],
+                        "total": 21,
+                        "limit": 20,
+                        "offset": 0
+                    }
+                })
+            },
+        );
+
+        let mut provider = runtime.provider();
+        let page = provider.list_recent_conversations().unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "remote-1");
+        assert_eq!(page.total, 21);
+        auth.join().unwrap();
+        list.join().unwrap();
     }
 
     #[test]
