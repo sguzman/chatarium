@@ -258,6 +258,7 @@ pub struct HistoryDiscoveryProof {
     pub application_context_header_count: u64,
     pub cache_disabled: bool,
     pub ui_stimulus_attempted: bool,
+    pub ui_stimulus_attempts: u64,
     pub ui_stimulus_targets: u64,
     pub ui_stimulus_steps: u64,
     pub ui_stimulus_chat_links_before: u64,
@@ -367,6 +368,7 @@ impl BrowserBridgeProvider {
             application_context_header_count: required_u64("application_context_header_count")?,
             cache_disabled: required_bool("cache_disabled")?,
             ui_stimulus_attempted: required_bool("ui_stimulus_attempted")?,
+            ui_stimulus_attempts: required_u64("ui_stimulus_attempts")?,
             ui_stimulus_targets: required_u64("ui_stimulus_targets")?,
             ui_stimulus_steps: required_u64("ui_stimulus_steps")?,
             ui_stimulus_chat_links_before: required_u64("ui_stimulus_chat_links_before")?,
@@ -1563,6 +1565,7 @@ mod tests {
                     "application_context_header_count": 6,
                     "cache_disabled": true,
                     "ui_stimulus_attempted": true,
+                    "ui_stimulus_attempts": 2,
                     "ui_stimulus_targets": 1,
                     "ui_stimulus_steps": 12,
                     "ui_stimulus_chat_links_before": 8,
@@ -1588,6 +1591,7 @@ mod tests {
         assert_eq!(observation.proof.application_context_header_count, 6);
         assert!(observation.proof.cache_disabled);
         assert!(observation.proof.ui_stimulus_attempted);
+        assert_eq!(observation.proof.ui_stimulus_attempts, 2);
         assert_eq!(observation.proof.ui_stimulus_targets, 1);
         assert_eq!(observation.proof.ui_stimulus_steps, 12);
         assert_eq!(observation.proof.ui_stimulus_chat_links_before, 8);
