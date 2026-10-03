@@ -545,9 +545,8 @@ impl ChatariumApp {
 
                 match provider.list_recent_conversations() {
                     Ok(observation) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryListLoaded {
-                            observation,
-                        });
+                        let _ =
+                            notices.send(LiveMirrorFetchNotice::HistoryListLoaded { observation });
                     }
                     Err(error) => {
                         let _ = notices.send(LiveMirrorFetchNotice::HistoryListFailed {
