@@ -170,6 +170,29 @@ impl Drop for AccountBridgeRuntime {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeTransport {
+    Page,
+    Tampermonkey,
+}
+
+impl BridgeTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Tampermonkey => "tampermonkey",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationListObservation {
+    pub page: ConversationListPage,
+    pub transport: BridgeTransport,
+    pub account_context: bool,
+    pub http_status: u16,
+}
+
 #[derive(Clone)]
 pub struct BrowserBridgeProvider {
     shared: Arc<Shared>,
@@ -186,7 +209,7 @@ impl BrowserBridgeProvider {
     /// Fetch and validate the single evidence-backed first page of ordinary account history.
     pub fn list_recent_conversations(
         &mut self,
-    ) -> Result<ConversationListPage, BrowserBridgeError> {
+    ) -> Result<ConversationListObservation, BrowserBridgeError> {
         let mut lease =
             AuthenticatedSessionLease::acquire(self).map_err(map_session_lease_error)?;
         lease
@@ -194,7 +217,7 @@ impl BrowserBridgeProvider {
             .map_err(map_session_lease_error)?
     }
 
-    fn fetch_history_first_page(&self) -> Result<ConversationListPage, BrowserBridgeError> {
+    fn fetch_history_first_page(&self) -> Result<ConversationListObservation, BrowserBridgeError> {
         let result = self.call(
             "list_conversations",
             |object| {
@@ -222,14 +245,36 @@ impl BrowserBridgeProvider {
         if status != 200 {
             return Err(status_error(status));
         }
+        let account_context = result
+            .get("account_context")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "successful conversation-list result is missing account-context evidence"
+                        .to_owned(),
+                )
+            })?;
+        if !account_context {
+            return Err(BrowserBridgeError::Protocol(
+                "conversation-list result was not executed with observed ChatGPT account context"
+                    .to_owned(),
+            ));
+        }
+        let transport = parse_bridge_transport(&result)?;
 
         let body = result.get("body").ok_or_else(|| {
             BrowserBridgeError::Protocol(
                 "successful conversation-list result is missing body".to_owned(),
             )
         })?;
-        parse_conversation_list_first_page(body)
-            .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))
+        let page = parse_conversation_list_first_page(body)
+            .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))?;
+        Ok(ConversationListObservation {
+            page,
+            transport,
+            account_context,
+            http_status: status,
+        })
     }
 
     /// Fetch one exact existing conversation using only the live browser-held session.
@@ -381,10 +426,30 @@ impl RemoteConversationFetchProvider for BrowserBridgeProvider {
         if status != 200 {
             return Err(status_error(status));
         }
+        if result.get("account_context").and_then(Value::as_bool) != Some(true) {
+            return Err(BrowserBridgeError::Protocol(
+                "conversation fetch was not executed with observed ChatGPT account context"
+                    .to_owned(),
+            ));
+        }
+        let _ = parse_bridge_transport(&result)?;
 
         result.get("body").cloned().ok_or_else(|| {
             BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
         })
+    }
+}
+
+fn parse_bridge_transport(result: &Value) -> Result<BridgeTransport, BrowserBridgeError> {
+    match result.get("bridge_transport").and_then(Value::as_str) {
+        Some("page") => Ok(BridgeTransport::Page),
+        Some("tampermonkey") => Ok(BridgeTransport::Tampermonkey),
+        Some(other) => Err(BrowserBridgeError::Protocol(format!(
+            "unsupported bridge transport {other:?}"
+        ))),
+        None => Err(BrowserBridgeError::Protocol(
+            "bridge result is missing transport evidence".to_owned(),
+        )),
     }
 }
 
@@ -947,6 +1012,8 @@ mod tests {
                         "ok": true,
                         "http_status": 200,
                         "content_type": "application/json",
+                        "account_context": true,
+                        "bridge_transport": "page",
                         "body": {
                             "items": [
                                 {
@@ -975,10 +1042,76 @@ mod tests {
         });
 
         let mut provider = runtime.provider();
-        let page = provider.list_recent_conversations().unwrap();
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].id, "remote-1");
-        assert_eq!(page.total, 21);
+        let observation = provider.list_recent_conversations().unwrap();
+        assert_eq!(observation.page.items.len(), 1);
+        assert_eq!(observation.page.items[0].id, "remote-1");
+        assert_eq!(observation.page.total, 21);
+        assert_eq!(observation.transport, BridgeTransport::Page);
+        assert!(observation.account_context);
+        assert_eq!(observation.http_status, 200);
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn c01_rejects_false_success_without_account_context() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+
+        let browser = thread::spawn(move || {
+            for expected_kind in ["probe_auth", "probe_auth", "list_conversations"] {
+                let raw = request(
+                    address,
+                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+                );
+                let split = raw
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .unwrap();
+                let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
+                assert_eq!(command["kind"], json!(expected_kind));
+
+                let result = if expected_kind == "list_conversations" {
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": "list_conversations",
+                        "ok": true,
+                        "http_status": 200,
+                        "content_type": "application/json",
+                        "account_context": false,
+                        "bridge_transport": "page",
+                        "body": {
+                            "items": [],
+                            "total": 0,
+                            "limit": 20,
+                            "offset": 0
+                        }
+                    })
+                } else {
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": "probe_auth",
+                        "ok": true,
+                        "authentication": "authenticated",
+                        "http_status": 200
+                    })
+                };
+                let body = serde_json::to_vec(&result).unwrap();
+                let request_head = format!(
+                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let mut raw = request_head.into_bytes();
+                raw.extend_from_slice(&body);
+                let response = request(address, &raw);
+                assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
+            }
+        });
+
+        let mut provider = runtime.provider();
+        let error = provider.list_recent_conversations().unwrap_err();
+        assert!(error.to_string().contains("account context"));
         browser.join().unwrap();
     }
 
@@ -1005,6 +1138,8 @@ mod tests {
                     "ok": true,
                     "http_status": 200,
                     "content_type": "application/json",
+                    "account_context": true,
+                    "bridge_transport": "page",
                     "body": {"conversation_id": "opaque/remote id"}
                 })
             },
