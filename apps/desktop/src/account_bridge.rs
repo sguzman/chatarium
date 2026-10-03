@@ -13,8 +13,7 @@ use chatarium_protocol::conversation_fetch_request::{
     CONVERSATION_FETCH_REQUEST_OBSERVATION, conversation_fetch_resource,
 };
 use chatarium_protocol::conversation_list::{
-    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, ConversationListPage,
-    parse_conversation_list_first_page,
+    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, ConversationListPage, parse_conversation_list_first_page,
 };
 use chatarium_store::remote_mirror_runtime::RemoteConversationFetchProvider;
 use serde_json::{Value, json};
@@ -60,9 +59,15 @@ impl fmt::Display for BrowserBridgeError {
                 )
             }
             Self::HttpStatus(status) => {
-                write!(formatter, "browser-backed ChatGPT request returned HTTP {status}")
+                write!(
+                    formatter,
+                    "browser-backed ChatGPT request returned HTTP {status}"
+                )
             }
-            Self::RateLimited => write!(formatter, "browser-backed ChatGPT request returned HTTP 429"),
+            Self::RateLimited => write!(
+                formatter,
+                "browser-backed ChatGPT request returned HTTP 429"
+            ),
             Self::Unauthenticated => {
                 write!(formatter, "browser ChatGPT session is unauthenticated")
             }
