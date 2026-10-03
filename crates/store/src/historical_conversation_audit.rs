@@ -75,7 +75,9 @@ pub fn record_historical_conversation_snapshot(
     .map_err(invalid_data)?;
 
     store.append_scoped(
-        Some(historical_conversation_scope(snapshot.local_conversation_id)),
+        Some(historical_conversation_scope(
+            snapshot.local_conversation_id,
+        )),
         EventKind::HistoricalConversationSnapshotImported,
         payload,
     )
@@ -198,7 +200,9 @@ fn required_string(value: &Value, field: &str) -> Result<String, String> {
         .get(field)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("historical conversation snapshot is missing string field '{field}'"))
+        .ok_or_else(|| {
+            format!("historical conversation snapshot is missing string field '{field}'")
+        })
 }
 
 fn required_non_empty_string(value: &Value, field: &str) -> Result<String, String> {
@@ -212,10 +216,9 @@ fn required_non_empty_string(value: &Value, field: &str) -> Result<String, Strin
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("historical conversation snapshot is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("historical conversation snapshot is missing integer field '{field}'")
+    })
 }
 
 fn optional_string(value: &Value, field: &str) -> Result<Option<String>, String> {
@@ -246,14 +249,20 @@ mod tests {
     use super::*;
     use crate::MemoryEventStore;
 
-    fn snapshot(local: LocalConversationId, remote: &str, digest: &str) -> HistoricalConversationSnapshot {
+    fn snapshot(
+        local: LocalConversationId,
+        remote: &str,
+        digest: &str,
+    ) -> HistoricalConversationSnapshot {
         HistoricalConversationSnapshot {
             local_conversation_id: local,
             remote_conversation_id: remote.to_owned(),
             source_sha256: "source".to_owned(),
             source_archive: "imports/openai-account-export/sources/source.json".to_owned(),
             conversation_sha256: digest.to_owned(),
-            conversation_archive: format!("imports/openai-account-export/conversations/{digest}.json"),
+            conversation_archive: format!(
+                "imports/openai-account-export/conversations/{digest}.json"
+            ),
             source_index: 0,
             title: Some("title".to_owned()),
             create_time: Some(1.0),
