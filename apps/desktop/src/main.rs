@@ -1878,9 +1878,9 @@ impl eframe::App for ChatariumApp {
                         if !self.remote_conversation_catalog.is_empty() {
                             ui.add_space(16.0);
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "CHATGPT HISTORY · {} OBSERVED",
+                                egui::RichText::new(history_observed_label(
                                     self.remote_conversation_catalog.len(),
+                                    self.remote_conversation_total,
                                 ))
                                 .size(10.0)
                                 .strong()
@@ -1922,44 +1922,32 @@ impl eframe::App for ChatariumApp {
                                         open_remote_requested = Some(entry.id.clone());
                                     }
                                 }
-                                let (remote_state, remote_state_color) =
-                                    if let Some(local_id) = live_local {
-                                        let partial = self
-                                            .live_mirror_catalog
-                                            .iter()
-                                            .find(|live| live.local_conversation_id == local_id)
-                                            .is_some_and(|live| live.truncated_before);
-                                        (
-                                            if partial {
-                                                "remote · mirrored locally · partial"
-                                            } else {
-                                                "remote · fully mirrored locally"
-                                            },
-                                            egui::Color32::from_rgb(112, 176, 137),
-                                        )
-                                    } else if imported_local.is_some() {
-                                        (
-                                            "remote · historical backup available",
-                                            egui::Color32::from_rgb(112, 116, 126),
-                                        )
-                                    } else if self.remote_discovery_pending.as_deref()
-                                        == Some(entry.id.as_str())
-                                    {
-                                        (
-                                            "remote · mirroring…",
-                                            egui::Color32::from_rgb(225, 194, 108),
-                                        )
-                                    } else if self.remote_mirror_failures.contains_key(&entry.id) {
-                                        (
-                                            "remote · mirror failed · click to retry",
-                                            egui::Color32::from_rgb(214, 128, 128),
-                                        )
-                                    } else {
-                                        (
-                                            "remote · discovered · click to mirror",
-                                            egui::Color32::from_rgb(112, 116, 126),
-                                        )
-                                    };
+                                let partial = live_local.is_some_and(|local_id| {
+                                    self.live_mirror_catalog
+                                        .iter()
+                                        .find(|live| live.local_conversation_id == local_id)
+                                        .is_some_and(|live| live.truncated_before)
+                                });
+                                let mirror_pending = self.remote_discovery_pending.as_deref()
+                                    == Some(entry.id.as_str());
+                                let mirror_failed =
+                                    self.remote_mirror_failures.contains_key(&entry.id);
+                                let remote_state = remote_history_entry_state_label(
+                                    live_local.is_some(),
+                                    partial,
+                                    imported_local.is_some(),
+                                    mirror_pending,
+                                    mirror_failed,
+                                );
+                                let remote_state_color = if live_local.is_some() {
+                                    egui::Color32::from_rgb(112, 176, 137)
+                                } else if mirror_pending {
+                                    egui::Color32::from_rgb(225, 194, 108)
+                                } else if mirror_failed {
+                                    egui::Color32::from_rgb(214, 128, 128)
+                                } else {
+                                    egui::Color32::from_rgb(112, 116, 126)
+                                };
                                 ui.label(
                                     egui::RichText::new(remote_state)
                                         .size(9.0)
@@ -2649,6 +2637,37 @@ fn transcript_bubble(
                 .color(egui::Color32::from_rgb(116, 121, 133)),
             );
         });
+}
+
+fn history_observed_label(observed: usize, proven_total: Option<u64>) -> String {
+    match proven_total {
+        Some(total) => format!("CHATGPT HISTORY · {observed}/{total}"),
+        None => format!("CHATGPT HISTORY · {observed} OBSERVED"),
+    }
+}
+
+fn remote_history_entry_state_label(
+    mirrored: bool,
+    partial: bool,
+    imported: bool,
+    pending: bool,
+    failed: bool,
+) -> &'static str {
+    if mirrored {
+        if partial {
+            "remote · mirrored locally · partial"
+        } else {
+            "remote · fully mirrored locally"
+        }
+    } else if imported {
+        "remote · historical backup available"
+    } else if pending {
+        "remote · mirroring…"
+    } else if failed {
+        "remote · mirror failed · click to retry"
+    } else {
+        "remote · discovered · click to mirror"
+    }
 }
 
 fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
@@ -3513,6 +3532,42 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn unknown_history_total_is_labeled_as_observed_not_complete() {
+        assert_eq!(
+            history_observed_label(85, None),
+            "CHATGPT HISTORY · 85 OBSERVED"
+        );
+        assert_eq!(
+            history_observed_label(85, Some(120)),
+            "CHATGPT HISTORY · 85/120"
+        );
+    }
+
+    #[test]
+    fn remote_history_entry_statuses_are_stage_explicit() {
+        assert_eq!(
+            remote_history_entry_state_label(false, false, false, false, false),
+            "remote · discovered · click to mirror"
+        );
+        assert_eq!(
+            remote_history_entry_state_label(false, false, false, true, false),
+            "remote · mirroring…"
+        );
+        assert_eq!(
+            remote_history_entry_state_label(false, false, false, false, true),
+            "remote · mirror failed · click to retry"
+        );
+        assert_eq!(
+            remote_history_entry_state_label(true, false, false, false, false),
+            "remote · fully mirrored locally"
+        );
+        assert_eq!(
+            remote_history_entry_state_label(true, true, false, false, false),
+            "remote · mirrored locally · partial"
+        );
     }
 
     #[test]
