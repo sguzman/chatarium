@@ -1045,6 +1045,46 @@ mod tests {
         })
     }
 
+    fn extension_auth_result(command: &Value) -> Value {
+        json!({
+            "version": 1,
+            "id": command["id"],
+            "kind": "probe_auth",
+            "ok": true,
+            "authentication": "authenticated",
+            "http_status": 200,
+            "bridge_transport": "extension",
+            "extension_version": "0.1.0",
+            "chatgpt_tab_found": true,
+            "main_world_execution": true,
+            "account_context": true,
+            "request_profile": AUTH_REQUEST_PROFILE
+        })
+    }
+
+    fn exchange_auth(address: SocketAddr) {
+        let raw = request(
+            address,
+            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+        );
+        let split = raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
+        assert_eq!(command["kind"], json!("probe_auth"));
+        assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
+        let body = serde_json::to_vec(&extension_auth_result(&command)).unwrap();
+        let request_head = format!(
+            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut raw = request_head.into_bytes();
+        raw.extend_from_slice(&body);
+        let response = request(address, &raw);
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
+    }
+
     #[test]
     fn chatgpt_page_preflight_is_narrowly_allowed() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
@@ -1082,42 +1122,47 @@ mod tests {
     }
 
     #[test]
-    fn auth_probe_crosses_only_typed_state() {
+    fn auth_probe_crosses_only_typed_state_and_extension_proof() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
         let browser = browser_exchange(
             address,
             |command| {
                 assert_eq!(command["kind"], json!("probe_auth"));
-                assert_eq!(command.as_object().unwrap().len(), 3);
+                assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
+                assert_eq!(command.as_object().unwrap().len(), 4);
             },
-            |command| {
-                json!({
-                    "version": 1,
-                    "id": command["id"],
-                    "kind": "probe_auth",
-                    "ok": true,
-                    "authentication": "authenticated",
-                    "http_status": 200
-                })
-            },
+            extension_auth_result,
         );
 
         let mut provider = runtime.provider();
+        let observation = provider.probe_authentication().unwrap();
         assert_eq!(
-            provider.authentication_evidence().unwrap(),
+            observation.evidence,
             SessionAuthenticationEvidence::Authenticated
         );
+        assert_eq!(observation.http_status, 200);
+        assert_eq!(observation.proof.extension_version, "0.1.0");
+        assert!(observation.proof.desktop_roundtrip);
+        assert!(observation.proof.chatgpt_tab_found);
+        assert!(observation.proof.main_world_execution);
+        assert!(observation.proof.account_context);
+        assert_eq!(observation.proof.request_profile, AUTH_REQUEST_PROFILE);
         browser.join().unwrap();
     }
 
     #[test]
-    fn c01_command_uses_exact_first_page_resource_and_parses_response() {
+    fn c01_command_uses_exact_first_page_resource_and_parses_extension_proof() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
 
         let browser = thread::spawn(move || {
             for expected_kind in ["probe_auth", "probe_auth", "list_conversations"] {
+                if expected_kind == "probe_auth" {
+                    exchange_auth(address);
+                    continue;
+                }
+
                 let raw = request(
                     address,
                     b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
@@ -1128,49 +1173,43 @@ mod tests {
                     .unwrap();
                 let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
                 assert_eq!(command["kind"], json!(expected_kind));
+                assert_eq!(
+                    command["resource"],
+                    json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE)
+                );
+                assert_eq!(
+                    command["request_profile"],
+                    json!(CONVERSATION_LIST_OBSERVATION)
+                );
+                assert_eq!(command.as_object().unwrap().len(), 5);
 
-                if expected_kind == "list_conversations" {
-                    assert_eq!(
-                        command["resource"],
-                        json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE)
-                    );
-                    assert_eq!(command.as_object().unwrap().len(), 4);
-                }
-
-                let result = if expected_kind == "probe_auth" {
-                    json!({
-                        "version": 1,
-                        "id": command["id"],
-                        "kind": "probe_auth",
-                        "ok": true,
-                        "authentication": "authenticated",
-                        "http_status": 200
-                    })
-                } else {
-                    json!({
-                        "version": 1,
-                        "id": command["id"],
-                        "kind": "list_conversations",
-                        "ok": true,
-                        "http_status": 200,
-                        "content_type": "application/json",
-                        "account_context": true,
-                        "bridge_transport": "page",
-                        "body": {
-                            "items": [
-                                {
-                                    "id": "remote-1",
-                                    "title": "One",
-                                    "create_time": "2026-09-30T18:32:58Z",
-                                    "update_time": "2026-09-30T21:04:06Z"
-                                }
-                            ],
-                            "total": 21,
-                            "limit": 20,
-                            "offset": 0
-                        }
-                    })
-                };
+                let result = json!({
+                    "version": 1,
+                    "id": command["id"],
+                    "kind": "list_conversations",
+                    "ok": true,
+                    "http_status": 200,
+                    "content_type": "application/json",
+                    "bridge_transport": "extension",
+                    "extension_version": "0.1.0",
+                    "chatgpt_tab_found": true,
+                    "main_world_execution": true,
+                    "account_context": true,
+                    "request_profile": CONVERSATION_LIST_OBSERVATION,
+                    "body": {
+                        "items": [
+                            {
+                                "id": "remote-1",
+                                "title": "One",
+                                "create_time": "2026-09-30T18:32:58Z",
+                                "update_time": "2026-09-30T21:04:06Z"
+                            }
+                        ],
+                        "total": 21,
+                        "limit": 20,
+                        "offset": 0
+                    }
+                });
                 let body = serde_json::to_vec(&result).unwrap();
                 let request_head = format!(
                     "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -1188,9 +1227,16 @@ mod tests {
         assert_eq!(observation.page.items.len(), 1);
         assert_eq!(observation.page.items[0].id, "remote-1");
         assert_eq!(observation.page.total, 21);
-        assert_eq!(observation.transport, BridgeTransport::Page);
-        assert!(observation.account_context);
         assert_eq!(observation.http_status, 200);
+        assert_eq!(observation.proof.extension_version, "0.1.0");
+        assert_eq!(
+            observation.proof.request_profile,
+            CONVERSATION_LIST_OBSERVATION
+        );
+        assert!(observation.proof.desktop_roundtrip);
+        assert!(observation.proof.chatgpt_tab_found);
+        assert!(observation.proof.main_world_execution);
+        assert!(observation.proof.account_context);
         browser.join().unwrap();
     }
 
@@ -1200,55 +1246,47 @@ mod tests {
         let address = runtime.address();
 
         let browser = thread::spawn(move || {
-            for expected_kind in ["probe_auth", "probe_auth", "list_conversations"] {
-                let raw = request(
-                    address,
-                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
-                );
-                let split = raw
-                    .windows(4)
-                    .position(|window| window == b"\r\n\r\n")
-                    .unwrap();
-                let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
-                assert_eq!(command["kind"], json!(expected_kind));
+            exchange_auth(address);
+            exchange_auth(address);
 
-                let result = if expected_kind == "list_conversations" {
-                    json!({
-                        "version": 1,
-                        "id": command["id"],
-                        "kind": "list_conversations",
-                        "ok": true,
-                        "http_status": 200,
-                        "content_type": "application/json",
-                        "account_context": false,
-                        "bridge_transport": "page",
-                        "body": {
-                            "items": [],
-                            "total": 0,
-                            "limit": 20,
-                            "offset": 0
-                        }
-                    })
-                } else {
-                    json!({
-                        "version": 1,
-                        "id": command["id"],
-                        "kind": "probe_auth",
-                        "ok": true,
-                        "authentication": "authenticated",
-                        "http_status": 200
-                    })
-                };
-                let body = serde_json::to_vec(&result).unwrap();
-                let request_head = format!(
-                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-                    body.len()
-                );
-                let mut raw = request_head.into_bytes();
-                raw.extend_from_slice(&body);
-                let response = request(address, &raw);
-                assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
-            }
+            let raw = request(
+                address,
+                b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+            );
+            let split = raw
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .unwrap();
+            let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
+            let result = json!({
+                "version": 1,
+                "id": command["id"],
+                "kind": "list_conversations",
+                "ok": true,
+                "http_status": 200,
+                "content_type": "application/json",
+                "bridge_transport": "extension",
+                "extension_version": "0.1.0",
+                "chatgpt_tab_found": true,
+                "main_world_execution": true,
+                "account_context": false,
+                "request_profile": CONVERSATION_LIST_OBSERVATION,
+                "body": {
+                    "items": [],
+                    "total": 0,
+                    "limit": 20,
+                    "offset": 0
+                }
+            });
+            let body = serde_json::to_vec(&result).unwrap();
+            let request_head = format!(
+                "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut raw = request_head.into_bytes();
+            raw.extend_from_slice(&body);
+            let response = request(address, &raw);
+            assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
         });
 
         let mut provider = runtime.provider();
@@ -1258,7 +1296,29 @@ mod tests {
     }
 
     #[test]
-    fn c02_command_uses_exact_evidence_backed_resource() {
+    fn retired_userscript_transport_is_rejected_even_with_success_shape() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+        let browser = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(command["kind"], json!("probe_auth"));
+            },
+            |command| {
+                let mut result = extension_auth_result(command);
+                result["bridge_transport"] = json!("page");
+                result
+            },
+        );
+
+        let mut provider = runtime.provider();
+        let error = provider.probe_authentication().unwrap_err();
+        assert!(error.to_string().contains("retired userscript transport"));
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn c02_command_uses_exact_evidence_backed_resource_and_extension_proof() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
         let browser = browser_exchange(
@@ -1271,6 +1331,10 @@ mod tests {
                         "/backend-api/conversations/opaque%2Fremote%20id?num_turns=10&include_has_versions=true"
                     )
                 );
+                assert_eq!(
+                    command["request_profile"],
+                    json!(CONVERSATION_FETCH_REQUEST_OBSERVATION)
+                );
             },
             |command| {
                 json!({
@@ -1280,21 +1344,31 @@ mod tests {
                     "ok": true,
                     "http_status": 200,
                     "content_type": "application/json",
+                    "bridge_transport": "extension",
+                    "extension_version": "0.1.0",
+                    "chatgpt_tab_found": true,
+                    "main_world_execution": true,
                     "account_context": true,
-                    "bridge_transport": "page",
+                    "request_profile": CONVERSATION_FETCH_REQUEST_OBSERVATION,
                     "body": {"conversation_id": "opaque/remote id"}
                 })
             },
         );
 
         let mut provider = runtime.provider();
-        let body = provider
-            .fetch_conversation(
+        let observation = provider
+            .fetch_conversation_observation(
                 &RemoteConversationId::new("opaque/remote id").unwrap(),
                 &ProtocolObservationRevision::new(CONVERSATION_FETCH_REQUEST_OBSERVATION).unwrap(),
             )
             .unwrap();
-        assert_eq!(body["conversation_id"], json!("opaque/remote id"));
+        assert_eq!(observation.body["conversation_id"], json!("opaque/remote id"));
+        assert_eq!(observation.http_status, 200);
+        assert_eq!(observation.proof.extension_version, "0.1.0");
+        assert_eq!(
+            observation.proof.request_profile,
+            CONVERSATION_FETCH_REQUEST_OBSERVATION
+        );
         browser.join().unwrap();
     }
 
@@ -1313,6 +1387,12 @@ mod tests {
                     "ok": false,
                     "http_status": 429,
                     "content_type": "application/json",
+                    "bridge_transport": "extension",
+                    "extension_version": "0.1.0",
+                    "chatgpt_tab_found": true,
+                    "main_world_execution": true,
+                    "account_context": true,
+                    "request_profile": CONVERSATION_FETCH_REQUEST_OBSERVATION,
                     "error": "remote_http_status"
                 })
             },
