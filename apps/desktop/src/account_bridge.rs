@@ -13,7 +13,8 @@ use chatarium_protocol::conversation_fetch_request::{
     CONVERSATION_FETCH_REQUEST_OBSERVATION, conversation_fetch_resource,
 };
 use chatarium_protocol::conversation_list::{
-    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, ConversationListPage, parse_conversation_list_first_page,
+    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, CONVERSATION_LIST_OBSERVATION, ConversationListPage,
+    parse_conversation_list_first_page,
 };
 use chatarium_store::remote_mirror_runtime::RemoteConversationFetchProvider;
 use serde_json::{Value, json};
@@ -34,6 +35,7 @@ const MAX_RESULT_BODY_BYTES: usize = 6 * 1024 * 1024;
 const NEXT_WAIT: Duration = Duration::from_secs(25);
 const AUTH_RESULT_WAIT: Duration = Duration::from_secs(5);
 const FETCH_RESULT_WAIT: Duration = Duration::from_secs(45);
+const AUTH_REQUEST_PROFILE: &str = "chatgpt-me-v1";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,24 +174,44 @@ impl Drop for AccountBridgeRuntime {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeTransport {
-    Page,
-    Tampermonkey,
+    Extension,
 }
 
 impl BridgeTransport {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Page => "page",
-            Self::Tampermonkey => "tampermonkey",
+            Self::Extension => "extension",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserProof {
+    pub extension_version: String,
+    pub desktop_roundtrip: bool,
+    pub chatgpt_tab_found: bool,
+    pub main_world_execution: bool,
+    pub account_context: bool,
+    pub request_profile: String,
+}
+
+pub struct AuthenticationObservation {
+    pub evidence: SessionAuthenticationEvidence,
+    pub proof: BrowserProof,
+    pub http_status: u16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationListObservation {
     pub page: ConversationListPage,
-    pub transport: BridgeTransport,
-    pub account_context: bool,
+    pub proof: BrowserProof,
+    pub http_status: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationFetchObservation {
+    pub body: Value,
+    pub proof: BrowserProof,
     pub http_status: u16,
 }
 
@@ -199,11 +221,11 @@ pub struct BrowserBridgeProvider {
 }
 
 impl BrowserBridgeProvider {
-    /// Probe whether the userscript is connected to an authenticated ChatGPT browser session.
+    /// Probe the instrumented extension against an authenticated ChatGPT browser session.
     pub fn probe_authentication(
         &mut self,
-    ) -> Result<SessionAuthenticationEvidence, BrowserBridgeError> {
-        self.authentication_evidence()
+    ) -> Result<AuthenticationObservation, BrowserBridgeError> {
+        self.probe_authentication_observation()
     }
 
     /// Fetch and validate the single evidence-backed first page of ordinary account history.
@@ -225,6 +247,10 @@ impl BrowserBridgeProvider {
                     "resource".to_owned(),
                     json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE),
                 );
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(CONVERSATION_LIST_OBSERVATION),
+                );
             },
             FETCH_RESULT_WAIT,
         )?;
@@ -245,22 +271,7 @@ impl BrowserBridgeProvider {
         if status != 200 {
             return Err(status_error(status));
         }
-        let account_context = result
-            .get("account_context")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                BrowserBridgeError::Protocol(
-                    "successful conversation-list result is missing account-context evidence"
-                        .to_owned(),
-                )
-            })?;
-        if !account_context {
-            return Err(BrowserBridgeError::Protocol(
-                "conversation-list result was not executed with observed ChatGPT account context"
-                    .to_owned(),
-            ));
-        }
-        let transport = parse_bridge_transport(&result)?;
+        let proof = parse_extension_proof(&result, CONVERSATION_LIST_OBSERVATION)?;
 
         let body = result.get("body").ok_or_else(|| {
             BrowserBridgeError::Protocol(
@@ -271,8 +282,7 @@ impl BrowserBridgeProvider {
             .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))?;
         Ok(ConversationListObservation {
             page,
-            transport,
-            account_context,
+            proof,
             http_status: status,
         })
     }
@@ -284,7 +294,7 @@ impl BrowserBridgeProvider {
     pub fn fetch_authenticated_conversation(
         &mut self,
         remote_conversation_id: &str,
-    ) -> Result<Value, BrowserBridgeError> {
+    ) -> Result<ConversationFetchObservation, BrowserBridgeError> {
         let remote_conversation_id = RemoteConversationId::new(remote_conversation_id)
             .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))?;
         let protocol_revision =
@@ -294,9 +304,96 @@ impl BrowserBridgeProvider {
             AuthenticatedSessionLease::acquire(self).map_err(map_session_lease_error)?;
         lease
             .with_authenticated_provider(|provider| {
-                provider.fetch_conversation(&remote_conversation_id, &protocol_revision)
+                provider.fetch_conversation_observation(
+                    &remote_conversation_id,
+                    &protocol_revision,
+                )
             })
             .map_err(map_session_lease_error)?
+    }
+
+    fn probe_authentication_observation(
+        &self,
+    ) -> Result<AuthenticationObservation, BrowserBridgeError> {
+        let result = self.call(
+            "probe_auth",
+            |object| {
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(AUTH_REQUEST_PROFILE),
+                );
+            },
+            AUTH_RESULT_WAIT,
+        )?;
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+        let http_status = required_http_status(&result, "authentication")?;
+        let evidence = match result.get("authentication").and_then(Value::as_str) {
+            Some("authenticated") => SessionAuthenticationEvidence::Authenticated,
+            Some("unauthenticated") => SessionAuthenticationEvidence::Unauthenticated,
+            Some("unknown") => SessionAuthenticationEvidence::Unknown,
+            _ => {
+                return Err(BrowserBridgeError::Protocol(
+                    "probe_auth result has no supported authentication state".to_owned(),
+                ));
+            }
+        };
+        let proof = parse_extension_proof(&result, AUTH_REQUEST_PROFILE)?;
+        Ok(AuthenticationObservation {
+            evidence,
+            proof,
+            http_status,
+        })
+    }
+
+    fn fetch_conversation_observation(
+        &self,
+        remote_conversation_id: &RemoteConversationId,
+        protocol_revision: &ProtocolObservationRevision,
+    ) -> Result<ConversationFetchObservation, BrowserBridgeError> {
+        if protocol_revision.as_str() != CONVERSATION_FETCH_REQUEST_OBSERVATION {
+            return Err(BrowserBridgeError::UnsupportedRevision(
+                protocol_revision.as_str().to_owned(),
+            ));
+        }
+
+        let resource = conversation_fetch_resource(remote_conversation_id.as_str())
+            .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))?;
+        let result = self.call(
+            "fetch_conversation",
+            |object| {
+                object.insert(
+                    "remote_conversation_id".to_owned(),
+                    json!(remote_conversation_id.as_str()),
+                );
+                object.insert("resource".to_owned(), json!(resource));
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(protocol_revision.as_str()),
+                );
+            },
+            FETCH_RESULT_WAIT,
+        )?;
+
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+
+        let http_status = required_http_status(&result, "conversation fetch")?;
+        if http_status != 200 {
+            return Err(status_error(http_status));
+        }
+        let proof = parse_extension_proof(&result, protocol_revision.as_str())?;
+        let body = result.get("body").cloned().ok_or_else(|| {
+            BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
+        })?;
+
+        Ok(ConversationFetchObservation {
+            body,
+            proof,
+            http_status,
+        })
     }
 
     fn call(
@@ -370,15 +467,8 @@ impl UserAuthenticatedSessionProvider for BrowserBridgeProvider {
     type Error = BrowserBridgeError;
 
     fn authentication_evidence(&mut self) -> Result<SessionAuthenticationEvidence, Self::Error> {
-        let result = self.call("probe_auth", |_| {}, AUTH_RESULT_WAIT)?;
-        match result.get("authentication").and_then(Value::as_str) {
-            Some("authenticated") => Ok(SessionAuthenticationEvidence::Authenticated),
-            Some("unauthenticated") => Ok(SessionAuthenticationEvidence::Unauthenticated),
-            Some("unknown") => Ok(SessionAuthenticationEvidence::Unknown),
-            _ => Err(BrowserBridgeError::Protocol(
-                "probe_auth result has no supported authentication state".to_owned(),
-            )),
-        }
+        self.probe_authentication_observation()
+            .map(|observation| observation.evidence)
     }
 }
 
@@ -390,60 +480,103 @@ impl RemoteConversationFetchProvider for BrowserBridgeProvider {
         remote_conversation_id: &RemoteConversationId,
         protocol_revision: &ProtocolObservationRevision,
     ) -> Result<Value, Self::FetchError> {
-        if protocol_revision.as_str() != CONVERSATION_FETCH_REQUEST_OBSERVATION {
-            return Err(BrowserBridgeError::UnsupportedRevision(
-                protocol_revision.as_str().to_owned(),
-            ));
-        }
-
-        let resource = conversation_fetch_resource(remote_conversation_id.as_str())
-            .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))?;
-        let result = self.call(
-            "fetch_conversation",
-            |object| {
-                object.insert(
-                    "remote_conversation_id".to_owned(),
-                    json!(remote_conversation_id.as_str()),
-                );
-                object.insert("resource".to_owned(), json!(resource));
-            },
-            FETCH_RESULT_WAIT,
-        )?;
-
-        if result.get("ok").and_then(Value::as_bool) != Some(true) {
-            return Err(remote_result_error(&result));
-        }
-
-        let status = result
-            .get("http_status")
-            .and_then(Value::as_u64)
-            .and_then(|status| u16::try_from(status).ok())
-            .ok_or_else(|| {
-                BrowserBridgeError::Protocol(
-                    "successful fetch result is missing HTTP status".to_owned(),
-                )
-            })?;
-        if status != 200 {
-            return Err(status_error(status));
-        }
-        if result.get("account_context").and_then(Value::as_bool) != Some(true) {
-            return Err(BrowserBridgeError::Protocol(
-                "conversation fetch was not executed with observed ChatGPT account context"
-                    .to_owned(),
-            ));
-        }
-        let _ = parse_bridge_transport(&result)?;
-
-        result.get("body").cloned().ok_or_else(|| {
-            BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
-        })
+        self.fetch_conversation_observation(remote_conversation_id, protocol_revision)
+            .map(|observation| observation.body)
     }
+}
+
+fn required_http_status(
+    result: &Value,
+    operation: &str,
+) -> Result<u16, BrowserBridgeError> {
+    result
+        .get("http_status")
+        .and_then(Value::as_u64)
+        .and_then(|status| u16::try_from(status).ok())
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "successful {operation} result is missing HTTP status"
+            ))
+        })
+}
+
+fn parse_extension_proof(
+    result: &Value,
+    expected_profile: &str,
+) -> Result<BrowserProof, BrowserBridgeError> {
+    if parse_bridge_transport(result)? != BridgeTransport::Extension {
+        return Err(BrowserBridgeError::Protocol(
+            "critical history result did not use the Edge extension transport".to_owned(),
+        ));
+    }
+
+    let extension_version = result
+        .get("extension_version")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 64)
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(
+                "extension result is missing a usable extension version".to_owned(),
+            )
+        })?
+        .to_owned();
+    let chatgpt_tab_found = result
+        .get("chatgpt_tab_found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let main_world_execution = result
+        .get("main_world_execution")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let account_context = result
+        .get("account_context")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let request_profile = result
+        .get("request_profile")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(
+                "extension result is missing request-profile evidence".to_owned(),
+            )
+        })?;
+    if request_profile != expected_profile {
+        return Err(BrowserBridgeError::Protocol(format!(
+            "extension request profile {request_profile:?} does not match expected {expected_profile:?}"
+        )));
+    }
+    if !chatgpt_tab_found {
+        return Err(BrowserBridgeError::Protocol(
+            "extension result does not prove an exact ChatGPT tab was found".to_owned(),
+        ));
+    }
+    if !main_world_execution {
+        return Err(BrowserBridgeError::Protocol(
+            "extension result does not prove MAIN-world execution".to_owned(),
+        ));
+    }
+    if !account_context {
+        return Err(BrowserBridgeError::Protocol(
+            "extension result does not prove ChatGPT account context".to_owned(),
+        ));
+    }
+
+    Ok(BrowserProof {
+        extension_version,
+        desktop_roundtrip: true,
+        chatgpt_tab_found,
+        main_world_execution,
+        account_context,
+        request_profile: request_profile.to_owned(),
+    })
 }
 
 fn parse_bridge_transport(result: &Value) -> Result<BridgeTransport, BrowserBridgeError> {
     match result.get("bridge_transport").and_then(Value::as_str) {
-        Some("page") => Ok(BridgeTransport::Page),
-        Some("tampermonkey") => Ok(BridgeTransport::Tampermonkey),
+        Some("extension") => Ok(BridgeTransport::Extension),
+        Some("page" | "tampermonkey") => Err(BrowserBridgeError::Protocol(
+            "retired userscript transport is not accepted on the critical history path".to_owned(),
+        )),
         Some(other) => Err(BrowserBridgeError::Protocol(format!(
             "unsupported bridge transport {other:?}"
         ))),
