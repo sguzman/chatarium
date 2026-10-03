@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.4 first-party CDP observation
+## Current architecture: 0.4.5 first-party CDP observation
 
 ```text
 Chatarium Desktop
@@ -86,6 +86,24 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.5 bounded exact-read rate-limit recovery
+
+Live mirror testing proved that a normal first-party exact C02 request can return HTTP 429. The private HAR contains both an exact C02 429 and a later ordinary exact C02 HTTP 200, and no `Retry-After` header was present. A 429 therefore means temporary throttling, not that the remote ID or browser account context is invalid.
+
+The mirror capture path now handles that conservatively:
+
+- the first exact 429 is recorded but **not terminal**;
+- Chatarium does not issue a direct private-API retry;
+- the temporary ChatGPT page remains alive so the real frontend can recover on its own;
+- after 12 seconds with no successful exact response, Chatarium performs at most **one** browser-level reload of that temporary page;
+- the total capture window is bounded at 32 seconds;
+- a later HTTP 200 wins even if one or more 429s occurred earlier;
+- a late 429 cannot overwrite already-established HTTP 200 proof;
+- a terminal rate-limit result includes total response count, exact-response count, rate-limited-response count, and reload count/failure proof;
+- the desktop then enforces a 60-second local cooldown before another user click can generate mirror traffic.
+
+This is a first-party browser-navigation recovery policy, not an API retry loop.
 
 ### 0.4.1 discovery-regression repair
 
@@ -171,7 +189,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.4 manifest contains only:
+The 0.4.5 manifest contains only:
 
 - `debugger`
 - `scripting`
