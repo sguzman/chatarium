@@ -394,8 +394,16 @@ mod tests {
         assert_eq!(transcript[0].text, "hello");
         assert_eq!(transcript[1].role, HistoricalTranscriptRole::Assistant);
         assert!(transcript[1].text.contains("active answer"));
-        assert!(transcript[1].text.contains("[non-text content: image_asset_pointer]"));
-        assert!(!transcript.iter().any(|message| message.text.contains("wrong branch")));
+        assert!(
+            transcript[1]
+                .text
+                .contains("[non-text content: image_asset_pointer]")
+        );
+        assert!(
+            !transcript
+                .iter()
+                .any(|message| message.text.contains("wrong branch"))
+        );
     }
 
     #[test]
