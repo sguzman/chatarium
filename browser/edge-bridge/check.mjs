@@ -31,7 +31,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.5') {
+if (manifest.version !== '0.4.6') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -92,6 +92,9 @@ for (const required of [
   'selectFinalConversationResponseMeta',
   'exact_response_count',
   "'exact_conversation_rate_limited'",
+  'SERVICE_WORKER_KEEPALIVE_MS',
+  'installServiceWorkerKeepalive',
+  'chrome.runtime.getPlatformInfo',
   'settleWithin',
 ]) {
   if (!worker.includes(required)) {
@@ -297,6 +300,16 @@ if (!worker.includes('const capture = activeConversationCaptures.get(tabId);')) 
   throw new Error('exact mirror listener is not isolated on activeConversationCaptures');
 }
 
+
+if (!worker.includes('const SERVICE_WORKER_KEEPALIVE_MS = 20_000')) {
+  throw new Error('MV3 bridge keepalive must remain below the 30-second idle window');
+}
+if (!worker.includes('void chrome.runtime.getPlatformInfo().catch(() => {})')) {
+  throw new Error('MV3 bridge keepalive must use a local extension API heartbeat');
+}
+if (!worker.includes('installServiceWorkerKeepalive();\nensureBridgeLoop();')) {
+  throw new Error('MV3 bridge keepalive must start before relying on the loopback bridge');
+}
 
 if (!worker.includes('const CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS = 12_000')) {
   throw new Error('exact mirror 429 recovery delay must remain bounded at 12 seconds');
