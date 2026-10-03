@@ -1,4 +1,5 @@
-mod account_bridge;\nmod siwc_bridge;
+mod account_bridge;
+mod siwc_bridge;
 
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
