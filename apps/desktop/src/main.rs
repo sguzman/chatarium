@@ -1524,6 +1524,9 @@ impl eframe::App for ChatariumApp {
         self.process_notices();
         self.process_live_mirror_fetch_notices();
         self.process_remote_notices();
+        if !self.history_discovery_started {
+            self.start_history_discovery(ctx);
+        }
 
         let local_display_messages =
             projected_local_display_messages(&self.events, self.local_conversation_id);
@@ -2464,6 +2467,47 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::PromoteDiscoveredLiveMirror {
+                expected_remote_conversation_id,
+                body,
+            } => {
+                let before = store.events().len();
+                match promote_discovered_live_mirror_body(
+                    &mut store,
+                    expected_remote_conversation_id.as_str(),
+                    &body,
+                ) {
+                    Ok(result) => {
+                        let appended_events = store.events()[before..].to_vec();
+                        let projection = latest_live_transcript(
+                            store.events(),
+                            result.local_conversation_id,
+                            Some(result.snapshot.sequence),
+                        );
+                        let (truncated_before, messages, projection_error) = match projection {
+                            Ok((_, projection)) => {
+                                (projection.truncated_before, projection.messages, None)
+                            }
+                            Err(error) => (false, Vec::new(), Some(error)),
+                        };
+                        let _ = notices.send(PersistNotice::DiscoveredLiveMirrorPromoted {
+                            local_conversation_id: result.local_conversation_id,
+                            remote_conversation_id: result.remote_conversation_id.as_str().to_owned(),
+                            snapshot_sequence: result.snapshot.sequence,
+                            appended_events,
+                            truncated_before,
+                            messages,
+                            projection_error,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::DiscoveredLiveMirrorPromotionFailed {
+                            remote_conversation_id: expected_remote_conversation_id,
+                            error: error.to_string(),
+                        });
+                    }
+                }
+            }
             PersistCommand::Shutdown => break,
         }
     }
@@ -2489,6 +2533,37 @@ fn start_account_bridge() -> (
             format!("browser history bridge unavailable: {error}"),
         ),
     }
+}
+
+fn latest_live_mirror_catalog(
+    events: &[EventEnvelope],
+) -> Result<Vec<LiveMirrorCatalogEntry>, String> {
+    let records = replay_remote_conversation_snapshot_audit(events)?;
+    let mut catalog = Vec::<LiveMirrorCatalogEntry>::new();
+
+    for record in records {
+        let entry = LiveMirrorCatalogEntry {
+            local_conversation_id: record.local_conversation_id,
+            remote_conversation_id: record.remote_conversation_id.as_str().to_owned(),
+            title: if record.envelope.title.trim().is_empty() {
+                "Untitled ChatGPT conversation".to_owned()
+            } else {
+                record.envelope.title.clone()
+            },
+            snapshot_sequence: record.imported_sequence,
+        };
+        if let Some(existing) = catalog
+            .iter_mut()
+            .find(|existing| existing.local_conversation_id == entry.local_conversation_id)
+        {
+            *existing = entry;
+        } else {
+            catalog.push(entry);
+        }
+    }
+
+    catalog.sort_by(|left, right| right.snapshot_sequence.cmp(&left.snapshot_sequence));
+    Ok(catalog)
 }
 
 fn latest_live_transcript(
