@@ -143,6 +143,10 @@ History discovery and mirror state are now separate UI domains. A failed individ
 
 The extension never returns raw cookies, authorization values, complete request-header sets, or browser storage to Rust. Exact private conversation bodies cross only into the local process for exact-ID validation and durable local storage.
 
+The first 0.4.0 and 0.4.1 discovery retests regressed from the live-proven 85-chat 0.3 result to zero observed items. 0.4.1 restored the exact 0.3 listener/wait path but still produced zero, proving that the 0.3 success depended on whether the frontend happened to emit a list-bearing response during the bounded reload window.
+
+The private HAR already supplies a deterministic successful list-bearing surface: HTTP 200 on `/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false`, with nested conversation summaries and pagination cursors. Edge Bridge 0.4.3 therefore freezes the complete 0.3 passive observer and adds an evidence-backed fallback only when that passive pass yields zero conversations. The fallback reuses browser-local first-party application context, performs one bounded MAIN-world GET of the successful sidebar resource, reduces the response through the same classifier, and returns only safe proof metadata plus typed summaries. If passive discovery already found conversations, the bootstrap does not run.
+
 Before 0.4 reaches live QA, the repository gate requires:
 
 1. Edge extension syntax and permission invariants;
