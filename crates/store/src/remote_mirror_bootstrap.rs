@@ -604,8 +604,8 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             vec![
-                ("num_turns", Some("10")),
-                ("include_has_versions", Some("true")),
+                ("num_turns", Some("10".to_owned())),
+                ("include_has_versions", Some("true".to_owned())),
             ]
         );
 
