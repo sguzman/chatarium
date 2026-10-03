@@ -301,9 +301,11 @@ impl BrowserBridgeProvider {
         let request_profile = result
             .get("request_profile")
             .and_then(Value::as_str)
-            .ok_or_else(|| BrowserBridgeError::Protocol(
-                "history discovery result is missing request profile".to_owned(),
-            ))?;
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing request profile".to_owned(),
+                )
+            })?;
         if request_profile != HISTORY_DISCOVERY_PROFILE {
             return Err(BrowserBridgeError::Protocol(format!(
                 "history discovery profile {request_profile:?} does not match expected {HISTORY_DISCOVERY_PROFILE:?}"
@@ -314,9 +316,11 @@ impl BrowserBridgeProvider {
             .get("extension_version")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty() && value.len() <= 64)
-            .ok_or_else(|| BrowserBridgeError::Protocol(
-                "history discovery result is missing extension version".to_owned(),
-            ))?
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing extension version".to_owned(),
+                )
+            })?
             .to_owned();
         let required_bool = |field: &str| {
             result.get(field).and_then(Value::as_bool).ok_or_else(|| {
@@ -363,9 +367,11 @@ impl BrowserBridgeProvider {
         let candidates = result
             .get("candidates")
             .and_then(Value::as_array)
-            .ok_or_else(|| BrowserBridgeError::Protocol(
-                "history discovery result is missing candidates".to_owned(),
-            ))?
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing candidates".to_owned(),
+                )
+            })?
             .iter()
             .enumerate()
             .map(|(index, value)| parse_history_surface_candidate(value, index))
@@ -374,9 +380,11 @@ impl BrowserBridgeProvider {
         let discovery = result
             .get("discovery")
             .and_then(Value::as_str)
-            .ok_or_else(|| BrowserBridgeError::Protocol(
-                "history discovery result is missing semantic state".to_owned(),
-            ))?
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing semantic state".to_owned(),
+                )
+            })?
             .to_owned();
 
         Ok(HistoryDiscoveryObservation {
@@ -670,40 +678,50 @@ fn parse_history_surface_candidate(
     let query_keys = object
         .get("query_keys")
         .and_then(Value::as_array)
-        .ok_or_else(|| BrowserBridgeError::Protocol(format!(
-            "history discovery candidate {index} is missing query keys"
-        )))?
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} is missing query keys"
+            ))
+        })?
         .iter()
         .map(|value| {
             value
                 .as_str()
                 .filter(|value| !value.is_empty() && value.len() <= 128)
                 .map(str::to_owned)
-                .ok_or_else(|| BrowserBridgeError::Protocol(format!(
-                    "history discovery candidate {index} has an invalid query key"
-                )))
+                .ok_or_else(|| {
+                    BrowserBridgeError::Protocol(format!(
+                        "history discovery candidate {index} has an invalid query key"
+                    ))
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     let items = object
         .get("items")
         .and_then(Value::as_array)
-        .ok_or_else(|| BrowserBridgeError::Protocol(format!(
-            "history discovery candidate {index} is missing items"
-        )))?
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} is missing items"
+            ))
+        })?
         .iter()
         .enumerate()
         .map(|(item_index, item)| {
-            let item = item.as_object().ok_or_else(|| BrowserBridgeError::Protocol(format!(
-                "history discovery candidate {index} item {item_index} is not an object"
-            )))?;
+            let item = item.as_object().ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} item {item_index} is not an object"
+                ))
+            })?;
             let id = item
                 .get("id")
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty() && id.len() <= 256)
-                .ok_or_else(|| BrowserBridgeError::Protocol(format!(
-                    "history discovery candidate {index} item {item_index} has invalid id"
-                )))?
+                .ok_or_else(|| {
+                    BrowserBridgeError::Protocol(format!(
+                        "history discovery candidate {index} item {item_index} has invalid id"
+                    ))
+                })?
                 .to_owned();
             let title = match item.get("title") {
                 None | Some(Value::Null) => None,
@@ -733,9 +751,11 @@ fn parse_history_surface_candidate(
         traversal_truncated: object
             .get("traversal_truncated")
             .and_then(Value::as_bool)
-            .ok_or_else(|| BrowserBridgeError::Protocol(format!(
-                "history discovery candidate {index} is missing traversal_truncated"
-            )))?,
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} is missing traversal_truncated"
+                ))
+            })?,
         observations: u64_field("observations")?,
         items,
     })
@@ -760,7 +780,10 @@ fn parse_extension_proof(
     require_request_context: bool,
 ) -> Result<BrowserProof, BrowserBridgeError> {
     let transport = parse_bridge_transport(result)?;
-    if !matches!(transport, BridgeTransport::Extension | BridgeTransport::ExtensionCdp) {
+    if !matches!(
+        transport,
+        BridgeTransport::Extension | BridgeTransport::ExtensionCdp
+    ) {
         return Err(BrowserBridgeError::Protocol(
             "critical history result did not use an Edge extension transport".to_owned(),
         ));
