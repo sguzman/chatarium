@@ -1,4 +1,5 @@
 mod account_bridge;
+mod diagnostics;
 mod siwc_bridge;
 
 use chatarium_core::{
@@ -274,6 +275,10 @@ struct ChatariumApp {
 impl ChatariumApp {
     fn new(repaint: &egui::Context) -> Self {
         let journal_path = default_journal_path();
+        diagnostics::info(
+            "startup",
+            format!("opening durable journal at {}", journal_path.display()),
+        );
         let data_dir = journal_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
@@ -282,6 +287,10 @@ impl ChatariumApp {
             Ok(mut store) => {
                 let recovery = recover_interrupted_remote_turns(&mut store);
                 let events = store.events().to_vec();
+                diagnostics::info(
+                    "startup",
+                    format!("journal replay complete: {} events", events.len()),
+                );
                 let draft = projected_working_draft(&events);
                 let (local_conversation_id, mut startup_status) =
                     match projected_local_conversation_id(&events) {
@@ -321,6 +330,14 @@ impl ChatariumApp {
                         Vec::new()
                     }
                 };
+                diagnostics::info(
+                    "startup",
+                    format!(
+                        "catalogs ready: historical={} live-mirrors={}",
+                        historical_catalog.len(),
+                        live_mirror_catalog.len()
+                    ),
+                );
                 let live_mirrored_conversations = live_mirror_catalog
                     .iter()
                     .map(|entry| entry.local_conversation_id)
@@ -531,6 +548,7 @@ impl ChatariumApp {
 
     fn start_history_discovery(&mut self, repaint: &egui::Context) {
         if self.history_list_pending {
+            diagnostics::debug("history", "discovery request ignored: one is already running");
             return;
         }
         self.history_discovery_started = true;
@@ -545,17 +563,26 @@ impl ChatariumApp {
         self.history_list_pending = true;
         self.history_bridge_proven = false;
         self.account_bridge_status = "listener ready · checking Edge extension…".to_owned();
+        diagnostics::info("history", "discovery started: probing authenticated Edge bridge");
 
         let spawn = thread::Builder::new()
             .name("chatarium-history-discovery".to_owned())
             .spawn(move || {
                 use chatarium_core::authenticated_session::SessionAuthenticationEvidence;
 
+                diagnostics::info("history", "authentication probe dispatched");
                 match provider.probe_authentication() {
                     Ok(observation) => {
                         let authenticated = matches!(
                             observation.evidence,
                             SessionAuthenticationEvidence::Authenticated
+                        );
+                        diagnostics::info(
+                            "history",
+                            format!(
+                                "authentication probe complete: authenticated={authenticated} HTTP={}",
+                                observation.http_status
+                            ),
                         );
                         let _ =
                             notices.send(LiveMirrorFetchNotice::HistoryAuthenticationObserved {
@@ -567,18 +594,59 @@ impl ChatariumApp {
                         }
                     }
                     Err(error) => {
+                        diagnostics::error("history", format!("authentication probe failed: {error}"));
                         let _ = notices.send(LiveMirrorFetchNotice::HistoryProbeFailed { error });
                         repaint.request_repaint();
                         return;
                     }
                 }
 
+                diagnostics::info(
+                    "history",
+                    "authenticated; starting bounded CDP reload + sidebar stimulus discovery",
+                );
                 match provider.discover_history_surfaces() {
                     Ok(observation) => {
+                        let unique_items = observation
+                            .candidates
+                            .iter()
+                            .flat_map(|candidate| candidate.items.iter().map(|item| item.id.as_str()))
+                            .collect::<HashSet<_>>()
+                            .len();
+                        diagnostics::info(
+                            "history",
+                            format!(
+                                "discovery complete: candidates={} unique-items={} responses={} backend-200={} stimulus-attempts={} targets={} steps={} links={}->{}",
+                                observation.candidates.len(),
+                                unique_items,
+                                observation.proof.responses_seen,
+                                observation.proof.backend_http_200_seen,
+                                observation.proof.ui_stimulus_attempts,
+                                observation.proof.ui_stimulus_targets,
+                                observation.proof.ui_stimulus_steps,
+                                observation.proof.ui_stimulus_chat_links_before,
+                                observation.proof.ui_stimulus_chat_links_after,
+                            ),
+                        );
+                        for candidate in &observation.candidates {
+                            diagnostics::debug(
+                                "history",
+                                format!(
+                                    "candidate surface={} kind={} conversations={} observations={} cursor-count={} truncated={}",
+                                    candidate.path,
+                                    candidate.surface_kind,
+                                    candidate.conversation_count,
+                                    candidate.observations,
+                                    candidate.cursor_count,
+                                    candidate.traversal_truncated,
+                                ),
+                            );
+                        }
                         let _ = notices
                             .send(LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation });
                     }
                     Err(error) => {
+                        diagnostics::error("history", format!("discovery failed: {error}"));
                         let _ = notices.send(LiveMirrorFetchNotice::HistoryDiscoveryFailed {
                             error: error.to_string(),
                         });
@@ -588,6 +656,7 @@ impl ChatariumApp {
             });
 
         if let Err(error) = spawn {
+            diagnostics::error("history", format!("failed to start discovery worker: {error}"));
             self.history_list_pending = false;
             self.account_bridge_status =
                 format!("listener ready · failed to start browser check: {error}");
@@ -609,6 +678,13 @@ impl ChatariumApp {
 
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
+        diagnostics::info(
+            "mirror",
+            format!(
+                "mirror requested for discovered conversation {}",
+                diagnostics::short_id(&remote_conversation_id)
+            ),
+        );
         self.remote_mirror_failures.remove(&remote_conversation_id);
         self.remote_discovery_pending = Some(remote_conversation_id.clone());
         self.pending_history_fetch_proof = None;
@@ -622,25 +698,55 @@ impl ChatariumApp {
         let spawn = thread::Builder::new()
             .name("chatarium-remote-history-open".to_owned())
             .spawn(move || {
+                diagnostics::info(
+                    "mirror",
+                    format!(
+                        "browser capture started for {}",
+                        diagnostics::short_id(&remote_conversation_id)
+                    ),
+                );
                 let notice = match provider
                     .fetch_authenticated_conversation(remote_conversation_id.as_str())
                 {
-                    Ok(observation) => LiveMirrorFetchNotice::DiscoveredFetched {
-                        remote_conversation_id,
-                        body: observation.body,
-                        proof: observation.proof,
-                        http_status: observation.http_status,
-                    },
-                    Err(error) => LiveMirrorFetchNotice::DiscoveredFailed {
-                        remote_conversation_id,
-                        error: error.to_string(),
-                    },
+                    Ok(observation) => {
+                        diagnostics::info(
+                            "mirror",
+                            format!(
+                                "browser capture complete for {}: HTTP={} exact-response={} debugger={} network={}",
+                                diagnostics::short_id(&remote_conversation_id),
+                                observation.http_status,
+                                observation.proof.exact_response_seen,
+                                observation.proof.debugger_attached,
+                                observation.proof.network_enabled,
+                            ),
+                        );
+                        LiveMirrorFetchNotice::DiscoveredFetched {
+                            remote_conversation_id,
+                            body: observation.body,
+                            proof: observation.proof,
+                            http_status: observation.http_status,
+                        }
+                    }
+                    Err(error) => {
+                        diagnostics::error(
+                            "mirror",
+                            format!(
+                                "browser capture failed for {}: {error}",
+                                diagnostics::short_id(&remote_conversation_id)
+                            ),
+                        );
+                        LiveMirrorFetchNotice::DiscoveredFailed {
+                            remote_conversation_id,
+                            error: error.to_string(),
+                        }
+                    }
                 };
                 let _ = notices.send(notice);
                 repaint.request_repaint();
             });
 
         if let Err(error) = spawn {
+            diagnostics::error("mirror", format!("failed to start mirror worker: {error}"));
             self.remote_discovery_pending = None;
             self.status = format!("failed to start remote conversation fetch: {error}");
         }
@@ -3503,20 +3609,27 @@ fn configure_ui(ctx: &egui::Context) {
 }
 
 fn main() -> eframe::Result<()> {
+    diagnostics::init();
+    diagnostics::info("app", "starting Chatarium desktop");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([860.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "Chatarium",
         options,
         Box::new(|creation_context| {
             configure_ui(&creation_context.egui_ctx);
             Ok(Box::new(ChatariumApp::new(&creation_context.egui_ctx)))
         }),
-    )
+    );
+    match &result {
+        Ok(()) => diagnostics::info("app", "desktop event loop exited cleanly"),
+        Err(error) => diagnostics::error("app", format!("desktop event loop failed: {error}")),
+    }
+    result
 }
 
 #[cfg(test)]
