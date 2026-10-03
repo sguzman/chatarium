@@ -2409,7 +2409,7 @@ fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
 fn history_probe_failure_status(error: &account_bridge::BrowserBridgeError) -> String {
     match error {
         account_bridge::BrowserBridgeError::Timeout => {
-            "userscript did not reach the loopback listener. In Edge/Chromium, allow Tampermonkey Site Access to all sites (or explicitly 127.0.0.1), then refresh ChatGPT history."
+            "userscript did not reach the loopback listener. Edge 153 + Tampermonkey 5.5.0 has a known GM networking stall; bridge v0.3 also tries direct page loopback, which may require allowing ChatGPT local network access in Edge."
                 .to_owned()
         }
         _ => format!("listener ready · browser not confirmed: {error}"),
