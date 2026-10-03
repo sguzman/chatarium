@@ -21,11 +21,13 @@ const ACCOUNT_KEY_PREFIX = 'chatarium-account-context:';
 const FETCH_PROFILE = '2026-10-03.001';
 const AUTH_PROFILE = 'chatgpt-me-v1';
 const DISCOVERY_PROFILE = 'cdp-history-discovery-v1';
-const SIDEBAR_BOOTSTRAP_RESOURCE =
-  '/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false';
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const DISCOVERY_WINDOW_MS = 8_000;
+const DISCOVERY_PRE_STIMULUS_MS = 1_750;
 const DISCOVERY_BODY_GRACE_MS = 500;
+const DISCOVERY_STIMULUS_MAX_TARGETS = 3;
+const DISCOVERY_STIMULUS_MAX_STEPS = 28;
+const DISCOVERY_STIMULUS_STEP_DELAY_MS = 120;
 const CONVERSATION_CAPTURE_WINDOW_MS = 20_000;
 const CONVERSATION_CAPTURE_BODY_GRACE_MS = 500;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -226,6 +228,106 @@ async function executePageGet(tabId, resource, requestHeaders) {
   });
   if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
     throw new Error('main_world_no_result');
+  }
+  return injection[0].result;
+}
+
+async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const all = [...document.querySelectorAll('nav, aside, [role="navigation"], div')];
+  const scored = [];
+
+  for (const element of all) {
+    if (!(element instanceof HTMLElement)) continue;
+    const style = getComputedStyle(element);
+    if (!['auto', 'scroll'].includes(style.overflowY)) continue;
+    if (element.scrollHeight <= element.clientHeight + 96) continue;
+
+    const chatLinks = element.querySelectorAll('a[href^="/c/"]').length;
+    const projectLinks = element.querySelectorAll('a[href*="/g/"], a[href*="/project"]').length;
+    if (chatLinks === 0 && projectLinks === 0) continue;
+
+    const navigationLike =
+      element.matches('nav, aside, [role="navigation"]')
+      || element.closest('nav, aside, [role="navigation"]') !== null;
+    const score =
+      (navigationLike ? 10_000 : 0)
+      + Math.min(chatLinks, 100) * 20
+      + Math.min(projectLinks, 50) * 10
+      + Math.min(element.clientHeight, 2_000);
+
+    scored.push({ element, score });
+  }
+
+  scored.sort((left, right) => right.score - left.score);
+
+  const targets = [];
+  for (const candidate of scored) {
+    if (targets.length >= maxTargets) break;
+    if (targets.some((existing) =>
+      existing.contains(candidate.element) || candidate.element.contains(existing))) {
+      continue;
+    }
+    targets.push(candidate.element);
+  }
+
+  const linksBefore = document.querySelectorAll('a[href^="/c/"]').length;
+  let totalSteps = 0;
+
+  for (const target of targets) {
+    const originalTop = target.scrollTop;
+    target.scrollTop = 0;
+    target.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await delay(stepDelayMs);
+
+    let stableBottomPasses = 0;
+    for (let step = 0; step < maxSteps; step += 1) {
+      const maxTop = Math.max(0, target.scrollHeight - target.clientHeight);
+      const increment = Math.max(320, Math.floor(target.clientHeight * 0.82));
+      const nextTop = Math.min(maxTop, target.scrollTop + increment);
+      const beforeHeight = target.scrollHeight;
+
+      target.scrollTop = nextTop;
+      target.dispatchEvent(new Event('scroll', { bubbles: true }));
+      totalSteps += 1;
+      await delay(stepDelayMs);
+
+      if (target.scrollTop >= maxTop - 2) {
+        await delay(stepDelayMs * 2);
+        if (target.scrollHeight <= beforeHeight + 2) {
+          stableBottomPasses += 1;
+          if (stableBottomPasses >= 2) break;
+        } else {
+          stableBottomPasses = 0;
+        }
+      }
+    }
+
+    target.scrollTop = Math.min(originalTop, Math.max(0, target.scrollHeight - target.clientHeight));
+    target.dispatchEvent(new Event('scroll', { bubbles: true }));
+  }
+
+  return {
+    ok: true,
+    targets: targets.length,
+    steps: totalSteps,
+    chat_links_before: linksBefore,
+    chat_links_after: document.querySelectorAll('a[href^="/c/"]').length,
+  };
+}
+
+async function stimulateHistoryUi(tabId) {
+  const injection = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: stimulateHistoryUiInPage,
+    args: [
+      DISCOVERY_STIMULUS_MAX_TARGETS,
+      DISCOVERY_STIMULUS_MAX_STEPS,
+      DISCOVERY_STIMULUS_STEP_DELAY_MS,
+    ],
+  });
+  if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
+    throw new Error('history_ui_stimulus_no_result');
   }
   return injection[0].result;
 }
@@ -492,10 +594,45 @@ async function discoverHistorySurfaces(command) {
     });
     result.network_enabled = true;
 
-    await chrome.tabs.reload(tab.id);
+    await chrome.debugger.sendCommand(debuggee, 'Network.setCacheDisabled', {
+      cacheDisabled: true,
+    });
+    result.cache_disabled = true;
+
+    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
+    await chrome.debugger.sendCommand(debuggee, 'Page.reload', {
+      ignoreCache: true,
+    });
     result.reload_started = true;
 
-    await sleep(DISCOVERY_WINDOW_MS);
+    result.ui_stimulus_attempted = false;
+    result.ui_stimulus_targets = 0;
+    result.ui_stimulus_steps = 0;
+    result.ui_stimulus_chat_links_before = 0;
+    result.ui_stimulus_chat_links_after = 0;
+    result.ui_stimulus_error = null;
+
+    await sleep(DISCOVERY_PRE_STIMULUS_MS);
+    result.ui_stimulus_attempted = true;
+    try {
+      const stimulus = await stimulateHistoryUi(tab.id);
+      if (stimulus && typeof stimulus === 'object') {
+        result.ui_stimulus_targets =
+          Number.isInteger(stimulus.targets) ? stimulus.targets : 0;
+        result.ui_stimulus_steps =
+          Number.isInteger(stimulus.steps) ? stimulus.steps : 0;
+        result.ui_stimulus_chat_links_before =
+          Number.isInteger(stimulus.chat_links_before) ? stimulus.chat_links_before : 0;
+        result.ui_stimulus_chat_links_after =
+          Number.isInteger(stimulus.chat_links_after) ? stimulus.chat_links_after : 0;
+      }
+    } catch (error) {
+      result.ui_stimulus_error =
+        error instanceof Error ? error.message : 'history_ui_stimulus_failed';
+    }
+
+    const remainingWindow = Math.max(0, DISCOVERY_WINDOW_MS - DISCOVERY_PRE_STIMULUS_MS);
+    await sleep(remainingWindow);
     await sleep(DISCOVERY_BODY_GRACE_MS);
     if (session.bodyTasks.size > 0) {
       await Promise.allSettled([...session.bodyTasks]);
@@ -523,53 +660,7 @@ async function discoverHistorySurfaces(command) {
   result.body_too_large = session.body_too_large;
   result.invalid_json = session.invalid_json;
   result.detached_reason = session.detached_reason;
-  result.sidebar_bootstrap_attempted = false;
-  result.sidebar_bootstrap_http_status = null;
-  result.sidebar_bootstrap_items = 0;
-  result.sidebar_bootstrap_error = null;
   result.application_context_header_count = Object.keys(session.applicationHeaders).length;
-
-  const passiveCandidates = mergeDiscoveryCandidates(session.candidates);
-  const passiveConversationCount = new Set(
-    passiveCandidates.flatMap((candidate) => (candidate.items ?? []).map((item) => item.id)),
-  ).size;
-
-  if (passiveConversationCount === 0) {
-    if (accountId !== null) {
-      result.sidebar_bootstrap_attempted = true;
-      const bootstrapHeaders = {
-        ...session.applicationHeaders,
-        [ACCOUNT_HEADER]: accountId,
-      };
-      try {
-        const bootstrap = await executePageGet(
-          tab.id,
-          SIDEBAR_BOOTSTRAP_RESOURCE,
-          bootstrapHeaders,
-        );
-        result.sidebar_bootstrap_http_status =
-          Number.isInteger(bootstrap?.http_status) ? bootstrap.http_status : null;
-        if (bootstrap?.ok === true && bootstrap.body && typeof bootstrap.body === 'object') {
-          const classified = classifyHistoryBody(
-            `https://chatgpt.com${SIDEBAR_BOOTSTRAP_RESOURCE}`,
-            bootstrap.body,
-          );
-          if (classified !== null) {
-            result.sidebar_bootstrap_items = classified.conversation_count;
-            session.candidates.push(classified);
-          }
-        } else {
-          result.sidebar_bootstrap_error =
-            typeof bootstrap?.error === 'string' ? bootstrap.error : 'sidebar_bootstrap_failed';
-        }
-      } catch (error) {
-        result.sidebar_bootstrap_error =
-          error instanceof Error ? error.message : 'sidebar_bootstrap_failed';
-      }
-    } else {
-      result.sidebar_bootstrap_error = 'account_context_unavailable';
-    }
-  }
 
   const candidates = mergeDiscoveryCandidates(session.candidates);
   result.candidate_count = candidates.length;
