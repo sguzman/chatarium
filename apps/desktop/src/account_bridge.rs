@@ -1132,9 +1132,9 @@ fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> Brow
 fn status_error(status: u16) -> BrowserBridgeError {
     match status {
         401 | 403 => BrowserBridgeError::Unauthenticated,
-        429 => BrowserBridgeError::RateLimited(
-            "no extended rate-limit proof was available".to_owned(),
-        ),
+        429 => {
+            BrowserBridgeError::RateLimited("no extended rate-limit proof was available".to_owned())
+        }
         other => BrowserBridgeError::HttpStatus(other),
     }
 }
