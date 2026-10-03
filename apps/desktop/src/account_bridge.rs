@@ -574,7 +574,7 @@ fn parse_extension_proof(
 fn parse_bridge_transport(result: &Value) -> Result<BridgeTransport, BrowserBridgeError> {
     match result.get("bridge_transport").and_then(Value::as_str) {
         Some("extension") => Ok(BridgeTransport::Extension),
-        Some("page" | "tampermonkey") => Err(BrowserBridgeError::Protocol(
+        Some("page") | Some("tampermonkey") => Err(BrowserBridgeError::Protocol(
             "retired userscript transport is not accepted on the critical history path".to_owned(),
         )),
         Some(other) => Err(BrowserBridgeError::Protocol(format!(
@@ -617,14 +617,28 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
         .get("bridge_transport")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    let account_context = match result.get("account_context").and_then(Value::as_bool) {
+    let extension_version = result
+        .get("extension_version")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let tab = proof_bool(result, "chatgpt_tab_found");
+    let main_world = proof_bool(result, "main_world_execution");
+    let account_context = proof_bool(result, "account_context");
+    let request_profile = result
+        .get("request_profile")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    BrowserBridgeError::Protocol(format!(
+        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; account-context={account_context}; profile={request_profile}"
+    ))
+}
+
+fn proof_bool(result: &Value, field: &str) -> &'static str {
+    match result.get(field).and_then(Value::as_bool) {
         Some(true) => "yes",
         Some(false) => "no",
         None => "unknown",
-    };
-    BrowserBridgeError::Protocol(format!(
-        "{reason}; transport={transport}; account-context={account_context}"
-    ))
+    }
 }
 
 fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> BrowserBridgeError {
