@@ -509,9 +509,7 @@ fn handle_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
 
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/v1/next") => handle_next(&mut stream, shared, page_origin),
-        ("POST", "/v1/result") => {
-            handle_result(&mut stream, shared, &request.body, page_origin)
-        }
+        ("POST", "/v1/result") => handle_result(&mut stream, shared, &request.body, page_origin),
         _ => write_bridge_response(&mut stream, 404, None, page_origin),
     }
 }
@@ -544,11 +542,7 @@ fn handle_page_preflight(stream: &mut TcpStream, request: &HttpRequest) -> io::R
     write_page_preflight_response(stream)
 }
 
-fn handle_next(
-    stream: &mut TcpStream,
-    shared: &Shared,
-    page_origin: bool,
-) -> io::Result<()> {
+fn handle_next(stream: &mut TcpStream, shared: &Shared, page_origin: bool) -> io::Result<()> {
     let deadline = Instant::now() + NEXT_WAIT;
     let mut state = shared
         .state
@@ -855,7 +849,9 @@ mod tests {
         assert!(text.starts_with("HTTP/1.1 204"));
         assert!(text.contains("Access-Control-Allow-Origin: https://chatgpt.com\r\n"));
         assert!(text.contains("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"));
-        assert!(text.contains("Access-Control-Allow-Headers: X-Chatarium-Bridge, Content-Type\r\n"));
+        assert!(
+            text.contains("Access-Control-Allow-Headers: X-Chatarium-Bridge, Content-Type\r\n")
+        );
     }
 
     #[test]
