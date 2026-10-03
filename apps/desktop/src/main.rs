@@ -131,9 +131,9 @@ enum PersistNotice {
 }
 
 enum LiveMirrorFetchNotice {
-    HistoryAuthenticated,
-    HistoryUnauthenticated,
-    HistoryAuthenticationUnknown,
+    HistoryAuthenticationObserved {
+        observation: account_bridge::AuthenticationObservation,
+    },
     HistoryProbeFailed {
         error: account_bridge::BrowserBridgeError,
     },
@@ -147,6 +147,8 @@ enum LiveMirrorFetchNotice {
         local_conversation_id: LocalConversationId,
         remote_conversation_id: String,
         body: Value,
+        proof: account_bridge::BrowserProof,
+        http_status: u16,
     },
     Failed {
         local_conversation_id: LocalConversationId,
@@ -155,6 +157,8 @@ enum LiveMirrorFetchNotice {
     DiscoveredFetched {
         remote_conversation_id: String,
         body: Value,
+        proof: account_bridge::BrowserProof,
+        http_status: u16,
     },
     DiscoveredFailed {
         remote_conversation_id: String,
@@ -200,6 +204,14 @@ struct LiveMirrorCatalogEntry {
     snapshot_sequence: u64,
 }
 
+#[derive(Debug, Clone)]
+struct PendingHistoryFetchProof {
+    local_conversation_id: Option<LocalConversationId>,
+    remote_conversation_id: String,
+    proof: account_bridge::BrowserProof,
+    http_status: u16,
+}
+
 struct ChatariumApp {
     draft: String,
     draft_revision: u64,
@@ -224,6 +236,8 @@ struct ChatariumApp {
     history_discovery_started: bool,
     history_list_pending: bool,
     history_bridge_authenticated: bool,
+    history_bridge_proven: bool,
+    pending_history_fetch_proof: Option<PendingHistoryFetchProof>,
     journal_path: PathBuf,
     persist_tx: Option<Sender<PersistCommand>>,
     notice_rx: Option<Receiver<PersistNotice>>,
@@ -340,6 +354,8 @@ impl ChatariumApp {
                         history_discovery_started: false,
                         history_list_pending: false,
                         history_bridge_authenticated: false,
+                        history_bridge_proven: false,
+                        pending_history_fetch_proof: None,
                         journal_path,
                         persist_tx: Some(persist_tx),
                         notice_rx: Some(notice_rx),
@@ -426,6 +442,8 @@ impl ChatariumApp {
             history_discovery_started: false,
             history_list_pending: false,
             history_bridge_authenticated: false,
+            history_bridge_proven: false,
+            pending_history_fetch_proof: None,
             journal_path,
             persist_tx: None,
             notice_rx: None,
@@ -523,18 +541,18 @@ impl ChatariumApp {
                 use chatarium_core::authenticated_session::SessionAuthenticationEvidence;
 
                 match provider.probe_authentication() {
-                    Ok(SessionAuthenticationEvidence::Authenticated) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryAuthenticated);
-                    }
-                    Ok(SessionAuthenticationEvidence::Unauthenticated) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryUnauthenticated);
-                        repaint.request_repaint();
-                        return;
-                    }
-                    Ok(SessionAuthenticationEvidence::Unknown) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryAuthenticationUnknown);
-                        repaint.request_repaint();
-                        return;
+                    Ok(observation) => {
+                        let authenticated = matches!(
+                            observation.evidence,
+                            SessionAuthenticationEvidence::Authenticated
+                        );
+                        let _ = notices.send(
+                            LiveMirrorFetchNotice::HistoryAuthenticationObserved { observation },
+                        );
+                        if !authenticated {
+                            repaint.request_repaint();
+                            return;
+                        }
                     }
                     Err(error) => {
                         let _ = notices.send(LiveMirrorFetchNotice::HistoryProbeFailed { error });
@@ -588,9 +606,11 @@ impl ChatariumApp {
                 let notice = match provider
                     .fetch_authenticated_conversation(remote_conversation_id.as_str())
                 {
-                    Ok(body) => LiveMirrorFetchNotice::DiscoveredFetched {
+                    Ok(observation) => LiveMirrorFetchNotice::DiscoveredFetched {
                         remote_conversation_id,
-                        body,
+                        body: observation.body,
+                        proof: observation.proof,
+                        http_status: observation.http_status,
                     },
                     Err(error) => LiveMirrorFetchNotice::DiscoveredFailed {
                         remote_conversation_id,
@@ -659,10 +679,12 @@ impl ChatariumApp {
                 let notice = match provider
                     .fetch_authenticated_conversation(remote_conversation_id.as_str())
                 {
-                    Ok(body) => LiveMirrorFetchNotice::Fetched {
+                    Ok(observation) => LiveMirrorFetchNotice::Fetched {
                         local_conversation_id,
                         remote_conversation_id,
-                        body,
+                        body: observation.body,
+                        proof: observation.proof,
+                        http_status: observation.http_status,
                     },
                     Err(error) => LiveMirrorFetchNotice::Failed {
                         local_conversation_id,
@@ -688,24 +710,43 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
-                LiveMirrorFetchNotice::HistoryAuthenticated => {
-                    self.history_bridge_authenticated = true;
-                    self.account_bridge_status = "browser connected · authenticated".to_owned();
-                }
-                LiveMirrorFetchNotice::HistoryUnauthenticated => {
-                    self.history_list_pending = false;
-                    self.history_bridge_authenticated = false;
-                    self.account_bridge_status = "browser connected · not signed in".to_owned();
-                }
-                LiveMirrorFetchNotice::HistoryAuthenticationUnknown => {
-                    self.history_list_pending = false;
-                    self.history_bridge_authenticated = false;
-                    self.account_bridge_status =
-                        "browser connected · authentication unknown".to_owned();
+                LiveMirrorFetchNotice::HistoryAuthenticationObserved { observation } => {
+                    use chatarium_core::authenticated_session::SessionAuthenticationEvidence;
+
+                    self.history_bridge_proven = false;
+                    match observation.evidence {
+                        SessionAuthenticationEvidence::Authenticated => {
+                            self.history_bridge_authenticated = true;
+                            self.account_bridge_status = format!(
+                                "PROOF PARTIAL: {} · auth=yes · HTTP {} · parser=pending · semantic=pending · durable=pending",
+                                browser_proof_label(&observation.proof),
+                                observation.http_status,
+                            );
+                        }
+                        SessionAuthenticationEvidence::Unauthenticated => {
+                            self.history_list_pending = false;
+                            self.history_bridge_authenticated = false;
+                            self.account_bridge_status = format!(
+                                "PROOF FAILED: {} · auth=no · HTTP {}",
+                                browser_proof_label(&observation.proof),
+                                observation.http_status,
+                            );
+                        }
+                        SessionAuthenticationEvidence::Unknown => {
+                            self.history_list_pending = false;
+                            self.history_bridge_authenticated = false;
+                            self.account_bridge_status = format!(
+                                "PROOF FAILED: {} · auth=unknown · HTTP {}",
+                                browser_proof_label(&observation.proof),
+                                observation.http_status,
+                            );
+                        }
+                    }
                 }
                 LiveMirrorFetchNotice::HistoryProbeFailed { error } => {
                     self.history_list_pending = false;
                     self.history_bridge_authenticated = false;
+                    self.history_bridge_proven = false;
                     self.account_bridge_status = history_probe_failure_status(&error);
                 }
                 LiveMirrorFetchNotice::HistoryListLoaded { observation } => {
@@ -713,23 +754,46 @@ impl ChatariumApp {
                     self.history_bridge_authenticated = true;
                     self.remote_conversation_total = Some(observation.page.total);
                     self.remote_conversation_catalog = observation.page.items;
-                    self.account_bridge_status = format!(
-                        "PROOF: transport={} · account-context=yes · history HTTP {} · items={} · total={}",
-                        observation.transport.as_str(),
-                        observation.http_status,
-                        self.remote_conversation_catalog.len(),
-                        self.remote_conversation_total.unwrap_or(0),
-                    );
+
+                    let contradicts_local_history = observation.page.total == 0
+                        && (!self.historical_catalog.is_empty()
+                            || !self.live_mirror_catalog.is_empty());
+                    if contradicts_local_history {
+                        self.history_bridge_proven = false;
+                        self.account_bridge_status = format!(
+                            "PROOF FAILED: {} · auth=yes · HTTP {} · parser=yes · semantic=contradiction(remote total=0 while local history exists)",
+                            browser_proof_label(&observation.proof),
+                            observation.http_status,
+                        );
+                    } else if observation.page.total == 0 {
+                        self.history_bridge_proven = false;
+                        self.account_bridge_status = format!(
+                            "PROOF PARTIAL: {} · auth=yes · HTTP {} · parser=yes · semantic=unconfirmed-zero · items=0 · total=0",
+                            browser_proof_label(&observation.proof),
+                            observation.http_status,
+                        );
+                    } else {
+                        self.history_bridge_proven = true;
+                        self.account_bridge_status = format!(
+                            "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=yes · items={} · total={}",
+                            browser_proof_label(&observation.proof),
+                            observation.http_status,
+                            self.remote_conversation_catalog.len(),
+                            self.remote_conversation_total.unwrap_or(0),
+                        );
+                    }
                 }
                 LiveMirrorFetchNotice::HistoryListFailed { error } => {
                     self.history_list_pending = false;
-                    self.history_bridge_authenticated = true;
+                    self.history_bridge_proven = false;
                     self.account_bridge_status =
-                        format!("PROOF FAILED after browser auth: {error}");
+                        format!("PROOF FAILED after authenticated extension path: {error}");
                 }
                 LiveMirrorFetchNotice::DiscoveredFetched {
                     remote_conversation_id,
                     body,
+                    proof,
+                    http_status,
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.remote_discovery_pending = None;
@@ -737,10 +801,18 @@ impl ChatariumApp {
                             .to_owned();
                         continue;
                     };
+                    self.pending_history_fetch_proof = Some(PendingHistoryFetchProof {
+                        local_conversation_id: None,
+                        remote_conversation_id: remote_conversation_id.clone(),
+                        proof,
+                        http_status,
+                    });
                     if let Err(error) = sender.send(PersistCommand::PromoteDiscoveredLiveMirror {
                         expected_remote_conversation_id: remote_conversation_id,
                         body,
                     }) {
+                        self.pending_history_fetch_proof = None;
+                        self.history_bridge_proven = false;
                         self.remote_discovery_pending = None;
                         self.status = format!("failed to queue remote mirror creation: {error}");
                     } else {
@@ -758,12 +830,17 @@ impl ChatariumApp {
                     {
                         self.remote_discovery_pending = None;
                     }
+                    self.pending_history_fetch_proof = None;
+                    self.history_bridge_proven = false;
+                    self.account_bridge_status = format!("PROOF FAILED during exact fetch: {error}");
                     self.status = format!("remote ChatGPT conversation fetch failed: {error}");
                 }
                 LiveMirrorFetchNotice::Fetched {
                     local_conversation_id,
                     remote_conversation_id,
                     body,
+                    proof,
+                    http_status,
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.live_mirror_pending = None;
@@ -771,11 +848,19 @@ impl ChatariumApp {
                             "live conversation fetched, but persistence is unavailable".to_owned();
                         continue;
                     };
+                    self.pending_history_fetch_proof = Some(PendingHistoryFetchProof {
+                        local_conversation_id: Some(local_conversation_id),
+                        remote_conversation_id: remote_conversation_id.clone(),
+                        proof,
+                        http_status,
+                    });
                     if let Err(error) = sender.send(PersistCommand::PromoteHistoricalLiveMirror {
                         local_conversation_id,
                         expected_remote_conversation_id: remote_conversation_id,
                         body,
                     }) {
+                        self.pending_history_fetch_proof = None;
+                        self.history_bridge_proven = false;
                         self.live_mirror_pending = None;
                         self.status = format!("failed to queue live mirror promotion: {error}");
                     } else {
@@ -791,6 +876,9 @@ impl ChatariumApp {
                     if self.live_mirror_pending == Some(local_conversation_id) {
                         self.live_mirror_pending = None;
                     }
+                    self.pending_history_fetch_proof = None;
+                    self.history_bridge_proven = false;
+                    self.account_bridge_status = format!("PROOF FAILED during exact fetch: {error}");
                     self.status = format!("live ChatGPT fetch failed: {error}");
                 }
             }
