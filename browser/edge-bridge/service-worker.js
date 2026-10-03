@@ -7,9 +7,10 @@ const PROTOCOL_VERSION = 1;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const ACCOUNT_HEADER = 'ChatGPT-Account-ID';
 const ACCOUNT_KEY_PREFIX = 'chatarium-account-context:';
+const LIST_CONTEXT_KEY_PREFIX = 'chatarium-list-request-context:';
 const LIST_RESOURCE =
   '/backend-api/conversations?exclude_conversation_origin=tpp&expand=false&hide_snorlax=false&is_archived=false&is_starred=false&limit=20&order=updated&offset=0';
-const LIST_PROFILE = '2026-10-03.002';
+const LIST_PROFILE = '2026-10-03.003';
 const FETCH_PROFILE = '2026-10-03.001';
 const AUTH_PROFILE = 'chatgpt-me-v1';
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -18,6 +19,7 @@ const RESULT_TIMEOUT_MS = 10_000;
 const LOOPBACK_RETRY_MS = 1_000;
 let loopRunning = false;
 let lastLoopbackError = '';
+const replayingTabs = new Set();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,6 +27,10 @@ function sleep(ms) {
 
 function accountKey(tabId) {
   return `${ACCOUNT_KEY_PREFIX}${tabId}`;
+}
+
+function listContextKey(tabId) {
+  return `${LIST_CONTEXT_KEY_PREFIX}${tabId}`;
 }
 
 function validAccountId(value) {
@@ -43,7 +49,88 @@ async function rememberAccountContext(tabId, value) {
 
 async function forgetAccountContext(tabId) {
   if (!Number.isInteger(tabId) || tabId < 0) return;
-  await chrome.storage.session.remove(accountKey(tabId));
+  await chrome.storage.session.remove([accountKey(tabId), listContextKey(tabId)]);
+}
+
+function safeListResource(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (url.origin !== 'https://chatgpt.com' || url.pathname !== '/backend-api/conversations') {
+    return null;
+  }
+  const expected = new URL(`https://chatgpt.com${LIST_RESOURCE}`);
+  if (url.search !== expected.search) {
+    return null;
+  }
+  return `${url.pathname}${url.search}`;
+}
+
+function isReplayHeaderName(name) {
+  const lower = name.toLowerCase();
+  return lower === 'chatgpt-account-id'
+    || lower === 'oai-did'
+    || lower === 'oai-language'
+    || lower === 'originator'
+    || lower.startsWith('x-oai-')
+    || lower.startsWith('x-openai-');
+}
+
+function collectReplayHeaders(requestHeaders) {
+  const headers = {};
+  for (const header of requestHeaders ?? []) {
+    if (typeof header.name !== 'string' || typeof header.value !== 'string') continue;
+    if (!isReplayHeaderName(header.name)) continue;
+    if (header.value.length === 0 || header.value.length > 2048) continue;
+    headers[header.name] = header.value;
+  }
+  return headers;
+}
+
+async function rememberListRequestContext(details) {
+  if (!Number.isInteger(details.tabId) || details.tabId < 0 || replayingTabs.has(details.tabId)) {
+    return;
+  }
+  if (details.method !== 'GET') return;
+  const resource = safeListResource(details.url);
+  if (resource === null) return;
+
+  const headers = collectReplayHeaders(details.requestHeaders);
+  const accountEntry = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === ACCOUNT_HEADER.toLowerCase(),
+  );
+  const accountId = accountEntry?.[1];
+  if (!validAccountId(accountId)) return;
+
+  await rememberAccountContext(details.tabId, accountId);
+  await chrome.storage.session.set({
+    [listContextKey(details.tabId)]: {
+      resource,
+      headers,
+      observed_status: null,
+    },
+  });
+}
+
+async function rememberListCompletion(details) {
+  if (!Number.isInteger(details.tabId) || details.tabId < 0 || replayingTabs.has(details.tabId)) {
+    return;
+  }
+  const resource = safeListResource(details.url);
+  if (resource === null) return;
+  const key = listContextKey(details.tabId);
+  const stored = await chrome.storage.session.get(key);
+  const context = stored[key];
+  if (!context || context.resource !== resource || typeof context.headers !== 'object') return;
+  await chrome.storage.session.set({
+    [key]: {
+      ...context,
+      observed_status: Number.isInteger(details.statusCode) ? details.statusCode : null,
+    },
+  });
 }
 
 chrome.webRequest.onBeforeSendHeaders.addListener(
@@ -55,9 +142,17 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     if (header && validAccountId(header.value)) {
       void rememberAccountContext(details.tabId, header.value);
     }
+    void rememberListRequestContext(details);
   },
   { urls: ['https://chatgpt.com/backend-api/*'] },
   ['requestHeaders'],
+);
+
+chrome.webRequest.onCompleted.addListener(
+  (details) => {
+    void rememberListCompletion(details);
+  },
+  { urls: ['https://chatgpt.com/backend-api/conversations?*'] },
 );
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -78,6 +173,26 @@ async function accountContextForTab(tabId) {
   const stored = await chrome.storage.session.get(key);
   const value = stored[key];
   return validAccountId(value) ? value : null;
+}
+
+async function listRequestContextForTab(tabId) {
+  const key = listContextKey(tabId);
+  const stored = await chrome.storage.session.get(key);
+  const context = stored[key];
+  if (!context || context.resource !== LIST_RESOURCE || typeof context.headers !== 'object') {
+    return null;
+  }
+  const accountEntry = Object.entries(context.headers).find(
+    ([name]) => name.toLowerCase() === ACCOUNT_HEADER.toLowerCase(),
+  );
+  if (!validAccountId(accountEntry?.[1])) return null;
+  return {
+    resource: context.resource,
+    headers: context.headers,
+    observedStatus: Number.isInteger(context.observed_status)
+      ? context.observed_status
+      : null,
+  };
 }
 
 async function findChatGptTab() {
@@ -116,15 +231,18 @@ function baseResult(command, requestProfile) {
     chatgpt_tab_found: false,
     main_world_execution: false,
     account_context: false,
+    request_context_observed: false,
+    first_party_http_status: null,
+    context_header_count: 0,
     request_profile: requestProfile,
   };
 }
 
-async function pageGet(resource, accountHeader, accountId, maxResponseBytes) {
+async function pageGet(resource, requestHeaders, maxResponseBytes) {
   try {
     const response = await fetch(resource, {
       method: 'GET',
-      headers: { [accountHeader]: accountId },
+      headers: requestHeaders,
       credentials: 'include',
       cache: 'no-store',
       redirect: 'error',
@@ -180,20 +298,25 @@ async function pageGet(resource, accountHeader, accountId, maxResponseBytes) {
   }
 }
 
-async function executePageGet(tabId, resource, accountId) {
-  const injection = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: 'MAIN',
-    func: pageGet,
-    args: [resource, ACCOUNT_HEADER, accountId, MAX_RESPONSE_BYTES],
-  });
-  if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
-    throw new Error('main_world_no_result');
+async function executePageGet(tabId, resource, requestHeaders) {
+  replayingTabs.add(tabId);
+  try {
+    const injection = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: pageGet,
+      args: [resource, requestHeaders, MAX_RESPONSE_BYTES],
+    });
+    if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
+      throw new Error('main_world_no_result');
+    }
+    return injection[0].result;
+  } finally {
+    replayingTabs.delete(tabId);
   }
-  return injection[0].result;
 }
 
-async function executeRead(command, resource, requestProfile) {
+async function executeRead(command, resource, requestProfile, requireObservedContext = false) {
   const result = baseResult(command, requestProfile);
   const { tab, accountId } = await findChatGptTab();
   if (!tab) {
@@ -208,9 +331,29 @@ async function executeRead(command, resource, requestProfile) {
   }
   result.account_context = true;
 
+  let requestHeaders = { [ACCOUNT_HEADER]: accountId };
+  if (requireObservedContext) {
+    const context = await listRequestContextForTab(tab.id);
+    if (context === null) {
+      result.error = 'first_party_request_context_unavailable';
+      return result;
+    }
+    const accountEntry = Object.entries(context.headers).find(
+      ([name]) => name.toLowerCase() === ACCOUNT_HEADER.toLowerCase(),
+    );
+    if (accountEntry?.[1] !== accountId) {
+      result.error = 'first_party_request_context_account_mismatch';
+      return result;
+    }
+    requestHeaders = context.headers;
+    result.request_context_observed = true;
+    result.first_party_http_status = context.observedStatus;
+    result.context_header_count = Object.keys(context.headers).length;
+  }
+
   let pageResult;
   try {
-    pageResult = await executePageGet(tab.id, resource, accountId);
+    pageResult = await executePageGet(tab.id, resource, requestHeaders);
     result.main_world_execution = true;
   } catch (error) {
     result.error = error instanceof Error ? error.message : 'main_world_execution_failed';
@@ -258,7 +401,7 @@ async function listConversations(command) {
       error: 'resource_profile_mismatch',
     };
   }
-  return executeRead(command, LIST_RESOURCE, LIST_PROFILE);
+  return executeRead(command, LIST_RESOURCE, LIST_PROFILE, true);
 }
 
 function percentEncodePathSegment(value) {
@@ -297,7 +440,7 @@ async function fetchConversation(command) {
       error: 'resource_profile_mismatch',
     };
   }
-  return executeRead(command, expectedResource, FETCH_PROFILE);
+  return executeRead(command, expectedResource, FETCH_PROFILE, true);
 }
 
 async function execute(command) {
