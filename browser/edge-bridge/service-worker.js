@@ -64,11 +64,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void forgetAccountContext(tabId);
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (typeof changeInfo.url === 'string' && !changeInfo.url.startsWith('https://chatgpt.com/')) {
-    void forgetAccountContext(tabId);
-  }
-});
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.type === 'main_frame' && Number.isInteger(details.tabId) && details.tabId >= 0) {
+      void forgetAccountContext(details.tabId);
+    }
+  },
+  { urls: ['https://chatgpt.com/*'], types: ['main_frame'] },
+);
 
 async function accountContextForTab(tabId) {
   const key = accountKey(tabId);
