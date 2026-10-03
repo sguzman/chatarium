@@ -255,6 +255,11 @@ pub struct HistoryDiscoveryProof {
     pub body_read_failures: u64,
     pub body_too_large: u64,
     pub invalid_json: u64,
+    pub application_context_header_count: u64,
+    pub sidebar_bootstrap_attempted: bool,
+    pub sidebar_bootstrap_http_status: Option<u16>,
+    pub sidebar_bootstrap_items: u64,
+    pub sidebar_bootstrap_error: Option<String>,
     pub request_profile: String,
 }
 
@@ -356,6 +361,19 @@ impl BrowserBridgeProvider {
             body_read_failures: required_u64("body_read_failures")?,
             body_too_large: required_u64("body_too_large")?,
             invalid_json: required_u64("invalid_json")?,
+            application_context_header_count: required_u64(
+                "application_context_header_count",
+            )?,
+            sidebar_bootstrap_attempted: required_bool("sidebar_bootstrap_attempted")?,
+            sidebar_bootstrap_http_status: result
+                .get("sidebar_bootstrap_http_status")
+                .and_then(Value::as_u64)
+                .and_then(|status| u16::try_from(status).ok()),
+            sidebar_bootstrap_items: required_u64("sidebar_bootstrap_items")?,
+            sidebar_bootstrap_error: result
+                .get("sidebar_bootstrap_error")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             request_profile: request_profile.to_owned(),
         };
         if !proof.chatgpt_tab_found
