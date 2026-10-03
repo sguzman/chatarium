@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Account Bridge
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.3.0
+// @version      0.4.0
 // @description  Narrow credential-contained bridge from Chatarium Desktop to the authenticated ChatGPT web session.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -23,6 +23,58 @@
     '/backend-api/conversations?exclude_conversation_origin=tpp&expand=false&hide_snorlax=false&is_archived=false&is_starred=false&limit=20&order=updated&offset=0';
   const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
   const ERROR_RETRY_MS = 750;
+  const ACCOUNT_CONTEXT_WAIT_MS = 10_000;
+  const ACCOUNT_HEADER = 'ChatGPT-Account-ID';
+  let capturedAccountId = null;
+  const nativePageFetch = unsafeWindow.fetch.bind(unsafeWindow);
+
+  function captureAccountContext(headers) {
+    if (!headers || capturedAccountId !== null) return;
+    try {
+      const normalized = new unsafeWindow.Headers(headers);
+      const value = normalized.get(ACCOUNT_HEADER);
+      if (
+        typeof value === 'string'
+        && value.length > 0
+        && value.length <= 128
+        && /^[A-Za-z0-9_-]+$/.test(value)
+      ) {
+        capturedAccountId = value;
+      }
+    } catch {
+      // Observational only. Never interfere with a first-party request.
+    }
+  }
+
+  function installAccountContextObserver() {
+    const observedFetch = function(input, init) {
+      try {
+        if (input instanceof unsafeWindow.Request) {
+          captureAccountContext(input.headers);
+        }
+        if (init && init.headers) {
+          captureAccountContext(init.headers);
+        }
+      } catch {
+        // Never break ChatGPT if the request shape changes.
+      }
+      return nativePageFetch(input, init);
+    };
+
+    try {
+      unsafeWindow.fetch = observedFetch;
+    } catch {
+      // A hardened page may make fetch non-writable. The bridge will fail closed later.
+    }
+  }
+
+  async function waitForAccountContext() {
+    const deadline = Date.now() + ACCOUNT_CONTEXT_WAIT_MS;
+    while (capturedAccountId === null && Date.now() < deadline) {
+      await sleep(50);
+    }
+    return capturedAccountId !== null;
+  }
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -68,7 +120,7 @@
         signal: controller.signal,
         targetAddressSpace: 'loopback',
       };
-      const response = await unsafeWindow.fetch(`${BRIDGE_ORIGIN}${path}`, init);
+      const response = await nativePageFetch(`${BRIDGE_ORIGIN}${path}`, init);
       return {
         status: response.status,
         responseText: await response.text(),
@@ -171,10 +223,16 @@
     }
   }
 
-  async function sameOriginFetch(resource) {
-    const pageFetch = unsafeWindow.fetch.bind(unsafeWindow);
-    return pageFetch(resource, {
+  async function sameOriginFetch(resource, requireAccountContext = false) {
+    if (requireAccountContext && !await waitForAccountContext()) {
+      throw new Error('account_context_unavailable');
+    }
+
+    return nativePageFetch(resource, {
       method: 'GET',
+      headers: capturedAccountId === null
+        ? undefined
+        : { [ACCOUNT_HEADER]: capturedAccountId },
       credentials: 'include',
       cache: 'no-store',
       redirect: 'error',
@@ -221,7 +279,7 @@
     }
 
     try {
-      const response = await sameOriginFetch(LIST_RESOURCE);
+      const response = await sameOriginFetch(LIST_RESOURCE, true);
       const contentType = response.headers.get('content-type') ?? '';
 
       if (response.status !== 200) {
@@ -232,6 +290,7 @@
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          account_context: capturedAccountId !== null,
           error: 'remote_http_status',
         };
       }
@@ -244,6 +303,7 @@
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          account_context: capturedAccountId !== null,
           error: 'remote_non_json_response',
         };
       }
@@ -260,6 +320,7 @@
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          account_context: capturedAccountId !== null,
           error: 'remote_invalid_json',
         };
       }
@@ -271,6 +332,7 @@
         ok: true,
         http_status: response.status,
         content_type: contentType,
+        account_context: capturedAccountId !== null,
         body,
       };
     } catch (error) {
@@ -279,6 +341,7 @@
         id: command.id,
         kind: command.kind,
         ok: false,
+        account_context: capturedAccountId !== null,
         error: error instanceof Error ? error.message : 'remote_fetch_failed',
       };
     }
@@ -312,7 +375,7 @@
     const resource = expectedResource;
 
     try {
-      const response = await sameOriginFetch(resource);
+      const response = await sameOriginFetch(resource, true);
       const contentType = response.headers.get('content-type') ?? '';
 
       if (response.status !== 200) {
@@ -323,6 +386,7 @@
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          account_context: capturedAccountId !== null,
           error: 'remote_http_status',
         };
       }
@@ -335,6 +399,7 @@
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          account_context: capturedAccountId !== null,
           error: 'remote_non_json_response',
         };
       }
@@ -351,6 +416,7 @@
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          account_context: capturedAccountId !== null,
           error: 'remote_invalid_json',
         };
       }
@@ -362,6 +428,7 @@
         ok: true,
         http_status: response.status,
         content_type: contentType,
+        account_context: capturedAccountId !== null,
         body,
       };
     } catch (error) {
@@ -370,6 +437,7 @@
         id: command.id,
         kind: command.kind,
         ok: false,
+        account_context: capturedAccountId !== null,
         error: error instanceof Error ? error.message : 'remote_fetch_failed',
       };
     }
@@ -400,6 +468,7 @@
 
   async function main() {
     main.lastError = '';
+    installAccountContextObserver();
     for (;;) {
       try {
         const response = await loopbackRequest('GET', '/v1/next', null, 30_000);
@@ -416,6 +485,7 @@
           continue;
         }
 
+        result.bridge_transport = response.transport;
         const posted = await loopbackRequest('POST', '/v1/result', result, 10_000);
         if (posted.status !== 204) {
           await sleep(ERROR_RETRY_MS);
