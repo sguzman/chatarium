@@ -37,6 +37,7 @@ use chatarium_protocol::read::{
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::convert::Infallible;
 use std::fmt;
 
 const LIVE_REVISION: &str = "2026-10-03.001";
@@ -118,6 +119,32 @@ impl<AuthError: fmt::Debug, FetchError: fmt::Debug> std::error::Error
 {
 }
 
+/// Store-only promotion error used after a live body was fetched off the durability worker.
+pub type HistoricalLiveMirrorPromotionError =
+    HistoricalLiveMirrorBootstrapError<Infallible, Infallible>;
+
+/// Validate and durably promote one already-fetched C02 body.
+///
+/// This performs no network I/O. The exact remote identity is rechecked against the durable
+/// historical lineage before any live-binding event is appended, so a stale UI selection or
+/// compromised bridge result cannot redirect one local lineage to another remote conversation.
+pub fn promote_historical_live_mirror_body<S>(
+    store: &mut S,
+    local_conversation_id: LocalConversationId,
+    expected_remote_conversation_id: &str,
+    fetched: &Value,
+) -> Result<HistoricalLiveMirrorBootstrapResult, HistoricalLiveMirrorPromotionError>
+where
+    S: EventStore,
+{
+    promote_historical_live_mirror_body_typed::<S, Infallible, Infallible>(
+        store,
+        local_conversation_id,
+        expected_remote_conversation_id,
+        fetched,
+    )
+}
+
 /// Fetch and promote one imported historical lineage into a live remote mirror.
 ///
 /// No durable live claim is appended until the fetched body parses against the current C02
@@ -160,11 +187,53 @@ where
         .map_err(HistoricalLiveMirrorBootstrapError::Session)?
         .map_err(HistoricalLiveMirrorBootstrapError::Provider)?;
 
+    promote_historical_live_mirror_body_typed::<S, P::Error, P::FetchError>(
+        store,
+        local_conversation_id,
+        remote_conversation_id.as_str(),
+        &fetched,
+    )
+}
+
+fn promote_historical_live_mirror_body_typed<S, AuthError, FetchError>(
+    store: &mut S,
+    local_conversation_id: LocalConversationId,
+    expected_remote_conversation_id: &str,
+    fetched: &Value,
+) -> Result<
+    HistoricalLiveMirrorBootstrapResult,
+    HistoricalLiveMirrorBootstrapError<AuthError, FetchError>,
+>
+where
+    S: EventStore,
+{
+    let catalog = latest_historical_conversation_catalog(store.events())
+        .map_err(HistoricalLiveMirrorBootstrapError::InvalidJournal)?;
+    let historical = catalog
+        .into_iter()
+        .find(|entry| entry.local_conversation_id == local_conversation_id)
+        .ok_or(
+            HistoricalLiveMirrorBootstrapError::HistoricalConversationMissing(
+                local_conversation_id,
+            ),
+        )?;
+
+    if historical.remote_conversation_id != expected_remote_conversation_id {
+        return Err(HistoricalLiveMirrorBootstrapError::ExistingBindingConflict(
+            "requested remote identity no longer matches the durable historical lineage".to_owned(),
+        ));
+    }
+
+    let remote_conversation_id = RemoteConversationId::new(historical.remote_conversation_id)
+        .map_err(|_| HistoricalLiveMirrorBootstrapError::InvalidHistoricalRemoteIdentity)?;
+    let protocol_revision = ProtocolObservationRevision::new(LIVE_REVISION)
+        .expect("hard-coded live protocol revision is non-empty");
+
     // This is intentionally before *any* live-binding append. The historical ID remains only a
     // candidate unless the live response positively echoes the exact same remote identity.
     parse_conversation_fetch_response(
         LIVE_REVISION,
-        &fetched,
+        fetched,
         Some(remote_conversation_id.as_str()),
     )
     .map_err(HistoricalLiveMirrorBootstrapError::Parse)?;
@@ -179,7 +248,7 @@ where
     ensure_selected(store, local_conversation_id)?;
 
     let snapshot =
-        import_validated_remote_conversation_snapshot(store, local_conversation_id, &fetched)
+        import_validated_remote_conversation_snapshot(store, local_conversation_id, fetched)
             .map_err(HistoricalLiveMirrorBootstrapError::Snapshot)?;
 
     Ok(HistoricalLiveMirrorBootstrapResult {
@@ -550,6 +619,49 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].local_conversation_id, local);
         assert_eq!(snapshots[0].remote_conversation_id.as_str(), "fixture-id-7");
+    }
+
+    #[test]
+    fn already_fetched_body_promotes_without_provider_or_network_authority() {
+        let (mut store, local) = historical_store();
+        let body = materialized_fixture();
+
+        let result = promote_historical_live_mirror_body(
+            &mut store,
+            local,
+            "fixture-id-7",
+            &body,
+        )
+        .expect("store-only promotion");
+
+        assert_eq!(result.local_conversation_id, local);
+        assert_eq!(result.remote_conversation_id.as_str(), "fixture-id-7");
+        assert!(result.snapshot.appended);
+        assert_eq!(replay_remote_identity_audit(store.events()).unwrap().len(), 1);
+        assert_eq!(
+            replay_remote_conversation_snapshot_audit(store.events())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn already_fetched_body_rechecks_durable_historical_identity_before_appending() {
+        let (mut store, local) = historical_store();
+        let before = store.events().len();
+
+        assert!(matches!(
+            promote_historical_live_mirror_body(
+                &mut store,
+                local,
+                "stale-ui-remote-id",
+                &materialized_fixture(),
+            ),
+            Err(HistoricalLiveMirrorBootstrapError::ExistingBindingConflict(_))
+        ));
+        assert_eq!(store.events().len(), before);
+        assert!(replay_remote_identity_audit(store.events()).unwrap().is_empty());
     }
 
     #[test]
