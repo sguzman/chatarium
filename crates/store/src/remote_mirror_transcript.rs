@@ -114,7 +114,8 @@ pub fn project_remote_active_transcript(
 
 fn project_visible_content(content: &ConversationMessageContent) -> Option<String> {
     match content {
-        ConversationMessageContent::Thoughts { .. } => None,
+        ConversationMessageContent::Thoughts { .. }
+        | ConversationMessageContent::Opaque { .. } => None,
         ConversationMessageContent::Parts { parts, .. } => {
             let mut projected = Vec::new();
             for part in parts {
@@ -251,6 +252,29 @@ mod tests {
         assert_eq!(transcript.messages[1].role, RemoteTranscriptRole::Assistant);
         assert_eq!(transcript.messages[1].text, "visible answer");
         assert!(!transcript.truncated_before);
+    }
+
+    #[test]
+    fn opaque_current_revision_content_is_not_projected_as_visible_text() {
+        let opaque = ConversationMessageContent::Opaque {
+            content_type: "future_private_content".to_owned(),
+            fields: serde_json::Map::from_iter([(
+                "payload".to_owned(),
+                json!({"shape": "unknown"}),
+            )]),
+        };
+        let transcript = project_remote_active_transcript(&envelope(
+            vec![
+                message("root", None, "system", parts("system")),
+                message("opaque", Some("root"), "assistant", opaque),
+                message("final", Some("opaque"), "assistant", parts("visible")),
+            ],
+            "final",
+        ))
+        .unwrap();
+
+        assert_eq!(transcript.messages.len(), 1);
+        assert_eq!(transcript.messages[0].text, "visible");
     }
 
     #[test]
