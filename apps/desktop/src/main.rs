@@ -406,7 +406,6 @@ impl ChatariumApp {
                                     cumulative_text: String::new(),
                                     observed_output: false,
                                 });
-                                self.remote_status = format!("sending with {}", pending.model);
                             }
                             Err(error) => {
                                 let payload = remote_turn_payload(
@@ -613,7 +612,6 @@ impl ChatariumApp {
                         EventKind::AssistantSnapshotObserved,
                         snapshot,
                     );
-                    self.remote_status = "ChatGPT is responding…".to_owned();
                 }
                 siwc_bridge::BridgeEvent::ResponseCompleted { request_id, text } => {
                     if !self
@@ -674,7 +672,6 @@ impl ChatariumApp {
                         EventKind::AssistantCompletionObserved,
                         completed,
                     );
-                    self.remote_status = "ChatGPT response complete".to_owned();
                 }
                 siwc_bridge::BridgeEvent::Failed { request_id, error } => {
                     self.sign_in_pending = false;
