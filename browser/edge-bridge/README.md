@@ -19,10 +19,10 @@ authenticated chatgpt.com tab
 The extension performs three deliberately separate jobs:
 
 1. poll Chatarium's typed loopback command queue and return typed results;
-2. observe the already-present `ChatGPT-Account-ID` header on first-party ChatGPT requests using `chrome.webRequest`;
-3. execute the evidence-backed authenticated GET inside the exact ChatGPT tab's MAIN world.
+2. observe the exact first-party ordinary-history request context using `chrome.webRequest`;
+3. execute the evidence-backed authenticated GET inside the exact ChatGPT tab's MAIN world using that observed application context.
 
-The raw account identifier stays in `chrome.storage.session` under a per-tab key. It is never returned to Rust, printed in diagnostics, or written to Chatarium's journal.
+For the ordinary-history request, the extension retains only a narrow allowlist of application-controlled headers already emitted by ChatGPT itself: `ChatGPT-Account-ID`, `oai-did`, `oai-language`, `originator`, and `x-oai-*` / `x-openai-*`. Their raw values stay in per-tab `chrome.storage.session`. Cookies, `Authorization`, browser-managed `sec-*` headers, and arbitrary headers are not captured for replay. None of the retained values is returned to Rust, printed in diagnostics, or written to Chatarium's journal.
 
 ## Permissions
 
@@ -49,7 +49,7 @@ The desktop supplies the exact evidence-backed resource and request-profile revi
 Current profiles:
 
 - authentication probe: `chatgpt-me-v1`
-- first account-history page: `2026-10-03.002`
+- first account-history page: `2026-10-03.003`
 - exact C02 conversation read: `2026-10-03.001`
 
 ## Proof ladder
@@ -61,20 +61,27 @@ A successful result carries only safe proof metadata:
 - exact ChatGPT tab found;
 - MAIN-world execution;
 - account-context presence;
+- observed first-party request-context presence;
+- original first-party HTTP status when observed;
+- count of browser-local context headers selected for replay;
 - request-profile identity;
-- HTTP status.
+- replay HTTP status.
 
 Rust then adds parser/semantic proof. Exact-conversation synchronization does not become a complete success until the matching validated mirror is durably committed to the local journal.
 
 A lower-level success must never be presented as a higher-level success.
 
-## Account-context observation
+## First-party request-context observation
 
-The extension does not guess, hard-code, or ask Rust for the active ChatGPT account identifier.
+The extension does not guess, hard-code, or ask Rust for the active ChatGPT account identifier or surrounding application request context.
 
-It passively observes `ChatGPT-Account-ID` on ChatGPT's own first-party `/backend-api/*` requests, validates a narrow identifier grammar, and stores the value only for that tab in extension session storage. Closing the tab or navigating it away from `chatgpt.com` removes the cached context.
+For the exact ordinary-history resource, it passively observes ChatGPT's own first-party request headers, validates the account selector, copies only the narrow replay allowlist described above into per-tab extension session storage, and records the first-party HTTP completion status when available. Closing the tab or navigating the main frame clears both account and request context.
 
-If no valid account context has been observed, account-history reads fail closed with `account_context_unavailable`.
+The replay path then requires that observed context. A history request fails closed with `first_party_request_context_unavailable` rather than falling back to a synthesized URL-plus-account-ID request. The extension-generated replay is excluded from observation so it cannot overwrite its own first-party evidence.
+
+The 2026-10-03 HAR is important but limited evidence here: it established this global request shape/context, while the global list responses captured in that HAR were HTTP 429. Successful HTTP 200 conversation-list-like responses in the same HAR came from gizmo/project endpoints and are not treated as proof of ordinary global-history semantics.
+
+This is Edge Bridge **0.2.0**, the single evidence-driven correction following the first 0.1.0 live run. That run proved extension transport, tab selection, MAIN-world execution, authentication, account context, HTTP 200, and parsing, but returned an unconfirmed empty global history.
 
 ## Loopback
 
