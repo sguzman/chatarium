@@ -1451,10 +1451,7 @@ mod tests {
             address,
             |command| {
                 assert_eq!(command["kind"], json!("discover_history_surfaces"));
-                assert_eq!(
-                    command["request_profile"],
-                    json!(HISTORY_DISCOVERY_PROFILE)
-                );
+                assert_eq!(command["request_profile"], json!(HISTORY_DISCOVERY_PROFILE));
                 assert_eq!(command.as_object().unwrap().len(), 4);
             },
             |command| {
