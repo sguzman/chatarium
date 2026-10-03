@@ -29,7 +29,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.0') {
+if (manifest.version !== '0.4.1') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -229,3 +229,18 @@ if (isJsonMimeType('text/html')) {
 }
 
 console.log('Chatarium CDP conversation capture matcher OK');
+
+
+const debuggerEventListenerCount =
+  worker.match(/chrome\.debugger\.onEvent\.addListener/g)?.length ?? 0;
+if (debuggerEventListenerCount < 2) {
+  throw new Error(
+    'history discovery and exact mirroring must use isolated debugger event listeners',
+  );
+}
+if (!worker.includes('const session = activeDiscoveries.get(tabId);')) {
+  throw new Error('known-good discovery listener is not isolated on activeDiscoveries');
+}
+if (!worker.includes('const capture = activeConversationCaptures.get(tabId);')) {
+  throw new Error('exact mirror listener is not isolated on activeConversationCaptures');
+}
