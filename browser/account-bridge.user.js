@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chatarium Account Bridge
 // @namespace    https://github.com/sguzman/chatarium
-// @version      0.1.0
+// @version      0.2.0
 // @description  Narrow credential-contained bridge from Chatarium Desktop to the authenticated ChatGPT web session.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -19,6 +19,8 @@
   const BRIDGE_HEADER = 'X-Chatarium-Bridge';
   const BRIDGE_HEADER_VALUE = '1';
   const VERSION = 1;
+  const LIST_RESOURCE =
+    '/backend-api/conversations?exclude_conversation_origin=tpp&expand=false&hide_snorlax=false&is_archived=false&is_starred=false&limit=20&order=updated&offset=0';
   const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
   const ERROR_RETRY_MS = 750;
 
@@ -144,6 +146,81 @@
     }
   }
 
+  async function listConversations(command) {
+    if (command.resource !== LIST_RESOURCE) {
+      return {
+        version: VERSION,
+        id: command.id,
+        kind: command.kind,
+        ok: false,
+        error: 'resource_profile_mismatch',
+      };
+    }
+
+    try {
+      const response = await sameOriginFetch(LIST_RESOURCE);
+      const contentType = response.headers.get('content-type') ?? '';
+
+      if (response.status !== 200) {
+        return {
+          version: VERSION,
+          id: command.id,
+          kind: command.kind,
+          ok: false,
+          http_status: response.status,
+          content_type: contentType,
+          error: 'remote_http_status',
+        };
+      }
+
+      if (!contentType.toLowerCase().split(';', 1)[0].trim().endsWith('json')) {
+        return {
+          version: VERSION,
+          id: command.id,
+          kind: command.kind,
+          ok: false,
+          http_status: response.status,
+          content_type: contentType,
+          error: 'remote_non_json_response',
+        };
+      }
+
+      const text = await readResponseTextBounded(response);
+      let body;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        return {
+          version: VERSION,
+          id: command.id,
+          kind: command.kind,
+          ok: false,
+          http_status: response.status,
+          content_type: contentType,
+          error: 'remote_invalid_json',
+        };
+      }
+
+      return {
+        version: VERSION,
+        id: command.id,
+        kind: command.kind,
+        ok: true,
+        http_status: response.status,
+        content_type: contentType,
+        body,
+      };
+    } catch (error) {
+      return {
+        version: VERSION,
+        id: command.id,
+        kind: command.kind,
+        ok: false,
+        error: error instanceof Error ? error.message : 'remote_fetch_failed',
+      };
+    }
+  }
+
   async function fetchConversation(command) {
     const remoteId = typeof command.remote_conversation_id === 'string'
       ? command.remote_conversation_id
@@ -243,6 +320,8 @@
     switch (command.kind) {
       case 'probe_auth':
         return probeAuthentication(command);
+      case 'list_conversations':
+        return listConversations(command);
       case 'fetch_conversation':
         return fetchConversation(command);
       default:
