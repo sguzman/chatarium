@@ -131,6 +131,14 @@ The bridge splits authority deliberately:
 
 The bridge uses long-polling rather than a timer-driven command scan, so an idle bridge does not continuously wake the page and an available command can be delivered immediately.
 
+### Chromium / Edge Tampermonkey permission
+
+`@connect 127.0.0.1` is necessary but may not be sufficient when Chromium-family browsers restrict Tampermonkey's extension-level Site Access. In that configuration the userscript can run normally on `chatgpt.com` while `GM_xmlhttpRequest` to the loopback listener never leaves Tampermonkey.
+
+For Edge/Chromium, Tampermonkey must have runtime host access that includes `127.0.0.1`; Tampermonkey's documented broad fix is extension **Site Access → On all sites**. If the browser exposes an explicit per-host grant, granting `127.0.0.1` is sufficient for Chatarium's loopback target. Chatarium reports this case as “userscript did not reach the loopback listener” rather than treating it as an authentication failure.
+
+This is still a userscript bridge, not Chrome Native Messaging. A separate native-messaging extension is unnecessary for Chatarium's loopback HTTP transport.
+
 This userscript is intentionally separate from `flight-recorder.user.js`. The recorder remains `@grant none` and keeps its page-context durability semantics; adding privileged Tampermonkey grants to it would unnecessarily change that execution boundary.
 
 The desktop half of this bridge must bind loopback only, require the bridge marker header, expose typed endpoints only, and never add a generic arbitrary-URL/method forwarding surface.
