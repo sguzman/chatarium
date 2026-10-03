@@ -4,6 +4,7 @@
 
 pub mod conversation_fetch;
 pub mod conversation_fetch_request;
+pub mod conversation_list;
 pub mod read;
 pub mod sse;
 pub mod stability;
