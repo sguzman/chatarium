@@ -476,13 +476,22 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
     {
         return status_error(status);
     }
-    BrowserBridgeError::Protocol(
-        result
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("remote fetch failed without structured reason")
-            .to_owned(),
-    )
+    let reason = result
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("remote fetch failed without structured reason");
+    let transport = result
+        .get("bridge_transport")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let account_context = match result.get("account_context").and_then(Value::as_bool) {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    };
+    BrowserBridgeError::Protocol(format!(
+        "{reason}; transport={transport}; account-context={account_context}"
+    ))
 }
 
 fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> BrowserBridgeError {
