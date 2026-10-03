@@ -523,6 +523,27 @@ Edge Bridge 0.4.3 therefore changes the recovery policy without changing the pro
 
 This is the first post-0.3 repair based on a **successful captured list response**, rather than another inference from an absent request.
 
+### Stage K5 — 0.4.3 synthetic sidebar bootstrap is rejected with HTTP 403
+
+The 0.4.3 live run produced a decisive result:
+
+```text
+account-context=yes
+app-context-headers=10
+sidebar-bootstrap=yes
+sidebar-http=403
+sidebar-items=0
+sidebar-error=remote_http_status
+```
+
+The recovery request executed and had browser account context, but the server rejected the synthetic MAIN-world request. This is not an operator or parser failure. It falsifies synthetic sidebar replay as a production recovery mechanism.
+
+The mistake repeated an already-known failure mode: reconstructing a private request is not equivalent to letting the first-party frontend originate it.
+
+0.4.4 removes the synthetic sidebar fetch entirely. It instead uses a cache-bypassing CDP reload followed by bounded programmatic scrolling of actual ChatGPT navigation surfaces while CDP remains attached. The site therefore owns request construction, headers, anti-abuse context, and any internal request wrapper behavior. Chatarium only stimulates the UI and observes the resulting first-party responses.
+
+Permanent rule added by this incident: a successful HAR response proves a response shape, but does not by itself authorize synthetic runtime replay when the site may attach unobserved or dynamic request context.
+
 ## 3. Where engineering/assistant behavior failed
 
 ### F1 — discouraging the HAR
