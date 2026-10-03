@@ -1444,6 +1444,93 @@ mod tests {
     }
 
     #[test]
+    fn cdp_history_discovery_crosses_only_typed_candidates_and_proof() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+        let browser = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(command["kind"], json!("discover_history_surfaces"));
+                assert_eq!(
+                    command["request_profile"],
+                    json!(HISTORY_DISCOVERY_PROFILE)
+                );
+                assert_eq!(command.as_object().unwrap().len(), 4);
+            },
+            |command| {
+                json!({
+                    "version": 1,
+                    "id": command["id"],
+                    "kind": "discover_history_surfaces",
+                    "ok": true,
+                    "bridge_transport": "extension-cdp",
+                    "extension_version": "0.3.0",
+                    "chatgpt_tab_found": true,
+                    "main_world_execution": false,
+                    "account_context": true,
+                    "debugger_attached": true,
+                    "network_enabled": true,
+                    "reload_started": true,
+                    "request_profile": HISTORY_DISCOVERY_PROFILE,
+                    "responses_seen": 37,
+                    "backend_http_200_seen": 12,
+                    "json_candidates_seen": 3,
+                    "body_read_failures": 0,
+                    "body_too_large": 0,
+                    "invalid_json": 0,
+                    "candidate_count": 1,
+                    "discovery": "candidates_observed",
+                    "candidates": [
+                        {
+                            "path": "/backend-api/gizmos/snorlax/sidebar",
+                            "query_keys": [
+                                "conversations_per_gizmo",
+                                "limit",
+                                "owned_only"
+                            ],
+                            "surface_kind": "snorlax_sidebar",
+                            "conversation_count": 1,
+                            "cursor_count": 2,
+                            "string_cursor_count": 1,
+                            "null_cursor_count": 1,
+                            "top_level_cursor": "string",
+                            "top_level_keys": ["cursor", "items"],
+                            "traversal_truncated": false,
+                            "observations": 1,
+                            "items": [
+                                {
+                                    "id": "remote-1",
+                                    "title": "Observed live",
+                                    "create_time": "2026-10-03T00:00:00Z",
+                                    "update_time": "2026-10-03T00:01:00Z"
+                                }
+                            ]
+                        }
+                    ]
+                })
+            },
+        );
+
+        let mut provider = runtime.provider();
+        let observation = provider.discover_history_surfaces().unwrap();
+        assert_eq!(observation.discovery, "candidates_observed");
+        assert_eq!(observation.proof.extension_version, "0.3.0");
+        assert!(observation.proof.desktop_roundtrip);
+        assert!(observation.proof.debugger_attached);
+        assert!(observation.proof.network_enabled);
+        assert!(observation.proof.reload_started);
+        assert_eq!(observation.proof.responses_seen, 37);
+        assert_eq!(observation.candidates.len(), 1);
+        assert_eq!(
+            observation.candidates[0].path,
+            "/backend-api/gizmos/snorlax/sidebar"
+        );
+        assert_eq!(observation.candidates[0].items.len(), 1);
+        assert_eq!(observation.candidates[0].items[0].id, "remote-1");
+        browser.join().unwrap();
+    }
+
+    #[test]
     fn c01_command_uses_exact_first_page_resource_and_parses_extension_proof() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
