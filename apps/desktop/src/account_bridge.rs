@@ -174,9 +174,8 @@ impl BrowserBridgeProvider {
         &mut self,
         remote_conversation_id: &str,
     ) -> Result<Value, BrowserBridgeError> {
-        let remote_conversation_id = RemoteConversationId::new(remote_conversation_id).map_err(
-            |error| BrowserBridgeError::Protocol(error.to_string()),
-        )?;
+        let remote_conversation_id = RemoteConversationId::new(remote_conversation_id)
+            .map_err(|error| BrowserBridgeError::Protocol(error.to_string()))?;
         let protocol_revision =
             ProtocolObservationRevision::new(CONVERSATION_FETCH_REQUEST_OBSERVATION)
                 .expect("hard-coded C02 observation revision is non-empty");
@@ -355,15 +354,13 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
     )
 }
 
-fn map_session_lease_error(
-    error: SessionLeaseError<BrowserBridgeError>,
-) -> BrowserBridgeError {
+fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> BrowserBridgeError {
     match error {
         SessionLeaseError::Provider(error) => error,
         SessionLeaseError::Unauthenticated => BrowserBridgeError::Unauthenticated,
-        SessionLeaseError::Unknown => BrowserBridgeError::Unavailable(
-            "browser authentication state is unknown".to_owned(),
-        ),
+        SessionLeaseError::Unknown => {
+            BrowserBridgeError::Unavailable("browser authentication state is unknown".to_owned())
+        }
     }
 }
 

@@ -626,18 +626,16 @@ mod tests {
         let (mut store, local) = historical_store();
         let body = materialized_fixture();
 
-        let result = promote_historical_live_mirror_body(
-            &mut store,
-            local,
-            "fixture-id-7",
-            &body,
-        )
-        .expect("store-only promotion");
+        let result = promote_historical_live_mirror_body(&mut store, local, "fixture-id-7", &body)
+            .expect("store-only promotion");
 
         assert_eq!(result.local_conversation_id, local);
         assert_eq!(result.remote_conversation_id.as_str(), "fixture-id-7");
         assert!(result.snapshot.appended);
-        assert_eq!(replay_remote_identity_audit(store.events()).unwrap().len(), 1);
+        assert_eq!(
+            replay_remote_identity_audit(store.events()).unwrap().len(),
+            1
+        );
         assert_eq!(
             replay_remote_conversation_snapshot_audit(store.events())
                 .unwrap()
@@ -658,10 +656,16 @@ mod tests {
                 "stale-ui-remote-id",
                 &materialized_fixture(),
             ),
-            Err(HistoricalLiveMirrorBootstrapError::ExistingBindingConflict(_))
+            Err(HistoricalLiveMirrorBootstrapError::ExistingBindingConflict(
+                _
+            ))
         ));
         assert_eq!(store.events().len(), before);
-        assert!(replay_remote_identity_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_remote_identity_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

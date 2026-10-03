@@ -452,10 +452,7 @@ impl ChatariumApp {
             return;
         };
         let Some(mut provider) = self.account_bridge_provider.clone() else {
-            self.status = format!(
-                "cannot sync from ChatGPT: {}",
-                self.account_bridge_status
-            );
+            self.status = format!("cannot sync from ChatGPT: {}", self.account_bridge_status);
             return;
         };
         let Some(sender) = self.persist_tx.clone() else {
@@ -813,9 +810,8 @@ impl ChatariumApp {
                             );
                         }
                     } else {
-                        self.status = format!(
-                            "ChatGPT live mirror durable at event #{snapshot_sequence}"
-                        );
+                        self.status =
+                            format!("ChatGPT live mirror durable at event #{snapshot_sequence}");
                     }
                 }
                 PersistNotice::HistoricalLiveMirrorPromotionFailed {
@@ -2149,11 +2145,9 @@ fn persistence_worker(
                             Some(result.snapshot.sequence),
                         );
                         let (truncated_before, messages, projection_error) = match projection {
-                            Ok((_, projection)) => (
-                                projection.truncated_before,
-                                projection.messages,
-                                None,
-                            ),
+                            Ok((_, projection)) => {
+                                (projection.truncated_before, projection.messages, None)
+                            }
                             Err(error) => (false, Vec::new(), Some(error)),
                         };
                         let _ = notices.send(PersistNotice::HistoricalLiveMirrorPromoted {
@@ -2207,21 +2201,17 @@ fn latest_live_transcript(
 ) -> Result<(u64, RemoteTranscriptProjection), String> {
     let records = replay_remote_conversation_snapshot_audit(events)?;
     let record = match exact_snapshot_sequence {
-        Some(sequence) => records
-            .iter()
-            .find(|record| {
-                record.local_conversation_id == local_conversation_id
-                    && record.imported_sequence == sequence
-            }),
+        Some(sequence) => records.iter().find(|record| {
+            record.local_conversation_id == local_conversation_id
+                && record.imported_sequence == sequence
+        }),
         None => records
             .iter()
             .rev()
             .find(|record| record.local_conversation_id == local_conversation_id),
     }
     .ok_or_else(|| {
-        format!(
-            "no durable live mirror snapshot exists for conversation {local_conversation_id}"
-        )
+        format!("no durable live mirror snapshot exists for conversation {local_conversation_id}")
     })?;
 
     let projection = project_remote_active_transcript(&record.envelope)?;
