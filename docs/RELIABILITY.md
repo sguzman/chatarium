@@ -56,6 +56,57 @@ Disk, network, parsing, capture processing, indexing, and reconciliation work mu
 
 The P0 browser flight recorder provides local survivability. It does not claim its DOM observations are a complete canonical replica of remote state. Later direct protocol integration adds stronger reconciliation semantics.
 
+## R11 — status labels are evidence claims
+
+A green/healthy status is an assertion about evidence, not decoration.
+
+The UI must distinguish at least these browser-integration levels when applicable:
+
+- desktop listener exists;
+- browser component is alive;
+- browser/desktop roundtrip succeeded;
+- exact ChatGPT tab was found;
+- main-world execution succeeded;
+- ChatGPT session is authenticated;
+- required account/workspace context is present;
+- target HTTP request succeeded;
+- response schema validated;
+- semantic sanity checks passed;
+- durable local mirror committed.
+
+A lower-level success must never be labeled as a higher-level success. In particular, `listener ready`, `browser authenticated`, HTTP 200, and parse success are not synonyms for synchronization.
+
+## R12 — contradiction invalidates apparent success
+
+A structurally valid remote response can still be semantically wrong for the intended account/context.
+
+If local/visible evidence contradicts a remote result, preserve the contradiction and fail/warn visibly rather than normalizing it into success.
+
+Examples:
+
+- a conversation list reports zero while the first-party account visibly contains ordinary conversations;
+- a conversation response identity does not match the requested remote ID;
+- first-party evidence requires account context but the reproduced request lacks it;
+- pagination proves older content exists while the UI presents the current page as complete.
+
+Contradiction detection is part of correctness.
+
+## R13 — critical browser transport must be promotable, observable, and replaceable
+
+A browser-side prototype is not production infrastructure merely because one roundtrip succeeded.
+
+Any browser integration on the critical account-history path must have:
+
+- explicit version identity;
+- deterministic transport diagnostics;
+- a stable execution-world model;
+- request-context parity;
+- a browser-version compatibility story;
+- a generated or visible failure-stage trace;
+- a documented fallback/replacement path.
+
+The 2026-10-03 Tampermonkey bridge incident is the canonical counterexample; see `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`.
+
 ## Suggested durability tiers
 
 Chatarium may expose these diagnostic labels:
