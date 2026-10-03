@@ -724,6 +724,36 @@ mod tests {
     }
 
     #[test]
+    fn discovered_body_with_unmodeled_current_content_shape_is_still_durable() {
+        let mut store = MemoryEventStore::default();
+        let mut body = materialized_fixture();
+        body["messages"][1]["content"] = json!({
+            "content_type": "unmodeled_content",
+            "payload": {
+                "shape": "not-yet-modeled"
+            }
+        });
+
+        let result =
+            promote_discovered_live_mirror_body(&mut store, "fixture-id-7", &body).unwrap();
+        assert!(result.snapshot.appended);
+
+        let snapshots = replay_remote_conversation_snapshot_audit(store.events()).unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].raw_body["messages"][1]["content"]["content_type"],
+            json!("unmodeled_content")
+        );
+        assert!(matches!(
+            &snapshots[0].envelope.messages[1].content,
+            chatarium_protocol::conversation_fetch::ConversationMessageContent::Opaque {
+                content_type,
+                ..
+            } if content_type == "unmodeled_content"
+        ));
+    }
+
+    #[test]
     fn discovered_body_identity_mismatch_appends_nothing() {
         let mut store = MemoryEventStore::default();
         let mut body = materialized_fixture();
