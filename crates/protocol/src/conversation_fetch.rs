@@ -64,6 +64,15 @@ pub enum ConversationMessageContent {
         thoughts: Vec<Value>,
         source_analysis_msg_id: String,
     },
+    /// Current-revision content whose structure is preserved exactly but not semantically
+    /// interpreted by Chatarium yet.
+    ///
+    /// This keeps a valid exact mirror durable without inventing visible transcript semantics
+    /// for newly observed system/tool/content variants.
+    Opaque {
+        content_type: String,
+        fields: Map<String, Value>,
+    },
 }
 
 /// Pagination metadata returned by the conversation fetch.
@@ -279,6 +288,12 @@ fn parse_content(
                 content_type,
                 thoughts,
                 source_analysis_msg_id,
+            })
+        }
+        _ if protocol_revision == "2026-10-03.001" => {
+            Ok(ConversationMessageContent::Opaque {
+                content_type,
+                fields: object.clone(),
             })
         }
         _ => Err(ConversationFetchParseError::InvalidContentShape {
@@ -581,6 +596,31 @@ mod tests {
             ConversationMessageContent::Thoughts { .. }
         ));
         assert_eq!(parsed.current_node, "fixture-id-6");
+    }
+
+    #[test]
+    fn latest_revision_preserves_uninterpreted_content_shape_as_opaque() {
+        let mut body = materialized_latest_fixture();
+        body["messages"][1]["content"] = json!({
+            "content_type": "future_private_content",
+            "payload": {
+                "shape": "not-yet-modeled"
+            }
+        });
+
+        let parsed = parse_conversation_fetch_response(
+            "2026-10-03.001",
+            &body,
+            Some("fixture-id-7"),
+        )
+        .expect("current live revision should preserve unknown content opaquely");
+
+        assert!(matches!(
+            &parsed.messages[1].content,
+            ConversationMessageContent::Opaque { content_type, fields }
+                if content_type == "future_private_content"
+                    && fields.get("payload").is_some()
+        ));
     }
 
     #[test]
