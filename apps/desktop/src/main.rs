@@ -700,11 +700,11 @@ impl ChatariumApp {
                 );
                 self.mirror_status =
                     format!("RATE LIMITED · retry available in about {remaining}s");
-                self.status =
-                    "remote mirror is cooling down after ChatGPT HTTP 429".to_owned();
+                self.status = "remote mirror is cooling down after ChatGPT HTTP 429".to_owned();
                 return;
             }
-            self.remote_mirror_retry_after.remove(&remote_conversation_id);
+            self.remote_mirror_retry_after
+                .remove(&remote_conversation_id);
         }
         let Some(mut provider) = self.account_bridge_provider.clone() else {
             self.status = "cannot open remote chat: history bridge unavailable".to_owned();
@@ -1522,7 +1522,8 @@ impl ChatariumApp {
                     self.live_mirror_truncated_before = truncated_before;
 
                     self.remote_mirror_failures.remove(&remote_conversation_id);
-                    self.remote_mirror_retry_after.remove(&remote_conversation_id);
+                    self.remote_mirror_retry_after
+                        .remove(&remote_conversation_id);
                     match self.pending_history_fetch_proof.take() {
                         Some(pending)
                             if pending.local_conversation_id.is_none()
