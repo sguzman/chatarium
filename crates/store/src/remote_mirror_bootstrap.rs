@@ -7,7 +7,9 @@
 
 use crate::EventStore;
 use crate::historical_transcript::latest_historical_conversation_catalog;
-use crate::remote_identity_audit::{record_remote_conversation_bound, replay_remote_identity_audit};
+use crate::remote_identity_audit::{
+    record_remote_conversation_bound, replay_remote_identity_audit,
+};
 use crate::remote_mirror_runtime::RemoteConversationFetchProvider;
 use crate::remote_mirror_selection_audit::{
     record_remote_mirror_selection_changed, replay_remote_mirror_selection_audit,
@@ -77,19 +79,36 @@ impl<AuthError: fmt::Debug, FetchError: fmt::Debug> fmt::Display
                 write!(formatter, "historical conversation {local} is not present")
             }
             Self::InvalidHistoricalRemoteIdentity => {
-                write!(formatter, "historical conversation has an invalid remote identity")
+                write!(
+                    formatter,
+                    "historical conversation has an invalid remote identity"
+                )
             }
             Self::ExistingBindingConflict(detail) => {
-                write!(formatter, "existing remote binding conflicts with live bootstrap: {detail}")
+                write!(
+                    formatter,
+                    "existing remote binding conflicts with live bootstrap: {detail}"
+                )
             }
             Self::AmbiguousReadEvidence => {
-                write!(formatter, "more than one validated live C02 read observation is durable")
+                write!(
+                    formatter,
+                    "more than one validated live C02 read observation is durable"
+                )
             }
-            Self::Session(error) => write!(formatter, "authenticated browser session unavailable: {error:?}"),
+            Self::Session(error) => write!(
+                formatter,
+                "authenticated browser session unavailable: {error:?}"
+            ),
             Self::Provider(error) => write!(formatter, "live conversation fetch failed: {error:?}"),
-            Self::Parse(error) => write!(formatter, "live conversation identity/shape validation failed: {error}"),
+            Self::Parse(error) => write!(
+                formatter,
+                "live conversation identity/shape validation failed: {error}"
+            ),
             Self::Persistence(error) => write!(formatter, "persist live mirror bootstrap: {error}"),
-            Self::Snapshot(error) => write!(formatter, "persist live conversation snapshot: {error}"),
+            Self::Snapshot(error) => {
+                write!(formatter, "persist live conversation snapshot: {error}")
+            }
         }
     }
 }
@@ -120,9 +139,11 @@ where
     let historical = catalog
         .into_iter()
         .find(|entry| entry.local_conversation_id == local_conversation_id)
-        .ok_or(HistoricalLiveMirrorBootstrapError::HistoricalConversationMissing(
-            local_conversation_id,
-        ))?;
+        .ok_or(
+            HistoricalLiveMirrorBootstrapError::HistoricalConversationMissing(
+                local_conversation_id,
+            ),
+        )?;
 
     let remote_conversation_id = RemoteConversationId::new(historical.remote_conversation_id)
         .map_err(|_| HistoricalLiveMirrorBootstrapError::InvalidHistoricalRemoteIdentity)?;
@@ -157,12 +178,9 @@ where
     ensure_live_read_evidence(store)?;
     ensure_selected(store, local_conversation_id)?;
 
-    let snapshot = import_validated_remote_conversation_snapshot(
-        store,
-        local_conversation_id,
-        &fetched,
-    )
-    .map_err(HistoricalLiveMirrorBootstrapError::Snapshot)?;
+    let snapshot =
+        import_validated_remote_conversation_snapshot(store, local_conversation_id, &fetched)
+            .map_err(HistoricalLiveMirrorBootstrapError::Snapshot)?;
 
     Ok(HistoricalLiveMirrorBootstrapResult {
         local_conversation_id,
@@ -246,10 +264,7 @@ where
         ReadExperiment::OpenConversation,
         ReadMethod::Get,
         "/backend-api/conversations/<id>",
-        vec![
-            "include_has_versions".to_owned(),
-            "num_turns".to_owned(),
-        ],
+        vec!["include_has_versions".to_owned(), "num_turns".to_owned()],
         Some(vec![
             ReadQueryParameterEvidence::known("num_turns", "10")
                 .expect("hard-coded safe C02 query literal"),
@@ -264,11 +279,9 @@ where
     )
     .expect("hard-coded validated C02 observation is structurally valid");
 
-    let provenance = RemoteReadObservationProvenance::sanitized_read_fixture(
-        sha256_hex(C02_FIXTURE),
-        0,
-    )
-    .expect("committed fixture SHA-256 is valid");
+    let provenance =
+        RemoteReadObservationProvenance::sanitized_read_fixture(sha256_hex(C02_FIXTURE), 0)
+            .expect("committed fixture SHA-256 is valid");
 
     record_remote_read_observation_from_fixture(
         store,
@@ -453,7 +466,11 @@ mod tests {
                 ConversationFetchParseError::IdentityMismatch { .. }
             ))
         ));
-        assert!(replay_remote_identity_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_remote_identity_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
         assert!(replay_remote_read_audit(store.events()).unwrap().is_empty());
         assert!(
             replay_remote_mirror_selection_audit(store.events())
@@ -558,7 +575,10 @@ mod tests {
         assert!(first.snapshot.appended);
         assert!(!second.snapshot.appended);
         assert_eq!(first.snapshot.sequence, second.snapshot.sequence);
-        assert_eq!(replay_remote_identity_audit(store.events()).unwrap().len(), 1);
+        assert_eq!(
+            replay_remote_identity_audit(store.events()).unwrap().len(),
+            1
+        );
         assert_eq!(
             replay_remote_read_audit(store.events())
                 .unwrap()
