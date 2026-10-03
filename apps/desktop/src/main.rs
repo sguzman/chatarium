@@ -1245,7 +1245,9 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(238, 239, 244)),
                         );
                         ui.label(
-                            egui::RichText::new(if self.remote_connected() {
+                            egui::RichText::new(if historical_mode {
+                                "Historical account-export snapshot · read-only"
+                            } else if self.remote_connected() {
                                 "Durable on this machine · authenticated with ChatGPT"
                             } else {
                                 "Durable on this machine · connect ChatGPT to enable remote turns"
@@ -1258,7 +1260,9 @@ impl eframe::App for ChatariumApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let connected = self.remote_connected();
                         egui::Frame::default()
-                            .fill(if connected {
+                            .fill(if historical_mode {
+                                egui::Color32::from_rgb(39, 42, 49)
+                            } else if connected {
                                 egui::Color32::from_rgb(24, 52, 37)
                             } else {
                                 egui::Color32::from_rgb(48, 42, 26)
@@ -1267,14 +1271,18 @@ impl eframe::App for ChatariumApp {
                             .inner_margin(egui::Margin::symmetric(10, 5))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new(if connected {
+                                    egui::RichText::new(if historical_mode {
+                                        "IMPORTED SNAPSHOT"
+                                    } else if connected {
                                         "CHATGPT CONNECTED"
                                     } else {
                                         "LOCAL ONLY"
                                     })
                                     .size(10.0)
                                     .strong()
-                                    .color(if connected {
+                                    .color(if historical_mode {
+                                        egui::Color32::from_rgb(179, 184, 196)
+                                    } else if connected {
                                         egui::Color32::from_rgb(126, 210, 156)
                                     } else {
                                         egui::Color32::from_rgb(225, 194, 108)
@@ -1293,6 +1301,32 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::symmetric(22, 14)),
             )
             .show(ctx, |ui| {
+                if historical_mode {
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgb(31, 33, 39))
+                        .stroke(egui::Stroke::new(
+                            1.0_f32,
+                            egui::Color32::from_rgb(54, 57, 66),
+                        ))
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .inner_margin(egui::Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new("Historical snapshot is read-only")
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(221, 223, 229)),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Chatarium will not silently fork or send into an imported chat. Live same-thread write-back remains a separate interoperability problem.",
+                                )
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                        });
+                    return;
+                }
+
                 let composer_fill = if self.persist_tx.is_some() {
                     egui::Color32::from_rgb(31, 33, 39)
                 } else {
@@ -1372,6 +1406,12 @@ impl eframe::App for ChatariumApp {
                 });
             });
 
+        let display_messages: &[DisplayMessage] = if historical_mode {
+            &self.historical_messages
+        } else {
+            &local_display_messages
+        };
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -1386,22 +1426,43 @@ impl eframe::App for ChatariumApp {
                         if display_messages.is_empty() {
                             ui.add_space(90.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(
-                                    egui::RichText::new("Start a local conversation")
+                                if historical_mode
+                                    && self.historical_load_pending
+                                        == self.selected_historical_conversation
+                                {
+                                    ui.spinner();
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Loading and verifying historical snapshot…",
+                                        )
+                                        .size(14.0)
+                                        .color(egui::Color32::from_rgb(180, 184, 193)),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(if historical_mode {
+                                            "No visible messages on the exported active branch"
+                                        } else {
+                                            "Start a local conversation"
+                                        })
                                         .size(24.0)
                                         .strong()
                                         .color(egui::Color32::from_rgb(221, 223, 229)),
-                                );
-                                ui.add_space(8.0);
-                                ui.label(
-                                    egui::RichText::new(if self.remote_connected() {
-                                        "Write below to send a durable turn through your ChatGPT plan."
-                                    } else {
-                                        "Messages committed here survive restarts. Connect ChatGPT to enable remote turns."
-                                    })
-                                    .size(13.0)
-                                    .color(egui::Color32::from_rgb(137, 141, 150)),
-                                );
+                                    );
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        egui::RichText::new(if historical_mode {
+                                            "The raw snapshot is preserved; Chatarium did not guess across missing or non-visible content."
+                                        } else if self.remote_connected() {
+                                            "Write below to send a durable turn through your ChatGPT plan."
+                                        } else {
+                                            "Messages committed here survive restarts. Connect ChatGPT to enable remote turns."
+                                        })
+                                        .size(13.0)
+                                        .color(egui::Color32::from_rgb(137, 141, 150)),
+                                    );
+                                }
                             });
                         } else {
                             ui.add_space(8.0);
@@ -1445,6 +1506,7 @@ impl eframe::App for ChatariumApp {
             || self.sign_in_pending
             || self.pending_remote_turn.is_some()
             || self.active_remote_turn.is_some()
+            || self.historical_load_pending.is_some()
         {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
