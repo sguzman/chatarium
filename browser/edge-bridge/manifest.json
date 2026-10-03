@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chatarium Edge Bridge",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Credential-contained bridge between Chatarium Desktop and an authenticated ChatGPT tab.",
   "permissions": [
     "debugger",
