@@ -158,8 +158,18 @@
       };
     }
 
-    const resource =
+    const expectedResource =
       `/backend-api/conversations/${percentEncodePathSegment(remoteId)}?num_turns=10&include_has_versions=true`;
+    if (command.resource !== expectedResource) {
+      return {
+        version: VERSION,
+        id: command.id,
+        kind: command.kind,
+        ok: false,
+        error: 'resource_profile_mismatch',
+      };
+    }
+    const resource = expectedResource;
 
     try {
       const response = await sameOriginFetch(resource);
