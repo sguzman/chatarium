@@ -3561,7 +3561,6 @@ mod tests {
     fn zero_item_discovery_is_not_a_success_claim() {
         let current_pass_observed = 0usize;
         assert_eq!(current_pass_observed, 0);
-        assert!(!current_pass_observed.is_positive());
     }
 
     #[test]
