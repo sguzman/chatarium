@@ -4,6 +4,11 @@ import {
   isCandidateResponse,
   mergeDiscoveryCandidates,
 } from './history-discovery.mjs';
+import {
+  conversationRoute,
+  isJsonMimeType,
+  matchConversationResponse,
+} from './conversation-capture.mjs';
 
 const root = new URL('./', import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(new URL('manifest.json', root), 'utf8'));
@@ -24,7 +29,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.3.0') {
+if (manifest.version !== '0.4.0') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -57,6 +62,11 @@ for (const required of [
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
   "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
   "case 'discover_history_surfaces'",
+  'chrome.tabs.create',
+  "'Page.navigate'",
+  'chrome.tabs.remove',
+  'activeConversationCaptures',
+  'captureConversationByNavigation',
 ]) {
   if (!worker.includes(required)) {
     throw new Error(`required Edge bridge invariant missing: ${required}`);
@@ -163,3 +173,58 @@ if (merged[0].items.length !== 3) {
 }
 
 console.log('Chatarium CDP history discovery classifier OK');
+
+
+const route = conversationRoute('conversation / one');
+if (route !== 'https://chatgpt.com/c/conversation%20%2F%20one') {
+  throw new Error(`conversation route encoding drifted: ${route}`);
+}
+if (conversationRoute('') !== null || conversationRoute('x'.repeat(257)) !== null) {
+  throw new Error('invalid conversation ids should not produce navigation routes');
+}
+
+const exactConversation = matchConversationResponse(
+  {
+    status: 200,
+    mimeType: 'application/json',
+    url: 'https://chatgpt.com/backend-api/conversations/remote-1?num_turns=10&include_has_versions=true',
+  },
+  'remote-1',
+);
+if (!exactConversation) {
+  throw new Error('exact first-party conversation response was not matched');
+}
+if (exactConversation.http_status !== 200) {
+  throw new Error('exact conversation status was not preserved');
+}
+if (exactConversation.query_keys.join(',') !== 'num_turns,include_has_versions') {
+  throw new Error('exact conversation query-key evidence drifted');
+}
+if (matchConversationResponse(
+  {
+    status: 200,
+    mimeType: 'application/json',
+    url: 'https://chatgpt.com/backend-api/conversations/remote-2',
+  },
+  'remote-1',
+) !== null) {
+  throw new Error('wrong remote conversation id matched exact capture');
+}
+if (matchConversationResponse(
+  {
+    status: 200,
+    mimeType: 'application/json',
+    url: 'https://example.com/backend-api/conversations/remote-1',
+  },
+  'remote-1',
+) !== null) {
+  throw new Error('off-origin response matched exact capture');
+}
+if (!isJsonMimeType('application/json; charset=utf-8') || !isJsonMimeType('application/problem+json')) {
+  throw new Error('JSON media-type classifier rejected supported JSON');
+}
+if (isJsonMimeType('text/html')) {
+  throw new Error('non-JSON media type passed conversation capture gate');
+}
+
+console.log('Chatarium CDP conversation capture matcher OK');
