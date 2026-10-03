@@ -1,0 +1,38 @@
+{
+  "schema": "chatarium-protocol-snapshot",
+  "version": 1,
+  "revision": "2026-10-03.001",
+  "observation_kind": "manual_edge_har_c02_interoperability_survey",
+  "canonical_experiment": "C02-open-conversation",
+  "capture_start_utc": "2026-10-03T02:48:21.732Z",
+  "capture_end_utc": "2026-10-03T02:49:08.356Z",
+  "client": {
+    "product": "chatgpt-web",
+    "browser": "Microsoft Edge 153",
+    "platform": "Linux x86_64"
+  },
+  "source": {
+    "kind": "manual-edge-har",
+    "raw_sha256": "2fef410f7b38b1b818eb3a978d0d3c1a189cdafa0b6fd39cef4bf0c05df2cbc0",
+    "raw_bytes": 23519530,
+    "committed_to_git": false
+  },
+  "semantic_assessment": {
+    "conversation_fetch_request_path_observed": true,
+    "conversation_fetch_query_literals_observed": true,
+    "successful_conversation_fetch_response_observed": true,
+    "new_message_content_variant_observed": true,
+    "new_conversation_write_observed": true,
+    "same_thread_existing_conversation_write_observed": false
+  },
+  "artifacts": {
+    "sanitized_observation": "evidence/C02.har-observation.json",
+    "regression_fixture": "../../fixtures/2026-10-03.001/c02-open-conversation.json"
+  },
+  "limitations": [
+    "The source HAR contains private account/conversation/security material and is not committed.",
+    "This browsing session was broader than canonical C02; causal claims are limited to individually correlated requests.",
+    "The HAR contains a successful first turn of a new conversation but no second message into an already-existing thread, so same-thread write semantics remain unestablished.",
+    "Account-wide conversation-list requests observed in this capture returned HTTP 429 and do not establish a C01 semantic baseline."
+  ]
+}

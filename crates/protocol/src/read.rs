@@ -14,8 +14,15 @@ use std::fmt;
 /// conversation enumeration, so no semantic baseline exists yet.
 pub const LATEST_VALIDATED_CONVERSATION_LIST_OBSERVATION: Option<&str> = None;
 
-/// The first successful controlled C02 conversation-fetch response is validated by snapshot `2026-10-01.001`.
-pub const LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION: Option<&str> = Some("2026-10-01.001");
+/// C02 conversation-fetch revisions whose response semantics remain explicitly supported.
+///
+/// `2026-10-03.001` corroborated the earlier envelope and added the observed
+/// thoughts/source-analysis content variant plus exact safe query literals.
+pub const VALIDATED_CONVERSATION_FETCH_OBSERVATIONS: [&str; 2] =
+    ["2026-10-01.001", "2026-10-03.001"];
+
+/// Newest successful controlled C02 conversation-fetch observation.
+pub const LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION: Option<&str> = Some("2026-10-03.001");
 
 /// Controlled read experiment that produced an observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -554,23 +561,24 @@ impl ReadObservation {
 /// establish C01/C02 read semantics.
 #[must_use]
 pub fn compatibility_for_read_flow(flow: ReadFlow, observed_revision: &str) -> Compatibility {
-    let baseline = match flow {
-        ReadFlow::ConversationList => LATEST_VALIDATED_CONVERSATION_LIST_OBSERVATION,
-        ReadFlow::ConversationFetch => LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION,
-    };
-
-    match baseline {
-        None => Compatibility::NoBaseline,
-        Some(expected) if expected == observed_revision => {
-            Compatibility::ValidatedAgainst(expected.to_owned())
+    match flow {
+        ReadFlow::ConversationList => Compatibility::NoBaseline,
+        ReadFlow::ConversationFetch
+            if VALIDATED_CONVERSATION_FETCH_OBSERVATIONS.contains(&observed_revision) =>
+        {
+            Compatibility::ValidatedAgainst(observed_revision.to_owned())
         }
-        Some(expected) => Compatibility::Mismatch {
-            expected_revision: expected.to_owned(),
-            detail: format!(
-                "{} observation revision {observed_revision:?} differs from validated baseline {expected:?}",
-                flow.stable_name()
-            ),
-        },
+        ReadFlow::ConversationFetch => {
+            let expected = LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION
+                .expect("conversation-fetch validated revisions are non-empty");
+            Compatibility::Mismatch {
+                expected_revision: expected.to_owned(),
+                detail: format!(
+                    "{} observation revision {observed_revision:?} is not one of the validated revisions; newest is {expected:?}",
+                    flow.stable_name()
+                ),
+            }
+        }
     }
 }
 
@@ -617,9 +625,13 @@ mod tests {
             compatibility_for_read_flow(ReadFlow::ConversationFetch, "2026-10-01.001"),
             Compatibility::ValidatedAgainst("2026-10-01.001".to_owned())
         );
+        assert_eq!(
+            compatibility_for_read_flow(ReadFlow::ConversationFetch, "2026-10-03.001"),
+            Compatibility::ValidatedAgainst("2026-10-03.001".to_owned())
+        );
         assert!(matches!(
             compatibility_for_read_flow(ReadFlow::ConversationFetch, "2026-09-30.002"),
-            Compatibility::Mismatch { expected_revision, .. } if expected_revision == "2026-10-01.001"
+            Compatibility::Mismatch { expected_revision, .. } if expected_revision == "2026-10-03.001"
         ));
         assert_eq!(LATEST_VALIDATED_OBSERVATION, Some("2026-09-29.002"));
     }

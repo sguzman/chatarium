@@ -1,6 +1,8 @@
 //! Evidence-gated semantic parsing for the validated C02 conversation-fetch response.
 
-use crate::read::LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION;
+use crate::read::{
+    LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION, VALIDATED_CONVERSATION_FETCH_OBSERVATIONS,
+};
 use serde_json::{Map, Value};
 use std::fmt;
 
@@ -55,6 +57,12 @@ pub enum ConversationMessageContent {
     Content {
         content_type: String,
         content: Value,
+    },
+    /// Reasoning summary payload observed in the 2026-10-03.001 Edge HAR.
+    Thoughts {
+        content_type: String,
+        thoughts: Vec<Value>,
+        source_analysis_msg_id: String,
     },
 }
 
@@ -134,7 +142,7 @@ pub fn parse_conversation_fetch_response(
     let Some(expected_revision) = LATEST_VALIDATED_CONVERSATION_FETCH_OBSERVATION else {
         return Err(ConversationFetchParseError::NoValidatedBaseline);
     };
-    if protocol_revision != expected_revision {
+    if !VALIDATED_CONVERSATION_FETCH_OBSERVATIONS.contains(&protocol_revision) {
         return Err(ConversationFetchParseError::UnsupportedRevision {
             observed: protocol_revision.to_owned(),
             expected: expected_revision.to_owned(),
@@ -163,7 +171,7 @@ pub fn parse_conversation_fetch_response(
         .ok_or_else(|| wrong_type("messages", "an array"))?
         .iter()
         .enumerate()
-        .map(|(index, value)| parse_message(index, value))
+        .map(|(index, value)| parse_message(protocol_revision, index, value))
         .collect::<Result<Vec<_>, _>>()?;
     let current_node = required_non_empty_string(object, "current_node")?.to_owned();
     let page_info = parse_page_info(required_field(object, "page_info")?)?;
@@ -180,6 +188,7 @@ pub fn parse_conversation_fetch_response(
 }
 
 fn parse_message(
+    protocol_revision: &str,
     index: usize,
     value: &Value,
 ) -> Result<ConversationMessage, ConversationFetchParseError> {
@@ -193,7 +202,7 @@ fn parse_message(
         author: parse_author(index, required_field(object, "author")?)?,
         create_time: required_number_at(object, "create_time", index)?,
         update_time: optional_number_at(object, "update_time", index)?,
-        content: parse_content(index, required_field(object, "content")?)?,
+        content: parse_content(protocol_revision, index, required_field(object, "content")?)?,
         status: required_string_at(object, "status", index)?.to_owned(),
         end_turn: optional_bool_at(object, "end_turn", index)?,
         weight: required_number_at(object, "weight", index)?,
@@ -219,6 +228,7 @@ fn parse_author(
 }
 
 fn parse_content(
+    protocol_revision: &str,
     index: usize,
     value: &Value,
 ) -> Result<ConversationMessageContent, ConversationFetchParseError> {
@@ -226,8 +236,12 @@ fn parse_content(
         .as_object()
         .ok_or_else(|| wrong_type(&format!("messages[{index}].content"), "an object"))?;
     let content_type = required_string_at(object, "content_type", index)?.to_owned();
-    match (object.contains_key("parts"), object.contains_key("content")) {
-        (true, false) => {
+    match (
+        object.contains_key("parts"),
+        object.contains_key("content"),
+        object.contains_key("thoughts"),
+    ) {
+        (true, false, false) => {
             let parts = object
                 .get("parts")
                 .and_then(Value::as_array)
@@ -238,10 +252,35 @@ fn parse_content(
                 parts,
             })
         }
-        (false, true) => Ok(ConversationMessageContent::Content {
+        (false, true, false) => Ok(ConversationMessageContent::Content {
             content_type,
             content: object.get("content").expect("checked above").clone(),
         }),
+        (false, false, true) if protocol_revision == "2026-10-03.001" => {
+            let thoughts = object
+                .get("thoughts")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    wrong_type(&format!("messages[{index}].content.thoughts"), "an array")
+                })?
+                .clone();
+            let source_analysis_msg_id = object
+                .get("source_analysis_msg_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    wrong_type(
+                        &format!("messages[{index}].content.source_analysis_msg_id"),
+                        "a non-empty string",
+                    )
+                })?
+                .to_owned();
+            Ok(ConversationMessageContent::Thoughts {
+                content_type,
+                thoughts,
+                source_analysis_msg_id,
+            })
+        }
         _ => Err(ConversationFetchParseError::InvalidContentShape {
             message_index: index,
         }),
@@ -489,6 +528,73 @@ mod tests {
         );
     }
 
+    fn materialized_latest_fixture() -> Value {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../protocol/fixtures/2026-10-03.001/c02-open-conversation.json"
+        ))
+        .expect("fixture JSON");
+        let body = fixture
+            .pointer("/read_responses/0/body")
+            .expect("fixture body")
+            .clone();
+
+        fn materialize(value: Value) -> Value {
+            match value {
+                Value::Object(map) => {
+                    Value::Object(map.into_iter().map(|(k, v)| (k, materialize(v))).collect())
+                }
+                Value::Array(items) => Value::Array(items.into_iter().map(materialize).collect()),
+                Value::String(value) if value == "<empty-string>" => Value::String(String::new()),
+                Value::String(value) if value == "<redacted-text>" => {
+                    Value::String("fixture-redacted-text".to_owned())
+                }
+                Value::String(value) if value == "<string>" => {
+                    Value::String("fixture-string".to_owned())
+                }
+                Value::String(value) if value == "<number>" => json!(1.0),
+                Value::String(value) if value == "<bool>" => json!(true),
+                Value::String(value) if value == "<url>" => {
+                    Value::String("https://example.invalid/".to_owned())
+                }
+                Value::String(value) if value.starts_with("<id:") && value.ends_with('>') => {
+                    let id = value.trim_start_matches("<id:").trim_end_matches('>');
+                    Value::String(format!("fixture-id-{id}"))
+                }
+                other => other,
+            }
+        }
+
+        materialize(body)
+    }
+
+    #[test]
+    fn parses_latest_har_fixture_and_thoughts_variant() {
+        let parsed = parse_conversation_fetch_response(
+            "2026-10-03.001",
+            &materialized_latest_fixture(),
+            Some("fixture-id-7"),
+        )
+        .expect("latest C02 fixture should parse");
+        assert_eq!(parsed.messages.len(), 4);
+        assert!(matches!(
+            parsed.messages[1].content,
+            ConversationMessageContent::Thoughts { .. }
+        ));
+        assert_eq!(parsed.current_node, "fixture-id-6");
+    }
+
+    #[test]
+    fn older_revision_does_not_retroactively_accept_thoughts_shape() {
+        assert_eq!(
+            parse_conversation_fetch_response(
+                "2026-10-01.001",
+                &materialized_latest_fixture(),
+                None,
+            ),
+            Err(ConversationFetchParseError::InvalidContentShape { message_index: 1 })
+        );
+    }
+
     #[test]
     fn rejects_unvalidated_revision() {
         let error =
@@ -498,7 +604,7 @@ mod tests {
             error,
             ConversationFetchParseError::UnsupportedRevision {
                 observed: "2026-09-30.002".to_owned(),
-                expected: "2026-10-01.001".to_owned(),
+                expected: "2026-10-03.001".to_owned(),
             }
         );
     }

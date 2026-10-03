@@ -1,0 +1,82 @@
+{
+  "schema": "chatarium-protocol-read-observation",
+  "version": 1,
+  "snapshot": "2026-10-03.001",
+  "canonical_experiment": "C02-open-conversation",
+  "source": {
+    "kind": "manual-edge-har",
+    "raw_sha256": "2fef410f7b38b1b818eb3a978d0d3c1a189cdafa0b6fd39cef4bf0c05df2cbc0",
+    "raw_bytes": 23519530,
+    "committed_to_git": false
+  },
+  "successful_conversation_fetch": {
+    "method": "GET",
+    "path": "/backend-api/conversations/<id>",
+    "query_keys": [
+      "include_has_versions",
+      "num_turns"
+    ],
+    "query_parameters": [
+      {
+        "key": "num_turns",
+        "value": "10"
+      },
+      {
+        "key": "include_has_versions",
+        "value": "true"
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "body_present": true,
+    "top_level_type": "object"
+  },
+  "response_structure": {
+    "message_count": 22,
+    "message_role_counts": {
+      "system": 3,
+      "user": 1,
+      "assistant": 11,
+      "tool": 7
+    },
+    "message_content_key_variants": [
+      {
+        "keys": ["content_type", "parts"],
+        "count": 19
+      },
+      {
+        "keys": ["content_type", "source_analysis_msg_id", "thoughts"],
+        "count": 2
+      },
+      {
+        "keys": ["content", "content_type"],
+        "count": 1
+      }
+    ],
+    "page_info_has_previous_page": false,
+    "page_info_has_next_page": false,
+    "new_unmodeled_top_level_key_observed": "sectioned_conversation"
+  },
+  "write_survey": {
+    "new_conversation_prepare": "POST /backend-api/f/conversation/prepare",
+    "new_conversation_mutation": "POST /backend-api/f/conversation",
+    "mutation_response_content_type": "text/event-stream",
+    "new_conversation_mutation_had_conversation_id": false,
+    "later_prepare_had_created_conversation_id": true,
+    "rename_path_shape": "POST /backend-api/conversation/id/<id>/rename",
+    "same_thread_existing_conversation_write_observed": false
+  },
+  "rate_limit_observations": {
+    "earlier_conversation_fetch_status": 429,
+    "account_conversation_list_statuses": [429, 429]
+  },
+  "privacy": {
+    "raw_har_copied": false,
+    "request_headers_copied": false,
+    "credentials_copied": false,
+    "sentinel_values_copied": false,
+    "concrete_remote_identifiers_copied": false,
+    "conversation_text_copied": false,
+    "account_or_settings_bodies_copied": false
+  }
+}

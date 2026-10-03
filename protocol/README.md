@@ -63,7 +63,7 @@ The baseline experiment set is defined in [`CAPTURE_PLAYBOOK.md`](CAPTURE_PLAYBO
 
 ## C02 semantic parsing
 
-Snapshot 2026-10-01.001 is the validated baseline for the ConversationFetch flow. The crates/protocol::conversation_fetch module now parses the observed successful envelope only when the caller supplies that exact observation revision.
+Snapshot 2026-10-01.001 established the first validated ConversationFetch baseline. Snapshot 2026-10-03.001 independently corroborates that envelope, establishes the exact safe C02 query literals/order, and adds the observed thoughts/source-analysis content variant. Both revisions remain explicitly valid; the newer parser capability is revision-gated rather than retroactively attributed to the older specimen.
 
 The parser establishes a minimal semantic envelope:
 
@@ -71,7 +71,8 @@ The parser establishes a minimal semantic envelope:
 - observed title and numeric create/update timestamps;
 - ordered message records;
 - author role/name/metadata;
-- the two observed content shapes, content_type + parts and content_type + content;
+- the original content shapes, content_type + parts and content_type + content;
+- on revision 2026-10-03.001, the additional content_type + thoughts + source_analysis_msg_id shape;
 - message status/end-turn/weight/metadata/recipient/channel;
 - current-node identity;
 - page-info cursors and pagination flags.
@@ -82,7 +83,7 @@ The parser also supports exact identity correlation: a caller may provide the re
 
 The committed sanitized C02 fixture is used as the parser regression source. Tests materialize its typed placeholders into deterministic non-private values at test time, so the repository exercises the observed structure without committing real conversation content.
 
-The successful 2026-10-01.001 fixture was captured with Flight Recorder v0.7.1 and therefore establishes only the query-key names `include_has_versions` and `num_turns`; their values remain unknown. Flight Recorder v0.7.2 introduces a narrowly approved query-evidence channel for a future C02 run. Only those two keys on an exact conversation-resource GET/HEAD may retain occurrence-ordered literals, and only empty/lowercase-boolean/bounded-decimal forms are publishable. Unsupported shapes become explicit redacted markers. The corpus validator, fixture importer, typed read model, and durable V3 audit all enforce the same boundary so no later implementation can retroactively invent values for the v0.7.1 observation.
+The successful 2026-10-01.001 fixture was captured with Flight Recorder v0.7.1 and therefore establishes only the query-key names `include_has_versions` and `num_turns`; their values remain unknown for that historical specimen. The independent 2026-10-03.001 Edge HAR observed the exact occurrence order and safe literals `num_turns=10&include_has_versions=true`. Those values are committed only in the newer revision. The corpus validator, fixture importer, typed read model, and durable V3 audit continue to enforce the narrow approved-value grammar, so the older evidence is not retroactively rewritten.
 
 
 ## Corpus validation
