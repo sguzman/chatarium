@@ -176,8 +176,11 @@ where
         record.binding.local_conversation_id()
     } else {
         let local = LocalConversationId::new();
-        let binding =
-            RemoteConversationBinding::new(local, remote_conversation_id.clone(), protocol_revision);
+        let binding = RemoteConversationBinding::new(
+            local,
+            remote_conversation_id.clone(),
+            protocol_revision,
+        );
         record_remote_conversation_bound(store, &binding)
             .map_err(HistoricalLiveMirrorBootstrapError::Persistence)?;
         local
@@ -700,8 +703,7 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let body = materialized_fixture();
 
-        let first =
-            promote_discovered_live_mirror_body(&mut store, "fixture-id-7", &body).unwrap();
+        let first = promote_discovered_live_mirror_body(&mut store, "fixture-id-7", &body).unwrap();
         let second =
             promote_discovered_live_mirror_body(&mut store, "fixture-id-7", &body).unwrap();
 
