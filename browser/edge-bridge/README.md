@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.0 first-party CDP observation
+## Current architecture: 0.4.1 first-party CDP observation
 
 ```text
 Chatarium Desktop
@@ -66,7 +66,7 @@ rather than `85/85`, and the History discovery status explicitly says coverage i
 
 The first 0.3 live run also exposed the next downstream boundary: clicking one discovered conversation fell back to the older synthetic MAIN-world C02 fetch and eventually produced a generic bridge timeout.
 
-0.4.0 removes that mismatch.
+0.4.0 removed that mismatch.
 
 For a discovered conversation, the extension now:
 
@@ -86,6 +86,21 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.1 discovery-regression repair
+
+The first 0.4.0 live run exposed a regression in history discovery: the extension still observed network traffic, but only one zero-item `/backend-api/conversation/init` candidate survived classification, so the desktop lost the previously proven 85-chat result.
+
+The exact causal delta was not established. Two discovery-path changes had been made while adding mirroring: the debugger event listener was multiplexed with exact-mirror capture, and the proven discovery completion/grace sequence was replaced with a new bounded settle helper.
+
+0.4.1 fixes this without guessing which change was causal:
+
+- restores the exact known-good 0.3 discovery `onEvent` / `onDetach` implementation;
+- restores the exact 0.3 discovery completion/wait sequence;
+- moves exact-mirror capture into separate debugger listeners keyed only by mirror capture sessions;
+- keeps the bounded settle helper only on the new mirror path;
+- renders a zero-item pass as `DISCOVERY INCOMPLETE`, never green `DISCOVERED`;
+- retains previously observed in-memory conversation summaries when a later pass is sparse instead of replacing the catalog with zero.
 
 The 2026-10-03 C02 protocol profile remains the semantic validation profile. 0.4 changes **how the first-party response is obtained**, not the parser's right to invent new semantics.
 
