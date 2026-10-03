@@ -2183,7 +2183,7 @@ fn start_account_bridge() -> (
             (
                 Some(runtime),
                 Some(provider),
-                "browser history bridge listener ready".to_owned(),
+                "listener ready · waiting for browser".to_owned(),
             )
         }
         Err(error) => (
