@@ -69,8 +69,10 @@ The UI must distinguish at least these browser-integration levels when applicabl
 - main-world execution succeeded;
 - ChatGPT session is authenticated;
 - required account/workspace context is present;
-- target HTTP request succeeded;
-- response schema validated;
+- for discovery: debugger/network observation actually ran and candidate response bodies were bounded/parsed;
+- for a known operation: target HTTP request succeeded;
+- response schema or discovery candidate structure validated;
+- pagination/completeness state is explicit rather than inferred;
 - semantic sanity checks passed;
 - durable local mirror committed.
 
@@ -99,13 +101,15 @@ Any browser integration on the critical account-history path must have:
 
 - explicit version identity;
 - deterministic transport diagnostics;
-- a stable execution-world model;
-- request-context parity;
+- a stable execution-world/observer model;
+- request-context parity when reproducing a request, or explicit first-party network observation when discovering the current surface;
+- bounded handling of private response bodies;
+- explicit pagination/completeness evidence;
 - a browser-version compatibility story;
 - a generated or visible failure-stage trace;
 - a documented fallback/replacement path.
 
-The 2026-10-03 Tampermonkey bridge incident is the canonical counterexample; see `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`.
+The 2026-10-03 Tampermonkey and exact-C01 replay failures are canonical counterexamples; see `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`.
 
 ## Suggested durability tiers
 
