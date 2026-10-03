@@ -1029,12 +1029,26 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
         .and_then(Value::as_u64)
         .map(|count| count.to_string())
         .unwrap_or_else(|| "unknown".to_owned());
+    let number = |field: &str| {
+        result
+            .get(field)
+            .and_then(Value::as_u64)
+            .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+    };
+    let detached_reason = result
+        .get("detached_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
     let request_profile = result
         .get("request_profile")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     BrowserBridgeError::Protocol(format!(
-        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; debugger={debugger}; network={network}; capture-tab={capture_tab}; navigation={navigation}; exact-response={exact_response}; account-context={account_context}; request-context={request_context}; first-party-http={first_party_http}; context-headers={context_header_count}; profile={request_profile}"
+        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; debugger={debugger}; network={network}; capture-tab={capture_tab}; navigation={navigation}; exact-response={exact_response}; responses={}; body-read-failures={}; body-too-large={}; invalid-json={}; detached={detached_reason}; account-context={account_context}; request-context={request_context}; first-party-http={first_party_http}; context-headers={context_header_count}; profile={request_profile}",
+        number("responses_seen"),
+        number("body_read_failures"),
+        number("body_too_large"),
+        number("invalid_json"),
     ))
 }
 
