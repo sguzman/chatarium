@@ -29,17 +29,17 @@ pub struct ImportSummary {
 
 /// Import one extracted ChatGPT conversation JSON array.
 pub fn import_file(export_path: &Path, data_dir: &Path) -> Result<ImportSummary, String> {
-    let bytes =
-        fs::read(export_path).map_err(|error| format!("read {}: {error}", export_path.display()))?;
+    let bytes = fs::read(export_path)
+        .map_err(|error| format!("read {}: {error}", export_path.display()))?;
     import_bytes(&bytes, data_dir)
 }
 
 fn import_bytes(bytes: &[u8], data_dir: &Path) -> Result<ImportSummary, String> {
-    let root: Value =
-        serde_json::from_slice(bytes).map_err(|error| format!("parse account export JSON: {error}"))?;
-    let conversations = root
-        .as_array()
-        .ok_or_else(|| "account export conversation file must be a top-level JSON array".to_owned())?;
+    let root: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("parse account export JSON: {error}"))?;
+    let conversations = root.as_array().ok_or_else(|| {
+        "account export conversation file must be a top-level JSON array".to_owned()
+    })?;
 
     let source_sha256 = sha256_hex(bytes);
     let source_archive = archive_bytes(
@@ -97,7 +97,8 @@ fn import_bytes(bytes: &[u8], data_dir: &Path) -> Result<ImportSummary, String> 
             &canonical,
         )?;
 
-        if known_snapshots.contains(&(remote_conversation_id.clone(), conversation_sha256.clone())) {
+        if known_snapshots.contains(&(remote_conversation_id.clone(), conversation_sha256.clone()))
+        {
             unchanged_snapshots += 1;
             continue;
         }
@@ -164,20 +165,32 @@ fn conversation_identity(conversation: &Value, index: usize) -> Result<String, S
         }
     };
     if selected.is_empty() {
-        return Err(format!("conversation at index {index} has an empty identity"));
+        return Err(format!(
+            "conversation at index {index} has an empty identity"
+        ));
     }
     Ok(selected.to_owned())
 }
 
-fn optional_string(value: Option<&Value>, index: usize, field: &str) -> Result<Option<String>, String> {
+fn optional_string(
+    value: Option<&Value>,
+    index: usize,
+    field: &str,
+) -> Result<Option<String>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
-        Some(_) => Err(format!("conversation at index {index} field {field:?} must be string or null")),
+        Some(_) => Err(format!(
+            "conversation at index {index} field {field:?} must be string or null"
+        )),
     }
 }
 
-fn optional_number(value: Option<&Value>, index: usize, field: &str) -> Result<Option<f64>, String> {
+fn optional_number(
+    value: Option<&Value>,
+    index: usize,
+    field: &str,
+) -> Result<Option<f64>, String> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_f64().map(Some).ok_or_else(|| {
@@ -192,8 +205,8 @@ fn archive_bytes(directory: &Path, sha256: &str, bytes: &[u8]) -> Result<PathBuf
     let path = directory.join(format!("{sha256}.json"));
 
     if path.exists() {
-        let existing =
-            fs::read(&path).map_err(|error| format!("read existing archive {}: {error}", path.display()))?;
+        let existing = fs::read(&path)
+            .map_err(|error| format!("read existing archive {}: {error}", path.display()))?;
         if sha256_hex(&existing) != sha256 {
             return Err(format!(
                 "existing archive {} does not match its content-addressed filename",
@@ -297,7 +310,10 @@ mod tests {
             .expect("snapshot archive");
         let value: Value = serde_json::from_str(&raw).expect("snapshot json");
         assert_eq!(
-            value.pointer("/mapping/user-a/children").and_then(Value::as_array).map(Vec::len),
+            value
+                .pointer("/mapping/user-a/children")
+                .and_then(Value::as_array)
+                .map(Vec::len),
             Some(2)
         );
 
@@ -330,10 +346,17 @@ mod tests {
             .filter(|record| record.snapshot.remote_conversation_id == "remote-a")
             .collect::<Vec<_>>();
         assert_eq!(remote_a.len(), 2);
-        assert!(remote_a
-            .iter()
-            .all(|record| record.snapshot.local_conversation_id == original_local));
-        assert_eq!(remote_a.last().and_then(|record| record.snapshot.title.as_deref()), Some("changed"));
+        assert!(
+            remote_a
+                .iter()
+                .all(|record| record.snapshot.local_conversation_id == original_local)
+        );
+        assert_eq!(
+            remote_a
+                .last()
+                .and_then(|record| record.snapshot.title.as_deref()),
+            Some("changed")
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
