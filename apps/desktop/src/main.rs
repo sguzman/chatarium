@@ -509,9 +509,12 @@ impl ChatariumApp {
                             self.model_list_pending = false;
                         }
 
-                        let needs_models =
-                            !was_connected || account_changed || self.remote_models.is_empty();
-                        if needs_models && !self.model_list_pending {
+                        if should_request_models(
+                            was_connected,
+                            account_changed,
+                            self.remote_models.is_empty(),
+                            self.model_list_pending,
+                        ) {
                             match self.remote.send(siwc_bridge::BridgeCommand::ListModels) {
                                 Ok(()) => {
                                     self.model_list_pending = true;
@@ -1434,6 +1437,15 @@ fn persistence_worker(
     }
 }
 
+fn should_request_models(
+    was_connected: bool,
+    account_changed: bool,
+    models_empty: bool,
+    model_list_pending: bool,
+) -> bool {
+    (!was_connected || account_changed || models_empty) && !model_list_pending
+}
+
 fn remote_error_is_observed_failure(error: &siwc_bridge::BridgeError) -> bool {
     error.status.is_some()
         || error.code.starts_with("subscription_sharing_")
@@ -1804,6 +1816,15 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn model_discovery_is_single_flight_and_transition_gated() {
+        assert!(should_request_models(false, false, true, false));
+        assert!(!should_request_models(false, false, true, true));
+        assert!(!should_request_models(true, false, false, false));
+        assert!(should_request_models(true, true, false, false));
+        assert!(should_request_models(true, false, true, false));
     }
 
     #[test]
