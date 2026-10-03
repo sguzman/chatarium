@@ -114,8 +114,9 @@ pub fn project_remote_active_transcript(
 
 fn project_visible_content(content: &ConversationMessageContent) -> Option<String> {
     match content {
-        ConversationMessageContent::Thoughts { .. }
-        | ConversationMessageContent::Opaque { .. } => None,
+        ConversationMessageContent::Thoughts { .. } | ConversationMessageContent::Opaque { .. } => {
+            None
+        }
         ConversationMessageContent::Parts { parts, .. } => {
             let mut projected = Vec::new();
             for part in parts {
