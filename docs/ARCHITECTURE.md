@@ -162,6 +162,46 @@ Raw read bodies exist only in the private recorder export. `snapshot-flight` fai
 
 This layer is intentionally disposable once the native client supersedes it, but its evidence vocabulary should align with `crates/core` so recovered histories can be imported later.
 
+## Browser integration boundary
+
+The 2026-10-03 account-history incident established a hard architectural distinction between **browser observation prototypes** and **critical runtime interoperability**.
+
+Tampermonkey remains valid for:
+
+- the emergency flight recorder;
+- disposable protocol experiments;
+- temporary observation/instrumentation.
+
+Tampermonkey is **not** the production account-history transport. The retired `account-bridge.user.js` remains in the repository as evidence of the experiment, not as the intended runtime boundary.
+
+The replacement account-history integration is a purpose-built Edge/Chromium extension. Its job is narrow:
+
+- identify the intended `https://chatgpt.com` tab;
+- execute evidence-backed first-party reads in the correct page execution context;
+- observe required first-party account/workspace request context without exporting reusable credentials;
+- exchange typed commands/results with Chatarium over a local transport;
+- emit proof-level diagnostics for each boundary;
+- never become an arbitrary browser/HTTP proxy.
+
+The extension transport remains subordinate to the existing protocol/store layers. It must reuse:
+
+- evidence-gated C01/C02 request models;
+- exact remote-ID validation;
+- live-mirror durability;
+- active-branch transcript projection;
+- explicit pagination uncertainty;
+- local/remote/historical provenance classes.
+
+The browser component does **not** decide that a result is semantically trustworthy merely because HTTP succeeded. The desktop/protocol layer must still perform schema, identity, and contradiction checks.
+
+Before first human QA, the extension must self-report distinct evidence for:
+
+`extension alive -> ChatGPT tab found -> desktop roundtrip -> page MAIN-world execution -> authenticated session -> account context -> target HTTP result -> parser result -> semantic sanity -> durable mirror`.
+
+No aggregate `connected` state substitutes for that chain.
+
+See `docs/postmortems/2026-10-03-chatgpt-history-bridge.md` for the failure history that created this boundary.
+
 ## Protocol revisions
 
 A protocol revision is an observation, not a semantic version of ChatGPT. IDs use a timestamp-oriented form such as `2026-09-17.001`. Multiple observations on the same day may increment the suffix.
@@ -178,7 +218,7 @@ The primary desktop provider now uses OpenAI's documented **Sign in with ChatGPT
 
 For official Responses inference, Chatarium's local-first transcript becomes the persistent conversation substrate: authored text is durably committed before dispatch; requests use `store:false` and `stream:true`; required history is reconstructed from durable local state and supplied in `input`; streamed assistant output is appended incrementally; and ambiguous transport outcomes remain explicit. OAuth credentials live outside that conversation history in protected local credential storage.
 
-`crates/store::remote_mirror_execution` and `crates/store::remote_mirror_runtime` remain the composition path for the **optional existing-chatgpt.com mirror/import feature**. Persistent state can derive only `Unselected`, `ProtocolBlocked`, or `RequiresAuthenticatedSession`; a mirror read still requires a live authenticated lease and exact evidence-gated C02 semantics. The v0.7.2 query-evidence pipeline may not invent unknown values. This mirror path is no longer a blocker for ordinary desktop chatting.
+`crates/store::remote_mirror_execution` and `crates/store::remote_mirror_runtime` remain the composition path for the **optional existing-chatgpt.com mirror/import feature**. Persistent state can derive only `Unselected`, `ProtocolBlocked`, or `RequiresAuthenticatedSession`; a mirror read still requires a live authenticated lease and exact evidence-gated C02 semantics. The v0.7.2 query-evidence pipeline may not invent unknown values. Snapshot `2026-10-03.001` later established the current C02 safe query literals from the operator's raw Edge HAR. The store/runtime seam remains transport-agnostic and is intended to be reused by the replacement Edge extension. This mirror path is no longer a blocker for ordinary desktop chatting.
 
 ## Future orchestration and tool plane
 
