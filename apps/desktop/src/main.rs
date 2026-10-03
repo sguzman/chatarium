@@ -3181,11 +3181,12 @@ mod tests {
     }
 
     #[test]
-    fn history_probe_timeout_explains_tampermonkey_loopback_permission() {
+    fn history_probe_timeout_explains_dual_loopback_recovery() {
         let status = history_probe_failure_status(&account_bridge::BrowserBridgeError::Timeout);
-        assert!(status.contains("Tampermonkey"));
-        assert!(status.contains("127.0.0.1"));
-        assert!(status.contains("Site Access"));
+        assert!(status.contains("Tampermonkey 5.5.0"));
+        assert!(status.contains("Edge 153"));
+        assert!(status.contains("direct page loopback"));
+        assert!(status.contains("local network access"));
     }
 
     #[test]
