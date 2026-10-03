@@ -309,6 +309,35 @@ What was established was enough:
 
 That is unacceptable for a core product dependency.
 
+### Stage J2 — Edge 0.1.0 falsifies the reconstructed C01 semantics
+
+The first purpose-built Edge bridge live run materially improved the evidence quality. It proved:
+
+- extension service worker ↔ desktop typed roundtrip;
+- exact ChatGPT tab selection;
+- MAIN-world execution;
+- authenticated session;
+- observed account context;
+- replay HTTP 200;
+- Rust list parser success.
+
+The result was still `items=0 · total=0`, which the new semantic gate correctly classified as `unconfirmed-zero` rather than success.
+
+Re-auditing the raw 2026-10-03 HAR after this contradiction found an important error in the project's own earlier evidence description: the ordinary global `/backend-api/conversations?...limit=20&offset=0` request shape was captured, including `ChatGPT-Account-ID` and surrounding application headers, but both global-list responses in that HAR were HTTP 429. The HAR therefore established **request shape/context**, not successful C01 response semantics. HTTP 200 conversation-list-like bodies in the same HAR came from gizmo/project endpoints and cannot be promoted to account-wide ordinary-history evidence.
+
+This matters because Edge 0.1.0 still reconstructed the request from the frozen URL plus the account selector. It did not replay the surrounding first-party application context.
+
+The single permitted evidence-driven correction is Edge Bridge 0.2.0:
+
+- observe the exact current first-party global C01 request;
+- retain only a narrow browser-local allowlist of application-controlled headers;
+- never retain cookies or authorization material;
+- replay that observed context in the exact ChatGPT tab's MAIN world;
+- return only safe proof metadata to Rust: request-context present, original first-party HTTP status when available, and context-header count;
+- fail closed if first-party request context was not observed.
+
+No claim is made yet that 0.2.0 fixes global history. It must pass automated checks before its one final live validation.
+
 ### Stage K — stop decision
 
 The project stopped iterating on Tampermonkey as a critical runtime transport.
