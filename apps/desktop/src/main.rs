@@ -1619,7 +1619,8 @@ impl eframe::App for ChatariumApp {
                                 if ui
                                     .selectable_label(
                                         !historical_mode,
-                                        egui::RichText::new(local_conversation_title.as_str()).strong(),
+                                        egui::RichText::new(local_conversation_title.as_str())
+                                            .strong(),
                                     )
                                     .clicked()
                                 {
@@ -1870,7 +1871,10 @@ impl eframe::App for ChatariumApp {
                                     });
                             }
                             if ui
-                                .add_sized([sidebar_control_width, 30.0], egui::Button::new("Disconnect ChatGPT"))
+                                .add_sized(
+                                    [sidebar_control_width, 30.0],
+                                    egui::Button::new("Disconnect ChatGPT"),
+                                )
                                 .clicked()
                             {
                                 self.disconnect_chatgpt();
@@ -1905,7 +1909,10 @@ impl eframe::App for ChatariumApp {
                                     );
                                 });
                                 if ui
-                                    .add_sized([sidebar_control_width, 28.0], egui::Button::new("Cancel sign-in"))
+                                    .add_sized(
+                                        [sidebar_control_width, 28.0],
+                                        egui::Button::new("Cancel sign-in"),
+                                    )
                                     .clicked()
                                 {
                                     self.cancel_chatgpt_sign_in();
@@ -1930,10 +1937,13 @@ impl eframe::App for ChatariumApp {
                         .show(ui, |ui| {
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(format!("journal\n{}", self.journal_path.display()))
-                                    .monospace()
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                                egui::RichText::new(format!(
+                                    "journal\n{}",
+                                    self.journal_path.display()
+                                ))
+                                .monospace()
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(126, 130, 139)),
                             );
                             ui.add_space(6.0);
                             ui.label(
