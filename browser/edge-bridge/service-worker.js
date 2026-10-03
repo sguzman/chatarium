@@ -40,6 +40,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function settleWithin(promises, timeoutMs) {
+  const tasks = [...promises];
+  if (tasks.length === 0) return;
+  await Promise.race([
+    Promise.allSettled(tasks),
+    sleep(timeoutMs),
+  ]);
+}
+
 function accountKey(tabId) {
   return `${ACCOUNT_KEY_PREFIX}${tabId}`;
 }
@@ -448,10 +457,7 @@ async function discoverHistorySurfaces(command) {
     result.reload_started = true;
 
     await sleep(DISCOVERY_WINDOW_MS);
-    await sleep(DISCOVERY_BODY_GRACE_MS);
-    if (session.bodyTasks.size > 0) {
-      await Promise.allSettled([...session.bodyTasks]);
-    }
+    await settleWithin(session.bodyTasks, DISCOVERY_BODY_GRACE_MS);
   } catch (error) {
     result.error = error instanceof Error ? error.message : 'cdp_discovery_failed';
   } finally {
@@ -654,10 +660,10 @@ async function captureConversationByNavigation(command, remoteId) {
       sleep(CONVERSATION_CAPTURE_WINDOW_MS).then(() => 'timeout'),
     ]);
 
-    await sleep(CONVERSATION_CAPTURE_BODY_GRACE_MS);
-    if (session.bodyTask !== null) {
-      await Promise.allSettled([session.bodyTask]);
-    }
+    await settleWithin(
+      session.bodyTask === null ? [] : [session.bodyTask],
+      CONVERSATION_CAPTURE_BODY_GRACE_MS,
+    );
 
     result.responses_seen = session.responses_seen;
     result.exact_response_seen = session.exact_response_seen;
