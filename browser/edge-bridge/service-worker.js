@@ -39,6 +39,7 @@ const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const NEXT_TIMEOUT_MS = 29_000;
 const RESULT_TIMEOUT_MS = 10_000;
 const LOOPBACK_RETRY_MS = 1_000;
+const SERVICE_WORKER_KEEPALIVE_MS = 20_000;
 const PAGE_FETCH_TIMEOUT_MS = 8_000;
 
 let loopRunning = false;
@@ -1100,6 +1101,17 @@ function ensureBridgeLoop() {
   });
 }
 
+function installServiceWorkerKeepalive() {
+  setInterval(() => {
+    // Chromium MV3 workers are normally retired after 30s of inactivity.
+    // This local bridge is intentionally long-lived while Edge is running:
+    // a harmless extension API call resets the MV3 idle timer without
+    // generating any ChatGPT/OpenAI network traffic.
+    void chrome.runtime.getPlatformInfo().catch(() => {});
+  }, SERVICE_WORKER_KEEPALIVE_MS);
+}
+
 chrome.runtime.onInstalled.addListener(ensureBridgeLoop);
 chrome.runtime.onStartup.addListener(ensureBridgeLoop);
+installServiceWorkerKeepalive();
 ensureBridgeLoop();
