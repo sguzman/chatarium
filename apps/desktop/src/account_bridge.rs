@@ -5,7 +5,8 @@
 //! authentication status probing and the exact evidence-backed C02 conversation GET.
 
 use chatarium_core::authenticated_session::{
-    SessionAuthenticationEvidence, UserAuthenticatedSessionProvider,
+    AuthenticatedSessionLease, SessionAuthenticationEvidence, SessionLeaseError,
+    UserAuthenticatedSessionProvider,
 };
 use chatarium_core::remote::{ProtocolObservationRevision, RemoteConversationId};
 use chatarium_protocol::conversation_fetch_request::{
@@ -165,6 +166,29 @@ pub struct BrowserBridgeProvider {
 }
 
 impl BrowserBridgeProvider {
+    /// Fetch one exact existing conversation using only the live browser-held session.
+    ///
+    /// Reusable authentication material never crosses this boundary. Authentication is probed
+    /// and revalidated through the same browser bridge immediately before the C02 read.
+    pub fn fetch_authenticated_conversation(
+        &mut self,
+        remote_conversation_id: &str,
+    ) -> Result<Value, BrowserBridgeError> {
+        let remote_conversation_id = RemoteConversationId::new(remote_conversation_id).map_err(
+            |error| BrowserBridgeError::Protocol(error.to_string()),
+        )?;
+        let protocol_revision =
+            ProtocolObservationRevision::new(CONVERSATION_FETCH_REQUEST_OBSERVATION)
+                .expect("hard-coded C02 observation revision is non-empty");
+        let mut lease =
+            AuthenticatedSessionLease::acquire(self).map_err(map_session_lease_error)?;
+        lease
+            .with_authenticated_provider(|provider| {
+                provider.fetch_conversation(&remote_conversation_id, &protocol_revision)
+            })
+            .map_err(map_session_lease_error)?
+    }
+
     fn call(
         &self,
         kind: &'static str,
@@ -329,6 +353,18 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
             .unwrap_or("remote fetch failed without structured reason")
             .to_owned(),
     )
+}
+
+fn map_session_lease_error(
+    error: SessionLeaseError<BrowserBridgeError>,
+) -> BrowserBridgeError {
+    match error {
+        SessionLeaseError::Provider(error) => error,
+        SessionLeaseError::Unauthenticated => BrowserBridgeError::Unauthenticated,
+        SessionLeaseError::Unknown => BrowserBridgeError::Unavailable(
+            "browser authentication state is unknown".to_owned(),
+        ),
+    }
 }
 
 fn status_error(status: u16) -> BrowserBridgeError {
