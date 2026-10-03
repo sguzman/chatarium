@@ -122,7 +122,9 @@ The bridge splits authority deliberately:
 - authenticated ChatGPT requests execute inside the already-signed-in `chatgpt.com` browser context;
 - Tampermonkey's privileged loopback transport carries only typed bridge commands/results to `127.0.0.1:43117`;
 - cookies, bearer/session tokens, request headers, Sentinel material, browser storage, and account identifiers never cross the bridge;
-- the only remote conversation read command constructs the exact C02 resource observed in protocol snapshot `2026-10-03.001`: `/backend-api/conversations/<id>?num_turns=10&include_has_versions=true`;
+- exact-conversation reads construct the C02 resource observed in protocol snapshot `2026-10-03.001`: `/backend-api/conversations/<id>?num_turns=10&include_has_versions=true`;
+- v0.2 adds one fixed ordinary-history command for the observed first page only: 20 recent, non-archived, non-starred conversations at offset 0; the bridge rejects any different resource profile instead of becoming a generic proxy;
+- history discovery and exact-conversation fetches are explicit typed commands; there is no automatic pagination or rate-limit retry;
 - non-200 responses return status metadata but not remote body text;
 - successful JSON bodies are bounded to 4 MiB before crossing loopback;
 - authentication probing reads only the HTTP status of `/backend-api/me` and discards its body.
