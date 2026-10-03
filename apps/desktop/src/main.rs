@@ -691,8 +691,11 @@ impl ChatariumApp {
         let repaint = repaint.clone();
         self.live_mirror_pending = Some(local_conversation_id);
         self.pending_history_fetch_proof = None;
-        self.history_bridge_proven = false;
-        self.status = "fetching exact ChatGPT conversation through Edge extension…".to_owned();
+        self.mirror_status =
+            "FETCHING · opening temporary ChatGPT tab and waiting for first-party conversation response…"
+                .to_owned();
+        self.status = "mirroring imported ChatGPT conversation through first-party navigation…"
+            .to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-live-mirror-fetch".to_owned())
@@ -918,9 +921,8 @@ impl ChatariumApp {
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.live_mirror_pending = None;
-                        self.history_bridge_proven = false;
-                        self.account_bridge_status =
-                            "PROOF FAILED: exact read succeeded but persistence is unavailable"
+                        self.mirror_status =
+                            "FAILED · exact first-party response captured, but local persistence is unavailable"
                                 .to_owned();
                         self.status =
                             "live conversation fetched, but persistence is unavailable".to_owned();
@@ -932,14 +934,18 @@ impl ChatariumApp {
                         proof,
                         http_status,
                     });
+                    self.mirror_status =
+                        "VALIDATED · exact remote response captured · persisting durable local mirror…"
+                            .to_owned();
                     if let Err(error) = sender.send(PersistCommand::PromoteHistoricalLiveMirror {
                         local_conversation_id,
                         expected_remote_conversation_id: remote_conversation_id,
                         body,
                     }) {
                         self.pending_history_fetch_proof = None;
-                        self.history_bridge_proven = false;
                         self.live_mirror_pending = None;
+                        self.mirror_status =
+                            format!("FAILED · could not queue durable mirror: {error}");
                         self.status = format!("failed to queue live mirror promotion: {error}");
                     } else {
                         self.status =
@@ -955,9 +961,7 @@ impl ChatariumApp {
                         self.live_mirror_pending = None;
                     }
                     self.pending_history_fetch_proof = None;
-                    self.history_bridge_proven = false;
-                    self.account_bridge_status =
-                        format!("PROOF FAILED during exact fetch: {error}");
+                    self.mirror_status = format!("FAILED · mirror fetch: {error}");
                     self.status = format!("live ChatGPT fetch failed: {error}");
                 }
             }
@@ -1222,25 +1226,27 @@ impl ChatariumApp {
                         Some(pending)
                             if pending.local_conversation_id == Some(local_conversation_id) =>
                         {
-                            self.history_bridge_proven = true;
-                            self.account_bridge_status = format!(
-                                "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=exact-id · durable-mirror=yes · event=#{}",
+                            self.mirror_status = format!(
+                                "{} · {} · HTTP {} · parser=yes · semantic=exact-id · durable=yes · event=#{}",
+                                if truncated_before {
+                                    "MIRRORED PARTIAL"
+                                } else {
+                                    "MIRRORED COMPLETE"
+                                },
                                 browser_proof_label(&pending.proof),
                                 pending.http_status,
                                 snapshot_sequence,
                             );
                         }
                         Some(pending) => {
-                            self.history_bridge_proven = false;
-                            self.account_bridge_status = format!(
-                                "PROOF FAILED: durable mirror event #{} has no matching browser proof (pending remote id {})",
+                            self.mirror_status = format!(
+                                "FAILED · durable event #{} has no matching browser proof (pending remote id {})",
                                 snapshot_sequence, pending.remote_conversation_id,
                             );
                         }
                         None => {
-                            self.history_bridge_proven = false;
-                            self.account_bridge_status = format!(
-                                "PROOF PARTIAL: durable mirror event #{} committed without a current browser proof chain",
+                            self.mirror_status = format!(
+                                "MIRRORED · durable event #{} committed without a current browser proof chain",
                                 snapshot_sequence,
                             );
                         }
@@ -1275,9 +1281,7 @@ impl ChatariumApp {
                         self.live_mirror_pending = None;
                     }
                     self.pending_history_fetch_proof = None;
-                    self.history_bridge_proven = false;
-                    self.account_bridge_status =
-                        format!("PROOF FAILED at durable mirror commit: {error}");
+                    self.mirror_status = format!("FAILED · durable mirror commit: {error}");
                     self.status = format!("live mirror promotion failed: {error}");
                 }
                 PersistNotice::DiscoveredLiveMirrorPromoted {
