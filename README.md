@@ -83,7 +83,7 @@ Chatarium is not a claim that ChatGPT exposes a supported public consumer API. I
 
 As of 2026-10-02, the official **Sign in with ChatGPT** path has been exercised successfully on the target Linux desktop: Chatarium completed browser authorization, received a connected ChatGPT-plan session, and discovered the account's available models. This proves the local desktop can authenticate without an API key and can use the user's ChatGPT-plan authorization boundary.
 
-The remaining live alpha gate is one successful streamed assistant completion. The first inference attempt reached the authenticated Responses path but coincided with a model-refresh loop that repeatedly re-requested the model catalog and triggered a rate-limit error. That loop is now guarded as single-flight model discovery and is under CI before the next live test.
+The first real streamed assistant completion has now succeeded on the target Linux desktop through the user's authenticated ChatGPT plan. The earlier model-refresh loop was fixed with transition-gated, single-flight discovery. The remaining alpha durability check is restart replay of the successful local user/assistant transcript.
 
 ## Development
 
