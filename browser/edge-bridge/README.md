@@ -78,7 +78,7 @@ If no valid account context has been observed, account-history reads fail closed
 
 ## Loopback
 
-The service worker talks only to `127.0.0.1:43117` and sends `X-Chatarium-Bridge: 1`. Chatarium independently enforces loopback binding, request-size limits, command/result correlation, and the typed command kinds.
+The service worker talks only to `127.0.0.1:43117` and sends the generation marker `X-Chatarium-Bridge: edge-mv3-v1`. Chatarium independently enforces loopback binding, rejects ordinary web origins/preflight, accepts only the Chromium extension-origin shape for browser-originated traffic, enforces request-size limits and command/result correlation, and rejects the retired userscript marker `1`. This means an old installed `account-bridge.user.js` cannot consume the extension command queue.
 
 The extension does not use Native Messaging. Native Messaging remains a fallback architecture only if the instrumented MV3 extension cannot reliably reach loopback on the target browser.
 
