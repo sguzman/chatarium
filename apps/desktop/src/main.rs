@@ -2760,8 +2760,16 @@ fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
 }
 
 fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) -> String {
+    let sidebar_http = proof
+        .sidebar_bootstrap_http_status
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let sidebar_error = proof
+        .sidebar_bootstrap_error
+        .as_deref()
+        .unwrap_or("none");
     format!(
-        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · app-context-headers={} · sidebar-bootstrap={} · sidebar-http={} · sidebar-items={} · sidebar-error={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
@@ -2775,6 +2783,11 @@ fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) 
         proof.body_read_failures,
         proof.body_too_large,
         proof.invalid_json,
+        proof.application_context_header_count,
+        yes_no(proof.sidebar_bootstrap_attempted),
+        sidebar_http,
+        proof.sidebar_bootstrap_items,
+        sidebar_error,
         proof.request_profile,
     )
 }
