@@ -1536,6 +1536,11 @@ mod tests {
                     "body_read_failures": 0,
                     "body_too_large": 0,
                     "invalid_json": 0,
+                    "application_context_header_count": 6,
+                    "sidebar_bootstrap_attempted": true,
+                    "sidebar_bootstrap_http_status": 200,
+                    "sidebar_bootstrap_items": 1,
+                    "sidebar_bootstrap_error": null,
                     "candidate_count": 1,
                     "discovery": "candidates_observed",
                     "candidates": [
@@ -1578,6 +1583,11 @@ mod tests {
         assert!(observation.proof.network_enabled);
         assert!(observation.proof.reload_started);
         assert_eq!(observation.proof.responses_seen, 37);
+        assert_eq!(observation.proof.application_context_header_count, 6);
+        assert!(observation.proof.sidebar_bootstrap_attempted);
+        assert_eq!(observation.proof.sidebar_bootstrap_http_status, Some(200));
+        assert_eq!(observation.proof.sidebar_bootstrap_items, 1);
+        assert_eq!(observation.proof.sidebar_bootstrap_error, None);
         assert_eq!(observation.candidates.len(), 1);
         assert_eq!(
             observation.candidates[0].path,
