@@ -5,7 +5,7 @@ use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
 };
-use chatarium_protocol::conversation_list::{ConversationListItem, ConversationListPage};
+use chatarium_protocol::conversation_list::ConversationListItem;
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
@@ -138,7 +138,7 @@ enum LiveMirrorFetchNotice {
         error: account_bridge::BrowserBridgeError,
     },
     HistoryListLoaded {
-        page: ConversationListPage,
+        observation: account_bridge::ConversationListObservation,
     },
     HistoryListFailed {
         error: String,
@@ -544,8 +544,10 @@ impl ChatariumApp {
                 }
 
                 match provider.list_recent_conversations() {
-                    Ok(page) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryListLoaded { page });
+                    Ok(observation) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryListLoaded {
+                            observation,
+                        });
                     }
                     Err(error) => {
                         let _ = notices.send(LiveMirrorFetchNotice::HistoryListFailed {
@@ -707,26 +709,24 @@ impl ChatariumApp {
                     self.history_bridge_authenticated = false;
                     self.account_bridge_status = history_probe_failure_status(&error);
                 }
-                LiveMirrorFetchNotice::HistoryListLoaded { page } => {
+                LiveMirrorFetchNotice::HistoryListLoaded { observation } => {
                     self.history_list_pending = false;
                     self.history_bridge_authenticated = true;
-                    self.remote_conversation_total = Some(page.total);
-                    self.remote_conversation_catalog = page.items;
+                    self.remote_conversation_total = Some(observation.page.total);
+                    self.remote_conversation_catalog = observation.page.items;
                     self.account_bridge_status = format!(
-                        "browser authenticated · {} recent chat{}",
+                        "PROOF: transport={} · account-context=yes · history HTTP {} · items={} · total={}",
+                        observation.transport.as_str(),
+                        observation.http_status,
                         self.remote_conversation_catalog.len(),
-                        if self.remote_conversation_catalog.len() == 1 {
-                            ""
-                        } else {
-                            "s"
-                        }
+                        self.remote_conversation_total.unwrap_or(0),
                     );
                 }
                 LiveMirrorFetchNotice::HistoryListFailed { error } => {
                     self.history_list_pending = false;
                     self.history_bridge_authenticated = true;
                     self.account_bridge_status =
-                        format!("browser authenticated · history unavailable: {error}");
+                        format!("PROOF FAILED after browser auth: {error}");
                 }
                 LiveMirrorFetchNotice::DiscoveredFetched {
                     remote_conversation_id,
