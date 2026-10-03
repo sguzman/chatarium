@@ -307,7 +307,13 @@ if (!worker.includes('const SERVICE_WORKER_KEEPALIVE_MS = 20_000')) {
 if (!worker.includes('void chrome.runtime.getPlatformInfo().catch(() => {})')) {
   throw new Error('MV3 bridge keepalive must use a local extension API heartbeat');
 }
-if (!worker.includes('installServiceWorkerKeepalive();\nensureBridgeLoop();')) {
+const keepaliveInstallIndex = worker.lastIndexOf('installServiceWorkerKeepalive();');
+const bridgeLoopInstallIndex = worker.lastIndexOf('ensureBridgeLoop();');
+if (
+  keepaliveInstallIndex < 0
+  || bridgeLoopInstallIndex < 0
+  || keepaliveInstallIndex > bridgeLoopInstallIndex
+) {
   throw new Error('MV3 bridge keepalive must start before relying on the loopback bridge');
 }
 
