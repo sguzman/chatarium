@@ -57,3 +57,7 @@ export function classifyConversationHttpStatus(status) {
   if (status === 429) return 'transient_rate_limit';
   return 'terminal_http_error';
 }
+
+export function selectFinalConversationResponseMeta(responseMeta, lastRateLimitMeta) {
+  return responseMeta ?? lastRateLimitMeta ?? null;
+}
