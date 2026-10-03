@@ -86,6 +86,15 @@ The committed sanitized C02 fixture is used as the parser regression source. Tes
 The successful 2026-10-01.001 fixture was captured with Flight Recorder v0.7.1 and therefore establishes only the query-key names `include_has_versions` and `num_turns`; their values remain unknown for that historical specimen. The independent 2026-10-03.001 Edge HAR observed the exact occurrence order and safe literals `num_turns=10&include_has_versions=true`. Those values are committed only in the newer revision. The corpus validator, fixture importer, typed read model, and durable V3 audit continue to enforce the narrow approved-value grammar, so the older evidence is not retroactively rewritten.
 
 
+## C01 ordinary account-history first page
+
+The current browser bridge supports one evidence-gated ordinary-history page. The exact request profile was observed in the 2026-10-03 Edge HAR: non-archived, non-starred ordinary conversations, ordered by update time, limit 20, offset 0, with special-origin conversations excluded. That HAR request returned HTTP 429, so it establishes the request literals but not a successful response.
+
+Successful response semantics are independently corroborated by an earlier Flight Recorder observation of `GET /backend-api/conversations`: HTTP 200 JSON with `items`, `total`, `limit`, and `offset`, plus conversation summaries carrying remote identity/title/time metadata. The implementation deliberately treats this as composite evidence rather than pretending one capture established both request and response.
+
+Only limit 20 / offset 0 is supported. The presence of pagination metadata is not permission to invent deeper pagination, and HTTP 429 never causes an automatic retry.
+
+
 ## Corpus validation
 
 The committed corpus is validated in CI with:
