@@ -309,44 +309,6 @@ async function captureCandidateBody(session, requestId) {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source?.tabId;
   if (!Number.isInteger(tabId)) return;
-
-  const capture = activeConversationCaptures.get(tabId);
-  if (capture && !capture.closed) {
-    if (method === 'Network.responseReceived') {
-      capture.responses_seen += 1;
-      const response = params?.response;
-      const matched = matchConversationResponse(response, capture.remoteId);
-      if (matched !== null) {
-        capture.exact_response_seen = true;
-        capture.responseMeta = matched;
-        if (matched.http_status !== 200) {
-          capture.resolve?.('http-status');
-        } else if (!isJsonMimeType(matched.mime_type)) {
-          capture.non_json_response = true;
-          capture.resolve?.('non-json');
-        } else {
-          capture.pendingRequestId = params.requestId;
-        }
-      }
-      return;
-    }
-
-    if (method === 'Network.loadingFinished') {
-      const requestId = params?.requestId;
-      if (typeof requestId !== 'string' || capture.pendingRequestId !== requestId) return;
-      capture.pendingRequestId = null;
-      if (Number(params.encodedDataLength) > MAX_RESPONSE_BYTES) {
-        capture.body_too_large += 1;
-        capture.resolve?.('body-too-large');
-        return;
-      }
-      void captureExactConversationBody(capture, requestId);
-      return;
-    }
-
-    return;
-  }
-
   const session = activeDiscoveries.get(tabId);
   if (!session || session.closed) return;
 
@@ -394,17 +356,57 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source?.tabId;
   if (!Number.isInteger(tabId)) return;
-
-  const capture = activeConversationCaptures.get(tabId);
-  if (capture) {
-    capture.detached_reason = typeof reason === 'string' ? reason : 'unknown';
-    capture.resolve?.('detached');
-    return;
-  }
-
   const session = activeDiscoveries.get(tabId);
   if (!session) return;
   session.detached_reason = typeof reason === 'string' ? reason : 'unknown';
+});
+
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source?.tabId;
+  if (!Number.isInteger(tabId)) return;
+  const capture = activeConversationCaptures.get(tabId);
+  if (!capture || capture.closed) return;
+
+  if (method === 'Network.responseReceived') {
+    capture.responses_seen += 1;
+    const response = params?.response;
+    const matched = matchConversationResponse(response, capture.remoteId);
+    if (matched !== null) {
+      capture.exact_response_seen = true;
+      capture.responseMeta = matched;
+      if (matched.http_status !== 200) {
+        capture.resolve?.('http-status');
+      } else if (!isJsonMimeType(matched.mime_type)) {
+        capture.non_json_response = true;
+        capture.resolve?.('non-json');
+      } else {
+        capture.pendingRequestId = params.requestId;
+      }
+    }
+    return;
+  }
+
+  if (method === 'Network.loadingFinished') {
+    const requestId = params?.requestId;
+    if (typeof requestId !== 'string' || capture.pendingRequestId !== requestId) return;
+    capture.pendingRequestId = null;
+    if (Number(params.encodedDataLength) > MAX_RESPONSE_BYTES) {
+      capture.body_too_large += 1;
+      capture.resolve?.('body-too-large');
+      return;
+    }
+    void captureExactConversationBody(capture, requestId);
+  }
+});
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  const tabId = source?.tabId;
+  if (!Number.isInteger(tabId)) return;
+  const capture = activeConversationCaptures.get(tabId);
+  if (!capture) return;
+  capture.detached_reason = typeof reason === 'string' ? reason : 'unknown';
+  capture.resolve?.('detached');
 });
 
 async function discoverHistorySurfaces(command) {
@@ -457,7 +459,10 @@ async function discoverHistorySurfaces(command) {
     result.reload_started = true;
 
     await sleep(DISCOVERY_WINDOW_MS);
-    await settleWithin(session.bodyTasks, DISCOVERY_BODY_GRACE_MS);
+    await sleep(DISCOVERY_BODY_GRACE_MS);
+    if (session.bodyTasks.size > 0) {
+      await Promise.allSettled([...session.bodyTasks]);
+    }
   } catch (error) {
     result.error = error instanceof Error ? error.message : 'cdp_discovery_failed';
   } finally {
