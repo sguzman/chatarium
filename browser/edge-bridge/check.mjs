@@ -9,6 +9,7 @@ import {
   conversationRoute,
   isJsonMimeType,
   matchConversationResponse,
+  selectFinalConversationResponseMeta,
 } from './conversation-capture.mjs';
 
 const root = new URL('./', import.meta.url);
@@ -81,6 +82,8 @@ for (const required of [
   'captureConversationByNavigation',
   'classifyConversationHttpStatus',
   'rate_limited_responses',
+  'lastRateLimitMeta',
+  'selectFinalConversationResponseMeta',
   'exact_response_count',
   "'exact_conversation_rate_limited'",
   'settleWithin',
@@ -242,6 +245,21 @@ if (!isJsonMimeType('application/json; charset=utf-8') || !isJsonMimeType('appli
 }
 if (isJsonMimeType('text/html')) {
   throw new Error('non-JSON media type passed conversation capture gate');
+}
+
+const successfulMeta = { http_status: 200, mime_type: 'application/json' };
+const lateRateLimitMeta = { http_status: 429, mime_type: 'application/json' };
+if (
+  selectFinalConversationResponseMeta(successfulMeta, lateRateLimitMeta)
+    !== successfulMeta
+) {
+  throw new Error('late HTTP 429 must not overwrite successful exact response proof');
+}
+if (
+  selectFinalConversationResponseMeta(null, lateRateLimitMeta)
+    !== lateRateLimitMeta
+) {
+  throw new Error('rate-limit proof must survive when no successful exact response exists');
 }
 
 if (classifyConversationHttpStatus(200) !== 'success') {
