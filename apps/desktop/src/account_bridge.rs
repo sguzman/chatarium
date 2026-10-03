@@ -195,6 +195,7 @@ pub struct BrowserProof {
     pub request_profile: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct AuthenticationObservation {
     pub evidence: SessionAuthenticationEvidence,
     pub proof: BrowserProof,
