@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 chatarium-core = { path = "../../crates/core" }
+chatarium-protocol = { path = "../../crates/protocol" }
 chatarium-store = { path = "../../crates/store" }
 eframe = "0.33"
 serde_json = "1"
