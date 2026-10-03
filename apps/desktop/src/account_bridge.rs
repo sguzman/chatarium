@@ -1772,14 +1772,19 @@ mod tests {
                     "ok": true,
                     "http_status": 200,
                     "content_type": "application/json",
-                    "bridge_transport": "extension",
-                    "extension_version": "0.2.0",
+                    "bridge_transport": "extension-cdp",
+                    "extension_version": "0.4.0",
                     "chatgpt_tab_found": true,
-                    "main_world_execution": true,
+                    "main_world_execution": false,
+                    "debugger_attached": true,
+                    "network_enabled": true,
+                    "capture_tab_created": true,
+                    "navigation_started": true,
+                    "exact_response_seen": true,
                     "account_context": true,
-                    "request_context_observed": true,
+                    "request_context_observed": false,
                     "first_party_http_status": 200,
-                    "context_header_count": 7,
+                    "context_header_count": 0,
                     "request_profile": CONVERSATION_FETCH_REQUEST_OBSERVATION,
                     "body": {"conversation_id": "opaque/remote id"}
                 })
@@ -1798,14 +1803,19 @@ mod tests {
             json!("opaque/remote id")
         );
         assert_eq!(observation.http_status, 200);
-        assert_eq!(observation.proof.extension_version, "0.2.0");
+        assert_eq!(observation.proof.extension_version, "0.4.0");
         assert_eq!(
             observation.proof.request_profile,
             CONVERSATION_FETCH_REQUEST_OBSERVATION
         );
-        assert!(observation.proof.request_context_observed);
+        assert!(observation.proof.debugger_attached);
+        assert!(observation.proof.network_enabled);
+        assert!(observation.proof.capture_tab_created);
+        assert!(observation.proof.navigation_started);
+        assert!(observation.proof.exact_response_seen);
+        assert!(!observation.proof.request_context_observed);
         assert_eq!(observation.proof.first_party_http_status, Some(200));
-        assert_eq!(observation.proof.context_header_count, 7);
+        assert_eq!(observation.proof.context_header_count, 0);
         browser.join().unwrap();
     }
 
