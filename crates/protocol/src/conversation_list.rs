@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::fmt;
 
 /// Composite observation revision for the currently supported ordinary-history page.
-pub const CONVERSATION_LIST_OBSERVATION: &str = "2026-10-03.002";
+pub const CONVERSATION_LIST_OBSERVATION: &str = "2026-10-03.003";
 
 /// Exact first-page resource observed in the user's Edge capture.
 pub const CONVERSATION_LIST_FIRST_PAGE_RESOURCE: &str = "/backend-api/conversations?exclude_conversation_origin=tpp&expand=false&hide_snorlax=false&is_archived=false&is_starred=false&limit=20&order=updated&offset=0";
