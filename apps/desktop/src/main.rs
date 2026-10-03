@@ -548,7 +548,10 @@ impl ChatariumApp {
 
     fn start_history_discovery(&mut self, repaint: &egui::Context) {
         if self.history_list_pending {
-            diagnostics::debug("history", "discovery request ignored: one is already running");
+            diagnostics::debug(
+                "history",
+                "discovery request ignored: one is already running",
+            );
             return;
         }
         self.history_discovery_started = true;
@@ -563,7 +566,10 @@ impl ChatariumApp {
         self.history_list_pending = true;
         self.history_bridge_proven = false;
         self.account_bridge_status = "listener ready · checking Edge extension…".to_owned();
-        diagnostics::info("history", "discovery started: probing authenticated Edge bridge");
+        diagnostics::info(
+            "history",
+            "discovery started: probing authenticated Edge bridge",
+        );
 
         let spawn = thread::Builder::new()
             .name("chatarium-history-discovery".to_owned())
@@ -656,7 +662,10 @@ impl ChatariumApp {
             });
 
         if let Err(error) = spawn {
-            diagnostics::error("history", format!("failed to start discovery worker: {error}"));
+            diagnostics::error(
+                "history",
+                format!("failed to start discovery worker: {error}"),
+            );
             self.history_list_pending = false;
             self.account_bridge_status =
                 format!("listener ready · failed to start browser check: {error}");
@@ -994,7 +1003,10 @@ impl ChatariumApp {
                     }
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryFailed { error } => {
-                    diagnostics::error("history", format!("UI received discovery failure: {error}"));
+                    diagnostics::error(
+                        "history",
+                        format!("UI received discovery failure: {error}"),
+                    );
                     self.history_list_pending = false;
                     self.history_bridge_proven = false;
                     self.account_bridge_status =
@@ -3002,7 +3014,10 @@ fn persistence_worker(
 ) {
     diagnostics::info(
         "persist",
-        format!("persistence worker ready: {} existing events", store.events().len()),
+        format!(
+            "persistence worker ready: {} existing events",
+            store.events().len()
+        ),
     );
     while let Ok(command) = commands.recv() {
         match command {
