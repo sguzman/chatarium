@@ -1467,6 +1467,7 @@ impl Drop for ChatariumApp {
 
 fn persistence_worker(
     mut store: JsonlEventStore,
+    data_dir: PathBuf,
     commands: Receiver<PersistCommand>,
     notices: Sender<PersistNotice>,
 ) {
@@ -1537,6 +1538,41 @@ fn persistence_worker(
                     });
                 }
             },
+            PersistCommand::LoadHistoricalConversation {
+                local_conversation_id,
+            } => {
+                let result = latest_historical_conversation_catalog(store.events()).and_then(
+                    |catalog| {
+                        let entry = catalog
+                            .into_iter()
+                            .find(|entry| entry.local_conversation_id == local_conversation_id)
+                            .ok_or_else(|| {
+                                format!(
+                                    "historical conversation {local_conversation_id} is not present in the durable catalog"
+                                )
+                            })?;
+                        let imported_sequence = entry.imported_sequence;
+                        let messages = load_historical_active_transcript(&data_dir, &entry)?;
+                        Ok((imported_sequence, messages))
+                    },
+                );
+
+                match result {
+                    Ok((imported_sequence, messages)) => {
+                        let _ = notices.send(PersistNotice::HistoricalConversationLoaded {
+                            local_conversation_id,
+                            imported_sequence,
+                            messages,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::HistoricalConversationLoadFailed {
+                            local_conversation_id,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::Shutdown => break,
         }
     }
