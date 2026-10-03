@@ -113,9 +113,13 @@ The local archive contains conversation text. Version 0.7.2 exports may also con
 
 Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed. A v0.7.2 private export may contain the narrowly approved C02 query literals above; older v0.7.0/v0.7.1 exports contain only query-key names, so their query values remain unknown and must never be backfilled from assumption.
 
-## Account bridge (live remote reads)
+## Account bridge (retired critical-path prototype)
 
-`account-bridge.user.js` is a separate, deliberately narrow Tampermonkey userscript for P3 live mirroring. It is **not** a generic HTTP proxy and it does not copy reusable ChatGPT credentials into Chatarium.
+> **Retired for production account-history transport.** `account-bridge.user.js` is retained as protocol/engineering evidence only. Do not continue iterating it as Chatarium's critical runtime bridge. The 2026-10-03 live QA sequence demonstrated unstable environment-dependent transport and insufficient execution/request-context guarantees. See [the complete postmortem](../docs/postmortems/2026-10-03-chatgpt-history-bridge.md).
+>
+> Tampermonkey remains acceptable for disposable experiments, observation, and the separate emergency flight recorder. The replacement account-history transport must be a purpose-built Edge/Chromium extension with explicit end-to-end diagnostics before human QA.
+
+`account-bridge.user.js` was a deliberately narrow Tampermonkey prototype for P3 live mirroring. It is **not** a generic HTTP proxy and it does not copy reusable ChatGPT credentials into Chatarium.
 
 The bridge splits authority deliberately:
 
@@ -149,3 +153,19 @@ This is still a userscript bridge, not Chrome Native Messaging. A separate nativ
 This userscript is intentionally separate from `flight-recorder.user.js`. The recorder remains `@grant none` and keeps its page-context durability semantics; adding privileged Tampermonkey grants to it would unnecessarily change that execution boundary.
 
 The desktop half of this bridge must bind loopback only, require the bridge marker header, expose typed endpoints only, and never add a generic arbitrary-URL/method forwarding surface.
+
+### Historical result
+
+The prototype established several reusable facts:
+
+- a browser-to-desktop localhost roundtrip was achieved in v0.3;
+- authenticated ChatGPT page execution could be reached;
+- exact C02 reads and typed result transport were viable;
+- a syntactically valid history response could still be semantically wrong when first-party account context was omitted;
+- the supplied HAR showed `ChatGPT-Account-ID` is part of the first-party conversation-list context;
+- a later v0.4 attempt to observe/preserve that context regressed to no loopback traffic in the target environment.
+
+The exact v0.4 regression cause was not established. That uncertainty is part of the reason the userscript was retired rather than debugged indefinitely.
+
+Do not interpret the presence of this file or its passing syntax tests as evidence that the live account bridge works in the target browser.
+
