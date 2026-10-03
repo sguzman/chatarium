@@ -54,6 +54,21 @@ A single status such as `connected`, `authenticated`, or `listener ready` is not
 
 If this instrumentation does not exist, build it before asking for live QA.
 
+For a **CDP discovery** architecture, do not pretend there is already one known target request. Before QA the diagnostics must instead expose:
+
+- debugger attach/detach success;
+- Network-domain enablement;
+- whether the extension initiated the required reload/action itself;
+- total observed network responses;
+- successful backend response count;
+- list-like JSON candidate count;
+- bounded response-body read failures;
+- oversized/malformed body rejection counts;
+- candidate surface/item counts;
+- whether pagination/account-wide completeness is proven or still unknown.
+
+A candidate surface is not a successful account-history sync merely because it contains recognizable conversations.
+
 ## Semantic sanity gate
 
 Before a QA result is called successful, check it against obvious product invariants.
