@@ -2764,10 +2764,7 @@ fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) 
         .sidebar_bootstrap_http_status
         .map(|status| status.to_string())
         .unwrap_or_else(|| "unknown".to_owned());
-    let sidebar_error = proof
-        .sidebar_bootstrap_error
-        .as_deref()
-        .unwrap_or("none");
+    let sidebar_error = proof.sidebar_bootstrap_error.as_deref().unwrap_or("none");
     format!(
         "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · app-context-headers={} · sidebar-bootstrap={} · sidebar-http={} · sidebar-items={} · sidebar-error={} · profile={}",
         proof.extension_version,
