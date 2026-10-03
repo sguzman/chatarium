@@ -135,7 +135,7 @@ enum LiveMirrorFetchNotice {
     HistoryUnauthenticated,
     HistoryAuthenticationUnknown,
     HistoryProbeFailed {
-        error: String,
+        error: account_bridge::BrowserBridgeError,
     },
     HistoryListLoaded {
         page: ConversationListPage,
@@ -537,9 +537,7 @@ impl ChatariumApp {
                         return;
                     }
                     Err(error) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryProbeFailed {
-                            error: error.to_string(),
-                        });
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryProbeFailed { error });
                         repaint.request_repaint();
                         return;
                     }
@@ -707,8 +705,7 @@ impl ChatariumApp {
                 LiveMirrorFetchNotice::HistoryProbeFailed { error } => {
                     self.history_list_pending = false;
                     self.history_bridge_authenticated = false;
-                    self.account_bridge_status =
-                        format!("listener ready · browser not confirmed: {error}");
+                    self.account_bridge_status = history_probe_failure_status(&error);
                 }
                 LiveMirrorFetchNotice::HistoryListLoaded { page } => {
                     self.history_list_pending = false;
@@ -1573,15 +1570,22 @@ impl eframe::App for ChatariumApp {
         let mut refresh_history_requested = false;
 
         egui::SidePanel::left("sidebar")
-            .exact_width(236.0)
-            .resizable(false)
+            .default_width(320.0)
+            .min_width(260.0)
+            .max_width(440.0)
+            .resizable(true)
             .frame(
                 egui::Frame::default()
                     .fill(egui::Color32::from_rgb(18, 19, 23))
                     .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
-                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("sidebar-scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let sidebar_control_width = ui.available_width();
+                        ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new("Chatarium")
                         .size(24.0)
@@ -1844,7 +1848,7 @@ impl eframe::App for ChatariumApp {
                             } else {
                                 "Refresh ChatGPT history"
                             })
-                            .min_size(egui::vec2(196.0, 30.0)),
+                            .min_size(egui::vec2(sidebar_control_width, 30.0)),
                         )
                         .clicked()
                     {
@@ -1872,7 +1876,7 @@ impl eframe::App for ChatariumApp {
                             .unwrap_or("Choose model");
                         egui::ComboBox::from_id_salt("chatgpt_model")
                             .selected_text(selected_text)
-                            .width(196.0)
+                            .width(sidebar_control_width)
                             .show_ui(ui, |ui| {
                                 for model in &self.remote_models {
                                     ui.selectable_value(
@@ -1884,7 +1888,7 @@ impl eframe::App for ChatariumApp {
                             });
                     }
                     if ui
-                        .add_sized([196.0, 30.0], egui::Button::new("Disconnect ChatGPT"))
+                        .add_sized([sidebar_control_width, 30.0], egui::Button::new("Disconnect ChatGPT"))
                         .clicked()
                     {
                         self.disconnect_chatgpt();
@@ -1903,7 +1907,7 @@ impl eframe::App for ChatariumApp {
                         .add_enabled(
                             !self.sign_in_pending && !self.sign_in_requested,
                             egui::Button::new(egui::RichText::new(sign_in_label).strong())
-                                .min_size(egui::vec2(196.0, 34.0)),
+                                .min_size(egui::vec2(sidebar_control_width, 34.0)),
                         )
                         .clicked()
                     {
@@ -1919,7 +1923,7 @@ impl eframe::App for ChatariumApp {
                             );
                         });
                         if ui
-                            .add_sized([196.0, 28.0], egui::Button::new("Cancel sign-in"))
+                            .add_sized([sidebar_control_width, 28.0], egui::Button::new("Cancel sign-in"))
                             .clicked()
                         {
                             self.cancel_chatgpt_sign_in();
@@ -1974,6 +1978,7 @@ impl eframe::App for ChatariumApp {
                         .color(egui::Color32::from_rgb(126, 130, 139)),
                     );
                 });
+                    });
             });
 
         if select_local_requested {
@@ -2397,14 +2402,26 @@ fn status_row(ui: &mut egui::Ui, label: &str, value: &str, healthy: bool) {
                 .size(11.0)
                 .color(egui::Color32::from_rgb(186, 189, 197)),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(value)
-                    .size(10.0)
-                    .color(egui::Color32::from_rgb(126, 130, 139)),
-            );
-        });
     });
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(value)
+                .size(10.0)
+                .color(egui::Color32::from_rgb(126, 130, 139)),
+        )
+        .wrap(),
+    );
+    ui.add_space(5.0);
+}
+
+fn history_probe_failure_status(error: &account_bridge::BrowserBridgeError) -> String {
+    match error {
+        account_bridge::BrowserBridgeError::Timeout => {
+            "userscript did not reach the loopback listener. In Edge/Chromium, allow Tampermonkey Site Access to all sites (or explicitly 127.0.0.1), then refresh ChatGPT history."
+                .to_owned()
+        }
+        _ => format!("listener ready · browser not confirmed: {error}"),
+    }
 }
 
 impl Drop for ChatariumApp {
@@ -3169,6 +3186,14 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn history_probe_timeout_explains_tampermonkey_loopback_permission() {
+        let status = history_probe_failure_status(&account_bridge::BrowserBridgeError::Timeout);
+        assert!(status.contains("Tampermonkey"));
+        assert!(status.contains("127.0.0.1"));
+        assert!(status.contains("Site Access"));
     }
 
     #[test]
