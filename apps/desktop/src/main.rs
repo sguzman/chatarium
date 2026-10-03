@@ -1654,61 +1654,55 @@ impl eframe::App for ChatariumApp {
                         .color(egui::Color32::from_rgb(112, 176, 137)),
                     );
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("remote-chatgpt-conversations")
-                        .max_height(260.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            for entry in &self.remote_conversation_catalog {
-                                let live_local = self
-                                    .live_mirror_catalog
-                                    .iter()
-                                    .find(|live| live.remote_conversation_id == entry.id)
-                                    .map(|live| live.local_conversation_id);
-                                let imported_local = self
-                                    .historical_catalog
-                                    .iter()
-                                    .find(|historical| {
-                                        historical.remote_conversation_id == entry.id
-                                    })
-                                    .map(|historical| historical.local_conversation_id);
-                                let local = live_local.or(imported_local);
-                                let selected = local.is_some()
-                                    && self.selected_historical_conversation == local;
-                                let title = entry
-                                    .title
-                                    .as_deref()
-                                    .filter(|title| !title.trim().is_empty())
-                                    .unwrap_or("Untitled ChatGPT conversation");
+                        for entry in &self.remote_conversation_catalog {
+                            let live_local = self
+                                .live_mirror_catalog
+                                .iter()
+                                .find(|live| live.remote_conversation_id == entry.id)
+                                .map(|live| live.local_conversation_id);
+                            let imported_local = self
+                                .historical_catalog
+                                .iter()
+                                .find(|historical| {
+                                    historical.remote_conversation_id == entry.id
+                                })
+                                .map(|historical| historical.local_conversation_id);
+                            let local = live_local.or(imported_local);
+                            let selected = local.is_some()
+                                && self.selected_historical_conversation == local;
+                            let title = entry
+                                .title
+                                .as_deref()
+                                .filter(|title| !title.trim().is_empty())
+                                .unwrap_or("Untitled ChatGPT conversation");
 
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(title).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    if let Some(local) = local {
-                                        select_historical_requested = Some(local);
-                                    } else {
-                                        open_remote_requested = Some(entry.id.clone());
-                                    }
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    egui::RichText::new(title).size(12.0),
+                                )
+                                .clicked()
+                            {
+                                if let Some(local) = local {
+                                    select_historical_requested = Some(local);
+                                } else {
+                                    open_remote_requested = Some(entry.id.clone());
                                 }
-                                ui.label(
-                                    egui::RichText::new(if live_local.is_some() {
-                                        "remote · mirrored locally"
-                                    } else if imported_local.is_some() {
-                                        "remote · historical backup available"
-                                    } else {
-                                        "remote · click to mirror"
-                                    })
-                                    .size(9.0)
-                                    .color(egui::Color32::from_rgb(112, 116, 126)),
-                                );
-                                ui.add_space(4.0);
                             }
-                        });
-                }
+                            ui.label(
+                                egui::RichText::new(if live_local.is_some() {
+                                    "remote · mirrored locally"
+                                } else if imported_local.is_some() {
+                                    "remote · historical backup available"
+                                } else {
+                                    "remote · click to mirror"
+                                })
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(112, 116, 126)),
+                            );
+                            ui.add_space(4.0);
+                        }
+            }
 
                 if !self.live_mirror_catalog.is_empty() {
                     ui.add_space(16.0);
@@ -1722,32 +1716,26 @@ impl eframe::App for ChatariumApp {
                         .color(egui::Color32::from_rgb(112, 116, 126)),
                     );
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("cached-chatgpt-conversations")
-                        .max_height(160.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            for entry in &self.live_mirror_catalog {
-                                let selected = self.selected_historical_conversation
-                                    == Some(entry.local_conversation_id);
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(entry.title.as_str()).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    select_historical_requested = Some(entry.local_conversation_id);
-                                }
-                                ui.label(
-                                    egui::RichText::new("durable offline mirror · read-only")
-                                        .size(9.0)
-                                        .color(egui::Color32::from_rgb(112, 116, 126)),
-                                );
-                                ui.add_space(4.0);
+                        for entry in &self.live_mirror_catalog {
+                            let selected = self.selected_historical_conversation
+                                == Some(entry.local_conversation_id);
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    egui::RichText::new(entry.title.as_str()).size(12.0),
+                                )
+                                .clicked()
+                            {
+                                select_historical_requested = Some(entry.local_conversation_id);
                             }
-                        });
-                }
+                            ui.label(
+                                egui::RichText::new("durable offline mirror · read-only")
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(112, 116, 126)),
+                            );
+                            ui.add_space(4.0);
+                        }
+            }
 
                 if !self.historical_catalog.is_empty() {
                     ui.add_space(16.0);
@@ -1761,48 +1749,42 @@ impl eframe::App for ChatariumApp {
                         .color(egui::Color32::from_rgb(112, 116, 126)),
                     );
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("historical-conversations")
-                        .max_height(220.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            for entry in &self.historical_catalog {
-                                let selected = self.selected_historical_conversation
-                                    == Some(entry.local_conversation_id);
-                                let title = entry
-                                    .title
-                                    .as_deref()
-                                    .filter(|title| !title.trim().is_empty())
-                                    .unwrap_or("Untitled imported conversation");
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(title).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    select_historical_requested = Some(entry.local_conversation_id);
-                                }
-                                let live_mirrored = self
-                                    .live_mirrored_conversations
-                                    .contains(&entry.local_conversation_id);
-                                ui.label(
-                                    egui::RichText::new(if live_mirrored {
-                                        "live mirror · read-only"
-                                    } else {
-                                        "historical snapshot · read-only"
-                                    })
-                                    .size(9.0)
-                                    .color(if live_mirrored {
-                                        egui::Color32::from_rgb(112, 176, 137)
-                                    } else {
-                                        egui::Color32::from_rgb(112, 116, 126)
-                                    }),
-                                );
-                                ui.add_space(4.0);
+                        for entry in &self.historical_catalog {
+                            let selected = self.selected_historical_conversation
+                                == Some(entry.local_conversation_id);
+                            let title = entry
+                                .title
+                                .as_deref()
+                                .filter(|title| !title.trim().is_empty())
+                                .unwrap_or("Untitled imported conversation");
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    egui::RichText::new(title).size(12.0),
+                                )
+                                .clicked()
+                            {
+                                select_historical_requested = Some(entry.local_conversation_id);
                             }
-                        });
-                }
+                            let live_mirrored = self
+                                .live_mirrored_conversations
+                                .contains(&entry.local_conversation_id);
+                            ui.label(
+                                egui::RichText::new(if live_mirrored {
+                                    "live mirror · read-only"
+                                } else {
+                                    "historical snapshot · read-only"
+                                })
+                                .size(9.0)
+                                .color(if live_mirrored {
+                                    egui::Color32::from_rgb(112, 176, 137)
+                                } else {
+                                    egui::Color32::from_rgb(112, 116, 126)
+                                }),
+                            );
+                            ui.add_space(4.0);
+                        }
+            }
 
                 ui.add_space(24.0);
                 ui.label(
