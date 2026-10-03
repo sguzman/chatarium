@@ -51,3 +51,9 @@ export function isJsonMimeType(mimeType) {
   const mediaType = mimeType.toLowerCase().split(';', 1)[0].trim();
   return mediaType === 'application/json' || mediaType.endsWith('+json');
 }
+
+export function classifyConversationHttpStatus(status) {
+  if (status === 200) return 'success';
+  if (status === 429) return 'transient_rate_limit';
+  return 'terminal_http_error';
+}
