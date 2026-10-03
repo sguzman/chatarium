@@ -32,8 +32,9 @@ const DISCOVERY_STIMULUS_MAX_STEPS = 28;
 const DISCOVERY_STIMULUS_STEP_DELAY_MS = 120;
 const DISCOVERY_STIMULUS_MAX_ATTEMPTS = 4;
 const DISCOVERY_STIMULUS_RETRY_MS = 750;
-const CONVERSATION_CAPTURE_WINDOW_MS = 20_000;
+const CONVERSATION_CAPTURE_WINDOW_MS = 32_000;
 const CONVERSATION_CAPTURE_BODY_GRACE_MS = 500;
+const CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS = 12_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const NEXT_TIMEOUT_MS = 29_000;
 const RESULT_TIMEOUT_MS = 10_000;
@@ -522,6 +523,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       if (disposition === 'transient_rate_limit') {
         capture.rate_limited_responses += 1;
         capture.lastRateLimitMeta = matched;
+        void scheduleRateLimitReload(capture);
         return;
       }
 
@@ -769,6 +771,29 @@ async function captureExactConversationBody(session, requestId) {
   }
 }
 
+async function scheduleRateLimitReload(capture) {
+  if (capture.rate_limit_reload_scheduled) return;
+  capture.rate_limit_reload_scheduled = true;
+
+  await sleep(CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS);
+  if (
+    capture.closed
+    || capture.body !== null
+    || capture.responseMeta !== null
+  ) {
+    return;
+  }
+
+  try {
+    await chrome.debugger.sendCommand(capture.debuggee, 'Page.reload', {
+      ignoreCache: false,
+    });
+    capture.rate_limit_reload_count += 1;
+  } catch {
+    capture.rate_limit_reload_failures += 1;
+  }
+}
+
 async function captureConversationByNavigation(command, remoteId) {
   const result = baseResult(command, FETCH_PROFILE);
   result.capture_tab_created = false;
@@ -776,6 +801,8 @@ async function captureConversationByNavigation(command, remoteId) {
   result.exact_response_seen = false;
   result.exact_response_count = 0;
   result.rate_limited_responses = 0;
+  result.rate_limit_reload_count = 0;
+  result.rate_limit_reload_failures = 0;
   result.responses_seen = 0;
   result.body_read_failures = 0;
   result.body_too_large = 0;
@@ -834,6 +861,9 @@ async function captureConversationByNavigation(command, remoteId) {
       exact_response_seen: false,
       exact_response_count: 0,
       rate_limited_responses: 0,
+      rate_limit_reload_scheduled: false,
+      rate_limit_reload_count: 0,
+      rate_limit_reload_failures: 0,
       responseMeta: null,
       lastRateLimitMeta: null,
       pendingRequestId: null,
@@ -858,6 +888,7 @@ async function captureConversationByNavigation(command, remoteId) {
     });
     result.network_enabled = true;
 
+    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
     await chrome.debugger.sendCommand(debuggee, 'Page.navigate', { url: route });
     result.navigation_started = true;
 
@@ -875,6 +906,8 @@ async function captureConversationByNavigation(command, remoteId) {
     result.exact_response_seen = session.exact_response_seen;
     result.exact_response_count = session.exact_response_count;
     result.rate_limited_responses = session.rate_limited_responses;
+    result.rate_limit_reload_count = session.rate_limit_reload_count;
+    result.rate_limit_reload_failures = session.rate_limit_reload_failures;
     result.body_read_failures = session.body_read_failures;
     result.body_too_large = session.body_too_large;
     result.invalid_json = session.invalid_json;
