@@ -51,7 +51,9 @@ pub fn project_remote_active_transcript(
             ));
         }
         let message = by_id.get(current).copied().ok_or_else(|| {
-            format!("remote conversation current/parent node {current:?} is missing from fetched page")
+            format!(
+                "remote conversation current/parent node {current:?} is missing from fetched page"
+            )
         })?;
         path.push(message);
 
@@ -193,7 +195,10 @@ mod tests {
         }
     }
 
-    fn envelope(messages: Vec<ConversationMessage>, current_node: &str) -> ConversationFetchEnvelope {
+    fn envelope(
+        messages: Vec<ConversationMessage>,
+        current_node: &str,
+    ) -> ConversationFetchEnvelope {
         ConversationFetchEnvelope {
             conversation_id: "remote".to_owned(),
             title: "Live".to_owned(),
@@ -222,9 +227,19 @@ mod tests {
                 message("root", None, "system", parts("system")),
                 message("user", Some("root"), "user", parts("hello")),
                 message("analysis", Some("user"), "assistant", thoughts),
-                message("tool", Some("analysis"), "tool", parts("private tool result")),
+                message(
+                    "tool",
+                    Some("analysis"),
+                    "tool",
+                    parts("private tool result"),
+                ),
                 message("final", Some("tool"), "assistant", parts("visible answer")),
-                message("sibling", Some("user"), "assistant", parts("abandoned branch")),
+                message(
+                    "sibling",
+                    Some("user"),
+                    "assistant",
+                    parts("abandoned branch"),
+                ),
             ],
             "final",
         ))
@@ -241,7 +256,12 @@ mod tests {
     #[test]
     fn missing_parent_is_only_accepted_when_previous_page_is_explicit() {
         let mut page = envelope(
-            vec![message("final", Some("older-page"), "assistant", parts("latest"))],
+            vec![message(
+                "final",
+                Some("older-page"),
+                "assistant",
+                parts("latest"),
+            )],
             "final",
         );
         assert!(
