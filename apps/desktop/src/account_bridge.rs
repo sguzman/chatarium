@@ -4,6 +4,7 @@
 //! material, browser storage, or account identifiers. It exposes only typed account-history
 //! commands: authentication probing, bounded history discovery/bootstrap, and exact C02 capture.
 
+use crate::diagnostics;
 use chatarium_core::authenticated_session::{
     AuthenticatedSessionLease, SessionAuthenticationEvidence, SessionLeaseError,
     UserAuthenticatedSessionProvider,
@@ -127,6 +128,7 @@ impl AccountBridgeRuntime {
 
         let listener = TcpListener::bind(address)?;
         let address = listener.local_addr()?;
+        diagnostics::info("bridge", format!("loopback listener ready on {address}"));
         let shared = Arc::new(Shared::default());
         let server_shared = Arc::clone(&shared);
         let server = thread::Builder::new()
@@ -622,7 +624,15 @@ impl BrowserBridgeProvider {
             self.shared.changed.notify_all();
         }
 
-        let deadline = Instant::now() + timeout;
+        diagnostics::debug(
+            "bridge",
+            format!(
+                "queued command id={id} kind={kind} timeout={}ms",
+                timeout.as_millis()
+            ),
+        );
+        let started = Instant::now();
+        let deadline = started + timeout;
         let mut state = self
             .shared
             .state
@@ -631,6 +641,14 @@ impl BrowserBridgeProvider {
 
         loop {
             if let Some(result) = state.results.remove(&id) {
+                diagnostics::debug(
+                    "bridge",
+                    format!(
+                        "command result id={id} kind={kind} elapsed={}ms {}",
+                        started.elapsed().as_millis(),
+                        result_diagnostic_summary(&result)
+                    ),
+                );
                 return validate_result(&id, kind, result);
             }
             if state.shutdown {
@@ -643,6 +661,13 @@ impl BrowserBridgeProvider {
             let now = Instant::now();
             if now >= deadline {
                 cleanup_command(&mut state, &id);
+                diagnostics::error(
+                    "bridge",
+                    format!(
+                        "command timeout id={id} kind={kind} after {}ms",
+                        started.elapsed().as_millis()
+                    ),
+                );
                 return Err(BrowserBridgeError::Timeout);
             }
             let remaining = deadline.saturating_duration_since(now);
@@ -1021,6 +1046,46 @@ fn proof_bool(result: &Value, field: &str) -> &'static str {
     }
 }
 
+fn result_diagnostic_summary(result: &Value) -> String {
+    let bool_field = |name: &str| {
+        result
+            .get(name)
+            .and_then(Value::as_bool)
+            .map(|value| if value { "yes" } else { "no" })
+            .unwrap_or("unknown")
+    };
+    let number_field = |name: &str| {
+        result
+            .get(name)
+            .and_then(Value::as_u64)
+            .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+    };
+    let text_field = |name: &str| {
+        result
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    };
+
+    format!(
+        "ok={} transport={} ext={} HTTP={} tab={} debugger={} network={} reload={} exact-response={} responses={} backend-200={} candidates={} stimulus-targets={} stimulus-steps={}",
+        bool_field("ok"),
+        text_field("bridge_transport"),
+        text_field("extension_version"),
+        number_field("http_status"),
+        bool_field("chatgpt_tab_found"),
+        bool_field("debugger_attached"),
+        bool_field("network_enabled"),
+        bool_field("reload_started"),
+        bool_field("exact_response_seen"),
+        number_field("responses_seen"),
+        number_field("backend_http_200_seen"),
+        number_field("candidate_count"),
+        number_field("ui_stimulus_targets"),
+        number_field("ui_stimulus_steps"),
+    )
+}
+
 fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> BrowserBridgeError {
     match error {
         SessionLeaseError::Provider(error) => error,
@@ -1140,6 +1205,10 @@ fn handle_next(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
             return write_response(stream, 204, None);
         }
         if let Some(command) = state.queued.pop_front() {
+            diagnostics::debug(
+                "bridge",
+                format!("delivering command id={} kind={}", command.id, command.kind),
+            );
             state.inflight.insert(command.id.clone(), command.kind);
             let body = serde_json::to_vec(&command.body)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -1187,6 +1256,13 @@ fn handle_result(stream: &mut TcpStream, shared: &Shared, body: &[u8]) -> io::Re
     if expected_kind != kind {
         return write_response(stream, 409, None);
     }
+    diagnostics::debug(
+        "bridge",
+        format!(
+            "accepted result id={id} kind={kind} {}",
+            result_diagnostic_summary(&value)
+        ),
+    );
     state.inflight.remove(id);
     state.results.insert(id.to_owned(), value);
     shared.changed.notify_all();
