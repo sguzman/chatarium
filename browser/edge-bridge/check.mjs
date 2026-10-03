@@ -63,6 +63,8 @@ for (const required of [
   "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
   "const SIDEBAR_BOOTSTRAP_RESOURCE =",
   'collectApplicationContextHeaders',
+  'if (passiveConversationCount === 0)',
+  'PAGE_FETCH_TIMEOUT_MS',
   'sidebar_bootstrap_attempted',
   'sidebar_bootstrap_http_status',
   'sidebar_bootstrap_items',
