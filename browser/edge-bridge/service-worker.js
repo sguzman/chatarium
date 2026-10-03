@@ -10,6 +10,7 @@ import {
   conversationRoute,
   isJsonMimeType,
   matchConversationResponse,
+  selectFinalConversationResponseMeta,
 } from './conversation-capture.mjs';
 
 const BRIDGE_ORIGIN = 'http://127.0.0.1:43117';
@@ -879,7 +880,10 @@ async function captureConversationByNavigation(command, remoteId) {
     result.invalid_json = session.invalid_json;
     result.detached_reason = session.detached_reason;
 
-    const finalResponseMeta = session.responseMeta ?? session.lastRateLimitMeta;
+    const finalResponseMeta = selectFinalConversationResponseMeta(
+      session.responseMeta,
+      session.lastRateLimitMeta,
+    );
     if (finalResponseMeta !== null) {
       result.first_party_http_status = finalResponseMeta.http_status;
       result.http_status = finalResponseMeta.http_status;
