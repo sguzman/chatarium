@@ -152,7 +152,7 @@ chrome.webRequest.onCompleted.addListener(
   (details) => {
     void rememberListCompletion(details);
   },
-  { urls: ['https://chatgpt.com/backend-api/conversations?*'] },
+  { urls: ['https://chatgpt.com/backend-api/*'] },
 );
 
 chrome.tabs.onRemoved.addListener((tabId) => {
