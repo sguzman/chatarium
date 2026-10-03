@@ -2597,13 +2597,20 @@ fn yes_no(value: bool) -> &'static str {
 }
 
 fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
+    let first_party_http = proof
+        .first_party_http_status
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
     format!(
-        "extension={} · roundtrip={} · tab={} · MAIN={} · account-context={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · MAIN={} · account-context={} · request-context={} · first-party-http={} · context-headers={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
         yes_no(proof.main_world_execution),
         yes_no(proof.account_context),
+        yes_no(proof.request_context_observed),
+        first_party_http,
+        proof.context_header_count,
         proof.request_profile,
     )
 }
