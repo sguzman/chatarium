@@ -28,6 +28,8 @@ const DISCOVERY_BODY_GRACE_MS = 500;
 const DISCOVERY_STIMULUS_MAX_TARGETS = 3;
 const DISCOVERY_STIMULUS_MAX_STEPS = 28;
 const DISCOVERY_STIMULUS_STEP_DELAY_MS = 120;
+const DISCOVERY_STIMULUS_MAX_ATTEMPTS = 4;
+const DISCOVERY_STIMULUS_RETRY_MS = 750;
 const CONVERSATION_CAPTURE_WINDOW_MS = 20_000;
 const CONVERSATION_CAPTURE_BODY_GRACE_MS = 500;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -606,6 +608,7 @@ async function discoverHistorySurfaces(command) {
     result.reload_started = true;
 
     result.ui_stimulus_attempted = false;
+    result.ui_stimulus_attempts = 0;
     result.ui_stimulus_targets = 0;
     result.ui_stimulus_steps = 0;
     result.ui_stimulus_chat_links_before = 0;
@@ -614,21 +617,28 @@ async function discoverHistorySurfaces(command) {
 
     await sleep(DISCOVERY_PRE_STIMULUS_MS);
     result.ui_stimulus_attempted = true;
-    try {
-      const stimulus = await stimulateHistoryUi(tab.id);
-      if (stimulus && typeof stimulus === 'object') {
-        result.ui_stimulus_targets =
-          Number.isInteger(stimulus.targets) ? stimulus.targets : 0;
-        result.ui_stimulus_steps =
-          Number.isInteger(stimulus.steps) ? stimulus.steps : 0;
-        result.ui_stimulus_chat_links_before =
-          Number.isInteger(stimulus.chat_links_before) ? stimulus.chat_links_before : 0;
-        result.ui_stimulus_chat_links_after =
-          Number.isInteger(stimulus.chat_links_after) ? stimulus.chat_links_after : 0;
+    for (let attempt = 0; attempt < DISCOVERY_STIMULUS_MAX_ATTEMPTS; attempt += 1) {
+      result.ui_stimulus_attempts += 1;
+      try {
+        const stimulus = await stimulateHistoryUi(tab.id);
+        if (stimulus && typeof stimulus === 'object') {
+          result.ui_stimulus_targets =
+            Number.isInteger(stimulus.targets) ? stimulus.targets : 0;
+          result.ui_stimulus_steps +=
+            Number.isInteger(stimulus.steps) ? stimulus.steps : 0;
+          result.ui_stimulus_chat_links_before =
+            Number.isInteger(stimulus.chat_links_before) ? stimulus.chat_links_before : 0;
+          result.ui_stimulus_chat_links_after =
+            Number.isInteger(stimulus.chat_links_after) ? stimulus.chat_links_after : 0;
+        }
+        if (result.ui_stimulus_targets > 0) break;
+      } catch (error) {
+        result.ui_stimulus_error =
+          error instanceof Error ? error.message : 'history_ui_stimulus_failed';
       }
-    } catch (error) {
-      result.ui_stimulus_error =
-        error instanceof Error ? error.message : 'history_ui_stimulus_failed';
+      if (attempt + 1 < DISCOVERY_STIMULUS_MAX_ATTEMPTS) {
+        await sleep(DISCOVERY_STIMULUS_RETRY_MS);
+      }
     }
 
     const remainingWindow = Math.max(0, DISCOVERY_WINDOW_MS - DISCOVERY_PRE_STIMULUS_MS);
