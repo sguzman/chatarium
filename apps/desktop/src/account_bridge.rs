@@ -1,8 +1,8 @@
 //! Loopback transport for credential-contained reads from the user's authenticated chatgpt.com tab.
 //!
 //! The Rust side never receives browser cookies, bearer/session tokens, request headers, Sentinel
-//! material, browser storage, or account identifiers. It exposes two typed commands only:
-//! authentication status probing and the exact evidence-backed C02 conversation GET.
+//! material, browser storage, or account identifiers. It exposes only typed account-history
+//! commands: authentication probing, the fixed C01 list read, and the exact evidence-backed C02 GET.
 
 use chatarium_core::authenticated_session::{
     AuthenticatedSessionLease, SessionAuthenticationEvidence, SessionLeaseError,
@@ -29,7 +29,6 @@ use std::time::{Duration, Instant};
 const DEFAULT_PORT: u16 = 43_117;
 const BRIDGE_HEADER: &str = "x-chatarium-bridge";
 const BRIDGE_HEADER_VALUE: &str = "1";
-const CHATGPT_PAGE_ORIGIN: &str = "https://chatgpt.com";
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BODY_BYTES: usize = 6 * 1024 * 1024;
 const NEXT_WAIT: Duration = Duration::from_secs(25);
@@ -717,54 +716,42 @@ fn handle_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
     };
 
     if request.method == "OPTIONS" {
-        return handle_page_preflight(&mut stream, &request);
+        return write_response(&mut stream, 403, None);
     }
 
-    let page_origin = request
+    if request
         .headers
         .get("origin")
-        .is_some_and(|origin| origin == CHATGPT_PAGE_ORIGIN);
+        .is_some_and(|origin| !is_extension_origin(origin))
+    {
+        return write_response(&mut stream, 403, None);
+    }
 
     if request.headers.get(BRIDGE_HEADER).map(String::as_str) != Some(BRIDGE_HEADER_VALUE) {
-        return write_bridge_response(&mut stream, 403, None, page_origin);
+        return write_response(&mut stream, 403, None);
     }
 
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/v1/next") => handle_next(&mut stream, shared, page_origin),
-        ("POST", "/v1/result") => handle_result(&mut stream, shared, &request.body, page_origin),
-        _ => write_bridge_response(&mut stream, 404, None, page_origin),
+        ("GET", "/v1/next") => handle_next(&mut stream, shared),
+        ("POST", "/v1/result") => handle_result(&mut stream, shared, &request.body),
+        _ => write_response(&mut stream, 404, None),
     }
 }
 
-fn handle_page_preflight(stream: &mut TcpStream, request: &HttpRequest) -> io::Result<()> {
-    if request.headers.get("origin").map(String::as_str) != Some(CHATGPT_PAGE_ORIGIN) {
-        return write_response(stream, 403, None);
-    }
-
-    let requested_method = request
-        .headers
-        .get("access-control-request-method")
-        .map(String::as_str);
-    if !matches!(requested_method, Some("GET" | "POST")) {
-        return write_response(stream, 403, None);
-    }
-
-    if let Some(requested_headers) = request.headers.get("access-control-request-headers") {
-        let allowed = requested_headers.split(',').all(|header| {
-            matches!(
-                header.trim().to_ascii_lowercase().as_str(),
-                "x-chatarium-bridge" | "content-type"
-            )
-        });
-        if !allowed {
-            return write_response(stream, 403, None);
-        }
-    }
-
-    write_page_preflight_response(stream)
+fn is_extension_origin(origin: &str) -> bool {
+    let Some(extension_id) = origin
+        .strip_prefix("chrome-extension://")
+        .map(|value| value.trim_end_matches('/'))
+    else {
+        return false;
+    };
+    extension_id.len() == 32
+        && extension_id
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'p'))
 }
 
-fn handle_next(stream: &mut TcpStream, shared: &Shared, page_origin: bool) -> io::Result<()> {
+fn handle_next(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
     let deadline = Instant::now() + NEXT_WAIT;
     let mut state = shared
         .state
@@ -773,23 +760,18 @@ fn handle_next(stream: &mut TcpStream, shared: &Shared, page_origin: bool) -> io
 
     loop {
         if state.shutdown {
-            return write_bridge_response(stream, 204, None, page_origin);
+            return write_response(stream, 204, None);
         }
         if let Some(command) = state.queued.pop_front() {
             state.inflight.insert(command.id.clone(), command.kind);
             let body = serde_json::to_vec(&command.body)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            return write_bridge_response(
-                stream,
-                200,
-                Some(("application/json", &body)),
-                page_origin,
-            );
+            return write_response(stream, 200, Some(("application/json", &body)));
         }
 
         let now = Instant::now();
         if now >= deadline {
-            return write_bridge_response(stream, 204, None, page_origin);
+            return write_response(stream, 204, None);
         }
         let remaining = deadline.saturating_duration_since(now);
         let waited = shared
@@ -800,27 +782,22 @@ fn handle_next(stream: &mut TcpStream, shared: &Shared, page_origin: bool) -> io
     }
 }
 
-fn handle_result(
-    stream: &mut TcpStream,
-    shared: &Shared,
-    body: &[u8],
-    page_origin: bool,
-) -> io::Result<()> {
+fn handle_result(stream: &mut TcpStream, shared: &Shared, body: &[u8]) -> io::Result<()> {
     let value: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
-        Err(_) => return write_bridge_response(stream, 400, None, page_origin),
+        Err(_) => return write_response(stream, 400, None),
     };
     let Some(object) = value.as_object() else {
-        return write_bridge_response(stream, 400, None, page_origin);
+        return write_response(stream, 400, None);
     };
     if object.get("version").and_then(Value::as_u64) != Some(1) {
-        return write_bridge_response(stream, 400, None, page_origin);
+        return write_response(stream, 400, None);
     }
     let Some(id) = object.get("id").and_then(Value::as_str) else {
-        return write_bridge_response(stream, 400, None, page_origin);
+        return write_response(stream, 400, None);
     };
     let Some(kind) = object.get("kind").and_then(Value::as_str) else {
-        return write_bridge_response(stream, 400, None, page_origin);
+        return write_response(stream, 400, None);
     };
 
     let mut state = shared
@@ -828,15 +805,15 @@ fn handle_result(
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let Some(expected_kind) = state.inflight.get(id).copied() else {
-        return write_bridge_response(stream, 409, None, page_origin);
+        return write_response(stream, 409, None);
     };
     if expected_kind != kind {
-        return write_bridge_response(stream, 409, None, page_origin);
+        return write_response(stream, 409, None);
     }
     state.inflight.remove(id);
     state.results.insert(id.to_owned(), value);
     shared.changed.notify_all();
-    write_bridge_response(stream, 204, None, page_origin)
+    write_response(stream, 204, None)
 }
 
 struct HttpRequest {
@@ -937,41 +914,6 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpReadError> {
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn write_bridge_response(
-    stream: &mut TcpStream,
-    status: u16,
-    body: Option<(&str, &[u8])>,
-    page_origin: bool,
-) -> io::Result<()> {
-    write_response_with_extra_headers(
-        stream,
-        status,
-        body,
-        page_origin.then_some(&[
-            ("Access-Control-Allow-Origin", CHATGPT_PAGE_ORIGIN),
-            ("Vary", "Origin"),
-        ]),
-    )
-}
-
-fn write_page_preflight_response(stream: &mut TcpStream) -> io::Result<()> {
-    write_response_with_extra_headers(
-        stream,
-        204,
-        None,
-        Some(&[
-            ("Access-Control-Allow-Origin", CHATGPT_PAGE_ORIGIN),
-            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-            (
-                "Access-Control-Allow-Headers",
-                "X-Chatarium-Bridge, Content-Type",
-            ),
-            ("Access-Control-Max-Age", "600"),
-            ("Vary", "Origin, Access-Control-Request-Headers"),
-        ]),
-    )
 }
 
 fn write_response(
@@ -1101,27 +1043,33 @@ mod tests {
     }
 
     #[test]
-    fn chatgpt_page_preflight_is_narrowly_allowed() {
+    fn web_page_origins_cannot_reach_the_retired_direct_loopback_path() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        for origin in ["https://chatgpt.com", "https://example.com"] {
+            let raw = format!(
+                "GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\nX-Chatarium-Bridge: 1\r\n\r\n"
+            );
+            let response = request(runtime.address(), raw.as_bytes());
+            assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 403"));
+        }
+    }
+
+    #[test]
+    fn chromium_extension_origin_can_reach_the_typed_loopback_surface() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let response = request(
+            runtime.address(),
+            b"GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: chrome-extension://abcdefghijklmnopabcdefghijklmnop\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+        );
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn browser_preflight_is_rejected_instead_of_reviving_page_cors() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let response = request(
             runtime.address(),
             b"OPTIONS /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://chatgpt.com\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Headers: x-chatarium-bridge\r\n\r\n",
-        );
-        let text = String::from_utf8_lossy(&response);
-        assert!(text.starts_with("HTTP/1.1 204"));
-        assert!(text.contains("Access-Control-Allow-Origin: https://chatgpt.com\r\n"));
-        assert!(text.contains("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"));
-        assert!(
-            text.contains("Access-Control-Allow-Headers: X-Chatarium-Bridge, Content-Type\r\n")
-        );
-    }
-
-    #[test]
-    fn unrelated_page_origin_cannot_preflight_bridge() {
-        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
-        let response = request(
-            runtime.address(),
-            b"OPTIONS /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://example.com\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Headers: x-chatarium-bridge\r\n\r\n",
         );
         assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 403"));
     }
