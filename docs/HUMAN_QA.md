@@ -32,6 +32,58 @@ A normal QA handoff should aim for:
 
 If a proposed test exceeds that budget, first build a harness or diagnostic command that collapses the work.
 
+## Live browser integration entry gate
+
+Before asking the operator to test a new browser bridge, extension, userscript, CDP adapter, or authenticated protocol path, the implementation must already expose enough instrumentation to answer without DevTools:
+
+- integration/version running;
+- browser component alive or absent;
+- exact ChatGPT tab found or absent;
+- browser-to-desktop roundtrip success/failure;
+- execution world used;
+- authentication result;
+- required account/workspace context present or absent;
+- safe request profile/revision used;
+- remote HTTP status;
+- response parser result;
+- returned item/message count and pagination/total signal where applicable;
+- last failure stage;
+- one correlation/run identifier.
+
+A single status such as `connected`, `authenticated`, or `listener ready` is not sufficient.
+
+If this instrumentation does not exist, build it before asking for live QA.
+
+## Semantic sanity gate
+
+Before a QA result is called successful, check it against obvious product invariants.
+
+Examples:
+
+- if the first-party ChatGPT sidebar visibly contains conversations, a reported remote total of zero is a contradiction, not a successful empty result;
+- if the target is an exact existing conversation, the returned remote identity must match;
+- if first-party evidence shows an account/workspace selector header, the test must prove that context was present;
+- if older pages are known to exist, the UI must not imply completeness.
+
+The operator must not be asked to decide whether a technically valid but semantically implausible response "looks okay."
+
+## Browser QA stop rule
+
+For one browser architecture, permit at most:
+
+1. one focused live validation after automated/local tests;
+2. one evidence-driven correction for a newly discovered concrete variable.
+
+If the second live validation still fails at the same architectural boundary, stop and escalate or replace the architecture. Do not keep changing hypotheses and using the operator as the integration harness.
+
+An exception requires a written issue note identifying:
+
+- the new evidence;
+- why it could not have been obtained automatically;
+- why another live run is expected to falsify one specific hypothesis rather than merely "try again."
+
+The 2026-10-03 history-bridge incident exceeded this budget and is the canonical reason for this rule.
+
 ## Required handoff fields
 
 Whenever human QA is still required, the handoff must state the following before the operator acts.
