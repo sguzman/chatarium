@@ -6,6 +6,7 @@ import {
   mergeDiscoveryCandidates,
 } from './history-discovery.mjs';
 import {
+  classifyConversationHttpStatus,
   conversationRoute,
   isJsonMimeType,
   matchConversationResponse,
@@ -514,8 +515,15 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     const matched = matchConversationResponse(response, capture.remoteId);
     if (matched !== null) {
       capture.exact_response_seen = true;
+      capture.exact_response_count += 1;
       capture.responseMeta = matched;
-      if (matched.http_status !== 200) {
+
+      const disposition = classifyConversationHttpStatus(matched.http_status);
+      if (disposition === 'transient_rate_limit') {
+        capture.rate_limited_responses += 1;
+        return;
+      }
+      if (disposition === 'terminal_http_error') {
         capture.resolve?.('http-status');
       } else if (!isJsonMimeType(matched.mime_type)) {
         capture.non_json_response = true;
@@ -763,6 +771,8 @@ async function captureConversationByNavigation(command, remoteId) {
   result.capture_tab_created = false;
   result.navigation_started = false;
   result.exact_response_seen = false;
+  result.exact_response_count = 0;
+  result.rate_limited_responses = 0;
   result.responses_seen = 0;
   result.body_read_failures = 0;
   result.body_too_large = 0;
@@ -819,6 +829,8 @@ async function captureConversationByNavigation(command, remoteId) {
       resolve: resolveCapture,
       responses_seen: 0,
       exact_response_seen: false,
+      exact_response_count: 0,
+      rate_limited_responses: 0,
       responseMeta: null,
       pendingRequestId: null,
       bodyTask: null,
@@ -857,6 +869,8 @@ async function captureConversationByNavigation(command, remoteId) {
 
     result.responses_seen = session.responses_seen;
     result.exact_response_seen = session.exact_response_seen;
+    result.exact_response_count = session.exact_response_count;
+    result.rate_limited_responses = session.rate_limited_responses;
     result.body_read_failures = session.body_read_failures;
     result.body_too_large = session.body_too_large;
     result.invalid_json = session.invalid_json;
@@ -869,9 +883,17 @@ async function captureConversationByNavigation(command, remoteId) {
     }
 
     if (outcome === 'timeout') {
-      result.error = session.exact_response_seen
-        ? 'exact_conversation_body_not_completed_before_timeout'
-        : 'exact_conversation_response_not_observed_before_timeout';
+      if (
+        session.body === null
+        && session.responseMeta !== null
+        && session.responseMeta.http_status === 429
+      ) {
+        result.error = 'exact_conversation_rate_limited';
+      } else {
+        result.error = session.exact_response_seen
+          ? 'exact_conversation_body_not_completed_before_timeout'
+          : 'exact_conversation_response_not_observed_before_timeout';
+      }
       return result;
     }
     if (session.responseMeta !== null && session.responseMeta.http_status !== 200) {
