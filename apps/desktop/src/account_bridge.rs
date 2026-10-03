@@ -256,10 +256,13 @@ pub struct HistoryDiscoveryProof {
     pub body_too_large: u64,
     pub invalid_json: u64,
     pub application_context_header_count: u64,
-    pub sidebar_bootstrap_attempted: bool,
-    pub sidebar_bootstrap_http_status: Option<u16>,
-    pub sidebar_bootstrap_items: u64,
-    pub sidebar_bootstrap_error: Option<String>,
+    pub cache_disabled: bool,
+    pub ui_stimulus_attempted: bool,
+    pub ui_stimulus_targets: u64,
+    pub ui_stimulus_steps: u64,
+    pub ui_stimulus_chat_links_before: u64,
+    pub ui_stimulus_chat_links_after: u64,
+    pub ui_stimulus_error: Option<String>,
     pub request_profile: String,
 }
 
@@ -362,14 +365,14 @@ impl BrowserBridgeProvider {
             body_too_large: required_u64("body_too_large")?,
             invalid_json: required_u64("invalid_json")?,
             application_context_header_count: required_u64("application_context_header_count")?,
-            sidebar_bootstrap_attempted: required_bool("sidebar_bootstrap_attempted")?,
-            sidebar_bootstrap_http_status: result
-                .get("sidebar_bootstrap_http_status")
-                .and_then(Value::as_u64)
-                .and_then(|status| u16::try_from(status).ok()),
-            sidebar_bootstrap_items: required_u64("sidebar_bootstrap_items")?,
-            sidebar_bootstrap_error: result
-                .get("sidebar_bootstrap_error")
+            cache_disabled: required_bool("cache_disabled")?,
+            ui_stimulus_attempted: required_bool("ui_stimulus_attempted")?,
+            ui_stimulus_targets: required_u64("ui_stimulus_targets")?,
+            ui_stimulus_steps: required_u64("ui_stimulus_steps")?,
+            ui_stimulus_chat_links_before: required_u64("ui_stimulus_chat_links_before")?,
+            ui_stimulus_chat_links_after: required_u64("ui_stimulus_chat_links_after")?,
+            ui_stimulus_error: result
+                .get("ui_stimulus_error")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             request_profile: request_profile.to_owned(),
@@ -1558,10 +1561,13 @@ mod tests {
                     "body_too_large": 0,
                     "invalid_json": 0,
                     "application_context_header_count": 6,
-                    "sidebar_bootstrap_attempted": true,
-                    "sidebar_bootstrap_http_status": 200,
-                    "sidebar_bootstrap_items": 1,
-                    "sidebar_bootstrap_error": null,
+                    "cache_disabled": true,
+                    "ui_stimulus_attempted": true,
+                    "ui_stimulus_targets": 1,
+                    "ui_stimulus_steps": 12,
+                    "ui_stimulus_chat_links_before": 8,
+                    "ui_stimulus_chat_links_after": 20,
+                    "ui_stimulus_error": null,
                     "candidate_count": 1,
                     "discovery": "candidates_observed"
                 });
@@ -1573,17 +1579,20 @@ mod tests {
         let mut provider = runtime.provider();
         let observation = provider.discover_history_surfaces().unwrap();
         assert_eq!(observation.discovery, "candidates_observed");
-        assert_eq!(observation.proof.extension_version, "0.4.3");
+        assert_eq!(observation.proof.extension_version, "0.4.4");
         assert!(observation.proof.desktop_roundtrip);
         assert!(observation.proof.debugger_attached);
         assert!(observation.proof.network_enabled);
         assert!(observation.proof.reload_started);
         assert_eq!(observation.proof.responses_seen, 37);
         assert_eq!(observation.proof.application_context_header_count, 6);
-        assert!(observation.proof.sidebar_bootstrap_attempted);
-        assert_eq!(observation.proof.sidebar_bootstrap_http_status, Some(200));
-        assert_eq!(observation.proof.sidebar_bootstrap_items, 1);
-        assert_eq!(observation.proof.sidebar_bootstrap_error, None);
+        assert!(observation.proof.cache_disabled);
+        assert!(observation.proof.ui_stimulus_attempted);
+        assert_eq!(observation.proof.ui_stimulus_targets, 1);
+        assert_eq!(observation.proof.ui_stimulus_steps, 12);
+        assert_eq!(observation.proof.ui_stimulus_chat_links_before, 8);
+        assert_eq!(observation.proof.ui_stimulus_chat_links_after, 20);
+        assert_eq!(observation.proof.ui_stimulus_error, None);
         assert_eq!(observation.candidates.len(), 1);
         assert_eq!(
             observation.candidates[0].path,
