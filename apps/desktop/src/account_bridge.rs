@@ -191,6 +191,9 @@ pub struct BrowserProof {
     pub chatgpt_tab_found: bool,
     pub main_world_execution: bool,
     pub account_context: bool,
+    pub request_context_observed: bool,
+    pub first_party_http_status: Option<u16>,
+    pub context_header_count: u64,
     pub request_profile: String,
 }
 
@@ -271,7 +274,7 @@ impl BrowserBridgeProvider {
         if status != 200 {
             return Err(status_error(status));
         }
-        let proof = parse_extension_proof(&result, CONVERSATION_LIST_OBSERVATION)?;
+        let proof = parse_extension_proof(&result, CONVERSATION_LIST_OBSERVATION, true)?;
 
         let body = result.get("body").ok_or_else(|| {
             BrowserBridgeError::Protocol(
@@ -333,7 +336,7 @@ impl BrowserBridgeProvider {
                 ));
             }
         };
-        let proof = parse_extension_proof(&result, AUTH_REQUEST_PROFILE)?;
+        let proof = parse_extension_proof(&result, AUTH_REQUEST_PROFILE, false)?;
         Ok(AuthenticationObservation {
             evidence,
             proof,
@@ -378,7 +381,7 @@ impl BrowserBridgeProvider {
         if http_status != 200 {
             return Err(status_error(http_status));
         }
-        let proof = parse_extension_proof(&result, protocol_revision.as_str())?;
+        let proof = parse_extension_proof(&result, protocol_revision.as_str(), true)?;
         let body = result.get("body").cloned().ok_or_else(|| {
             BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
         })?;
@@ -494,6 +497,7 @@ fn required_http_status(result: &Value, operation: &str) -> Result<u16, BrowserB
 fn parse_extension_proof(
     result: &Value,
     expected_profile: &str,
+    require_request_context: bool,
 ) -> Result<BrowserProof, BrowserBridgeError> {
     if parse_bridge_transport(result)? != BridgeTransport::Extension {
         return Err(BrowserBridgeError::Protocol(
@@ -523,6 +527,18 @@ fn parse_extension_proof(
         .get("account_context")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let request_context_observed = result
+        .get("request_context_observed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let first_party_http_status = result
+        .get("first_party_http_status")
+        .and_then(Value::as_u64)
+        .and_then(|status| u16::try_from(status).ok());
+    let context_header_count = result
+        .get("context_header_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let request_profile = result
         .get("request_profile")
         .and_then(Value::as_str)
@@ -551,6 +567,16 @@ fn parse_extension_proof(
             "extension result does not prove ChatGPT account context".to_owned(),
         ));
     }
+    if require_request_context && !request_context_observed {
+        return Err(BrowserBridgeError::Protocol(
+            "extension result does not prove observed first-party request context".to_owned(),
+        ));
+    }
+    if require_request_context && context_header_count == 0 {
+        return Err(BrowserBridgeError::Protocol(
+            "extension result observed no replayable first-party context headers".to_owned(),
+        ));
+    }
 
     Ok(BrowserProof {
         extension_version,
@@ -558,6 +584,9 @@ fn parse_extension_proof(
         chatgpt_tab_found,
         main_world_execution,
         account_context,
+        request_context_observed,
+        first_party_http_status,
+        context_header_count,
         request_profile: request_profile.to_owned(),
     })
 }
@@ -615,12 +644,23 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
     let tab = proof_bool(result, "chatgpt_tab_found");
     let main_world = proof_bool(result, "main_world_execution");
     let account_context = proof_bool(result, "account_context");
+    let request_context = proof_bool(result, "request_context_observed");
+    let first_party_http = result
+        .get("first_party_http_status")
+        .and_then(Value::as_u64)
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let context_header_count = result
+        .get("context_header_count")
+        .and_then(Value::as_u64)
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
     let request_profile = result
         .get("request_profile")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     BrowserBridgeError::Protocol(format!(
-        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; account-context={account_context}; profile={request_profile}"
+        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; account-context={account_context}; request-context={request_context}; first-party-http={first_party_http}; context-headers={context_header_count}; profile={request_profile}"
     ))
 }
 
@@ -999,10 +1039,13 @@ mod tests {
             "authentication": "authenticated",
             "http_status": 200,
             "bridge_transport": "extension",
-            "extension_version": "0.1.0",
+            "extension_version": "0.2.0",
             "chatgpt_tab_found": true,
             "main_world_execution": true,
             "account_context": true,
+            "request_context_observed": false,
+            "first_party_http_status": null,
+            "context_header_count": 0,
             "request_profile": AUTH_REQUEST_PROFILE
         })
     }
@@ -1103,11 +1146,14 @@ mod tests {
             SessionAuthenticationEvidence::Authenticated
         );
         assert_eq!(observation.http_status, 200);
-        assert_eq!(observation.proof.extension_version, "0.1.0");
+        assert_eq!(observation.proof.extension_version, "0.2.0");
         assert!(observation.proof.desktop_roundtrip);
         assert!(observation.proof.chatgpt_tab_found);
         assert!(observation.proof.main_world_execution);
         assert!(observation.proof.account_context);
+        assert!(!observation.proof.request_context_observed);
+        assert_eq!(observation.proof.first_party_http_status, None);
+        assert_eq!(observation.proof.context_header_count, 0);
         assert_eq!(observation.proof.request_profile, AUTH_REQUEST_PROFILE);
         browser.join().unwrap();
     }
@@ -1152,10 +1198,13 @@ mod tests {
                     "http_status": 200,
                     "content_type": "application/json",
                     "bridge_transport": "extension",
-                    "extension_version": "0.1.0",
+                    "extension_version": "0.2.0",
                     "chatgpt_tab_found": true,
                     "main_world_execution": true,
                     "account_context": true,
+                    "request_context_observed": true,
+                    "first_party_http_status": 200,
+                    "context_header_count": 7,
                     "request_profile": CONVERSATION_LIST_OBSERVATION,
                     "body": {
                         "items": [
@@ -1189,7 +1238,7 @@ mod tests {
         assert_eq!(observation.page.items[0].id, "remote-1");
         assert_eq!(observation.page.total, 21);
         assert_eq!(observation.http_status, 200);
-        assert_eq!(observation.proof.extension_version, "0.1.0");
+        assert_eq!(observation.proof.extension_version, "0.2.0");
         assert_eq!(
             observation.proof.request_profile,
             CONVERSATION_LIST_OBSERVATION
@@ -1198,6 +1247,9 @@ mod tests {
         assert!(observation.proof.chatgpt_tab_found);
         assert!(observation.proof.main_world_execution);
         assert!(observation.proof.account_context);
+        assert!(observation.proof.request_context_observed);
+        assert_eq!(observation.proof.first_party_http_status, Some(200));
+        assert_eq!(observation.proof.context_header_count, 7);
         browser.join().unwrap();
     }
 
@@ -1227,10 +1279,13 @@ mod tests {
                 "http_status": 200,
                 "content_type": "application/json",
                 "bridge_transport": "extension",
-                "extension_version": "0.1.0",
+                "extension_version": "0.2.0",
                 "chatgpt_tab_found": true,
                 "main_world_execution": true,
                 "account_context": false,
+                "request_context_observed": true,
+                "first_party_http_status": 200,
+                "context_header_count": 7,
                 "request_profile": CONVERSATION_LIST_OBSERVATION,
                 "body": {
                     "items": [],
@@ -1306,10 +1361,13 @@ mod tests {
                     "http_status": 200,
                     "content_type": "application/json",
                     "bridge_transport": "extension",
-                    "extension_version": "0.1.0",
+                    "extension_version": "0.2.0",
                     "chatgpt_tab_found": true,
                     "main_world_execution": true,
                     "account_context": true,
+                    "request_context_observed": true,
+                    "first_party_http_status": 200,
+                    "context_header_count": 7,
                     "request_profile": CONVERSATION_FETCH_REQUEST_OBSERVATION,
                     "body": {"conversation_id": "opaque/remote id"}
                 })
@@ -1328,11 +1386,14 @@ mod tests {
             json!("opaque/remote id")
         );
         assert_eq!(observation.http_status, 200);
-        assert_eq!(observation.proof.extension_version, "0.1.0");
+        assert_eq!(observation.proof.extension_version, "0.2.0");
         assert_eq!(
             observation.proof.request_profile,
             CONVERSATION_FETCH_REQUEST_OBSERVATION
         );
+        assert!(observation.proof.request_context_observed);
+        assert_eq!(observation.proof.first_party_http_status, Some(200));
+        assert_eq!(observation.proof.context_header_count, 7);
         browser.join().unwrap();
     }
 
@@ -1352,7 +1413,7 @@ mod tests {
                     "http_status": 429,
                     "content_type": "application/json",
                     "bridge_transport": "extension",
-                    "extension_version": "0.1.0",
+                    "extension_version": "0.2.0",
                     "chatgpt_tab_found": true,
                     "main_world_execution": true,
                     "account_context": true,
