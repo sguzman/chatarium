@@ -2762,7 +2762,7 @@ fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
 fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) -> String {
     let stimulus_error = proof.ui_stimulus_error.as_deref().unwrap_or("none");
     format!(
-        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · cache-bypass={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · app-context-headers={} · ui-stimulus={} · stimulus-targets={} · stimulus-steps={} · chat-links={}->{} · stimulus-error={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · cache-bypass={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · app-context-headers={} · ui-stimulus={} · stimulus-attempts={} · stimulus-targets={} · stimulus-steps={} · chat-links={}->{} · stimulus-error={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
@@ -2779,6 +2779,7 @@ fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) 
         proof.invalid_json,
         proof.application_context_header_count,
         yes_no(proof.ui_stimulus_attempted),
+        proof.ui_stimulus_attempts,
         proof.ui_stimulus_targets,
         proof.ui_stimulus_steps,
         proof.ui_stimulus_chat_links_before,
