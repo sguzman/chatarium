@@ -166,6 +166,39 @@ The full failure chain and permanent gates are documented in `docs/postmortems/2
 
 A product-shaped native desktop shell remains available as a local test surface while P3 completes. It exercises durable composition, typed local authored-message identity, restart recovery, and durable transcript rendering without claiming remote history completeness.
 
+## P3.5 — local mirror browser surface
+
+Once a conversation has been durably mirrored, rereading it should not require another ChatGPT conversation read.
+
+Build an extension-owned **Local Mirror** surface inside `chatgpt.com` backed entirely by Chatarium's localhost API and append-only mirror store.
+
+Deliverables:
+
+- expose locally mirrored conversation titles/search metadata through a typed localhost read API;
+- add a clearly labeled `LOCAL MIRROR` section or browser-owned panel within the ChatGPT page chrome;
+- open a mirrored conversation from local durable state without issuing `/backend-api/conversations/<id>` or other ChatGPT conversation-read requests;
+- render local transcript content with explicit provenance such as `LOCAL MIRROR · no remote read`;
+- preserve remote conversation identity so the local copy can still be correlated with its server-side source;
+- keep remote-only conversations visibly distinct and offer an explicit one-time mirror action rather than silently fetching;
+- never intercept or forge successful OpenAI backend responses to make the site believe local data came from the server;
+- never monkey-patch private ChatGPT fetches as the primary local-view architecture;
+- keep write/send behavior out of the first local-view milestone; local rereading must be read-only until explicit synchronization semantics exist;
+- expose enough local status that the user can tell whether a view is fully local, partial, stale, or requires remote synchronization.
+
+Preferred browser architecture:
+
+```text
+chatgpt.com page
+    ↕ extension-owned Local Mirror UI
+Edge extension
+    ↕ typed localhost reads only
+Chatarium mirror/index
+    ↕
+append-only local durable state
+```
+
+Exit criterion: after a conversation is fully mirrored, opening and rereading it through the Local Mirror browser surface causes **zero ChatGPT conversation-read HTTP requests**.
+
 ## P4 — direct text turns
 
 Add controlled remote mutation support.
