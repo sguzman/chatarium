@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_PORT: u16 = 43_117;
 const BRIDGE_HEADER: &str = "x-chatarium-bridge";
-const BRIDGE_HEADER_VALUE: &str = "1";
+const BRIDGE_HEADER_VALUE: &str = "edge-mv3-v1";
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BODY_BYTES: usize = 6 * 1024 * 1024;
 const NEXT_WAIT: Duration = Duration::from_secs(25);
@@ -981,7 +981,7 @@ mod tests {
         thread::spawn(move || {
             let raw = request(
                 address,
-                b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+                b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
             );
             let split = raw
                 .windows(4)
@@ -992,7 +992,7 @@ mod tests {
             let result = result(&command);
             let body = serde_json::to_vec(&result).unwrap();
             let request_head = format!(
-                "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut raw = request_head.into_bytes();
@@ -1022,7 +1022,7 @@ mod tests {
     fn exchange_auth(address: SocketAddr) {
         let raw = request(
             address,
-            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
         );
         let split = raw
             .windows(4)
@@ -1033,7 +1033,7 @@ mod tests {
         assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
         let body = serde_json::to_vec(&extension_auth_result(&command)).unwrap();
         let request_head = format!(
-            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
         let mut raw = request_head.into_bytes();
@@ -1047,7 +1047,7 @@ mod tests {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         for origin in ["https://chatgpt.com", "https://example.com"] {
             let raw = format!(
-                "GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\nX-Chatarium-Bridge: 1\r\n\r\n"
+                "GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n"
             );
             let response = request(runtime.address(), raw.as_bytes());
             assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 403"));
@@ -1059,7 +1059,7 @@ mod tests {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let response = request(
             runtime.address(),
-            b"GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: chrome-extension://abcdefghijklmnopabcdefghijklmnop\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+            b"GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: chrome-extension://abcdefghijklmnopabcdefghijklmnop\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
         );
         assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 404"));
     }
@@ -1080,6 +1080,16 @@ mod tests {
         let response = request(
             runtime.address(),
             b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        );
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 403"));
+    }
+
+    #[test]
+    fn retired_userscript_marker_cannot_consume_extension_commands() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let response = request(
+            runtime.address(),
+            b"GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
         );
         assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 403"));
     }
@@ -1128,7 +1138,7 @@ mod tests {
 
                 let raw = request(
                     address,
-                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
                 );
                 let split = raw
                     .windows(4)
@@ -1175,7 +1185,7 @@ mod tests {
                 });
                 let body = serde_json::to_vec(&result).unwrap();
                 let request_head = format!(
-                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                     body.len()
                 );
                 let mut raw = request_head.into_bytes();
@@ -1214,7 +1224,7 @@ mod tests {
 
             let raw = request(
                 address,
-                b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
+                b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
             );
             let split = raw
                 .windows(4)
@@ -1243,7 +1253,7 @@ mod tests {
             });
             let body = serde_json::to_vec(&result).unwrap();
             let request_head = format!(
-                "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
             let mut raw = request_head.into_bytes();
