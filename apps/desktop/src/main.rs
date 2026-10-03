@@ -937,9 +937,32 @@ impl eframe::App for ChatariumApp {
         self.process_notices();
         self.process_remote_notices();
 
-        let display_messages =
+        let local_display_messages =
             projected_local_display_messages(&self.events, self.local_conversation_id);
-        let conversation_title = derived_conversation_title(&display_messages);
+        let local_conversation_title = derived_conversation_title(&local_display_messages);
+        let historical_mode = self.selected_historical_conversation.is_some();
+        let selected_historical_entry = self.selected_historical_conversation.and_then(|selected| {
+            self.historical_catalog
+                .iter()
+                .find(|entry| entry.local_conversation_id == selected)
+        });
+        let conversation_title = selected_historical_entry
+            .and_then(|entry| entry.title.clone())
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| {
+                if historical_mode {
+                    "Imported ChatGPT conversation".to_owned()
+                } else {
+                    local_conversation_title.clone()
+                }
+            });
+        let display_message_count = if historical_mode {
+            self.historical_messages.len()
+        } else {
+            local_display_messages.len()
+        };
+        let mut select_local_requested = false;
+        let mut select_historical_requested = None;
 
         egui::SidePanel::left("sidebar")
             .exact_width(236.0)
@@ -973,27 +996,78 @@ impl eframe::App for ChatariumApp {
                 ui.add_space(6.0);
 
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(31, 33, 39))
+                    .fill(if historical_mode {
+                        egui::Color32::from_rgb(26, 28, 33)
+                    } else {
+                        egui::Color32::from_rgb(31, 33, 39)
+                    })
                     .corner_radius(egui::CornerRadius::same(8))
                     .inner_margin(egui::Margin::symmetric(10, 9))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(conversation_title.as_str())
-                                    .strong()
-                                    .color(egui::Color32::from_rgb(229, 231, 236)),
-                            );
-                        });
+                        if ui
+                            .selectable_label(
+                                !historical_mode,
+                                egui::RichText::new(local_conversation_title.as_str()).strong(),
+                            )
+                            .clicked()
+                        {
+                            select_local_requested = true;
+                        }
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} transcript message{}",
-                                display_messages.len(),
-                                if display_messages.len() == 1 { "" } else { "s" }
+                                "{} local message{}",
+                                local_display_messages.len(),
+                                if local_display_messages.len() == 1 { "" } else { "s" }
                             ))
                             .size(11.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
                     });
+
+                if !self.historical_catalog.is_empty() {
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "IMPORTED HISTORY · {}",
+                            self.historical_catalog.len()
+                        ))
+                        .size(10.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                    );
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("historical-conversations")
+                        .max_height(220.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for entry in &self.historical_catalog {
+                                let selected = self.selected_historical_conversation
+                                    == Some(entry.local_conversation_id);
+                                let title = entry
+                                    .title
+                                    .as_deref()
+                                    .filter(|title| !title.trim().is_empty())
+                                    .unwrap_or("Untitled imported conversation");
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(title).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    select_historical_requested =
+                                        Some(entry.local_conversation_id);
+                                }
+                                ui.label(
+                                    egui::RichText::new("historical snapshot · read-only")
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                                );
+                                ui.add_space(4.0);
+                            }
+                        });
+                }
 
                 ui.add_space(24.0);
                 ui.label(
@@ -1146,6 +1220,12 @@ impl eframe::App for ChatariumApp {
                     );
                 });
             });
+
+        if select_local_requested {
+            self.select_local_conversation();
+        } else if let Some(local_conversation_id) = select_historical_requested {
+            self.select_historical_conversation(local_conversation_id);
+        }
 
         egui::TopBottomPanel::top("conversation_header")
             .resizable(false)
