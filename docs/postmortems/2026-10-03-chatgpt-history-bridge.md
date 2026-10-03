@@ -477,6 +477,52 @@ Per-conversation mirror:
 
 A per-conversation mirror failure is never allowed to erase a successful discovery proof.
 
+### Stage K4 — live 0.4 regression proves passive discovery was opportunistic
+
+The first 0.4.0 live run and the subsequent 0.4.1 repair run both regressed history discovery to zero observed conversation items.
+
+0.4.1 had restored the exact 0.3 discovery listener and wait sequence, so the repeated zero result disproved the earlier diagnosis that the regression was fully explained by debugger-listener multiplexing or altered body-grace timing.
+
+The key evidence from the 0.4.1 failure was:
+
+```text
+responses=129
+backend-200=29
+json-candidates=1
+candidates=1
+current-pass-items=0
+best-surface=/backend-api/conversation/init (0)
+```
+
+The 85-chat 0.3 success therefore remained valid, but the passive algorithm was not deterministic: it only saw useful history when the frontend itself happened to emit a list-bearing request during the bounded reload window.
+
+Re-auditing the private HAR identified the deterministic surface that best explains the successful 0.3 observation:
+
+```text
+GET /backend-api/gizmos/snorlax/sidebar
+  ?conversations_per_gizmo=5
+  &limit=20
+  &owned_only=false
+→ HTTP 200
+→ ~185 KiB JSON
+→ nested conversations.items
+→ nested and top-level cursors
+```
+
+The HAR also records subsequent top-level cursor pagination requests on that same sidebar surface.
+
+Edge Bridge 0.4.3 therefore changes the recovery policy without changing the proven passive path:
+
+- the full 0.3 passive classifier/listener remains frozen;
+- if passive discovery finds conversations, no recovery request is issued;
+- if passive discovery finds zero, the extension reuses browser-local application context observed from ordinary first-party backend traffic;
+- it performs one bounded MAIN-world GET for the successful sidebar surface;
+- the response is reduced through the same conversation-summary classifier;
+- raw application-context headers remain browser-local;
+- Rust receives only safe proof metadata, typed summaries, and non-secret error state.
+
+This is the first post-0.3 repair based on a **successful captured list response**, rather than another inference from an absent request.
+
 ## 3. Where engineering/assistant behavior failed
 
 ### F1 — discouraging the HAR
