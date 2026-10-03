@@ -1397,9 +1397,14 @@ fn transcript_bubble(
             );
             ui.add_space(5.0);
             ui.label(
-                egui::RichText::new(format!("event #{}", message.sequence))
-                    .size(10.0)
-                    .color(egui::Color32::from_rgb(116, 121, 133)),
+                egui::RichText::new(
+                    message
+                        .provenance_label
+                        .clone()
+                        .unwrap_or_else(|| format!("event #{}", message.sequence)),
+                )
+                .size(10.0)
+                .color(egui::Color32::from_rgb(116, 121, 133)),
             );
         });
 }
@@ -1823,10 +1828,31 @@ fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
             role,
             text,
             sequence: event.sequence,
+            provenance_label: None,
         });
     }
 
     messages
+}
+
+fn historical_display_messages(
+    messages: Vec<HistoricalTranscriptMessage>,
+    imported_sequence: u64,
+) -> Vec<DisplayMessage> {
+    messages
+        .into_iter()
+        .map(|message| DisplayMessage {
+            role: match message.role {
+                HistoricalTranscriptRole::User => DisplayRole::User,
+                HistoricalTranscriptRole::Assistant => DisplayRole::Assistant,
+            },
+            text: message.text,
+            sequence: imported_sequence,
+            provenance_label: Some(format!(
+                "historical snapshot · import event #{imported_sequence}"
+            )),
+        })
+        .collect()
 }
 
 fn payload_message_identity(payload: &str, role: DisplayRole) -> Option<String> {
@@ -1930,6 +1956,8 @@ mod tests {
             PersistNotice::DraftSaved { .. } => "draft_saved",
             PersistNotice::MessageCommitted { .. } => "message_committed",
             PersistNotice::TurnEventAppended { .. } => "turn_event_appended",
+            PersistNotice::HistoricalConversationLoaded { .. } => "historical_loaded",
+            PersistNotice::HistoricalConversationLoadFailed { .. } => "historical_load_failed",
             PersistNotice::Failed { .. } => "failed",
         }
     }
@@ -2094,11 +2122,13 @@ mod tests {
                 role: DisplayRole::Assistant,
                 text: "system-like preface".to_owned(),
                 sequence: 1,
+                provenance_label: None,
             },
             DisplayMessage {
                 role: DisplayRole::User,
                 text: "  a useful local title\nwith whitespace  ".to_owned(),
                 sequence: 2,
+                provenance_label: None,
             },
         ];
 
