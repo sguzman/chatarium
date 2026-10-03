@@ -83,47 +83,80 @@ Exit criterion: Chatarium can mirror selected existing conversations into local 
 
 The store/protocol side of live mirroring remains valid: exact remote identity, C02 parsing, durable snapshots, active-branch projection, and offline cached mirrors are retained.
 
-The browser-integration history now has three explicitly separated generations.
+The browser-integration history now has four explicitly separated generations.
 
 **Tampermonkey** is retired from the critical runtime path. It produced useful protocol evidence and one successful browser↔desktop roundtrip, but repeated live QA exposed unstable transport/execution-world behavior and inadequate first-party request-context parity.
 
-**Edge Bridge 0.1/0.2 exact-request replay** is also retired. 0.1 proved that a purpose-built MV3 extension could reliably cross the desktop/tab/MAIN/auth/account boundaries, but its reconstructed ordinary-history request returned an unconfirmed empty result. Re-auditing the private HAR then showed that the frozen global `/backend-api/conversations?...limit=20&offset=0` specimens were HTTP 429, so they proved request shape/context rather than successful global-history semantics.
+**Edge Bridge 0.1/0.2 exact-request replay** is also retired. 0.1 proved that a purpose-built MV3 extension could reliably cross the desktop/tab/MAIN/auth/account boundaries, but its reconstructed ordinary-history request returned an unconfirmed empty result. Re-auditing the private HAR showed that the frozen global `/backend-api/conversations?...limit=20&offset=0` specimens were HTTP 429, so they proved request shape/context rather than successful global-history semantics.
 
-0.2 was the one allowed evidence-driven correction. It waited for the exact first-party frozen C01 request and intended to replay the observed application context. The final live validation failed both before and after a full tab reload with `tab=yes`, `account-context=yes`, `request-context=no`, `first-party-http=unknown`, `context-headers=0`, and `first_party_request_context_unavailable`. Per the human-QA stop rule, #102 was closed and exact-C01 replay was retired instead of patched again.
+0.2 was the one allowed evidence-driven correction. It waited for the exact first-party frozen C01 request and intended to replay observed application context. The final live validation failed both before and after a full tab reload with `tab=yes`, `account-context=yes`, `request-context=no`, `first-party-http=unknown`, `context-headers=0`, and `first_party_request_context_unavailable`. Per the human-QA stop rule, #102 was closed and exact-C01 replay was retired.
 
-**Edge Bridge 0.3 CDP discovery**, tracked by #103, is the new architecture.
+**Edge Bridge 0.3 CDP discovery** replaced request replay with current first-party observation.
 
-It does not require any historical conversation-list request to appear. During one bounded discovery command the extension:
+During one bounded discovery command it:
 
 1. attaches `chrome.debugger` only to the selected ChatGPT tab;
 2. enables the CDP Network domain;
 3. reloads the ChatGPT tab itself;
-4. observes the actual current first-party `/backend-api/*` traffic;
-5. considers only successful JSON responses on conversation/sidebar/pin-like paths;
-6. reads completed candidate bodies through `Network.getResponseBody`;
-7. extracts bounded typed conversation-summary candidates and structural cursor metadata;
-8. detaches the debugger.
+4. observes actual current first-party `/backend-api/*` traffic;
+5. reads successful list-like JSON responses with `Network.getResponseBody`;
+6. extracts bounded typed conversation summaries and structural cursor metadata;
+7. detaches the debugger.
 
-The extension never returns raw cookies, authorization values, full request headers, or browser storage to Rust. When CDP reveals the already-observed `ChatGPT-Account-ID`, it remains browser-local in session storage for the independently evidenced C02 exact-conversation read.
+### 0.3 live validation: history discovery works
 
-The desktop treats CDP discovery as **partial proof**, not synchronization success. Its status reports debugger/network/automatic-reload proof, response counts, candidate counts, body-read failures, malformed/oversized body rejection, best observed surface, and `completeness=unproven`. Candidate summaries may be displayed for investigation, but `ConversationList` remains `NoBaseline` until a current surface's pagination and account-wide completeness are separately established.
+The first 0.3 target-browser validation succeeded.
 
-The old `list_conversations` command is not used by the desktop flow. The extension returns an explicit retirement error if stale code attempts to invoke it.
+The extension visibly entered its bounded debugging session and Chatarium populated the sidebar with **85 real conversation summaries/titles** observed from the first-party traffic produced during that reload window.
 
-The exact C02 read profile remains `2026-10-03.001`; exact remote identity must still validate before any durable mirror is committed. Same-thread writeback remains unestablished.
+This is the first live proof that Chatarium can automatically discover the user's current ChatGPT conversation surfaces without reconstructing or waiting for a frozen private endpoint.
 
-Before 0.3 reaches live QA, the repository gate requires:
+It is **not** proof that 85 is the account-wide total. The old UI rendered `85/85` because an unknown total fell back to the observed count; that was a presentation bug. The active UI now labels the set as `85 OBSERVED` and keeps account-wide coverage explicitly unknown. `ConversationList` remains `NoBaseline` until pagination/completeness semantics are separately established.
+
+The live run also exposed two downstream observations:
+
+- clicking a discovered conversation caused the older synthetic exact C02 fetch to time out;
+- one OS-level “Application Not Responding” dialog appeared for Chatarium during the browser-debugging interval.
+
+Neither observation invalidates the history-discovery success. They are separate boundaries.
+
+**Edge Bridge 0.4 CDP mirroring**, tracked by #104, removes the remaining synthetic exact-read step.
+
+For one discovered remote conversation it:
+
+1. keeps the user's active ChatGPT tab untouched;
+2. creates a temporary background tab;
+3. attaches CDP before target navigation;
+4. enables the Network domain;
+5. navigates the temporary tab to `https://chatgpt.com/c/<remote-id>`;
+6. observes the exact first-party `/backend-api/conversations/<remote-id>` response generated by ChatGPT itself;
+7. preserves actual first-party HTTP/content-type evidence;
+8. reads the completed body through `Network.getResponseBody`;
+9. applies body-size and JSON bounds;
+10. passes the body through the existing exact C02 remote-identity/parser gate;
+11. durably commits the local mirror;
+12. detaches and closes the temporary tab on every outcome.
+
+The independently evidenced C02 semantic profile remains `2026-10-03.001`. 0.4 changes the capture mechanism, not the right to infer new response semantics.
+
+History discovery and mirror state are now separate UI domains. A failed individual mirror no longer turns successful history discovery into a failed bridge. Per-conversation labels distinguish discovered, mirroring, retryable failure, fully mirrored, and partial mirror states. The global Mirror row reports fetch/validation/persistence/durable stages separately.
+
+The extension never returns raw cookies, authorization values, complete request-header sets, or browser storage to Rust. Exact private conversation bodies cross only into the local process for exact-ID validation and durable local storage.
+
+Before 0.4 reaches live QA, the repository gate requires:
 
 1. Edge extension syntax and permission invariants;
-2. pure CDP history-classifier tests;
-3. Rust formatting;
-4. full workspace compile;
-5. lockfile stability;
-6. protocol corpus validation;
-7. full workspace tests;
-8. Linux desktop compile/tests.
-
-The extension performs the discovery reload itself. Human QA for 0.3 must not require manual reload loops, DevTools, console inspection, or another HAR merely to discover the current list surface.
+2. pure history-classifier tests;
+3. exact-conversation response-matcher tests;
+4. temporary-tab create/navigate/cleanup invariants;
+5. stage-specific timeout/failure diagnostics;
+6. explicit UI state tests;
+7. Rust formatting;
+8. full workspace compile;
+9. lockfile stability;
+10. protocol corpus validation;
+11. full workspace tests;
+12. Linux desktop compile/tests.
 
 The full failure chain and permanent gates are documented in `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`.
 
