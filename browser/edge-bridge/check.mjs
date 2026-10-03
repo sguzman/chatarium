@@ -19,7 +19,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.1.0') {
+if (manifest.version !== '0.2.0') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['scripting', 'storage', 'webRequest'], 'permissions');
@@ -43,10 +43,13 @@ for (const required of [
   "world: 'MAIN'",
   'chrome.webRequest.onBeforeSendHeaders',
   'chrome.webRequest.onBeforeRequest',
+  'chrome.webRequest.onCompleted',
   'chrome.storage.session',
   "const ACCOUNT_HEADER = 'ChatGPT-Account-ID'",
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
+  "const LIST_CONTEXT_KEY_PREFIX = 'chatarium-list-request-context:'",
+  'request_context_observed',
 ]) {
   if (!worker.includes(required)) {
     throw new Error(`required Edge bridge invariant missing: ${required}`);
