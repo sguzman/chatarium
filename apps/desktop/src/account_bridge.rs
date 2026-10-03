@@ -222,7 +222,7 @@ pub struct ConversationFetchObservation {
     pub http_status: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HistorySurfaceCandidate {
     pub path: String,
     pub query_keys: Vec<String>,
@@ -253,7 +253,7 @@ pub struct HistoryDiscoveryProof {
     pub request_profile: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HistoryDiscoveryObservation {
     pub discovery: String,
     pub proof: HistoryDiscoveryProof,
