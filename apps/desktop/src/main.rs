@@ -694,8 +694,8 @@ impl ChatariumApp {
         self.mirror_status =
             "FETCHING · opening temporary ChatGPT tab and waiting for first-party conversation response…"
                 .to_owned();
-        self.status = "mirroring imported ChatGPT conversation through first-party navigation…"
-            .to_owned();
+        self.status =
+            "mirroring imported ChatGPT conversation through first-party navigation…".to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-live-mirror-fetch".to_owned())
