@@ -143,6 +143,12 @@ enum LiveMirrorFetchNotice {
     HistoryListFailed {
         error: String,
     },
+    HistoryDiscoveryLoaded {
+        observation: account_bridge::HistoryDiscoveryObservation,
+    },
+    HistoryDiscoveryFailed {
+        error: String,
+    },
     Fetched {
         local_conversation_id: LocalConversationId,
         remote_conversation_id: String,
@@ -560,13 +566,14 @@ impl ChatariumApp {
                     }
                 }
 
-                match provider.list_recent_conversations() {
+                match provider.discover_history_surfaces() {
                     Ok(observation) => {
-                        let _ =
-                            notices.send(LiveMirrorFetchNotice::HistoryListLoaded { observation });
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryDiscoveryLoaded {
+                            observation,
+                        });
                     }
                     Err(error) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryListFailed {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryDiscoveryFailed {
                             error: error.to_string(),
                         });
                     }
@@ -792,6 +799,45 @@ impl ChatariumApp {
                     self.history_bridge_proven = false;
                     self.account_bridge_status =
                         format!("PROOF FAILED after authenticated extension path: {error}");
+                }
+                LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation } => {
+                    self.history_list_pending = false;
+                    self.history_bridge_proven = false;
+                    self.remote_conversation_total = None;
+
+                    let candidate_count = observation.candidates.len();
+                    let mut catalog = BTreeMap::new();
+                    let mut best_surface = None::<(String, u64)>;
+                    for candidate in observation.candidates {
+                        if best_surface
+                            .as_ref()
+                            .is_none_or(|(_, count)| candidate.conversation_count > *count)
+                        {
+                            best_surface =
+                                Some((candidate.path.clone(), candidate.conversation_count));
+                        }
+                        for item in candidate.items {
+                            catalog.entry(item.id.clone()).or_insert(item);
+                        }
+                    }
+                    self.remote_conversation_catalog = catalog.into_values().collect();
+
+                    let best_surface = best_surface
+                        .map(|(path, count)| format!("{path} ({count})"))
+                        .unwrap_or_else(|| "none".to_owned());
+                    self.account_bridge_status = format!(
+                        "PROOF PARTIAL: {} · candidates={} · observed-items={} · best-surface={} · completeness=unproven",
+                        history_discovery_proof_label(&observation.proof),
+                        candidate_count,
+                        self.remote_conversation_catalog.len(),
+                        best_surface,
+                    );
+                }
+                LiveMirrorFetchNotice::HistoryDiscoveryFailed { error } => {
+                    self.history_list_pending = false;
+                    self.history_bridge_proven = false;
+                    self.account_bridge_status =
+                        format!("PROOF FAILED during CDP history discovery: {error}");
                 }
                 LiveMirrorFetchNotice::DiscoveredFetched {
                     remote_conversation_id,
@@ -2597,20 +2643,33 @@ fn yes_no(value: bool) -> &'static str {
 }
 
 fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
-    let first_party_http = proof
-        .first_party_http_status
-        .map(|status| status.to_string())
-        .unwrap_or_else(|| "unknown".to_owned());
     format!(
-        "extension={} · roundtrip={} · tab={} · MAIN={} · account-context={} · request-context={} · first-party-http={} · context-headers={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · MAIN={} · account-context={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
         yes_no(proof.main_world_execution),
         yes_no(proof.account_context),
-        yes_no(proof.request_context_observed),
-        first_party_http,
-        proof.context_header_count,
+        proof.request_profile,
+    )
+}
+
+fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) -> String {
+    format!(
+        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · profile={}",
+        proof.extension_version,
+        yes_no(proof.desktop_roundtrip),
+        yes_no(proof.chatgpt_tab_found),
+        yes_no(proof.debugger_attached),
+        yes_no(proof.network_enabled),
+        yes_no(proof.reload_started),
+        yes_no(proof.account_context),
+        proof.responses_seen,
+        proof.backend_http_200_seen,
+        proof.json_candidates_seen,
+        proof.body_read_failures,
+        proof.body_too_large,
+        proof.invalid_json,
         proof.request_profile,
     )
 }
