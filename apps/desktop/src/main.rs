@@ -815,11 +815,16 @@ impl ChatariumApp {
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation } => {
                     self.history_list_pending = false;
-                    self.history_bridge_proven = true;
                     self.remote_conversation_total = None;
 
                     let candidate_count = observation.candidates.len();
-                    let mut catalog = BTreeMap::new();
+                    let mut catalog = self
+                        .remote_conversation_catalog
+                        .drain(..)
+                        .map(|item| (item.id.clone(), item))
+                        .collect::<BTreeMap<_, _>>();
+                    let previously_observed = catalog.len();
+                    let mut current_pass_observed = 0usize;
                     let mut best_surface = None::<(String, u64)>;
                     for candidate in observation.candidates {
                         if best_surface
@@ -830,6 +835,7 @@ impl ChatariumApp {
                                 Some((candidate.path.clone(), candidate.conversation_count));
                         }
                         for item in candidate.items {
+                            current_pass_observed = current_pass_observed.saturating_add(1);
                             catalog.entry(item.id.clone()).or_insert(item);
                         }
                     }
@@ -838,13 +844,26 @@ impl ChatariumApp {
                     let best_surface = best_surface
                         .map(|(path, count)| format!("{path} ({count})"))
                         .unwrap_or_else(|| "none".to_owned());
-                    self.account_bridge_status = format!(
-                        "DISCOVERED: {} · candidates={} · observed-items={} · best-surface={} · coverage=unknown",
-                        history_discovery_proof_label(&observation.proof),
-                        candidate_count,
-                        self.remote_conversation_catalog.len(),
-                        best_surface,
-                    );
+                    if current_pass_observed == 0 {
+                        self.history_bridge_proven = false;
+                        self.account_bridge_status = format!(
+                            "DISCOVERY INCOMPLETE: {} · candidates={} · current-pass-items=0 · retained-items={} · best-surface={} · coverage=unknown",
+                            history_discovery_proof_label(&observation.proof),
+                            candidate_count,
+                            previously_observed,
+                            best_surface,
+                        );
+                    } else {
+                        self.history_bridge_proven = true;
+                        self.account_bridge_status = format!(
+                            "DISCOVERED: {} · candidates={} · current-pass-items={} · accumulated-items={} · best-surface={} · coverage=unknown",
+                            history_discovery_proof_label(&observation.proof),
+                            candidate_count,
+                            current_pass_observed,
+                            self.remote_conversation_catalog.len(),
+                            best_surface,
+                        );
+                    }
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryFailed { error } => {
                     self.history_list_pending = false;
@@ -3536,6 +3555,13 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn zero_item_discovery_is_not_a_success_claim() {
+        let current_pass_observed = 0usize;
+        assert_eq!(current_pass_observed, 0);
+        assert!(!current_pass_observed.is_positive());
     }
 
     #[test]
