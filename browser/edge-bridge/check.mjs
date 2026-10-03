@@ -29,7 +29,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.2') {
+if (manifest.version !== '0.4.3') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -61,6 +61,11 @@ for (const required of [
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
   "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
+  "const SIDEBAR_BOOTSTRAP_RESOURCE =",
+  'collectApplicationContextHeaders',
+  'sidebar_bootstrap_attempted',
+  'sidebar_bootstrap_http_status',
+  'sidebar_bootstrap_items',
   "case 'discover_history_surfaces'",
   'chrome.tabs.create',
   "'Page.navigate'",
@@ -269,4 +274,42 @@ if (!worker.includes('const session = activeDiscoveries.get(tabId);')) {
 }
 if (!worker.includes('const capture = activeConversationCaptures.get(tabId);')) {
   throw new Error('exact mirror listener is not isolated on activeConversationCaptures');
+}
+
+
+const sidebarBootstrapPath =
+  '/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false';
+const sidebarBootstrap = classifyHistoryBody(
+  `https://chatgpt.com${sidebarBootstrapPath}`,
+  {
+    items: [
+      {
+        gizmo: { gizmo: { id: 'project-bootstrap' } },
+        conversations: {
+          items: [
+            {
+              id: 'bootstrap-conversation-1',
+              title: 'Bootstrap one',
+              create_time: '2026-10-03T00:00:00Z',
+              update_time: '2026-10-03T00:01:00Z',
+            },
+            {
+              id: 'bootstrap-conversation-2',
+              title: 'Bootstrap two',
+              create_time: '2026-10-03T00:02:00Z',
+              update_time: '2026-10-03T00:03:00Z',
+            },
+          ],
+          cursor: null,
+        },
+      },
+    ],
+    cursor: 'next-project-page',
+  },
+);
+if (!sidebarBootstrap || sidebarBootstrap.surface_kind !== 'snorlax_sidebar') {
+  throw new Error('evidence-backed sidebar bootstrap surface was not classified');
+}
+if (sidebarBootstrap.conversation_count !== 2) {
+  throw new Error('evidence-backed sidebar bootstrap conversations were not extracted');
 }
