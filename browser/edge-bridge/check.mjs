@@ -1,4 +1,9 @@
 import fs from 'node:fs';
+import {
+  classifyHistoryBody,
+  isCandidateResponse,
+  mergeDiscoveryCandidates,
+} from './history-discovery.mjs';
 
 const root = new URL('./', import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(new URL('manifest.json', root), 'utf8'));
@@ -73,3 +78,88 @@ for (const required of [
     throw new Error(`required CDP discovery invariant missing: ${required}`);
   }
 }
+
+
+const ordinaryResponse = {
+  status: 200,
+  mimeType: 'application/json',
+  url: 'https://chatgpt.com/backend-api/conversations?limit=20&offset=0',
+};
+if (!isCandidateResponse(ordinaryResponse)) {
+  throw new Error('ordinary conversation response should be a discovery candidate');
+}
+if (isCandidateResponse({ ...ordinaryResponse, status: 429 })) {
+  throw new Error('rate-limited response must not be promoted to a discovery candidate');
+}
+if (isCandidateResponse({
+  status: 200,
+  mimeType: 'application/json',
+  url: 'https://chatgpt.com/backend-api/settings/user',
+})) {
+  throw new Error('non-history JSON response must not be promoted to a discovery candidate');
+}
+
+const sidebar = classifyHistoryBody(
+  'https://chatgpt.com/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false',
+  {
+    items: [
+      {
+        gizmo: { gizmo: { id: 'project-1' } },
+        conversations: {
+          items: [
+            {
+              id: 'conversation-1',
+              title: 'One',
+              create_time: '2026-10-03T00:00:00Z',
+              update_time: '2026-10-03T00:01:00Z',
+            },
+            {
+              id: 'conversation-2',
+              title: null,
+              create_time: '2026-10-02T00:00:00Z',
+              update_time: '2026-10-02T00:01:00Z',
+            },
+          ],
+          cursor: 'nested-next',
+        },
+      },
+    ],
+    cursor: 'top-next',
+  },
+);
+if (!sidebar || sidebar.surface_kind !== 'snorlax_sidebar') {
+  throw new Error('snorlax sidebar surface classification failed');
+}
+if (sidebar.conversation_count !== 2 || sidebar.items.length !== 2) {
+  throw new Error('snorlax sidebar conversation extraction failed');
+}
+if (sidebar.cursor_count !== 2 || sidebar.top_level_cursor !== 'string') {
+  throw new Error('snorlax sidebar cursor classification failed');
+}
+if (sidebar.query_keys.join(',') !== 'conversations_per_gizmo,limit,owned_only') {
+  throw new Error('query values leaked into discovery metadata or query-key order drifted');
+}
+
+const merged = mergeDiscoveryCandidates([
+  sidebar,
+  {
+    ...sidebar,
+    conversation_count: 1,
+    items: [
+      {
+        id: 'conversation-3',
+        title: 'Three',
+        create_time: null,
+        update_time: null,
+      },
+    ],
+  },
+]);
+if (merged.length !== 1 || merged[0].observations !== 2) {
+  throw new Error('repeated observations were not merged by surface shape');
+}
+if (merged[0].items.length !== 3) {
+  throw new Error('conversation identities were not merged across repeated observations');
+}
+
+console.log('Chatarium CDP history discovery classifier OK');
