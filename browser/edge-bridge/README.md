@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.1 first-party CDP observation
+## Current architecture: 0.4.3 first-party CDP observation
 
 ```text
 Chatarium Desktop
@@ -104,6 +104,30 @@ The exact causal delta was not established. Two discovery-path changes had been 
 
 The 2026-10-03 C02 protocol profile remains the semantic validation profile. 0.4 changes **how the first-party response is obtained**, not the parser's right to invent new semantics.
 
+### 0.4.2 / 0.4.3: deterministic recovery of the proven 85-chat surface
+
+A second live run of 0.4.1 still produced zero observed conversations even though the exact 0.3 listener and wait logic had been restored. That established that the original 0.3 success was real but opportunistic: the passive observer only succeeds when the frontend itself happens to request a list-bearing surface during the bounded reload window.
+
+The private HAR already contains stronger evidence. It records HTTP 200 for:
+
+`/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false`
+
+with an approximately 185 KiB JSON body containing nested conversation summaries and top-level/nested cursors. The same HAR records subsequent cursor pagination requests on that sidebar surface.
+
+0.4.3 therefore keeps the **entire known-good 0.3 passive classifier and debugger listener unchanged** and adds a deterministic fallback:
+
+1. run the original bounded passive 0.3 discovery;
+2. if that pass yields one or more conversations, stop there;
+3. only when the passive pass yields zero conversations, reuse browser-local application context observed from ordinary first-party backend traffic;
+4. issue one bounded MAIN-world GET for the known successful sidebar resource;
+5. reduce its response through the same 0.3 conversation-summary classifier;
+6. merge the summaries into the discovery result;
+7. expose only safe proof metadata to Rust: whether bootstrap ran, HTTP status, item count, application-context header count, and a non-secret error code.
+
+Raw application-context header values never cross into Rust.
+
+This bootstrap is intentionally a **fallback**, not a replacement for the working 0.3 path. It cannot perturb a naturally successful passive discovery.
+
 ## Explicit mirror states
 
 History discovery and per-conversation mirroring are separate status domains.
@@ -152,7 +176,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.0 manifest contains only:
+The 0.4.3 manifest contains only:
 
 - `debugger`
 - `scripting`
