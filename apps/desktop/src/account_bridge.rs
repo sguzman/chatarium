@@ -47,7 +47,7 @@ pub enum BrowserBridgeError {
     Protocol(String),
     UnsupportedRevision(String),
     HttpStatus(u16),
-    RateLimited,
+    RateLimited(String),
     Unauthenticated,
 }
 
@@ -69,9 +69,9 @@ impl fmt::Display for BrowserBridgeError {
                     "browser-backed ChatGPT request returned HTTP {status}"
                 )
             }
-            Self::RateLimited => write!(
+            Self::RateLimited(detail) => write!(
                 formatter,
-                "browser-backed ChatGPT request returned HTTP 429"
+                "browser-backed ChatGPT request returned HTTP 429 ({detail})"
             ),
             Self::Unauthenticated => {
                 write!(formatter, "browser ChatGPT session is unauthenticated")
@@ -996,6 +996,23 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
         .and_then(Value::as_u64)
         .and_then(|status| u16::try_from(status).ok())
     {
+        if status == 429 {
+            let exact = result
+                .get("exact_response_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let throttled = result
+                .get("rate_limited_responses")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let responses = result
+                .get("responses_seen")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            return BrowserBridgeError::RateLimited(format!(
+                "observed {throttled} throttled exact response(s) across {exact} exact response(s) and {responses} total network response(s); no successful exact response arrived before the bounded capture window ended"
+            ));
+        }
         return status_error(status);
     }
     let reason = result
@@ -1113,7 +1130,9 @@ fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> Brow
 fn status_error(status: u16) -> BrowserBridgeError {
     match status {
         401 | 403 => BrowserBridgeError::Unauthenticated,
-        429 => BrowserBridgeError::RateLimited,
+        429 => BrowserBridgeError::RateLimited(
+            "no extended rate-limit proof was available".to_owned(),
+        ),
         other => BrowserBridgeError::HttpStatus(other),
     }
 }
@@ -1978,7 +1997,9 @@ mod tests {
                 &RemoteConversationId::new("remote").unwrap(),
                 &ProtocolObservationRevision::new(CONVERSATION_FETCH_REQUEST_OBSERVATION).unwrap(),
             ),
-            Err(BrowserBridgeError::RateLimited)
+            Err(BrowserBridgeError::RateLimited(
+                "observed 0 throttled exact response(s) across 0 exact response(s) and 0 total network response(s); no successful exact response arrived before the bounded capture window ended".to_owned()
+            ))
         );
         browser.join().unwrap();
     }
