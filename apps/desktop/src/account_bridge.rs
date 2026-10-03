@@ -194,6 +194,11 @@ pub struct BrowserProof {
     pub desktop_roundtrip: bool,
     pub chatgpt_tab_found: bool,
     pub main_world_execution: bool,
+    pub debugger_attached: bool,
+    pub network_enabled: bool,
+    pub capture_tab_created: bool,
+    pub navigation_started: bool,
+    pub exact_response_seen: bool,
     pub account_context: bool,
     pub request_context_observed: bool,
     pub first_party_http_status: Option<u16>,
@@ -546,6 +551,12 @@ impl BrowserBridgeProvider {
             return Err(status_error(http_status));
         }
         let proof = parse_extension_proof(&result, protocol_revision.as_str(), true, false)?;
+        if !proof.exact_response_seen {
+            return Err(BrowserBridgeError::Protocol(
+                "conversation mirror result did not prove the exact first-party response was observed"
+                    .to_owned(),
+            ));
+        }
         let body = result.get("body").cloned().ok_or_else(|| {
             BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
         })?;
@@ -807,6 +818,26 @@ fn parse_extension_proof(
         .get("main_world_execution")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let debugger_attached = result
+        .get("debugger_attached")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let network_enabled = result
+        .get("network_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let capture_tab_created = result
+        .get("capture_tab_created")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let navigation_started = result
+        .get("navigation_started")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let exact_response_seen = result
+        .get("exact_response_seen")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let account_context = result
         .get("account_context")
         .and_then(Value::as_bool)
@@ -841,9 +872,11 @@ fn parse_extension_proof(
             "extension result does not prove an exact ChatGPT tab was found".to_owned(),
         ));
     }
-    if !main_world_execution {
+    let cdp_execution = debugger_attached && network_enabled && navigation_started;
+    if !main_world_execution && !cdp_execution {
         return Err(BrowserBridgeError::Protocol(
-            "extension result does not prove MAIN-world execution".to_owned(),
+            "extension result proves neither MAIN-world execution nor bounded CDP navigation"
+                .to_owned(),
         ));
     }
     if require_account_context && !account_context {
@@ -867,6 +900,11 @@ fn parse_extension_proof(
         desktop_roundtrip: true,
         chatgpt_tab_found,
         main_world_execution,
+        debugger_attached,
+        network_enabled,
+        capture_tab_created,
+        navigation_started,
+        exact_response_seen,
         account_context,
         request_context_observed,
         first_party_http_status,
@@ -928,6 +966,11 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
         .unwrap_or("unknown");
     let tab = proof_bool(result, "chatgpt_tab_found");
     let main_world = proof_bool(result, "main_world_execution");
+    let debugger = proof_bool(result, "debugger_attached");
+    let network = proof_bool(result, "network_enabled");
+    let capture_tab = proof_bool(result, "capture_tab_created");
+    let navigation = proof_bool(result, "navigation_started");
+    let exact_response = proof_bool(result, "exact_response_seen");
     let account_context = proof_bool(result, "account_context");
     let request_context = proof_bool(result, "request_context_observed");
     let first_party_http = result
@@ -945,7 +988,7 @@ fn remote_result_error(result: &Value) -> BrowserBridgeError {
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     BrowserBridgeError::Protocol(format!(
-        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; account-context={account_context}; request-context={request_context}; first-party-http={first_party_http}; context-headers={context_header_count}; profile={request_profile}"
+        "{reason}; transport={transport}; extension={extension_version}; tab={tab}; MAIN={main_world}; debugger={debugger}; network={network}; capture-tab={capture_tab}; navigation={navigation}; exact-response={exact_response}; account-context={account_context}; request-context={request_context}; first-party-http={first_party_http}; context-headers={context_header_count}; profile={request_profile}"
     ))
 }
 
