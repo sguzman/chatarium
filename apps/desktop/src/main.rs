@@ -507,6 +507,32 @@ impl ChatariumApp {
                         }
                     }
                 }
+                PersistNotice::HistoricalConversationLoaded {
+                    local_conversation_id,
+                    imported_sequence,
+                    messages,
+                } => {
+                    if self.selected_historical_conversation == Some(local_conversation_id) {
+                        self.historical_messages =
+                            historical_display_messages(messages, imported_sequence);
+                        self.loaded_historical_conversation = Some(local_conversation_id);
+                        self.historical_load_pending = None;
+                        self.status = format!(
+                            "verified historical snapshot loaded from import event #{imported_sequence}"
+                        );
+                    }
+                }
+                PersistNotice::HistoricalConversationLoadFailed {
+                    local_conversation_id,
+                    error,
+                } => {
+                    if self.selected_historical_conversation == Some(local_conversation_id) {
+                        self.historical_load_pending = None;
+                        self.loaded_historical_conversation = None;
+                        self.historical_messages.clear();
+                        self.status = format!("historical snapshot load failed: {error}");
+                    }
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
