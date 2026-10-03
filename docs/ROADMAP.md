@@ -87,7 +87,13 @@ The Tampermonkey `account-bridge.user.js` experiment is **retired from the criti
 
 The replacement browser runtime is now implemented under `browser/edge-bridge/` as a purpose-built Edge/Chromium Manifest V3 extension, tracked by #102. The retired userscript transports are rejected by the Rust critical path rather than retained as hidden fallbacks. The extension uses narrow host permissions, keeps the raw account selector browser-local, executes evidence-backed reads in the exact ChatGPT tab's MAIN world, and carries explicit proof metadata across the existing typed loopback protocol.
 
-This implementation is still **pre-live-QA**. It must not reach human QA until automated checks are green and it can self-report, independently:
+The first Edge Bridge 0.1.0 live validation has now occurred. It proved extension/version, desktop roundtrip, exact ChatGPT tab selection, MAIN-world execution, authenticated session, account context, HTTP 200, and parser success, but the ordinary-history result was `items=0 · total=0` and was correctly held at `semantic=unconfirmed-zero` rather than promoted to success.
+
+A re-audit of the private HAR then found that the frozen ordinary-history request had been captured under HTTP 429. That artifact proves the global C01 request shape/context but not successful result semantics. The successful conversation-list-like responses in the same HAR are gizmo/project surfaces and are not treated as substitutes for ordinary global history.
+
+Per the human-QA stop rule, Edge Bridge 0.2.0 is the **single evidence-driven correction** for this architecture. It observes the current first-party global C01 request, retains only a narrow allowlist of application-controlled request headers in browser session storage, and replays that observed context in MAIN world. Rust receives only safe proof metadata: whether request context was observed, the first-party HTTP status when available, and the replay-header count. Raw values remain browser-local.
+
+No second live run is allowed until automated checks are green. The proof ladder for that final validation is:
 
 1. extension/version alive;
 2. exact ChatGPT tab found;
@@ -95,13 +101,14 @@ This implementation is still **pre-live-QA**. It must not reach human QA until a
 4. MAIN-world execution;
 5. authenticated session;
 6. required account/workspace context;
-7. exact request profile/revision;
-8. remote HTTP status;
-9. parser result;
-10. semantic sanity result;
-11. durable mirror result.
+7. observed first-party request context;
+8. exact request profile/revision;
+9. first-party and replay HTTP evidence;
+10. parser result;
+11. semantic sanity result;
+12. durable mirror result.
 
-The desktop status row now treats authentication as only a partial proof. A list result becomes healthy only after extension/tab/MAIN/account/profile/HTTP/parser/semantic evidence succeeds; an exact-conversation sync reaches complete proof only after the matching durable mirror event. A zero-history result contradicting existing local history is explicitly rejected rather than normalized into success.
+The desktop status row treats authentication as only partial proof. A list result becomes healthy only after extension/tab/MAIN/account/request-context/profile/HTTP/parser/semantic evidence succeeds; an exact-conversation sync reaches complete proof only after the matching durable mirror event. A zero-history result remains explicitly non-success.
 
 The full failure chain and permanent gates are documented in `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`.
 
