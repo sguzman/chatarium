@@ -1,5 +1,6 @@
-//! Import browser flight-recorder evidence into Chatarium's durable native journal.
+//! Import controlled external conversation evidence into Chatarium's durable native journal.
 
+mod openai_export;
 mod read_fixture;
 
 use chatarium_core::EventKind;
@@ -30,6 +31,16 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
+        [command, export, data_dir] if command == "openai-export" => {
+            let summary = openai_export::import_file(Path::new(export), Path::new(data_dir))?;
+            println!("source sha256: {}", summary.source_sha256);
+            println!("source archive: {}", summary.source_archive.display());
+            println!("journal: {}", summary.journal_path.display());
+            println!("conversations seen: {}", summary.conversations_seen);
+            println!("snapshots appended: {}", summary.appended_snapshots);
+            println!("unchanged snapshots: {}", summary.unchanged_snapshots);
+            Ok(())
+        }
         [command, export, data_dir] if command == "flight-recorder" => {
             import_file(Path::new(export), Path::new(data_dir))
         }
@@ -53,13 +64,17 @@ fn run() -> Result<(), String> {
             );
             Ok(())
         }
+        [command, _export] if command == "openai-export" => Err(
+            "refusing to import without an explicit data directory; usage: chatarium-importer openai-export <conversations.json> <data-dir>"
+                .to_owned(),
+        ),
         [command, _export] if command == "flight-recorder" => Err(
             "refusing to import without an explicit data directory; usage: chatarium-importer flight-recorder <export.json> <data-dir>"
                 .to_owned(),
         ),
         _ => {
             eprintln!(
-                "Usage:\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>"
+                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>"
             );
             Err("invalid arguments".to_owned())
         }
