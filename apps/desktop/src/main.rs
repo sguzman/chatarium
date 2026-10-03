@@ -235,7 +235,6 @@ struct ChatariumApp {
     remote_conversation_total: Option<u64>,
     history_discovery_started: bool,
     history_list_pending: bool,
-    history_bridge_authenticated: bool,
     history_bridge_proven: bool,
     pending_history_fetch_proof: Option<PendingHistoryFetchProof>,
     journal_path: PathBuf,
@@ -353,7 +352,6 @@ impl ChatariumApp {
                         remote_conversation_total: None,
                         history_discovery_started: false,
                         history_list_pending: false,
-                        history_bridge_authenticated: false,
                         history_bridge_proven: false,
                         pending_history_fetch_proof: None,
                         journal_path,
@@ -441,7 +439,6 @@ impl ChatariumApp {
             remote_conversation_total: None,
             history_discovery_started: false,
             history_list_pending: false,
-            history_bridge_authenticated: false,
             history_bridge_proven: false,
             pending_history_fetch_proof: None,
             journal_path,
@@ -721,7 +718,6 @@ impl ChatariumApp {
                     self.history_bridge_proven = false;
                     match observation.evidence {
                         SessionAuthenticationEvidence::Authenticated => {
-                            self.history_bridge_authenticated = true;
                             self.account_bridge_status = format!(
                                 "PROOF PARTIAL: {} · auth=yes · HTTP {} · parser=pending · semantic=pending · durable=pending",
                                 browser_proof_label(&observation.proof),
@@ -730,7 +726,6 @@ impl ChatariumApp {
                         }
                         SessionAuthenticationEvidence::Unauthenticated => {
                             self.history_list_pending = false;
-                            self.history_bridge_authenticated = false;
                             self.account_bridge_status = format!(
                                 "PROOF FAILED: {} · auth=no · HTTP {}",
                                 browser_proof_label(&observation.proof),
@@ -739,7 +734,6 @@ impl ChatariumApp {
                         }
                         SessionAuthenticationEvidence::Unknown => {
                             self.history_list_pending = false;
-                            self.history_bridge_authenticated = false;
                             self.account_bridge_status = format!(
                                 "PROOF FAILED: {} · auth=unknown · HTTP {}",
                                 browser_proof_label(&observation.proof),
@@ -750,13 +744,11 @@ impl ChatariumApp {
                 }
                 LiveMirrorFetchNotice::HistoryProbeFailed { error } => {
                     self.history_list_pending = false;
-                    self.history_bridge_authenticated = false;
                     self.history_bridge_proven = false;
                     self.account_bridge_status = history_probe_failure_status(&error);
                 }
                 LiveMirrorFetchNotice::HistoryListLoaded { observation } => {
                     self.history_list_pending = false;
-                    self.history_bridge_authenticated = true;
                     self.remote_conversation_total = Some(observation.page.total);
                     self.remote_conversation_catalog = observation.page.items;
 
