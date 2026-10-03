@@ -95,6 +95,15 @@ For the current desktop alpha, launch normally:
 cargo run -p chatarium-desktop
 ```
 
+Terminal diagnostics are enabled by default at INFO level. They are stage-oriented rather than payload-oriented: startup/journal replay, browser-bridge command timing, history discovery, candidate counts, mirror capture, validation, and durable persistence are printed with elapsed milliseconds and thread names.
+
+```text
+[chatarium +  1842ms INFO  history    chatarium-history-discovery] discovery complete: candidates=7 unique-items=85 responses=189 backend-200=63 ...
+[chatarium +  2410ms INFO  mirror     chatarium-remote-history-open] browser capture started for …12ab34cd
+```
+
+Use `CHATARIUM_LOG=debug` for bridge command delivery/timing details, `CHATARIUM_LOG=warn` for warnings/errors only, or `CHATARIUM_LOG=off` to silence terminal diagnostics. The logger intentionally does not dump conversation bodies, account identifiers, cookies, authorization material, or raw browser request headers.
+
 The desktop now prepares the pinned official Sign in with ChatGPT DevKit automatically in a background worker before starting its credential-owning sidecar, so the user does not need to run a separate bootstrap command. The first authenticated launch requires Node.js 22+ and network access to initialize/install the exact lockfile-resolved DevKit dependencies; later launches reuse the verified build. On Linux, authenticated use also requires a working Secret Service implementation plus the `secret-tool` helper. Chatarium never installs OS packages automatically; if that protection backend is unavailable, authentication fails closed while the local-only application remains usable.
 
 `node tools/run-desktop.mjs` remains a development convenience wrapper, but it is no longer required for ordinary repository launches.
