@@ -12,6 +12,12 @@ use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
 };
+use chatarium_store::remote_mirror_bootstrap::promote_historical_live_mirror_body;
+use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
+use chatarium_store::remote_mirror_transcript::{
+    RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
+    project_remote_active_transcript,
+};
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
@@ -37,6 +43,14 @@ enum PersistCommand {
     },
     LoadHistoricalConversation {
         local_conversation_id: LocalConversationId,
+    },
+    LoadLiveConversation {
+        local_conversation_id: LocalConversationId,
+    },
+    PromoteHistoricalLiveMirror {
+        local_conversation_id: LocalConversationId,
+        expected_remote_conversation_id: String,
+        body: Value,
     },
     Shutdown,
 }
@@ -65,11 +79,45 @@ enum PersistNotice {
         local_conversation_id: LocalConversationId,
         error: String,
     },
+    LiveConversationLoaded {
+        local_conversation_id: LocalConversationId,
+        snapshot_sequence: u64,
+        truncated_before: bool,
+        messages: Vec<RemoteTranscriptMessage>,
+    },
+    LiveConversationLoadFailed {
+        local_conversation_id: LocalConversationId,
+        error: String,
+    },
+    HistoricalLiveMirrorPromoted {
+        local_conversation_id: LocalConversationId,
+        snapshot_sequence: u64,
+        appended_events: Vec<EventEnvelope>,
+        truncated_before: bool,
+        messages: Vec<RemoteTranscriptMessage>,
+        projection_error: Option<String>,
+    },
+    HistoricalLiveMirrorPromotionFailed {
+        local_conversation_id: LocalConversationId,
+        error: String,
+    },
     Failed {
         operation: &'static str,
         revision: Option<u64>,
         request_id: Option<u64>,
         turn_id: Option<LocalTurnId>,
+        error: String,
+    },
+}
+
+enum LiveMirrorFetchNotice {
+    Fetched {
+        local_conversation_id: LocalConversationId,
+        remote_conversation_id: String,
+        body: Value,
+    },
+    Failed {
+        local_conversation_id: LocalConversationId,
         error: String,
     },
 }
@@ -118,11 +166,19 @@ struct ChatariumApp {
     loaded_historical_conversation: Option<LocalConversationId>,
     historical_messages: Vec<DisplayMessage>,
     historical_load_pending: Option<LocalConversationId>,
+    live_mirrored_conversations: HashSet<LocalConversationId>,
+    live_mirror_pending: Option<LocalConversationId>,
+    live_mirror_truncated_before: bool,
     journal_path: PathBuf,
     persist_tx: Option<Sender<PersistCommand>>,
     notice_rx: Option<Receiver<PersistNotice>>,
     worker: Option<JoinHandle<()>>,
     status: String,
+    account_bridge: Option<account_bridge::AccountBridgeRuntime>,
+    account_bridge_provider: Option<account_bridge::BrowserBridgeProvider>,
+    account_bridge_status: String,
+    live_mirror_fetch_tx: Sender<LiveMirrorFetchNotice>,
+    live_mirror_fetch_rx: Receiver<LiveMirrorFetchNotice>,
     remote: siwc_bridge::BridgeRuntime,
     remote_session: siwc_bridge::SessionState,
     remote_models: Vec<siwc_bridge::Model>,
@@ -180,6 +236,21 @@ impl ChatariumApp {
                         Vec::new()
                     }
                 };
+                let live_mirrored_conversations =
+                    match replay_remote_conversation_snapshot_audit(&events) {
+                        Ok(records) => records
+                            .into_iter()
+                            .map(|record| record.local_conversation_id)
+                            .collect(),
+                        Err(error) => {
+                            startup_status =
+                                format!("{startup_status}; live mirror replay warning: {error}");
+                            HashSet::new()
+                        }
+                    };
+                let (account_bridge, account_bridge_provider, account_bridge_status) =
+                    start_account_bridge();
+                let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
                 let worker_data_dir = data_dir.clone();
@@ -204,11 +275,19 @@ impl ChatariumApp {
                         loaded_historical_conversation: None,
                         historical_messages: Vec::new(),
                         historical_load_pending: None,
+                        live_mirrored_conversations,
+                        live_mirror_pending: None,
+                        live_mirror_truncated_before: false,
                         journal_path,
                         persist_tx: Some(persist_tx),
                         notice_rx: Some(notice_rx),
                         worker: Some(worker),
                         status: startup_status,
+                        account_bridge,
+                        account_bridge_provider,
+                        account_bridge_status,
+                        live_mirror_fetch_tx,
+                        live_mirror_fetch_rx,
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
@@ -249,6 +328,18 @@ impl ChatariumApp {
         events: Vec<EventEnvelope>,
         status: String,
     ) -> Self {
+        let live_mirrored_conversations = replay_remote_conversation_snapshot_audit(&events)
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|record| record.local_conversation_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let (account_bridge, account_bridge_provider, account_bridge_status) =
+            start_account_bridge();
+        let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
+
         Self {
             draft,
             draft_revision: 0,
@@ -266,11 +357,19 @@ impl ChatariumApp {
             loaded_historical_conversation: None,
             historical_messages: Vec::new(),
             historical_load_pending: None,
+            live_mirrored_conversations,
+            live_mirror_pending: None,
+            live_mirror_truncated_before: false,
             journal_path,
             persist_tx: None,
             notice_rx: None,
             worker: None,
             status,
+            account_bridge,
+            account_bridge_provider,
+            account_bridge_status,
+            live_mirror_fetch_tx,
+            live_mirror_fetch_rx,
             remote: siwc_bridge::BridgeRuntime::start(repaint),
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
@@ -290,6 +389,7 @@ impl ChatariumApp {
     fn select_local_conversation(&mut self) {
         self.selected_historical_conversation = None;
         self.historical_load_pending = None;
+        self.live_mirror_truncated_before = false;
         self.status = "local conversation selected".to_owned();
     }
 
@@ -310,13 +410,134 @@ impl ChatariumApp {
             self.status = "cannot load historical conversation: persistence unavailable".to_owned();
             return;
         };
-        if let Err(error) = sender.send(PersistCommand::LoadHistoricalConversation {
-            local_conversation_id,
-        }) {
+        let command = if self
+            .live_mirrored_conversations
+            .contains(&local_conversation_id)
+        {
+            PersistCommand::LoadLiveConversation {
+                local_conversation_id,
+            }
+        } else {
+            PersistCommand::LoadHistoricalConversation {
+                local_conversation_id,
+            }
+        };
+        if let Err(error) = sender.send(command) {
             self.historical_load_pending = None;
-            self.status = format!("failed to queue historical conversation load: {error}");
+            self.status = format!("failed to queue conversation snapshot load: {error}");
+        } else if self
+            .live_mirrored_conversations
+            .contains(&local_conversation_id)
+        {
+            self.status = "loading validated live mirror snapshot…".to_owned();
         } else {
             self.status = "loading verified historical snapshot…".to_owned();
+        }
+    }
+
+    fn sync_historical_conversation(
+        &mut self,
+        local_conversation_id: LocalConversationId,
+        repaint: &egui::Context,
+    ) {
+        if self.live_mirror_pending.is_some() {
+            return;
+        }
+        let Some(entry) = self
+            .historical_catalog
+            .iter()
+            .find(|entry| entry.local_conversation_id == local_conversation_id)
+        else {
+            self.status = "cannot sync: imported conversation is missing".to_owned();
+            return;
+        };
+        let Some(mut provider) = self.account_bridge_provider.clone() else {
+            self.status = format!(
+                "cannot sync from ChatGPT: {}",
+                self.account_bridge_status
+            );
+            return;
+        };
+        let Some(sender) = self.persist_tx.clone() else {
+            self.status = "cannot sync from ChatGPT: persistence unavailable".to_owned();
+            return;
+        };
+
+        let remote_conversation_id = entry.remote_conversation_id.clone();
+        let notices = self.live_mirror_fetch_tx.clone();
+        let repaint = repaint.clone();
+        self.live_mirror_pending = Some(local_conversation_id);
+        self.status = "fetching exact ChatGPT conversation through browser session…".to_owned();
+
+        let spawn = thread::Builder::new()
+            .name("chatarium-live-mirror-fetch".to_owned())
+            .spawn(move || {
+                let notice = match provider
+                    .fetch_authenticated_conversation(remote_conversation_id.as_str())
+                {
+                    Ok(body) => LiveMirrorFetchNotice::Fetched {
+                        local_conversation_id,
+                        remote_conversation_id,
+                        body,
+                    },
+                    Err(error) => LiveMirrorFetchNotice::Failed {
+                        local_conversation_id,
+                        error: error.to_string(),
+                    },
+                };
+                let _ = notices.send(notice);
+                repaint.request_repaint();
+                drop(sender);
+            });
+
+        if let Err(error) = spawn {
+            self.live_mirror_pending = None;
+            self.status = format!("failed to start live mirror fetch worker: {error}");
+        }
+    }
+
+    fn process_live_mirror_fetch_notices(&mut self) {
+        let notices = self
+            .live_mirror_fetch_rx
+            .try_iter()
+            .collect::<Vec<LiveMirrorFetchNotice>>();
+
+        for notice in notices {
+            match notice {
+                LiveMirrorFetchNotice::Fetched {
+                    local_conversation_id,
+                    remote_conversation_id,
+                    body,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        self.live_mirror_pending = None;
+                        self.status =
+                            "live conversation fetched, but persistence is unavailable".to_owned();
+                        continue;
+                    };
+                    if let Err(error) = sender.send(PersistCommand::PromoteHistoricalLiveMirror {
+                        local_conversation_id,
+                        expected_remote_conversation_id: remote_conversation_id,
+                        body,
+                    }) {
+                        self.live_mirror_pending = None;
+                        self.status = format!("failed to queue live mirror promotion: {error}");
+                    } else {
+                        self.status =
+                            "live response validated by browser; persisting mirror evidence…"
+                                .to_owned();
+                    }
+                }
+                LiveMirrorFetchNotice::Failed {
+                    local_conversation_id,
+                    error,
+                } => {
+                    if self.live_mirror_pending == Some(local_conversation_id) {
+                        self.live_mirror_pending = None;
+                    }
+                    self.status = format!("live ChatGPT fetch failed: {error}");
+                }
+            }
         }
     }
 
@@ -531,6 +752,80 @@ impl ChatariumApp {
                         self.historical_messages.clear();
                         self.status = format!("historical snapshot load failed: {error}");
                     }
+                }
+                PersistNotice::LiveConversationLoaded {
+                    local_conversation_id,
+                    snapshot_sequence,
+                    truncated_before,
+                    messages,
+                } => {
+                    if self.selected_historical_conversation == Some(local_conversation_id) {
+                        self.historical_messages =
+                            remote_display_messages(messages, snapshot_sequence);
+                        self.loaded_historical_conversation = Some(local_conversation_id);
+                        self.historical_load_pending = None;
+                        self.live_mirror_truncated_before = truncated_before;
+                        self.status = format!(
+                            "validated live mirror loaded from remote snapshot event #{snapshot_sequence}"
+                        );
+                    }
+                }
+                PersistNotice::LiveConversationLoadFailed {
+                    local_conversation_id,
+                    error,
+                } => {
+                    if self.selected_historical_conversation == Some(local_conversation_id) {
+                        self.historical_load_pending = None;
+                        self.loaded_historical_conversation = None;
+                        self.historical_messages.clear();
+                        self.status = format!("live mirror snapshot load failed: {error}");
+                    }
+                }
+                PersistNotice::HistoricalLiveMirrorPromoted {
+                    local_conversation_id,
+                    snapshot_sequence,
+                    appended_events,
+                    truncated_before,
+                    messages,
+                    projection_error,
+                } => {
+                    self.events.extend(appended_events);
+                    self.live_mirrored_conversations
+                        .insert(local_conversation_id);
+                    if self.live_mirror_pending == Some(local_conversation_id) {
+                        self.live_mirror_pending = None;
+                    }
+
+                    if self.selected_historical_conversation == Some(local_conversation_id) {
+                        self.historical_load_pending = None;
+                        self.loaded_historical_conversation = Some(local_conversation_id);
+                        self.live_mirror_truncated_before = truncated_before;
+                        if let Some(error) = projection_error {
+                            self.historical_messages.clear();
+                            self.status = format!(
+                                "live mirror is durable, but visible transcript projection is blocked: {error}"
+                            );
+                        } else {
+                            self.historical_messages =
+                                remote_display_messages(messages, snapshot_sequence);
+                            self.status = format!(
+                                "ChatGPT live mirror durable at event #{snapshot_sequence}"
+                            );
+                        }
+                    } else {
+                        self.status = format!(
+                            "ChatGPT live mirror durable at event #{snapshot_sequence}"
+                        );
+                    }
+                }
+                PersistNotice::HistoricalLiveMirrorPromotionFailed {
+                    local_conversation_id,
+                    error,
+                } => {
+                    if self.live_mirror_pending == Some(local_conversation_id) {
+                        self.live_mirror_pending = None;
+                    }
+                    self.status = format!("live mirror promotion failed: {error}");
                 }
                 PersistNotice::Failed {
                     operation,
@@ -934,6 +1229,7 @@ impl ChatariumApp {
 impl eframe::App for ChatariumApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
+        self.process_live_mirror_fetch_notices();
         self.process_remote_notices();
 
         let local_display_messages =
@@ -1720,9 +2016,121 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::LoadLiveConversation {
+                local_conversation_id,
+            } => match latest_live_transcript(store.events(), local_conversation_id, None) {
+                Ok((snapshot_sequence, projection)) => {
+                    let _ = notices.send(PersistNotice::LiveConversationLoaded {
+                        local_conversation_id,
+                        snapshot_sequence,
+                        truncated_before: projection.truncated_before,
+                        messages: projection.messages,
+                    });
+                }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::LiveConversationLoadFailed {
+                        local_conversation_id,
+                        error,
+                    });
+                }
+            },
+            PersistCommand::PromoteHistoricalLiveMirror {
+                local_conversation_id,
+                expected_remote_conversation_id,
+                body,
+            } => {
+                let before = store.events().len();
+                match promote_historical_live_mirror_body(
+                    &mut store,
+                    local_conversation_id,
+                    expected_remote_conversation_id.as_str(),
+                    &body,
+                ) {
+                    Ok(result) => {
+                        let appended_events = store.events()[before..].to_vec();
+                        let projection = latest_live_transcript(
+                            store.events(),
+                            local_conversation_id,
+                            Some(result.snapshot.sequence),
+                        );
+                        let (truncated_before, messages, projection_error) = match projection {
+                            Ok((_, projection)) => (
+                                projection.truncated_before,
+                                projection.messages,
+                                None,
+                            ),
+                            Err(error) => (false, Vec::new(), Some(error)),
+                        };
+                        let _ = notices.send(PersistNotice::HistoricalLiveMirrorPromoted {
+                            local_conversation_id,
+                            snapshot_sequence: result.snapshot.sequence,
+                            appended_events,
+                            truncated_before,
+                            messages,
+                            projection_error,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::HistoricalLiveMirrorPromotionFailed {
+                            local_conversation_id,
+                            error: error.to_string(),
+                        });
+                    }
+                }
+            }
             PersistCommand::Shutdown => break,
         }
     }
+}
+
+fn start_account_bridge() -> (
+    Option<account_bridge::AccountBridgeRuntime>,
+    Option<account_bridge::BrowserBridgeProvider>,
+    String,
+) {
+    match account_bridge::AccountBridgeRuntime::start() {
+        Ok(runtime) => {
+            let provider = runtime.provider();
+            (
+                Some(runtime),
+                Some(provider),
+                "browser history bridge listener ready".to_owned(),
+            )
+        }
+        Err(error) => (
+            None,
+            None,
+            format!("browser history bridge unavailable: {error}"),
+        ),
+    }
+}
+
+fn latest_live_transcript(
+    events: &[EventEnvelope],
+    local_conversation_id: LocalConversationId,
+    exact_snapshot_sequence: Option<u64>,
+) -> Result<(u64, RemoteTranscriptProjection), String> {
+    let records = replay_remote_conversation_snapshot_audit(events)?;
+    let record = match exact_snapshot_sequence {
+        Some(sequence) => records
+            .iter()
+            .find(|record| {
+                record.local_conversation_id == local_conversation_id
+                    && record.imported_sequence == sequence
+            }),
+        None => records
+            .iter()
+            .rev()
+            .find(|record| record.local_conversation_id == local_conversation_id),
+    }
+    .ok_or_else(|| {
+        format!(
+            "no durable live mirror snapshot exists for conversation {local_conversation_id}"
+        )
+    })?;
+
+    let projection = project_remote_active_transcript(&record.envelope)?;
+    Ok((record.imported_sequence, projection))
 }
 
 fn should_request_models(
@@ -1997,6 +2405,26 @@ fn historical_display_messages(
         .collect()
 }
 
+fn remote_display_messages(
+    messages: Vec<RemoteTranscriptMessage>,
+    snapshot_sequence: u64,
+) -> Vec<DisplayMessage> {
+    messages
+        .into_iter()
+        .map(|message| DisplayMessage {
+            role: match message.role {
+                RemoteTranscriptRole::User => DisplayRole::User,
+                RemoteTranscriptRole::Assistant => DisplayRole::Assistant,
+            },
+            text: message.text,
+            sequence: snapshot_sequence,
+            provenance_label: Some(format!(
+                "live mirror · remote snapshot event #{snapshot_sequence}"
+            )),
+        })
+        .collect()
+}
+
 fn payload_message_identity(payload: &str, role: DisplayRole) -> Option<String> {
     let value = serde_json::from_str::<Value>(payload).ok()?;
     let paths: &[&str] = match role {
@@ -2100,6 +2528,10 @@ mod tests {
             PersistNotice::TurnEventAppended { .. } => "turn_event_appended",
             PersistNotice::HistoricalConversationLoaded { .. } => "historical_loaded",
             PersistNotice::HistoricalConversationLoadFailed { .. } => "historical_load_failed",
+            PersistNotice::LiveConversationLoaded { .. } => "live_loaded",
+            PersistNotice::LiveConversationLoadFailed { .. } => "live_load_failed",
+            PersistNotice::HistoricalLiveMirrorPromoted { .. } => "live_promoted",
+            PersistNotice::HistoricalLiveMirrorPromotionFailed { .. } => "live_promotion_failed",
             PersistNotice::Failed { .. } => "failed",
         }
     }
