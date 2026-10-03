@@ -544,9 +544,10 @@ impl ChatariumApp {
                             observation.evidence,
                             SessionAuthenticationEvidence::Authenticated
                         );
-                        let _ = notices.send(
-                            LiveMirrorFetchNotice::HistoryAuthenticationObserved { observation },
-                        );
+                        let _ =
+                            notices.send(LiveMirrorFetchNotice::HistoryAuthenticationObserved {
+                                observation,
+                            });
                         if !authenticated {
                             repaint.request_repaint();
                             return;
@@ -598,7 +599,8 @@ impl ChatariumApp {
         self.remote_discovery_pending = Some(remote_conversation_id.clone());
         self.pending_history_fetch_proof = None;
         self.history_bridge_proven = false;
-        self.status = "fetching exact remote ChatGPT conversation through Edge extension…".to_owned();
+        self.status =
+            "fetching exact remote ChatGPT conversation through Edge extension…".to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-remote-history-open".to_owned())
@@ -838,7 +840,8 @@ impl ChatariumApp {
                     }
                     self.pending_history_fetch_proof = None;
                     self.history_bridge_proven = false;
-                    self.account_bridge_status = format!("PROOF FAILED during exact fetch: {error}");
+                    self.account_bridge_status =
+                        format!("PROOF FAILED during exact fetch: {error}");
                     self.status = format!("remote ChatGPT conversation fetch failed: {error}");
                 }
                 LiveMirrorFetchNotice::Fetched {
@@ -888,7 +891,8 @@ impl ChatariumApp {
                     }
                     self.pending_history_fetch_proof = None;
                     self.history_bridge_proven = false;
-                    self.account_bridge_status = format!("PROOF FAILED during exact fetch: {error}");
+                    self.account_bridge_status =
+                        format!("PROOF FAILED during exact fetch: {error}");
                     self.status = format!("live ChatGPT fetch failed: {error}");
                 }
             }
@@ -1165,8 +1169,7 @@ impl ChatariumApp {
                             self.history_bridge_proven = false;
                             self.account_bridge_status = format!(
                                 "PROOF FAILED: durable mirror event #{} has no matching browser proof (pending remote id {})",
-                                snapshot_sequence,
-                                pending.remote_conversation_id,
+                                snapshot_sequence, pending.remote_conversation_id,
                             );
                         }
                         None => {
@@ -1250,8 +1253,7 @@ impl ChatariumApp {
                             self.history_bridge_proven = false;
                             self.account_bridge_status = format!(
                                 "PROOF FAILED: durable mirror event #{} does not match pending browser proof for remote id {}",
-                                snapshot_sequence,
-                                pending.remote_conversation_id,
+                                snapshot_sequence, pending.remote_conversation_id,
                             );
                         }
                         None => {
