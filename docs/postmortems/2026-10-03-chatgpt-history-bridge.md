@@ -5,6 +5,8 @@
 **Status:** Tampermonkey is retired as a critical runtime transport. A purpose-built Edge extension is the next browser-integration architecture.  
 **Related issues:** #88, #92, #94, #95, #96, #97, #98, #99, #100, #101
 
+For the audit-oriented timeline and claim/proof matrix, see [the companion evidence ledger](2026-10-03-chatgpt-history-bridge-ledger.md).
+
 ## Executive summary
 
 This effort consumed substantially more operator time than it should have because engineering repeatedly moved from partial evidence to implementation, then interpreted intermediate infrastructure signals as product success.
