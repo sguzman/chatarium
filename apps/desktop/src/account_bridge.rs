@@ -781,65 +781,77 @@ mod tests {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
 
-        let auth = browser_exchange(
-            address,
-            |command| {
-                assert_eq!(command["kind"], json!("probe_auth"));
-            },
-            |command| {
-                json!({
-                    "version": 1,
-                    "id": command["id"],
-                    "kind": "probe_auth",
-                    "ok": true,
-                    "authentication": "authenticated",
-                    "http_status": 200
-                })
-            },
-        );
-
-        let list = browser_exchange(
-            address,
-            |command| {
-                assert_eq!(command["kind"], json!("list_conversations"));
-                assert_eq!(
-                    command["resource"],
-                    json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE)
+        let browser = thread::spawn(move || {
+            for expected_kind in ["probe_auth", "probe_auth", "list_conversations"] {
+                let raw = request(
+                    address,
+                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
                 );
-                assert_eq!(command.as_object().unwrap().len(), 4);
-            },
-            |command| {
-                json!({
-                    "version": 1,
-                    "id": command["id"],
-                    "kind": "list_conversations",
-                    "ok": true,
-                    "http_status": 200,
-                    "content_type": "application/json",
-                    "body": {
-                        "items": [
-                            {
-                                "id": "remote-1",
-                                "title": "One",
-                                "create_time": "2026-09-30T18:32:58Z",
-                                "update_time": "2026-09-30T21:04:06Z"
-                            }
-                        ],
-                        "total": 21,
-                        "limit": 20,
-                        "offset": 0
-                    }
-                })
-            },
-        );
+                let split = raw
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .unwrap();
+                let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
+                assert_eq!(command["kind"], json!(expected_kind));
+
+                if expected_kind == "list_conversations" {
+                    assert_eq!(
+                        command["resource"],
+                        json!(CONVERSATION_LIST_FIRST_PAGE_RESOURCE)
+                    );
+                    assert_eq!(command.as_object().unwrap().len(), 4);
+                }
+
+                let result = if expected_kind == "probe_auth" {
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": "probe_auth",
+                        "ok": true,
+                        "authentication": "authenticated",
+                        "http_status": 200
+                    })
+                } else {
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": "list_conversations",
+                        "ok": true,
+                        "http_status": 200,
+                        "content_type": "application/json",
+                        "body": {
+                            "items": [
+                                {
+                                    "id": "remote-1",
+                                    "title": "One",
+                                    "create_time": "2026-09-30T18:32:58Z",
+                                    "update_time": "2026-09-30T21:04:06Z"
+                                }
+                            ],
+                            "total": 21,
+                            "limit": 20,
+                            "offset": 0
+                        }
+                    })
+                };
+                let body = serde_json::to_vec(&result).unwrap();
+                let request_head = format!(
+                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let mut raw = request_head.into_bytes();
+                raw.extend_from_slice(&body);
+                let response = request(address, &raw);
+                assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
+            }
+        });
 
         let mut provider = runtime.provider();
         let page = provider.list_recent_conversations().unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, "remote-1");
         assert_eq!(page.total, 21);
-        auth.join().unwrap();
-        list.join().unwrap();
+        browser.join().unwrap();
     }
 
     #[test]
