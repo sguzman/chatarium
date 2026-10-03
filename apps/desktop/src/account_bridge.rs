@@ -2,7 +2,7 @@
 //!
 //! The Rust side never receives browser cookies, bearer/session tokens, request headers, Sentinel
 //! material, browser storage, or account identifiers. It exposes only typed account-history
-//! commands: authentication probing, the fixed C01 list read, and the exact evidence-backed C02 GET.
+//! commands: authentication probing, bounded history discovery/bootstrap, and exact C02 capture.
 
 use chatarium_core::authenticated_session::{
     AuthenticatedSessionLease, SessionAuthenticationEvidence, SessionLeaseError,
@@ -36,7 +36,7 @@ const AUTH_RESULT_WAIT: Duration = Duration::from_secs(5);
 const FETCH_RESULT_WAIT: Duration = Duration::from_secs(45);
 const AUTH_REQUEST_PROFILE: &str = "chatgpt-me-v1";
 const HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-discovery-v1";
-const DISCOVERY_RESULT_WAIT: Duration = Duration::from_secs(20);
+const DISCOVERY_RESULT_WAIT: Duration = Duration::from_secs(30);
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
