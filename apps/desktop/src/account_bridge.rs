@@ -49,11 +49,18 @@ impl fmt::Display for BrowserBridgeError {
             Self::Timeout => write!(formatter, "browser bridge timed out"),
             Self::Protocol(detail) => write!(formatter, "browser bridge protocol error: {detail}"),
             Self::UnsupportedRevision(revision) => {
-                write!(formatter, "browser bridge does not implement C02 revision {revision:?}")
+                write!(
+                    formatter,
+                    "browser bridge does not implement C02 revision {revision:?}"
+                )
             }
-            Self::HttpStatus(status) => write!(formatter, "remote conversation GET returned HTTP {status}"),
+            Self::HttpStatus(status) => {
+                write!(formatter, "remote conversation GET returned HTTP {status}")
+            }
             Self::RateLimited => write!(formatter, "remote conversation GET returned HTTP 429"),
-            Self::Unauthenticated => write!(formatter, "browser ChatGPT session is unauthenticated"),
+            Self::Unauthenticated => {
+                write!(formatter, "browser ChatGPT session is unauthenticated")
+            }
         }
     }
 }
@@ -134,7 +141,11 @@ impl AccountBridgeRuntime {
 impl Drop for AccountBridgeRuntime {
     fn drop(&mut self) {
         {
-            let mut state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.shutdown = true;
             self.shared.changed.notify_all();
         }
@@ -162,11 +173,10 @@ impl BrowserBridgeProvider {
     ) -> Result<Value, BrowserBridgeError> {
         let id;
         {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .map_err(|_| BrowserBridgeError::Unavailable("bridge state poisoned".to_owned()))?;
+            let mut state =
+                self.shared.state.lock().map_err(|_| {
+                    BrowserBridgeError::Unavailable("bridge state poisoned".to_owned())
+                })?;
             if state.shutdown {
                 return Err(BrowserBridgeError::Unavailable(
                     "bridge server is shutting down".to_owned(),
@@ -225,9 +235,7 @@ impl BrowserBridgeProvider {
 impl UserAuthenticatedSessionProvider for BrowserBridgeProvider {
     type Error = BrowserBridgeError;
 
-    fn authentication_evidence(
-        &mut self,
-    ) -> Result<SessionAuthenticationEvidence, Self::Error> {
+    fn authentication_evidence(&mut self) -> Result<SessionAuthenticationEvidence, Self::Error> {
         let result = self.call("probe_auth", |_| {}, AUTH_RESULT_WAIT)?;
         match result.get("authentication").and_then(Value::as_str) {
             Some("authenticated") => Ok(SessionAuthenticationEvidence::Authenticated),
@@ -277,23 +285,24 @@ impl RemoteConversationFetchProvider for BrowserBridgeProvider {
             .and_then(Value::as_u64)
             .and_then(|status| u16::try_from(status).ok())
             .ok_or_else(|| {
-                BrowserBridgeError::Protocol("successful fetch result is missing HTTP status".to_owned())
+                BrowserBridgeError::Protocol(
+                    "successful fetch result is missing HTTP status".to_owned(),
+                )
             })?;
         if status != 200 {
             return Err(status_error(status));
         }
 
-        result
-            .get("body")
-            .cloned()
-            .ok_or_else(|| BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned()))
+        result.get("body").cloned().ok_or_else(|| {
+            BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
+        })
     }
 }
 
 fn validate_result(id: &str, kind: &str, result: Value) -> Result<Value, BrowserBridgeError> {
-    let object = result
-        .as_object()
-        .ok_or_else(|| BrowserBridgeError::Protocol("bridge result must be an object".to_owned()))?;
+    let object = result.as_object().ok_or_else(|| {
+        BrowserBridgeError::Protocol("bridge result must be an object".to_owned())
+    })?;
     if object.get("version").and_then(Value::as_u64) != Some(1)
         || object.get("id").and_then(Value::as_str) != Some(id)
         || object.get("kind").and_then(Value::as_str) != Some(kind)
@@ -386,12 +395,7 @@ fn handle_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
         Err(HttpReadError::Io(error)) => return Err(error),
     };
 
-    if request
-        .headers
-        .get(BRIDGE_HEADER)
-        .map(String::as_str)
-        != Some(BRIDGE_HEADER_VALUE)
-    {
+    if request.headers.get(BRIDGE_HEADER).map(String::as_str) != Some(BRIDGE_HEADER_VALUE) {
         return write_response(&mut stream, 403, None);
     }
 
@@ -404,7 +408,10 @@ fn handle_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
 
 fn handle_next(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
     let deadline = Instant::now() + NEXT_WAIT;
-    let mut state = shared.state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
 
     loop {
         if state.shutdown {
@@ -448,7 +455,10 @@ fn handle_result(stream: &mut TcpStream, shared: &Shared, body: &[u8]) -> io::Re
         return write_response(stream, 400, None);
     };
 
-    let mut state = shared.state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let Some(expected_kind) = state.inflight.get(id).copied() else {
         return write_response(stream, 409, None);
     };
@@ -498,8 +508,14 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpReadError> {
     let mut lines = header_text.split("\r\n");
     let request_line = lines.next().ok_or(HttpReadError::Malformed)?;
     let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().ok_or(HttpReadError::Malformed)?.to_owned();
-    let path = request_parts.next().ok_or(HttpReadError::Malformed)?.to_owned();
+    let method = request_parts
+        .next()
+        .ok_or(HttpReadError::Malformed)?
+        .to_owned();
+    let path = request_parts
+        .next()
+        .ok_or(HttpReadError::Malformed)?
+        .to_owned();
     let version = request_parts.next().ok_or(HttpReadError::Malformed)?;
     if request_parts.next().is_some() || version != "HTTP/1.1" || !path.starts_with('/') {
         return Err(HttpReadError::Malformed);
@@ -520,7 +536,9 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpReadError> {
         return Err(HttpReadError::Malformed);
     }
     let content_length = match headers.get("content-length") {
-        Some(value) => value.parse::<usize>().map_err(|_| HttpReadError::Malformed)?,
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| HttpReadError::Malformed)?,
         None => 0,
     };
     if content_length > MAX_RESULT_BODY_BYTES {
@@ -606,7 +624,10 @@ mod tests {
                 address,
                 b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\n\r\n",
             );
-            let split = raw.windows(4).position(|window| window == b"\r\n\r\n").unwrap();
+            let split = raw
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .unwrap();
             let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
             inspect(&command);
             let result = result(&command);
@@ -672,7 +693,9 @@ mod tests {
                 assert_eq!(command["kind"], json!("fetch_conversation"));
                 assert_eq!(
                     command["resource"],
-                    json!("/backend-api/conversations/opaque%2Fremote%20id?num_turns=10&include_has_versions=true")
+                    json!(
+                        "/backend-api/conversations/opaque%2Fremote%20id?num_turns=10&include_has_versions=true"
+                    )
                 );
             },
             |command| {
