@@ -7,8 +7,7 @@ use std::fmt;
 pub const CONVERSATION_LIST_OBSERVATION: &str = "2026-10-03.002";
 
 /// Exact first-page resource observed in the user's Edge capture.
-pub const CONVERSATION_LIST_FIRST_PAGE_RESOURCE: &str =
-    "/backend-api/conversations?exclude_conversation_origin=tpp&expand=false&hide_snorlax=false&is_archived=false&is_starred=false&limit=20&order=updated&offset=0";
+pub const CONVERSATION_LIST_FIRST_PAGE_RESOURCE: &str = "/backend-api/conversations?exclude_conversation_origin=tpp&expand=false&hide_snorlax=false&is_archived=false&is_starred=false&limit=20&order=updated&offset=0";
 
 /// One account-history summary.
 #[derive(Debug, Clone, PartialEq)]
@@ -43,10 +42,20 @@ impl fmt::Display for ConversationListParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TopLevelNotObject => write!(formatter, "conversation list must be a JSON object"),
-            Self::MissingField(field) => write!(formatter, "conversation list is missing {field:?}"),
-            Self::InvalidField(field) => write!(formatter, "conversation list field {field:?} has an unsupported value"),
-            Self::InvalidItem(index) => write!(formatter, "conversation list item {index} is not an object"),
-            Self::InvalidItemIdentity(index) => write!(formatter, "conversation list item {index} has no usable remote id"),
+            Self::MissingField(field) => {
+                write!(formatter, "conversation list is missing {field:?}")
+            }
+            Self::InvalidField(field) => write!(
+                formatter,
+                "conversation list field {field:?} has an unsupported value"
+            ),
+            Self::InvalidItem(index) => {
+                write!(formatter, "conversation list item {index} is not an object")
+            }
+            Self::InvalidItemIdentity(index) => write!(
+                formatter,
+                "conversation list item {index} has no usable remote id"
+            ),
             Self::UnsupportedPage { limit, offset } => write!(
                 formatter,
                 "conversation list page metadata limit={limit} offset={offset} is outside the evidenced first-page profile"
@@ -116,16 +125,11 @@ pub fn parse_conversation_list_first_page(
     })
 }
 
-fn required_u64(
-    value: Option<&Value>,
-    field: &str,
-) -> Result<u64, ConversationListParseError> {
-    value
-        .and_then(Value::as_u64)
-        .ok_or_else(|| match value {
-            None => ConversationListParseError::MissingField(field.to_owned()),
-            Some(_) => ConversationListParseError::InvalidField(field.to_owned()),
-        })
+fn required_u64(value: Option<&Value>, field: &str) -> Result<u64, ConversationListParseError> {
+    value.and_then(Value::as_u64).ok_or_else(|| match value {
+        None => ConversationListParseError::MissingField(field.to_owned()),
+        Some(_) => ConversationListParseError::InvalidField(field.to_owned()),
+    })
 }
 
 #[cfg(test)]
