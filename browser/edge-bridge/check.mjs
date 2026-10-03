@@ -5,6 +5,7 @@ import {
   mergeDiscoveryCandidates,
 } from './history-discovery.mjs';
 import {
+  classifyConversationHttpStatus,
   conversationRoute,
   isJsonMimeType,
   matchConversationResponse,
@@ -29,7 +30,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.4') {
+if (manifest.version !== '0.4.5') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -78,6 +79,10 @@ for (const required of [
   'chrome.tabs.remove',
   'activeConversationCaptures',
   'captureConversationByNavigation',
+  'classifyConversationHttpStatus',
+  'rate_limited_responses',
+  'exact_response_count',
+  "'exact_conversation_rate_limited'",
   'settleWithin',
 ]) {
   if (!worker.includes(required)) {
@@ -237,6 +242,18 @@ if (!isJsonMimeType('application/json; charset=utf-8') || !isJsonMimeType('appli
 }
 if (isJsonMimeType('text/html')) {
   throw new Error('non-JSON media type passed conversation capture gate');
+}
+
+if (classifyConversationHttpStatus(200) !== 'success') {
+  throw new Error('HTTP 200 conversation response must be capturable');
+}
+if (classifyConversationHttpStatus(429) !== 'transient_rate_limit') {
+  throw new Error('HTTP 429 conversation response must stay observable, not terminal');
+}
+for (const status of [400, 401, 403, 404, 500, 503]) {
+  if (classifyConversationHttpStatus(status) !== 'terminal_http_error') {
+    throw new Error(`HTTP ${status} must remain terminal for exact conversation capture`);
+  }
 }
 
 console.log('Chatarium CDP conversation capture matcher OK');
