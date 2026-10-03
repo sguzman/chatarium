@@ -495,6 +495,128 @@ impl ChatariumApp {
         }
     }
 
+    fn start_history_discovery(&mut self, repaint: &egui::Context) {
+        if self.history_list_pending {
+            return;
+        }
+        self.history_discovery_started = true;
+
+        let Some(mut provider) = self.account_bridge_provider.clone() else {
+            self.account_bridge_status = "listener unavailable".to_owned();
+            return;
+        };
+
+        let notices = self.live_mirror_fetch_tx.clone();
+        let repaint = repaint.clone();
+        self.history_list_pending = true;
+        self.account_bridge_status = "listener ready · checking browser…".to_owned();
+
+        let spawn = thread::Builder::new()
+            .name("chatarium-history-discovery".to_owned())
+            .spawn(move || {
+                use chatarium_core::authenticated_session::SessionAuthenticationEvidence;
+
+                match provider.probe_authentication() {
+                    Ok(SessionAuthenticationEvidence::Authenticated) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryAuthenticated);
+                    }
+                    Ok(SessionAuthenticationEvidence::Unauthenticated) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryUnauthenticated);
+                        repaint.request_repaint();
+                        return;
+                    }
+                    Ok(SessionAuthenticationEvidence::Unknown) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryAuthenticationUnknown);
+                        repaint.request_repaint();
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryProbeFailed {
+                            error: error.to_string(),
+                        });
+                        repaint.request_repaint();
+                        return;
+                    }
+                }
+
+                match provider.list_recent_conversations() {
+                    Ok(page) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryListLoaded { page });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(LiveMirrorFetchNotice::HistoryListFailed {
+                            error: error.to_string(),
+                        });
+                    }
+                }
+                repaint.request_repaint();
+            });
+
+        if let Err(error) = spawn {
+            self.history_list_pending = false;
+            self.account_bridge_status =
+                format!("listener ready · failed to start browser check: {error}");
+        }
+    }
+
+    fn open_discovered_remote_conversation(
+        &mut self,
+        remote_conversation_id: String,
+        repaint: &egui::Context,
+    ) {
+        if self.remote_discovery_pending.is_some() || self.live_mirror_pending.is_some() {
+            return;
+        }
+        let Some(mut provider) = self.account_bridge_provider.clone() else {
+            self.status = "cannot open remote chat: history bridge unavailable".to_owned();
+            return;
+        };
+
+        let notices = self.live_mirror_fetch_tx.clone();
+        let repaint = repaint.clone();
+        self.remote_discovery_pending = Some(remote_conversation_id.clone());
+        self.status = "fetching exact remote ChatGPT conversation…".to_owned();
+
+        let spawn = thread::Builder::new()
+            .name("chatarium-remote-history-open".to_owned())
+            .spawn(move || {
+                let notice = match provider
+                    .fetch_authenticated_conversation(remote_conversation_id.as_str())
+                {
+                    Ok(body) => LiveMirrorFetchNotice::DiscoveredFetched {
+                        remote_conversation_id,
+                        body,
+                    },
+                    Err(error) => LiveMirrorFetchNotice::DiscoveredFailed {
+                        remote_conversation_id,
+                        error: error.to_string(),
+                    },
+                };
+                let _ = notices.send(notice);
+                repaint.request_repaint();
+            });
+
+        if let Err(error) = spawn {
+            self.remote_discovery_pending = None;
+            self.status = format!("failed to start remote conversation fetch: {error}");
+        }
+    }
+
+    fn refresh_live_mirror_catalog(&mut self) {
+        match latest_live_mirror_catalog(&self.events) {
+            Ok(catalog) => {
+                self.live_mirrored_conversations = catalog
+                    .iter()
+                    .map(|entry| entry.local_conversation_id)
+                    .collect();
+                self.live_mirror_catalog = catalog;
+            }
+            Err(error) => {
+                self.status = format!("live mirror replay warning: {error}");
+            }
+        }
+    }
+
     fn sync_historical_conversation(
         &mut self,
         local_conversation_id: LocalConversationId,
@@ -561,6 +683,77 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
+                LiveMirrorFetchNotice::HistoryAuthenticated => {
+                    self.history_bridge_authenticated = true;
+                    self.account_bridge_status = "browser connected · authenticated".to_owned();
+                }
+                LiveMirrorFetchNotice::HistoryUnauthenticated => {
+                    self.history_list_pending = false;
+                    self.history_bridge_authenticated = false;
+                    self.account_bridge_status = "browser connected · not signed in".to_owned();
+                }
+                LiveMirrorFetchNotice::HistoryAuthenticationUnknown => {
+                    self.history_list_pending = false;
+                    self.history_bridge_authenticated = false;
+                    self.account_bridge_status =
+                        "browser connected · authentication unknown".to_owned();
+                }
+                LiveMirrorFetchNotice::HistoryProbeFailed { error } => {
+                    self.history_list_pending = false;
+                    self.history_bridge_authenticated = false;
+                    self.account_bridge_status =
+                        format!("listener ready · browser not confirmed: {error}");
+                }
+                LiveMirrorFetchNotice::HistoryListLoaded { page } => {
+                    self.history_list_pending = false;
+                    self.history_bridge_authenticated = true;
+                    self.remote_conversation_total = Some(page.total);
+                    self.remote_conversation_catalog = page.items;
+                    self.account_bridge_status = format!(
+                        "browser authenticated · {} recent chat{}",
+                        self.remote_conversation_catalog.len(),
+                        if self.remote_conversation_catalog.len() == 1 { "" } else { "s" }
+                    );
+                }
+                LiveMirrorFetchNotice::HistoryListFailed { error } => {
+                    self.history_list_pending = false;
+                    self.history_bridge_authenticated = true;
+                    self.account_bridge_status =
+                        format!("browser authenticated · history unavailable: {error}");
+                }
+                LiveMirrorFetchNotice::DiscoveredFetched {
+                    remote_conversation_id,
+                    body,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        self.remote_discovery_pending = None;
+                        self.status =
+                            "remote conversation fetched, but persistence is unavailable".to_owned();
+                        continue;
+                    };
+                    if let Err(error) = sender.send(PersistCommand::PromoteDiscoveredLiveMirror {
+                        expected_remote_conversation_id: remote_conversation_id,
+                        body,
+                    }) {
+                        self.remote_discovery_pending = None;
+                        self.status = format!("failed to queue remote mirror creation: {error}");
+                    } else {
+                        self.status =
+                            "remote conversation validated; creating durable live mirror…"
+                                .to_owned();
+                    }
+                }
+                LiveMirrorFetchNotice::DiscoveredFailed {
+                    remote_conversation_id,
+                    error,
+                } => {
+                    if self.remote_discovery_pending.as_deref()
+                        == Some(remote_conversation_id.as_str())
+                    {
+                        self.remote_discovery_pending = None;
+                    }
+                    self.status = format!("remote ChatGPT conversation fetch failed: {error}");
+                }
                 LiveMirrorFetchNotice::Fetched {
                     local_conversation_id,
                     remote_conversation_id,
@@ -847,8 +1040,7 @@ impl ChatariumApp {
                     projection_error,
                 } => {
                     self.events.extend(appended_events);
-                    self.live_mirrored_conversations
-                        .insert(local_conversation_id);
+                    self.refresh_live_mirror_catalog();
                     if self.live_mirror_pending == Some(local_conversation_id) {
                         self.live_mirror_pending = None;
                     }
@@ -882,6 +1074,51 @@ impl ChatariumApp {
                         self.live_mirror_pending = None;
                     }
                     self.status = format!("live mirror promotion failed: {error}");
+                }
+                PersistNotice::DiscoveredLiveMirrorPromoted {
+                    local_conversation_id,
+                    remote_conversation_id,
+                    snapshot_sequence,
+                    appended_events,
+                    truncated_before,
+                    messages,
+                    projection_error,
+                } => {
+                    self.events.extend(appended_events);
+                    self.refresh_live_mirror_catalog();
+                    if self.remote_discovery_pending.as_deref()
+                        == Some(remote_conversation_id.as_str())
+                    {
+                        self.remote_discovery_pending = None;
+                    }
+                    self.selected_historical_conversation = Some(local_conversation_id);
+                    self.loaded_historical_conversation = Some(local_conversation_id);
+                    self.historical_load_pending = None;
+                    self.live_mirror_truncated_before = truncated_before;
+
+                    if let Some(error) = projection_error {
+                        self.historical_messages.clear();
+                        self.status = format!(
+                            "live mirror is durable, but visible transcript projection is blocked: {error}"
+                        );
+                    } else {
+                        self.historical_messages =
+                            remote_display_messages(messages, snapshot_sequence);
+                        self.status = format!(
+                            "remote ChatGPT conversation mirrored locally at event #{snapshot_sequence}"
+                        );
+                    }
+                }
+                PersistNotice::DiscoveredLiveMirrorPromotionFailed {
+                    remote_conversation_id,
+                    error,
+                } => {
+                    if self.remote_discovery_pending.as_deref()
+                        == Some(remote_conversation_id.as_str())
+                    {
+                        self.remote_discovery_pending = None;
+                    }
+                    self.status = format!("remote mirror creation failed: {error}");
                 }
                 PersistNotice::Failed {
                     operation,
