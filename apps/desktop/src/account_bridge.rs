@@ -13,8 +13,8 @@ use chatarium_protocol::conversation_fetch_request::{
     CONVERSATION_FETCH_REQUEST_OBSERVATION, conversation_fetch_resource,
 };
 use chatarium_protocol::conversation_list::{
-    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, CONVERSATION_LIST_OBSERVATION, ConversationListPage,
-    parse_conversation_list_first_page,
+    CONVERSATION_LIST_FIRST_PAGE_RESOURCE, CONVERSATION_LIST_OBSERVATION, ConversationListItem,
+    ConversationListPage, parse_conversation_list_first_page,
 };
 use chatarium_store::remote_mirror_runtime::RemoteConversationFetchProvider;
 use serde_json::{Value, json};
