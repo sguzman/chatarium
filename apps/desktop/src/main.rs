@@ -1236,12 +1236,14 @@ impl eframe::App for ChatariumApp {
             projected_local_display_messages(&self.events, self.local_conversation_id);
         let local_conversation_title = derived_conversation_title(&local_display_messages);
         let historical_mode = self.selected_historical_conversation.is_some();
-        let selected_historical_entry =
-            self.selected_historical_conversation.and_then(|selected| {
-                self.historical_catalog
-                    .iter()
-                    .find(|entry| entry.local_conversation_id == selected)
-            });
+        let selected_historical_id = self.selected_historical_conversation;
+        let selected_live_mirror = selected_historical_id
+            .is_some_and(|selected| self.live_mirrored_conversations.contains(&selected));
+        let selected_historical_entry = selected_historical_id.and_then(|selected| {
+            self.historical_catalog
+                .iter()
+                .find(|entry| entry.local_conversation_id == selected)
+        });
         let conversation_title = selected_historical_entry
             .and_then(|entry| entry.title.clone())
             .filter(|title| !title.trim().is_empty())
@@ -1254,6 +1256,7 @@ impl eframe::App for ChatariumApp {
             });
         let mut select_local_requested = false;
         let mut select_historical_requested = None;
+        let mut sync_live_requested = None;
 
         egui::SidePanel::left("sidebar")
             .exact_width(236.0)
@@ -1353,10 +1356,21 @@ impl eframe::App for ChatariumApp {
                                 {
                                     select_historical_requested = Some(entry.local_conversation_id);
                                 }
+                                let live_mirrored = self
+                                    .live_mirrored_conversations
+                                    .contains(&entry.local_conversation_id);
                                 ui.label(
-                                    egui::RichText::new("historical snapshot · read-only")
-                                        .size(9.0)
-                                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                                    egui::RichText::new(if live_mirrored {
+                                        "live mirror · read-only"
+                                    } else {
+                                        "historical snapshot · read-only"
+                                    })
+                                    .size(9.0)
+                                    .color(if live_mirrored {
+                                        egui::Color32::from_rgb(112, 176, 137)
+                                    } else {
+                                        egui::Color32::from_rgb(112, 116, 126)
+                                    }),
                                 );
                                 ui.add_space(4.0);
                             }
@@ -1372,6 +1386,16 @@ impl eframe::App for ChatariumApp {
                 );
                 ui.add_space(7.0);
                 status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
+                status_row(
+                    ui,
+                    "History bridge",
+                    if self.account_bridge.is_some() {
+                        "listener ready"
+                    } else {
+                        "unavailable"
+                    },
+                    self.account_bridge.is_some(),
+                );
                 status_row(
                     ui,
                     "ChatGPT",
@@ -1539,7 +1563,9 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(238, 239, 244)),
                         );
                         ui.label(
-                            egui::RichText::new(if historical_mode {
+                            egui::RichText::new(if selected_live_mirror {
+                                "Validated live ChatGPT mirror · read-only"
+                            } else if historical_mode {
                                 "Historical account-export snapshot · read-only"
                             } else if self.remote_connected() {
                                 "Durable on this machine · authenticated with ChatGPT"
@@ -1554,7 +1580,9 @@ impl eframe::App for ChatariumApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let connected = self.remote_connected();
                         egui::Frame::default()
-                            .fill(if historical_mode {
+                            .fill(if selected_live_mirror {
+                                egui::Color32::from_rgb(24, 52, 37)
+                            } else if historical_mode {
                                 egui::Color32::from_rgb(39, 42, 49)
                             } else if connected {
                                 egui::Color32::from_rgb(24, 52, 37)
@@ -1565,7 +1593,9 @@ impl eframe::App for ChatariumApp {
                             .inner_margin(egui::Margin::symmetric(10, 5))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new(if historical_mode {
+                                    egui::RichText::new(if selected_live_mirror {
+                                        "LIVE MIRROR"
+                                    } else if historical_mode {
                                         "IMPORTED SNAPSHOT"
                                     } else if connected {
                                         "CHATGPT CONNECTED"
@@ -1575,7 +1605,9 @@ impl eframe::App for ChatariumApp {
                                     .size(10.0)
                                     .strong()
                                     .color(
-                                        if historical_mode {
+                                        if selected_live_mirror {
+                                            egui::Color32::from_rgb(126, 210, 156)
+                                        } else if historical_mode {
                                             egui::Color32::from_rgb(179, 184, 196)
                                         } else if connected {
                                             egui::Color32::from_rgb(126, 210, 156)
@@ -1608,17 +1640,58 @@ impl eframe::App for ChatariumApp {
                         .inner_margin(egui::Margin::same(14))
                         .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new("Historical snapshot is read-only")
-                                    .strong()
-                                    .color(egui::Color32::from_rgb(221, 223, 229)),
+                                egui::RichText::new(if selected_live_mirror {
+                                    "Live mirror is read-only for now"
+                                } else {
+                                    "Historical snapshot is read-only"
+                                })
+                                .strong()
+                                .color(egui::Color32::from_rgb(221, 223, 229)),
                             );
                             ui.label(
-                                egui::RichText::new(
-                                    "Chatarium will not silently fork or send into an imported chat. Live same-thread write-back remains a separate interoperability problem.",
-                                )
+                                egui::RichText::new(if selected_live_mirror {
+                                    "Chatarium can refresh this real ChatGPT thread through your browser session. Same-thread write-back remains evidence-gated, so the composer stays disabled."
+                                } else {
+                                    "Sync can upgrade this imported lineage to a validated live mirror without creating a parallel conversation. Same-thread write-back remains a separate interoperability problem."
+                                })
                                 .size(11.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                let pending = self.live_mirror_pending == selected_historical_id;
+                                let can_sync = selected_historical_id.is_some()
+                                    && self.persist_tx.is_some()
+                                    && self.account_bridge_provider.is_some()
+                                    && self.live_mirror_pending.is_none();
+                                let label = if pending {
+                                    "Syncing…"
+                                } else if selected_live_mirror {
+                                    "Refresh from ChatGPT"
+                                } else {
+                                    "Sync from ChatGPT"
+                                };
+                                if ui
+                                    .add_enabled(
+                                        can_sync,
+                                        egui::Button::new(egui::RichText::new(label).strong())
+                                            .min_size(egui::vec2(160.0, 32.0)),
+                                    )
+                                    .clicked()
+                                {
+                                    sync_live_requested = selected_historical_id;
+                                }
+                                if pending {
+                                    ui.spinner();
+                                }
+                            });
+                            if self.account_bridge_provider.is_none() {
+                                ui.label(
+                                    egui::RichText::new(self.account_bridge_status.as_str())
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(166, 139, 112)),
+                                );
+                            }
                         });
                     return;
                 }
@@ -1702,6 +1775,10 @@ impl eframe::App for ChatariumApp {
                 });
             });
 
+        if let Some(local_conversation_id) = sync_live_requested {
+            self.sync_historical_conversation(local_conversation_id, ctx);
+        }
+
         let display_messages: &[DisplayMessage] = if historical_mode {
             &self.historical_messages
         } else {
@@ -1730,14 +1807,20 @@ impl eframe::App for ChatariumApp {
                                     ui.add_space(8.0);
                                     ui.label(
                                         egui::RichText::new(
-                                            "Loading and verifying historical snapshot…",
+                                            if selected_live_mirror {
+                                                "Loading validated live mirror snapshot…"
+                                            } else {
+                                                "Loading and verifying historical snapshot…"
+                                            },
                                         )
                                         .size(14.0)
                                         .color(egui::Color32::from_rgb(180, 184, 193)),
                                     );
                                 } else {
                                     ui.label(
-                                        egui::RichText::new(if historical_mode {
+                                        egui::RichText::new(if selected_live_mirror {
+                                            "No visible messages in the current live mirror page"
+                                        } else if historical_mode {
                                             "No visible messages on the exported active branch"
                                         } else {
                                             "Start a local conversation"
@@ -1748,7 +1831,9 @@ impl eframe::App for ChatariumApp {
                                     );
                                     ui.add_space(8.0);
                                     ui.label(
-                                        egui::RichText::new(if historical_mode {
+                                        egui::RichText::new(if selected_live_mirror {
+                                            "The live response is durable; Chatarium did not expose system, tool, or reasoning content or guess across missing pagination."
+                                        } else if historical_mode {
                                             "The raw snapshot is preserved; Chatarium did not guess across missing or non-visible content."
                                         } else if self.remote_connected() {
                                             "Write below to send a durable turn through your ChatGPT plan."
@@ -1762,6 +1847,16 @@ impl eframe::App for ChatariumApp {
                             });
                         } else {
                             ui.add_space(8.0);
+                            if selected_live_mirror && self.live_mirror_truncated_before {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Older messages exist before this fetched page; Chatarium is not guessing across the pagination boundary.",
+                                    )
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(190, 166, 112)),
+                                );
+                                ui.add_space(10.0);
+                            }
                             for message in display_messages {
                                 match message.role {
                                     DisplayRole::User => {
