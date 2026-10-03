@@ -21,6 +21,8 @@ const ACCOUNT_KEY_PREFIX = 'chatarium-account-context:';
 const FETCH_PROFILE = '2026-10-03.001';
 const AUTH_PROFILE = 'chatgpt-me-v1';
 const DISCOVERY_PROFILE = 'cdp-history-discovery-v1';
+const SIDEBAR_BOOTSTRAP_RESOURCE =
+  '/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false';
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const DISCOVERY_WINDOW_MS = 8_000;
 const DISCOVERY_BODY_GRACE_MS = 500;
@@ -30,6 +32,7 @@ const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const NEXT_TIMEOUT_MS = 29_000;
 const RESULT_TIMEOUT_MS = 10_000;
 const LOOPBACK_RETRY_MS = 1_000;
+const PAGE_FETCH_TIMEOUT_MS = 8_000;
 
 let loopRunning = false;
 let lastLoopbackError = '';
@@ -116,6 +119,27 @@ function headerValue(headers, name) {
   return null;
 }
 
+function isApplicationContextHeader(name) {
+  const lower = name.toLowerCase();
+  return lower === 'chatgpt-account-id'
+    || lower === 'oai-did'
+    || lower === 'oai-language'
+    || lower === 'originator'
+    || lower.startsWith('x-oai-')
+    || lower.startsWith('x-openai-');
+}
+
+function collectApplicationContextHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return {};
+  const selected = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (!isApplicationContextHeader(name)) continue;
+    if (typeof value !== 'string' || value.length === 0 || value.length > 2048) continue;
+    selected[name] = value;
+  }
+  return selected;
+}
+
 function safeBackendUrl(rawUrl) {
   let url;
   try {
@@ -128,7 +152,9 @@ function safeBackendUrl(rawUrl) {
   return url;
 }
 
-async function pageGet(resource, requestHeaders, maxResponseBytes) {
+async function pageGet(resource, requestHeaders, maxResponseBytes, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort('page fetch timeout'), timeoutMs);
   try {
     const response = await fetch(resource, {
       method: 'GET',
@@ -136,6 +162,7 @@ async function pageGet(resource, requestHeaders, maxResponseBytes) {
       credentials: 'include',
       cache: 'no-store',
       redirect: 'error',
+      signal: controller.signal,
     });
     const contentType = response.headers.get('content-type') ?? '';
     const declaredLength = Number(response.headers.get('content-length'));
@@ -185,6 +212,8 @@ async function pageGet(resource, requestHeaders, maxResponseBytes) {
       ok: false,
       error: error instanceof Error ? error.message : 'remote_fetch_failed',
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -193,7 +222,7 @@ async function executePageGet(tabId, resource, requestHeaders) {
     target: { tabId },
     world: 'MAIN',
     func: pageGet,
-    args: [resource, requestHeaders, MAX_RESPONSE_BYTES],
+    args: [resource, requestHeaders, MAX_RESPONSE_BYTES, PAGE_FETCH_TIMEOUT_MS],
   });
   if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
     throw new Error('main_world_no_result');
@@ -316,6 +345,13 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     const headers = method === 'Network.requestWillBeSent'
       ? params?.request?.headers
       : params?.headers;
+    const applicationHeaders = collectApplicationContextHeaders(headers);
+    if (Object.keys(applicationHeaders).length > 0) {
+      session.applicationHeaders = {
+        ...session.applicationHeaders,
+        ...applicationHeaders,
+      };
+    }
     const accountId = headerValue(headers, ACCOUNT_HEADER);
     if (validAccountId(accountId)) {
       session.accountId = accountId;
@@ -424,6 +460,7 @@ async function discoverHistorySurfaces(command) {
     tabId: tab.id,
     closed: false,
     accountId: null,
+    applicationHeaders: {},
     responses_seen: 0,
     backend_200_seen: 0,
     json_candidates_seen: 0,
@@ -486,6 +523,46 @@ async function discoverHistorySurfaces(command) {
   result.body_too_large = session.body_too_large;
   result.invalid_json = session.invalid_json;
   result.detached_reason = session.detached_reason;
+  result.sidebar_bootstrap_attempted = false;
+  result.sidebar_bootstrap_http_status = null;
+  result.sidebar_bootstrap_items = 0;
+  result.sidebar_bootstrap_error = null;
+  result.application_context_header_count = Object.keys(session.applicationHeaders).length;
+
+  if (accountId !== null) {
+    result.sidebar_bootstrap_attempted = true;
+    const bootstrapHeaders = {
+      ...session.applicationHeaders,
+      [ACCOUNT_HEADER]: accountId,
+    };
+    try {
+      const bootstrap = await executePageGet(
+        tab.id,
+        SIDEBAR_BOOTSTRAP_RESOURCE,
+        bootstrapHeaders,
+      );
+      result.sidebar_bootstrap_http_status =
+        Number.isInteger(bootstrap?.http_status) ? bootstrap.http_status : null;
+      if (bootstrap?.ok === true && bootstrap.body && typeof bootstrap.body === 'object') {
+        const classified = classifyHistoryBody(
+          `https://chatgpt.com${SIDEBAR_BOOTSTRAP_RESOURCE}`,
+          bootstrap.body,
+        );
+        if (classified !== null) {
+          result.sidebar_bootstrap_items = classified.conversation_count;
+          session.candidates.push(classified);
+        }
+      } else {
+        result.sidebar_bootstrap_error =
+          typeof bootstrap?.error === 'string' ? bootstrap.error : 'sidebar_bootstrap_failed';
+      }
+    } catch (error) {
+      result.sidebar_bootstrap_error =
+        error instanceof Error ? error.message : 'sidebar_bootstrap_failed';
+    }
+  } else {
+    result.sidebar_bootstrap_error = 'account_context_unavailable';
+  }
 
   const candidates = mergeDiscoveryCandidates(session.candidates);
   result.candidate_count = candidates.length;
