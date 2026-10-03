@@ -627,7 +627,7 @@ mod tests {
             Compatibility::Mismatch {
                 expected_revision,
                 ..
-            } if expected_revision == "2026-10-01.001"
+            } if expected_revision == "2026-10-03.001"
         ));
     }
 
