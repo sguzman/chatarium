@@ -7,6 +7,10 @@ use chatarium_core::{
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
+use chatarium_store::historical_transcript::{
+    HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
+    latest_historical_conversation_catalog, load_historical_active_transcript,
+};
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
@@ -30,6 +34,9 @@ enum PersistCommand {
         kind: EventKind,
         payload: String,
     },
+    LoadHistoricalConversation {
+        local_conversation_id: LocalConversationId,
+    },
     Shutdown,
 }
 
@@ -47,6 +54,15 @@ enum PersistNotice {
         turn_id: LocalTurnId,
         kind: EventKind,
         event: EventEnvelope,
+    },
+    HistoricalConversationLoaded {
+        local_conversation_id: LocalConversationId,
+        imported_sequence: u64,
+        messages: Vec<HistoricalTranscriptMessage>,
+    },
+    HistoricalConversationLoadFailed {
+        local_conversation_id: LocalConversationId,
+        error: String,
     },
     Failed {
         operation: &'static str,
@@ -68,6 +84,7 @@ struct DisplayMessage {
     role: DisplayRole,
     text: String,
     sequence: u64,
+    provenance_label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +112,11 @@ struct ChatariumApp {
     evidence: TurnEvidence,
     local_conversation_id: LocalConversationId,
     events: Vec<EventEnvelope>,
+    historical_catalog: Vec<HistoricalConversationCatalogEntry>,
+    selected_historical_conversation: Option<LocalConversationId>,
+    loaded_historical_conversation: Option<LocalConversationId>,
+    historical_messages: Vec<DisplayMessage>,
+    historical_load_pending: Option<LocalConversationId>,
     journal_path: PathBuf,
     persist_tx: Option<Sender<PersistCommand>>,
     notice_rx: Option<Receiver<PersistNotice>>,
