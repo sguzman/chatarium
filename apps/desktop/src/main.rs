@@ -5,6 +5,7 @@ use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
 };
+use chatarium_protocol::conversation_list::{ConversationListItem, ConversationListPage};
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
@@ -12,7 +13,6 @@ use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
 };
-use chatarium_protocol::conversation_list::{ConversationListItem, ConversationListPage};
 use chatarium_store::remote_mirror_bootstrap::{
     promote_discovered_live_mirror_body, promote_historical_live_mirror_body,
 };
@@ -134,9 +134,15 @@ enum LiveMirrorFetchNotice {
     HistoryAuthenticated,
     HistoryUnauthenticated,
     HistoryAuthenticationUnknown,
-    HistoryProbeFailed { error: String },
-    HistoryListLoaded { page: ConversationListPage },
-    HistoryListFailed { error: String },
+    HistoryProbeFailed {
+        error: String,
+    },
+    HistoryListLoaded {
+        page: ConversationListPage,
+    },
+    HistoryListFailed {
+        error: String,
+    },
     Fetched {
         local_conversation_id: LocalConversationId,
         remote_conversation_id: String,
@@ -712,7 +718,11 @@ impl ChatariumApp {
                     self.account_bridge_status = format!(
                         "browser authenticated · {} recent chat{}",
                         self.remote_conversation_catalog.len(),
-                        if self.remote_conversation_catalog.len() == 1 { "" } else { "s" }
+                        if self.remote_conversation_catalog.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
                     );
                 }
                 LiveMirrorFetchNotice::HistoryListFailed { error } => {
@@ -727,8 +737,8 @@ impl ChatariumApp {
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.remote_discovery_pending = None;
-                        self.status =
-                            "remote conversation fetched, but persistence is unavailable".to_owned();
+                        self.status = "remote conversation fetched, but persistence is unavailable"
+                            .to_owned();
                         continue;
                     };
                     if let Err(error) = sender.send(PersistCommand::PromoteDiscoveredLiveMirror {
@@ -1723,8 +1733,7 @@ impl eframe::App for ChatariumApp {
                                     )
                                     .clicked()
                                 {
-                                    select_historical_requested =
-                                        Some(entry.local_conversation_id);
+                                    select_historical_requested = Some(entry.local_conversation_id);
                                 }
                                 ui.label(
                                     egui::RichText::new("durable offline mirror · read-only")
@@ -2629,7 +2638,10 @@ fn persistence_worker(
                         };
                         let _ = notices.send(PersistNotice::DiscoveredLiveMirrorPromoted {
                             local_conversation_id: result.local_conversation_id,
-                            remote_conversation_id: result.remote_conversation_id.as_str().to_owned(),
+                            remote_conversation_id: result
+                                .remote_conversation_id
+                                .as_str()
+                                .to_owned(),
                             snapshot_sequence: result.snapshot.sequence,
                             appended_events,
                             truncated_before,
