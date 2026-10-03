@@ -85,7 +85,9 @@ The store/protocol side of live mirroring remains valid: exact remote identity, 
 
 The Tampermonkey `account-bridge.user.js` experiment is **retired from the critical runtime path**. It produced useful protocol evidence and one successful browser↔desktop roundtrip, but repeated live QA exposed unstable transport/execution-world behavior and inadequate first-party request-context parity. Most importantly, the supplied HAR later showed that first-party conversation-list requests include account-selection context that the initial bridge omitted.
 
-The next browser-runtime milestone is a purpose-built Edge/Chromium extension. It must not reach human QA until it can self-report, independently:
+The replacement browser runtime is now implemented under `browser/edge-bridge/` as a purpose-built Edge/Chromium Manifest V3 extension, tracked by #102. The retired userscript transports are rejected by the Rust critical path rather than retained as hidden fallbacks. The extension uses narrow host permissions, keeps the raw account selector browser-local, executes evidence-backed reads in the exact ChatGPT tab's MAIN world, and carries explicit proof metadata across the existing typed loopback protocol.
+
+This implementation is still **pre-live-QA**. It must not reach human QA until automated checks are green and it can self-report, independently:
 
 1. extension/version alive;
 2. exact ChatGPT tab found;
@@ -98,6 +100,8 @@ The next browser-runtime milestone is a purpose-built Edge/Chromium extension. I
 9. parser result;
 10. semantic sanity result;
 11. durable mirror result.
+
+The desktop status row now treats authentication as only a partial proof. A list result becomes healthy only after extension/tab/MAIN/account/profile/HTTP/parser/semantic evidence succeeds; an exact-conversation sync reaches complete proof only after the matching durable mirror event. A zero-history result contradicting existing local history is explicitly rejected rather than normalized into success.
 
 The full failure chain and permanent gates are documented in `docs/postmortems/2026-10-03-chatgpt-history-bridge.md`.
 
