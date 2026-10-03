@@ -516,13 +516,15 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (matched !== null) {
       capture.exact_response_seen = true;
       capture.exact_response_count += 1;
-      capture.responseMeta = matched;
 
       const disposition = classifyConversationHttpStatus(matched.http_status);
       if (disposition === 'transient_rate_limit') {
         capture.rate_limited_responses += 1;
+        capture.lastRateLimitMeta = matched;
         return;
       }
+
+      capture.responseMeta = matched;
       if (disposition === 'terminal_http_error') {
         capture.resolve?.('http-status');
       } else if (!isJsonMimeType(matched.mime_type)) {
@@ -832,6 +834,7 @@ async function captureConversationByNavigation(command, remoteId) {
       exact_response_count: 0,
       rate_limited_responses: 0,
       responseMeta: null,
+      lastRateLimitMeta: null,
       pendingRequestId: null,
       bodyTask: null,
       body: null,
@@ -876,17 +879,18 @@ async function captureConversationByNavigation(command, remoteId) {
     result.invalid_json = session.invalid_json;
     result.detached_reason = session.detached_reason;
 
-    if (session.responseMeta !== null) {
-      result.first_party_http_status = session.responseMeta.http_status;
-      result.http_status = session.responseMeta.http_status;
-      result.content_type = session.responseMeta.mime_type;
+    const finalResponseMeta = session.responseMeta ?? session.lastRateLimitMeta;
+    if (finalResponseMeta !== null) {
+      result.first_party_http_status = finalResponseMeta.http_status;
+      result.http_status = finalResponseMeta.http_status;
+      result.content_type = finalResponseMeta.mime_type;
     }
 
     if (outcome === 'timeout') {
       if (
         session.body === null
-        && session.responseMeta !== null
-        && session.responseMeta.http_status === 429
+        && session.responseMeta === null
+        && session.lastRateLimitMeta !== null
       ) {
         result.error = 'exact_conversation_rate_limited';
       } else {
