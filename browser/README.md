@@ -131,6 +131,11 @@ The bridge splits authority deliberately:
 
 Bridge v0.3 prefers a direct page-context loopback request to `127.0.0.1:43117`. On modern Edge this uses the browser's Local Network Access permission model; Chatarium's loopback server answers CORS/preflight only for `https://chatgpt.com`, and still requires the typed bridge marker and endpoints. If direct page transport is unavailable, the userscript can fall back to Tampermonkey's privileged `GM_xmlhttpRequest`.
 
+Bridge v0.4 also preserves ChatGPT's active account context without exporting it from the browser. At document-start the userscript passively observes first-party same-origin fetches and retains only the `ChatGPT-Account-ID` header value in page-local memory. History enumeration and exact-conversation reads are refused until that first-party account context has been observed. The raw account ID is never sent over loopback, written to the journal, printed to the console, or surfaced in desktop diagnostics; Chatarium receives only a boolean proof that account context was present.
+
+Desktop history status is intentionally evidentiary rather than cosmetic. A successful list displays safe proof fields such as loopback transport, `account-context=yes`, remote HTTP status, parsed item count, and remote total. A syntactically valid empty result without account-context proof is rejected instead of being shown as “0 recent chats.”
+
+
 ### Chromium / Edge transport notes
 
 Tampermonkey 5.5.0 on Chromium/Edge 153 has an upstream background-networking regression that can stall or abort GM requests. Because the user's current environment matches that exact combination, v0.3 deliberately does not rely on the GM fallback there. The page-context route avoids Tampermonkey's MV3 background lifetime entirely.
