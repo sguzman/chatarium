@@ -1535,13 +1535,19 @@ impl eframe::App for ChatariumApp {
         let selected_historical_id = self.selected_historical_conversation;
         let selected_live_mirror = selected_historical_id
             .is_some_and(|selected| self.live_mirrored_conversations.contains(&selected));
+        let selected_live_entry = selected_historical_id.and_then(|selected| {
+            self.live_mirror_catalog
+                .iter()
+                .find(|entry| entry.local_conversation_id == selected)
+        });
         let selected_historical_entry = selected_historical_id.and_then(|selected| {
             self.historical_catalog
                 .iter()
                 .find(|entry| entry.local_conversation_id == selected)
         });
-        let conversation_title = selected_historical_entry
-            .and_then(|entry| entry.title.clone())
+        let conversation_title = selected_live_entry
+            .map(|entry| entry.title.clone())
+            .or_else(|| selected_historical_entry.and_then(|entry| entry.title.clone()))
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| {
                 if historical_mode {
@@ -1553,6 +1559,8 @@ impl eframe::App for ChatariumApp {
         let mut select_local_requested = false;
         let mut select_historical_requested = None;
         let mut sync_live_requested = None;
+        let mut open_remote_requested = None;
+        let mut refresh_history_requested = false;
 
         egui::SidePanel::left("sidebar")
             .exact_width(236.0)
@@ -1617,6 +1625,116 @@ impl eframe::App for ChatariumApp {
                             .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
                     });
+
+                if !self.remote_conversation_catalog.is_empty() {
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "CHATGPT HISTORY · {}/{}",
+                            self.remote_conversation_catalog.len(),
+                            self.remote_conversation_total
+                                .unwrap_or(self.remote_conversation_catalog.len() as u64)
+                        ))
+                        .size(10.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(112, 176, 137)),
+                    );
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("remote-chatgpt-conversations")
+                        .max_height(260.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for entry in &self.remote_conversation_catalog {
+                                let live_local = self
+                                    .live_mirror_catalog
+                                    .iter()
+                                    .find(|live| live.remote_conversation_id == entry.id)
+                                    .map(|live| live.local_conversation_id);
+                                let imported_local = self
+                                    .historical_catalog
+                                    .iter()
+                                    .find(|historical| {
+                                        historical.remote_conversation_id == entry.id
+                                    })
+                                    .map(|historical| historical.local_conversation_id);
+                                let local = live_local.or(imported_local);
+                                let selected = local.is_some()
+                                    && self.selected_historical_conversation == local;
+                                let title = entry
+                                    .title
+                                    .as_deref()
+                                    .filter(|title| !title.trim().is_empty())
+                                    .unwrap_or("Untitled ChatGPT conversation");
+
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(title).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(local) = local {
+                                        select_historical_requested = Some(local);
+                                    } else {
+                                        open_remote_requested = Some(entry.id.clone());
+                                    }
+                                }
+                                ui.label(
+                                    egui::RichText::new(if live_local.is_some() {
+                                        "remote · mirrored locally"
+                                    } else if imported_local.is_some() {
+                                        "remote · historical backup available"
+                                    } else {
+                                        "remote · click to mirror"
+                                    })
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(112, 116, 126)),
+                                );
+                                ui.add_space(4.0);
+                            }
+                        });
+                }
+
+                if !self.live_mirror_catalog.is_empty() {
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "CACHED CHATGPT · {}",
+                            self.live_mirror_catalog.len()
+                        ))
+                        .size(10.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                    );
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("cached-chatgpt-conversations")
+                        .max_height(160.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for entry in &self.live_mirror_catalog {
+                                let selected = self.selected_historical_conversation
+                                    == Some(entry.local_conversation_id);
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(entry.title.as_str()).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    select_historical_requested =
+                                        Some(entry.local_conversation_id);
+                                }
+                                ui.label(
+                                    egui::RichText::new("durable offline mirror · read-only")
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                                );
+                                ui.add_space(4.0);
+                            }
+                        });
+                }
 
                 if !self.historical_catalog.is_empty() {
                     ui.add_space(16.0);
@@ -1685,12 +1803,8 @@ impl eframe::App for ChatariumApp {
                 status_row(
                     ui,
                     "History bridge",
-                    if self.account_bridge.is_some() {
-                        "listener ready"
-                    } else {
-                        "unavailable"
-                    },
-                    self.account_bridge.is_some(),
+                    self.account_bridge_status.as_str(),
+                    self.history_bridge_authenticated,
                 );
                 status_row(
                     ui,
@@ -1710,6 +1824,24 @@ impl eframe::App for ChatariumApp {
                     },
                     self.remote_connected(),
                 );
+
+                ui.add_space(8.0);
+                if self.account_bridge_provider.is_some() {
+                    if ui
+                        .add_enabled(
+                            !self.history_list_pending,
+                            egui::Button::new(if self.history_list_pending {
+                                "Checking ChatGPT history…"
+                            } else {
+                                "Refresh ChatGPT history"
+                            })
+                            .min_size(egui::vec2(196.0, 30.0)),
+                        )
+                        .clicked()
+                    {
+                        refresh_history_requested = true;
+                    }
+                }
 
                 ui.add_space(14.0);
                 if self.remote_connected() {
@@ -1839,6 +1971,11 @@ impl eframe::App for ChatariumApp {
             self.select_local_conversation();
         } else if let Some(local_conversation_id) = select_historical_requested {
             self.select_historical_conversation(local_conversation_id);
+        } else if let Some(remote_conversation_id) = open_remote_requested {
+            self.open_discovered_remote_conversation(remote_conversation_id, ctx);
+        }
+        if refresh_history_requested {
+            self.start_history_discovery(ctx);
         }
 
         egui::TopBottomPanel::top("conversation_header")
@@ -2989,6 +3126,10 @@ mod tests {
             PersistNotice::LiveConversationLoadFailed { .. } => "live_load_failed",
             PersistNotice::HistoricalLiveMirrorPromoted { .. } => "live_promoted",
             PersistNotice::HistoricalLiveMirrorPromotionFailed { .. } => "live_promotion_failed",
+            PersistNotice::DiscoveredLiveMirrorPromoted { .. } => "discovered_live_promoted",
+            PersistNotice::DiscoveredLiveMirrorPromotionFailed { .. } => {
+                "discovered_live_promotion_failed"
+            }
             PersistNotice::Failed { .. } => "failed",
         }
     }
