@@ -208,6 +208,7 @@ struct LiveMirrorCatalogEntry {
     remote_conversation_id: String,
     title: String,
     snapshot_sequence: u64,
+    truncated_before: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +237,8 @@ struct ChatariumApp {
     live_mirror_catalog: Vec<LiveMirrorCatalogEntry>,
     live_mirror_pending: Option<LocalConversationId>,
     remote_discovery_pending: Option<String>,
+    remote_mirror_failures: BTreeMap<String, String>,
+    mirror_status: String,
     live_mirror_truncated_before: bool,
     remote_conversation_catalog: Vec<ConversationListItem>,
     remote_conversation_total: Option<u64>,
@@ -353,6 +356,8 @@ impl ChatariumApp {
                         live_mirror_catalog,
                         live_mirror_pending: None,
                         remote_discovery_pending: None,
+                        remote_mirror_failures: BTreeMap::new(),
+                        mirror_status: "idle · no mirror in progress".to_owned(),
                         live_mirror_truncated_before: false,
                         remote_conversation_catalog: Vec::new(),
                         remote_conversation_total: None,
@@ -440,6 +445,8 @@ impl ChatariumApp {
             live_mirror_catalog,
             live_mirror_pending: None,
             remote_discovery_pending: None,
+            remote_mirror_failures: BTreeMap::new(),
+            mirror_status: "idle · no mirror in progress".to_owned(),
             live_mirror_truncated_before: false,
             remote_conversation_catalog: Vec::new(),
             remote_conversation_total: None,
@@ -602,11 +609,15 @@ impl ChatariumApp {
 
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
+        self.remote_mirror_failures.remove(&remote_conversation_id);
         self.remote_discovery_pending = Some(remote_conversation_id.clone());
         self.pending_history_fetch_proof = None;
-        self.history_bridge_proven = false;
+        self.mirror_status =
+            "FETCHING · opening temporary ChatGPT tab and waiting for first-party conversation response…"
+                .to_owned();
         self.status =
-            "fetching exact remote ChatGPT conversation through Edge extension…".to_owned();
+            "mirroring remote ChatGPT conversation through first-party browser navigation…"
+                .to_owned();
 
         let spawn = thread::Builder::new()
             .name("chatarium-remote-history-open".to_owned())
@@ -801,7 +812,7 @@ impl ChatariumApp {
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation } => {
                     self.history_list_pending = false;
-                    self.history_bridge_proven = false;
+                    self.history_bridge_proven = true;
                     self.remote_conversation_total = None;
 
                     let candidate_count = observation.candidates.len();
@@ -825,7 +836,7 @@ impl ChatariumApp {
                         .map(|(path, count)| format!("{path} ({count})"))
                         .unwrap_or_else(|| "none".to_owned());
                     self.account_bridge_status = format!(
-                        "PROOF PARTIAL: {} · candidates={} · observed-items={} · best-surface={} · completeness=unproven",
+                        "DISCOVERED: {} · candidates={} · observed-items={} · best-surface={} · coverage=unknown",
                         history_discovery_proof_label(&observation.proof),
                         candidate_count,
                         self.remote_conversation_catalog.len(),
@@ -846,9 +857,12 @@ impl ChatariumApp {
                 } => {
                     let Some(sender) = &self.persist_tx else {
                         self.remote_discovery_pending = None;
-                        self.history_bridge_proven = false;
-                        self.account_bridge_status =
-                            "PROOF FAILED: exact read succeeded but persistence is unavailable"
+                        self.remote_mirror_failures.insert(
+                            remote_conversation_id.clone(),
+                            "local persistence unavailable".to_owned(),
+                        );
+                        self.mirror_status =
+                            "FAILED · exact first-party response captured, but local persistence is unavailable"
                                 .to_owned();
                         self.status = "remote conversation fetched, but persistence is unavailable"
                             .to_owned();
@@ -860,13 +874,19 @@ impl ChatariumApp {
                         proof,
                         http_status,
                     });
+                    self.mirror_status =
+                        "VALIDATED · exact remote response captured · persisting durable local mirror…"
+                            .to_owned();
                     if let Err(error) = sender.send(PersistCommand::PromoteDiscoveredLiveMirror {
-                        expected_remote_conversation_id: remote_conversation_id,
+                        expected_remote_conversation_id: remote_conversation_id.clone(),
                         body,
                     }) {
                         self.pending_history_fetch_proof = None;
-                        self.history_bridge_proven = false;
                         self.remote_discovery_pending = None;
+                        self.remote_mirror_failures
+                            .insert(remote_conversation_id, error.to_string());
+                        self.mirror_status =
+                            format!("FAILED · could not queue durable mirror: {error}");
                         self.status = format!("failed to queue remote mirror creation: {error}");
                     } else {
                         self.status =
@@ -884,9 +904,9 @@ impl ChatariumApp {
                         self.remote_discovery_pending = None;
                     }
                     self.pending_history_fetch_proof = None;
-                    self.history_bridge_proven = false;
-                    self.account_bridge_status =
-                        format!("PROOF FAILED during exact fetch: {error}");
+                    self.remote_mirror_failures
+                        .insert(remote_conversation_id.clone(), error.clone());
+                    self.mirror_status = format!("FAILED · mirror fetch: {error}");
                     self.status = format!("remote ChatGPT conversation fetch failed: {error}");
                 }
                 LiveMirrorFetchNotice::Fetched {
@@ -1281,30 +1301,33 @@ impl ChatariumApp {
                     self.historical_load_pending = None;
                     self.live_mirror_truncated_before = truncated_before;
 
+                    self.remote_mirror_failures.remove(&remote_conversation_id);
                     match self.pending_history_fetch_proof.take() {
                         Some(pending)
                             if pending.local_conversation_id.is_none()
                                 && pending.remote_conversation_id == remote_conversation_id =>
                         {
-                            self.history_bridge_proven = true;
-                            self.account_bridge_status = format!(
-                                "PROOF: {} · auth=yes · HTTP {} · parser=yes · semantic=exact-id · durable-mirror=yes · event=#{}",
+                            self.mirror_status = format!(
+                                "{} · {} · HTTP {} · parser=yes · semantic=exact-id · durable=yes · event=#{}",
+                                if truncated_before {
+                                    "MIRRORED PARTIAL"
+                                } else {
+                                    "MIRRORED COMPLETE"
+                                },
                                 browser_proof_label(&pending.proof),
                                 pending.http_status,
                                 snapshot_sequence,
                             );
                         }
                         Some(pending) => {
-                            self.history_bridge_proven = false;
-                            self.account_bridge_status = format!(
-                                "PROOF FAILED: durable mirror event #{} does not match pending browser proof for remote id {}",
+                            self.mirror_status = format!(
+                                "FAILED · durable event #{} did not match pending proof for remote id {}",
                                 snapshot_sequence, pending.remote_conversation_id,
                             );
                         }
                         None => {
-                            self.history_bridge_proven = false;
-                            self.account_bridge_status = format!(
-                                "PROOF PARTIAL: durable mirror event #{} committed without a current browser proof chain",
+                            self.mirror_status = format!(
+                                "MIRRORED · durable event #{} committed without a current browser proof chain",
                                 snapshot_sequence,
                             );
                         }
@@ -1333,9 +1356,9 @@ impl ChatariumApp {
                         self.remote_discovery_pending = None;
                     }
                     self.pending_history_fetch_proof = None;
-                    self.history_bridge_proven = false;
-                    self.account_bridge_status =
-                        format!("PROOF FAILED at durable mirror commit: {error}");
+                    self.remote_mirror_failures
+                        .insert(remote_conversation_id.clone(), error.clone());
+                    self.mirror_status = format!("FAILED · durable mirror commit: {error}");
                     self.status = format!("remote mirror creation failed: {error}");
                 }
                 PersistNotice::Failed {
@@ -1856,10 +1879,8 @@ impl eframe::App for ChatariumApp {
                             ui.add_space(16.0);
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "CHATGPT HISTORY · {}/{}",
+                                    "CHATGPT HISTORY · {} OBSERVED",
                                     self.remote_conversation_catalog.len(),
-                                    self.remote_conversation_total
-                                        .unwrap_or(self.remote_conversation_catalog.len() as u64)
                                 ))
                                 .size(10.0)
                                 .strong()
@@ -1901,16 +1922,48 @@ impl eframe::App for ChatariumApp {
                                         open_remote_requested = Some(entry.id.clone());
                                     }
                                 }
-                                ui.label(
-                                    egui::RichText::new(if live_local.is_some() {
-                                        "remote · mirrored locally"
+                                let (remote_state, remote_state_color) =
+                                    if let Some(local_id) = live_local {
+                                        let partial = self
+                                            .live_mirror_catalog
+                                            .iter()
+                                            .find(|live| live.local_conversation_id == local_id)
+                                            .is_some_and(|live| live.truncated_before);
+                                        (
+                                            if partial {
+                                                "remote · mirrored locally · partial"
+                                            } else {
+                                                "remote · fully mirrored locally"
+                                            },
+                                            egui::Color32::from_rgb(112, 176, 137),
+                                        )
                                     } else if imported_local.is_some() {
-                                        "remote · historical backup available"
+                                        (
+                                            "remote · historical backup available",
+                                            egui::Color32::from_rgb(112, 116, 126),
+                                        )
+                                    } else if self.remote_discovery_pending.as_deref()
+                                        == Some(entry.id.as_str())
+                                    {
+                                        (
+                                            "remote · mirroring…",
+                                            egui::Color32::from_rgb(225, 194, 108),
+                                        )
+                                    } else if self.remote_mirror_failures.contains_key(&entry.id) {
+                                        (
+                                            "remote · mirror failed · click to retry",
+                                            egui::Color32::from_rgb(214, 128, 128),
+                                        )
                                     } else {
-                                        "remote · click to mirror"
-                                    })
-                                    .size(9.0)
-                                    .color(egui::Color32::from_rgb(112, 116, 126)),
+                                        (
+                                            "remote · discovered · click to mirror",
+                                            egui::Color32::from_rgb(112, 116, 126),
+                                        )
+                                    };
+                                ui.label(
+                                    egui::RichText::new(remote_state)
+                                        .size(9.0)
+                                        .color(remote_state_color),
                                 );
                                 ui.add_space(4.0);
                             }
@@ -2009,9 +2062,15 @@ impl eframe::App for ChatariumApp {
                         status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
                         status_row(
                             ui,
-                            "History bridge",
+                            "History discovery",
                             self.account_bridge_status.as_str(),
                             self.history_bridge_proven,
+                        );
+                        status_row(
+                            ui,
+                            "Mirror",
+                            self.mirror_status.as_str(),
+                            self.mirror_status.starts_with("MIRRORED"),
                         );
                         status_row(
                             ui,
@@ -2643,11 +2702,16 @@ fn yes_no(value: bool) -> &'static str {
 
 fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
     format!(
-        "extension={} · roundtrip={} · tab={} · MAIN={} · account-context={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · MAIN={} · debugger={} · network={} · capture-tab={} · navigation={} · exact-response={} · account-context={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
         yes_no(proof.main_world_execution),
+        yes_no(proof.debugger_attached),
+        yes_no(proof.network_enabled),
+        yes_no(proof.capture_tab_created),
+        yes_no(proof.navigation_started),
+        yes_no(proof.exact_response_seen),
         yes_no(proof.account_context),
         proof.request_profile,
     )
@@ -2967,6 +3031,9 @@ fn latest_live_mirror_catalog(
     let mut catalog = Vec::<LiveMirrorCatalogEntry>::new();
 
     for record in records {
+        let truncated_before = project_remote_active_transcript(&record.envelope)
+            .map(|projection| projection.truncated_before)
+            .unwrap_or(true);
         let entry = LiveMirrorCatalogEntry {
             local_conversation_id: record.local_conversation_id,
             remote_conversation_id: record.remote_conversation_id.as_str().to_owned(),
@@ -2976,6 +3043,7 @@ fn latest_live_mirror_catalog(
                 record.envelope.title.clone()
             },
             snapshot_sequence: record.imported_sequence,
+            truncated_before,
         };
         if let Some(existing) = catalog
             .iter_mut()
