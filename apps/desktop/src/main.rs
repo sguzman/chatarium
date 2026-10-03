@@ -171,16 +171,14 @@ impl ChatariumApp {
                             format!("{startup_status}; remote-turn recovery warning: {error}");
                     }
                 }
-                let historical_catalog =
-                    match latest_historical_conversation_catalog(&events) {
-                        Ok(catalog) => catalog,
-                        Err(error) => {
-                            startup_status = format!(
-                                "{startup_status}; historical archive replay warning: {error}"
-                            );
-                            Vec::new()
-                        }
-                    };
+                let historical_catalog = match latest_historical_conversation_catalog(&events) {
+                    Ok(catalog) => catalog,
+                    Err(error) => {
+                        startup_status =
+                            format!("{startup_status}; historical archive replay warning: {error}");
+                        Vec::new()
+                    }
+                };
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
                 let worker_data_dir = data_dir.clone();
@@ -941,11 +939,12 @@ impl eframe::App for ChatariumApp {
             projected_local_display_messages(&self.events, self.local_conversation_id);
         let local_conversation_title = derived_conversation_title(&local_display_messages);
         let historical_mode = self.selected_historical_conversation.is_some();
-        let selected_historical_entry = self.selected_historical_conversation.and_then(|selected| {
-            self.historical_catalog
-                .iter()
-                .find(|entry| entry.local_conversation_id == selected)
-        });
+        let selected_historical_entry =
+            self.selected_historical_conversation.and_then(|selected| {
+                self.historical_catalog
+                    .iter()
+                    .find(|entry| entry.local_conversation_id == selected)
+            });
         let conversation_title = selected_historical_entry
             .and_then(|entry| entry.title.clone())
             .filter(|title| !title.trim().is_empty())
@@ -1012,7 +1011,11 @@ impl eframe::App for ChatariumApp {
                             egui::RichText::new(format!(
                                 "{} local message{}",
                                 local_display_messages.len(),
-                                if local_display_messages.len() == 1 { "" } else { "s" }
+                                if local_display_messages.len() == 1 {
+                                    ""
+                                } else {
+                                    "s"
+                                }
                             ))
                             .size(11.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -1051,8 +1054,7 @@ impl eframe::App for ChatariumApp {
                                     )
                                     .clicked()
                                 {
-                                    select_historical_requested =
-                                        Some(entry.local_conversation_id);
+                                    select_historical_requested = Some(entry.local_conversation_id);
                                 }
                                 ui.label(
                                     egui::RichText::new("historical snapshot · read-only")
@@ -1275,13 +1277,15 @@ impl eframe::App for ChatariumApp {
                                     })
                                     .size(10.0)
                                     .strong()
-                                    .color(if historical_mode {
-                                        egui::Color32::from_rgb(179, 184, 196)
-                                    } else if connected {
-                                        egui::Color32::from_rgb(126, 210, 156)
-                                    } else {
-                                        egui::Color32::from_rgb(225, 194, 108)
-                                    }),
+                                    .color(
+                                        if historical_mode {
+                                            egui::Color32::from_rgb(179, 184, 196)
+                                        } else if connected {
+                                            egui::Color32::from_rgb(126, 210, 156)
+                                        } else {
+                                            egui::Color32::from_rgb(225, 194, 108)
+                                        },
+                                    ),
                                 );
                             });
                     });
@@ -2463,10 +2467,7 @@ mod tests {
         let store = JsonlEventStore::open(&path).expect("open journal");
         let (command_tx, command_rx) = mpsc::channel();
         let (notice_tx, notice_rx) = mpsc::channel();
-        let worker_data_dir = path
-            .parent()
-            .expect("journal parent")
-            .to_path_buf();
+        let worker_data_dir = path.parent().expect("journal parent").to_path_buf();
         let worker = thread::spawn(move || {
             persistence_worker(store, worker_data_dir, command_rx, notice_tx)
         });
