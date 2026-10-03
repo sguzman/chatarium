@@ -140,6 +140,10 @@ struct ChatariumApp {
 impl ChatariumApp {
     fn new(repaint: &egui::Context) -> Self {
         let journal_path = default_journal_path();
+        let data_dir = journal_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
         match JsonlEventStore::open(&journal_path) {
             Ok(mut store) => {
                 let recovery = recover_interrupted_remote_turns(&mut store);
@@ -167,11 +171,24 @@ impl ChatariumApp {
                             format!("{startup_status}; remote-turn recovery warning: {error}");
                     }
                 }
+                let historical_catalog =
+                    match latest_historical_conversation_catalog(&events) {
+                        Ok(catalog) => catalog,
+                        Err(error) => {
+                            startup_status = format!(
+                                "{startup_status}; historical archive replay warning: {error}"
+                            );
+                            Vec::new()
+                        }
+                    };
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
+                let worker_data_dir = data_dir.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
-                    .spawn(move || persistence_worker(store, persist_rx, notice_tx));
+                    .spawn(move || {
+                        persistence_worker(store, worker_data_dir, persist_rx, notice_tx)
+                    });
 
                 match worker {
                     Ok(worker) => Self {
@@ -183,6 +200,11 @@ impl ChatariumApp {
                         evidence: TurnEvidence::default(),
                         local_conversation_id,
                         events,
+                        historical_catalog,
+                        selected_historical_conversation: None,
+                        loaded_historical_conversation: None,
+                        historical_messages: Vec::new(),
+                        historical_load_pending: None,
                         journal_path,
                         persist_tx: Some(persist_tx),
                         notice_rx: Some(notice_rx),
@@ -239,7 +261,12 @@ impl ChatariumApp {
                 .ok()
                 .flatten()
                 .unwrap_or_default(),
+            historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
             events,
+            selected_historical_conversation: None,
+            loaded_historical_conversation: None,
+            historical_messages: Vec::new(),
+            historical_load_pending: None,
             journal_path,
             persist_tx: None,
             notice_rx: None,
@@ -258,6 +285,39 @@ impl ChatariumApp {
             pending_remote_turn: None,
             active_remote_turn: None,
             commit_remote_intents: BTreeMap::new(),
+        }
+    }
+
+    fn select_local_conversation(&mut self) {
+        self.selected_historical_conversation = None;
+        self.historical_load_pending = None;
+        self.status = "local conversation selected".to_owned();
+    }
+
+    fn select_historical_conversation(&mut self, local_conversation_id: LocalConversationId) {
+        if self.selected_historical_conversation == Some(local_conversation_id)
+            && self.loaded_historical_conversation == Some(local_conversation_id)
+        {
+            return;
+        }
+
+        self.selected_historical_conversation = Some(local_conversation_id);
+        self.loaded_historical_conversation = None;
+        self.historical_messages.clear();
+        self.historical_load_pending = Some(local_conversation_id);
+
+        let Some(sender) = &self.persist_tx else {
+            self.historical_load_pending = None;
+            self.status = "cannot load historical conversation: persistence unavailable".to_owned();
+            return;
+        };
+        if let Err(error) = sender.send(PersistCommand::LoadHistoricalConversation {
+            local_conversation_id,
+        }) {
+            self.historical_load_pending = None;
+            self.status = format!("failed to queue historical conversation load: {error}");
+        } else {
+            self.status = "loading verified historical snapshot…".to_owned();
         }
     }
 
