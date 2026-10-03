@@ -42,6 +42,7 @@ for (const forbidden of ['GM_xmlhttpRequest', 'unsafeWindow', 'Tampermonkey']) {
 for (const required of [
   "world: 'MAIN'",
   'chrome.webRequest.onBeforeSendHeaders',
+  'chrome.webRequest.onBeforeRequest',
   'chrome.storage.session',
   "const ACCOUNT_HEADER = 'ChatGPT-Account-ID'",
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
