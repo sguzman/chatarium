@@ -304,10 +304,7 @@ impl BrowserBridgeProvider {
             AuthenticatedSessionLease::acquire(self).map_err(map_session_lease_error)?;
         lease
             .with_authenticated_provider(|provider| {
-                provider.fetch_conversation_observation(
-                    &remote_conversation_id,
-                    &protocol_revision,
-                )
+                provider.fetch_conversation_observation(&remote_conversation_id, &protocol_revision)
             })
             .map_err(map_session_lease_error)?
     }
@@ -318,10 +315,7 @@ impl BrowserBridgeProvider {
         let result = self.call(
             "probe_auth",
             |object| {
-                object.insert(
-                    "request_profile".to_owned(),
-                    json!(AUTH_REQUEST_PROFILE),
-                );
+                object.insert("request_profile".to_owned(), json!(AUTH_REQUEST_PROFILE));
             },
             AUTH_RESULT_WAIT,
         )?;
@@ -485,10 +479,7 @@ impl RemoteConversationFetchProvider for BrowserBridgeProvider {
     }
 }
 
-fn required_http_status(
-    result: &Value,
-    operation: &str,
-) -> Result<u16, BrowserBridgeError> {
+fn required_http_status(result: &Value, operation: &str) -> Result<u16, BrowserBridgeError> {
     result
         .get("http_status")
         .and_then(Value::as_u64)
@@ -745,10 +736,7 @@ fn is_extension_origin(origin: &str) -> bool {
     else {
         return false;
     };
-    extension_id.len() == 32
-        && extension_id
-            .bytes()
-            .all(|byte| matches!(byte, b'a'..=b'p'))
+    extension_id.len() == 32 && extension_id.bytes().all(|byte| matches!(byte, b'a'..=b'p'))
 }
 
 fn handle_next(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
@@ -1335,7 +1323,10 @@ mod tests {
                 &ProtocolObservationRevision::new(CONVERSATION_FETCH_REQUEST_OBSERVATION).unwrap(),
             )
             .unwrap();
-        assert_eq!(observation.body["conversation_id"], json!("opaque/remote id"));
+        assert_eq!(
+            observation.body["conversation_id"],
+            json!("opaque/remote id")
+        );
         assert_eq!(observation.http_status, 200);
         assert_eq!(observation.proof.extension_version, "0.1.0");
         assert_eq!(
