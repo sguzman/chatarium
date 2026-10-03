@@ -529,39 +529,46 @@ async function discoverHistorySurfaces(command) {
   result.sidebar_bootstrap_error = null;
   result.application_context_header_count = Object.keys(session.applicationHeaders).length;
 
-  if (accountId !== null) {
-    result.sidebar_bootstrap_attempted = true;
-    const bootstrapHeaders = {
-      ...session.applicationHeaders,
-      [ACCOUNT_HEADER]: accountId,
-    };
-    try {
-      const bootstrap = await executePageGet(
-        tab.id,
-        SIDEBAR_BOOTSTRAP_RESOURCE,
-        bootstrapHeaders,
-      );
-      result.sidebar_bootstrap_http_status =
-        Number.isInteger(bootstrap?.http_status) ? bootstrap.http_status : null;
-      if (bootstrap?.ok === true && bootstrap.body && typeof bootstrap.body === 'object') {
-        const classified = classifyHistoryBody(
-          `https://chatgpt.com${SIDEBAR_BOOTSTRAP_RESOURCE}`,
-          bootstrap.body,
+  const passiveCandidates = mergeDiscoveryCandidates(session.candidates);
+  const passiveConversationCount = new Set(
+    passiveCandidates.flatMap((candidate) => (candidate.items ?? []).map((item) => item.id)),
+  ).size;
+
+  if (passiveConversationCount === 0) {
+    if (accountId !== null) {
+      result.sidebar_bootstrap_attempted = true;
+      const bootstrapHeaders = {
+        ...session.applicationHeaders,
+        [ACCOUNT_HEADER]: accountId,
+      };
+      try {
+        const bootstrap = await executePageGet(
+          tab.id,
+          SIDEBAR_BOOTSTRAP_RESOURCE,
+          bootstrapHeaders,
         );
-        if (classified !== null) {
-          result.sidebar_bootstrap_items = classified.conversation_count;
-          session.candidates.push(classified);
+        result.sidebar_bootstrap_http_status =
+          Number.isInteger(bootstrap?.http_status) ? bootstrap.http_status : null;
+        if (bootstrap?.ok === true && bootstrap.body && typeof bootstrap.body === 'object') {
+          const classified = classifyHistoryBody(
+            `https://chatgpt.com${SIDEBAR_BOOTSTRAP_RESOURCE}`,
+            bootstrap.body,
+          );
+          if (classified !== null) {
+            result.sidebar_bootstrap_items = classified.conversation_count;
+            session.candidates.push(classified);
+          }
+        } else {
+          result.sidebar_bootstrap_error =
+            typeof bootstrap?.error === 'string' ? bootstrap.error : 'sidebar_bootstrap_failed';
         }
-      } else {
+      } catch (error) {
         result.sidebar_bootstrap_error =
-          typeof bootstrap?.error === 'string' ? bootstrap.error : 'sidebar_bootstrap_failed';
+          error instanceof Error ? error.message : 'sidebar_bootstrap_failed';
       }
-    } catch (error) {
-      result.sidebar_bootstrap_error =
-        error instanceof Error ? error.message : 'sidebar_bootstrap_failed';
+    } else {
+      result.sidebar_bootstrap_error = 'account_context_unavailable';
     }
-  } else {
-    result.sidebar_bootstrap_error = 'account_context_unavailable';
   }
 
   const candidates = mergeDiscoveryCandidates(session.candidates);
