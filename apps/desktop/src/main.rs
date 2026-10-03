@@ -956,11 +956,6 @@ impl eframe::App for ChatariumApp {
                     local_conversation_title.clone()
                 }
             });
-        let display_message_count = if historical_mode {
-            self.historical_messages.len()
-        } else {
-            local_display_messages.len()
-        };
         let mut select_local_requested = false;
         let mut select_historical_requested = None;
 
@@ -2130,6 +2125,35 @@ mod tests {
     }
 
     #[test]
+    fn historical_messages_keep_import_provenance_and_roles() {
+        let messages = historical_display_messages(
+            vec![
+                HistoricalTranscriptMessage {
+                    remote_message_id: "user".to_owned(),
+                    role: HistoricalTranscriptRole::User,
+                    text: "hello".to_owned(),
+                    create_time: None,
+                },
+                HistoricalTranscriptMessage {
+                    remote_message_id: "assistant".to_owned(),
+                    role: HistoricalTranscriptRole::Assistant,
+                    text: "world".to_owned(),
+                    create_time: None,
+                },
+            ],
+            42,
+        );
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, DisplayRole::User);
+        assert_eq!(messages[1].role, DisplayRole::Assistant);
+        assert_eq!(
+            messages[0].provenance_label.as_deref(),
+            Some("historical snapshot · import event #42")
+        );
+    }
+
+    #[test]
     fn model_discovery_is_single_flight_and_transition_gated() {
         assert!(should_request_models(false, false, true, false));
         assert!(!should_request_models(false, false, true, true));
@@ -2439,7 +2463,13 @@ mod tests {
         let store = JsonlEventStore::open(&path).expect("open journal");
         let (command_tx, command_rx) = mpsc::channel();
         let (notice_tx, notice_rx) = mpsc::channel();
-        let worker = thread::spawn(move || persistence_worker(store, command_rx, notice_tx));
+        let worker_data_dir = path
+            .parent()
+            .expect("journal parent")
+            .to_path_buf();
+        let worker = thread::spawn(move || {
+            persistence_worker(store, worker_data_dir, command_rx, notice_tx)
+        });
 
         let message = AuthoredUserMessage::new(
             LocalConversationId::new(),
@@ -2515,16 +2545,19 @@ mod tests {
                 role: DisplayRole::User,
                 text: "one".to_owned(),
                 sequence: 1,
+                provenance_label: None,
             },
             DisplayMessage {
                 role: DisplayRole::Assistant,
                 text: "two".to_owned(),
                 sequence: 2,
+                provenance_label: None,
             },
             DisplayMessage {
                 role: DisplayRole::User,
                 text: "three".to_owned(),
                 sequence: 3,
+                provenance_label: None,
             },
         ];
 
