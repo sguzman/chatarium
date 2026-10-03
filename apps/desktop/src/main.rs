@@ -12,7 +12,10 @@ use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
 };
-use chatarium_store::remote_mirror_bootstrap::promote_historical_live_mirror_body;
+use chatarium_protocol::conversation_list::{ConversationListItem, ConversationListPage};
+use chatarium_store::remote_mirror_bootstrap::{
+    promote_discovered_live_mirror_body, promote_historical_live_mirror_body,
+};
 use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
@@ -49,6 +52,10 @@ enum PersistCommand {
     },
     PromoteHistoricalLiveMirror {
         local_conversation_id: LocalConversationId,
+        expected_remote_conversation_id: String,
+        body: Value,
+    },
+    PromoteDiscoveredLiveMirror {
         expected_remote_conversation_id: String,
         body: Value,
     },
@@ -101,6 +108,19 @@ enum PersistNotice {
         local_conversation_id: LocalConversationId,
         error: String,
     },
+    DiscoveredLiveMirrorPromoted {
+        local_conversation_id: LocalConversationId,
+        remote_conversation_id: String,
+        snapshot_sequence: u64,
+        appended_events: Vec<EventEnvelope>,
+        truncated_before: bool,
+        messages: Vec<RemoteTranscriptMessage>,
+        projection_error: Option<String>,
+    },
+    DiscoveredLiveMirrorPromotionFailed {
+        remote_conversation_id: String,
+        error: String,
+    },
     Failed {
         operation: &'static str,
         revision: Option<u64>,
@@ -111,6 +131,12 @@ enum PersistNotice {
 }
 
 enum LiveMirrorFetchNotice {
+    HistoryAuthenticated,
+    HistoryUnauthenticated,
+    HistoryAuthenticationUnknown,
+    HistoryProbeFailed { error: String },
+    HistoryListLoaded { page: ConversationListPage },
+    HistoryListFailed { error: String },
     Fetched {
         local_conversation_id: LocalConversationId,
         remote_conversation_id: String,
@@ -118,6 +144,14 @@ enum LiveMirrorFetchNotice {
     },
     Failed {
         local_conversation_id: LocalConversationId,
+        error: String,
+    },
+    DiscoveredFetched {
+        remote_conversation_id: String,
+        body: Value,
+    },
+    DiscoveredFailed {
+        remote_conversation_id: String,
         error: String,
     },
 }
@@ -152,6 +186,14 @@ struct ActiveRemoteTurn {
     observed_output: bool,
 }
 
+#[derive(Debug, Clone)]
+struct LiveMirrorCatalogEntry {
+    local_conversation_id: LocalConversationId,
+    remote_conversation_id: String,
+    title: String,
+    snapshot_sequence: u64,
+}
+
 struct ChatariumApp {
     draft: String,
     draft_revision: u64,
@@ -167,8 +209,15 @@ struct ChatariumApp {
     historical_messages: Vec<DisplayMessage>,
     historical_load_pending: Option<LocalConversationId>,
     live_mirrored_conversations: HashSet<LocalConversationId>,
+    live_mirror_catalog: Vec<LiveMirrorCatalogEntry>,
     live_mirror_pending: Option<LocalConversationId>,
+    remote_discovery_pending: Option<String>,
     live_mirror_truncated_before: bool,
+    remote_conversation_catalog: Vec<ConversationListItem>,
+    remote_conversation_total: Option<u64>,
+    history_discovery_started: bool,
+    history_list_pending: bool,
+    history_bridge_authenticated: bool,
     journal_path: PathBuf,
     persist_tx: Option<Sender<PersistCommand>>,
     notice_rx: Option<Receiver<PersistNotice>>,
@@ -236,18 +285,18 @@ impl ChatariumApp {
                         Vec::new()
                     }
                 };
-                let live_mirrored_conversations =
-                    match replay_remote_conversation_snapshot_audit(&events) {
-                        Ok(records) => records
-                            .into_iter()
-                            .map(|record| record.local_conversation_id)
-                            .collect(),
-                        Err(error) => {
-                            startup_status =
-                                format!("{startup_status}; live mirror replay warning: {error}");
-                            HashSet::new()
-                        }
-                    };
+                let live_mirror_catalog = match latest_live_mirror_catalog(&events) {
+                    Ok(catalog) => catalog,
+                    Err(error) => {
+                        startup_status =
+                            format!("{startup_status}; live mirror replay warning: {error}");
+                        Vec::new()
+                    }
+                };
+                let live_mirrored_conversations = live_mirror_catalog
+                    .iter()
+                    .map(|entry| entry.local_conversation_id)
+                    .collect();
                 let (account_bridge, account_bridge_provider, account_bridge_status) =
                     start_account_bridge();
                 let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
@@ -276,8 +325,15 @@ impl ChatariumApp {
                         historical_messages: Vec::new(),
                         historical_load_pending: None,
                         live_mirrored_conversations,
+                        live_mirror_catalog,
                         live_mirror_pending: None,
+                        remote_discovery_pending: None,
                         live_mirror_truncated_before: false,
+                        remote_conversation_catalog: Vec::new(),
+                        remote_conversation_total: None,
+                        history_discovery_started: false,
+                        history_list_pending: false,
+                        history_bridge_authenticated: false,
                         journal_path,
                         persist_tx: Some(persist_tx),
                         notice_rx: Some(notice_rx),
@@ -328,14 +384,11 @@ impl ChatariumApp {
         events: Vec<EventEnvelope>,
         status: String,
     ) -> Self {
-        let live_mirrored_conversations = replay_remote_conversation_snapshot_audit(&events)
-            .map(|records| {
-                records
-                    .into_iter()
-                    .map(|record| record.local_conversation_id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let live_mirror_catalog = latest_live_mirror_catalog(&events).unwrap_or_default();
+        let live_mirrored_conversations = live_mirror_catalog
+            .iter()
+            .map(|entry| entry.local_conversation_id)
+            .collect();
         let (account_bridge, account_bridge_provider, account_bridge_status) =
             start_account_bridge();
         let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
@@ -358,8 +411,15 @@ impl ChatariumApp {
             historical_messages: Vec::new(),
             historical_load_pending: None,
             live_mirrored_conversations,
+            live_mirror_catalog,
             live_mirror_pending: None,
+            remote_discovery_pending: None,
             live_mirror_truncated_before: false,
+            remote_conversation_catalog: Vec::new(),
+            remote_conversation_total: None,
+            history_discovery_started: false,
+            history_list_pending: false,
+            history_bridge_authenticated: false,
             journal_path,
             persist_tx: None,
             notice_rx: None,
