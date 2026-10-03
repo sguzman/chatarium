@@ -568,9 +568,8 @@ impl ChatariumApp {
 
                 match provider.discover_history_surfaces() {
                     Ok(observation) => {
-                        let _ = notices.send(LiveMirrorFetchNotice::HistoryDiscoveryLoaded {
-                            observation,
-                        });
+                        let _ = notices
+                            .send(LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation });
                     }
                     Err(error) => {
                         let _ = notices.send(LiveMirrorFetchNotice::HistoryDiscoveryFailed {
