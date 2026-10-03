@@ -127,7 +127,7 @@ pub fn project_historical_active_transcript(
         })?;
 
     let mut seen = BTreeSet::<String>::new();
-    let mut path = Vec::<(&str, &Value)>::new();
+    let mut path = Vec::<(String, &Value)>::new();
 
     loop {
         if !seen.insert(current.clone()) {
@@ -138,7 +138,7 @@ pub fn project_historical_active_transcript(
         let node = mapping.get(&current).ok_or_else(|| {
             format!("historical conversation active branch references missing node {current:?}")
         })?;
-        path.push((current.as_str(), node));
+        path.push((current.clone(), node));
 
         match node.get("parent") {
             None | Some(Value::Null) => break,
@@ -207,7 +207,7 @@ pub fn project_historical_active_transcript(
             .get("id")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .unwrap_or(node_id)
+            .unwrap_or(node_id.as_str())
             .to_owned();
         let create_time = optional_number(message.get("create_time"), "message.create_time")?;
 
