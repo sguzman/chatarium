@@ -151,9 +151,7 @@ pub fn project_historical_active_transcript(
             Some(_) => {
                 return Err(format!(
                     "historical conversation node {:?} has non-string parent",
-                    path.last()
-                        .map(|(id, _)| id.as_str())
-                        .unwrap_or_default()
+                    path.last().map(|(id, _)| id.as_str()).unwrap_or_default()
                 ));
             }
         }
