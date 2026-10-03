@@ -361,9 +361,7 @@ impl BrowserBridgeProvider {
             body_read_failures: required_u64("body_read_failures")?,
             body_too_large: required_u64("body_too_large")?,
             invalid_json: required_u64("invalid_json")?,
-            application_context_header_count: required_u64(
-                "application_context_header_count",
-            )?,
+            application_context_header_count: required_u64("application_context_header_count")?,
             sidebar_bootstrap_attempted: required_bool("sidebar_bootstrap_attempted")?,
             sidebar_bootstrap_http_status: result
                 .get("sidebar_bootstrap_http_status")
