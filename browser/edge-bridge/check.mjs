@@ -82,6 +82,12 @@ for (const required of [
   'captureConversationByNavigation',
   'classifyConversationHttpStatus',
   'rate_limited_responses',
+  'rate_limit_reload_scheduled',
+  'rate_limit_reload_count',
+  'rate_limit_reload_failures',
+  'CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS',
+  'scheduleRateLimitReload',
+  "'Page.reload'",
   'lastRateLimitMeta',
   'selectFinalConversationResponseMeta',
   'exact_response_count',
@@ -291,6 +297,26 @@ if (!worker.includes('const capture = activeConversationCaptures.get(tabId);')) 
   throw new Error('exact mirror listener is not isolated on activeConversationCaptures');
 }
 
+
+if (!worker.includes('const CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS = 12_000')) {
+  throw new Error('exact mirror 429 recovery delay must remain bounded at 12 seconds');
+}
+if (!worker.includes('const CONVERSATION_CAPTURE_WINDOW_MS = 32_000')) {
+  throw new Error('exact mirror capture window must leave room for one delayed first-party reload');
+}
+const scheduleBody = worker.slice(
+  worker.indexOf('async function scheduleRateLimitReload'),
+  worker.indexOf('async function captureConversationByNavigation'),
+);
+const reloadCalls = scheduleBody.match(/'Page\.reload'/g)?.length ?? 0;
+if (reloadCalls !== 1) {
+  throw new Error(
+    `rate-limit recovery must issue exactly one browser-level reload, found ${reloadCalls}`,
+  );
+}
+if (!scheduleBody.includes('if (capture.rate_limit_reload_scheduled) return;')) {
+  throw new Error('rate-limit recovery must be single-flight');
+}
 
 if (worker.includes('SIDEBAR_BOOTSTRAP_RESOURCE')) {
   throw new Error('synthetic sidebar history replay must remain retired');
