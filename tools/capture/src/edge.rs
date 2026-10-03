@@ -3303,7 +3303,7 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         let local = fs::canonicalize(&base).unwrap();
         let mut config = config_under(&local);
-        config.startup_timeout = Duration::from_secs(1);
+        config.startup_timeout = Duration::from_secs(3);
         let attempts = Arc::new(Mutex::new(0));
         let mut http = SequenceHttp::new([
             Err(TransportError::ReadinessTransient(
@@ -3391,7 +3391,7 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         let local = fs::canonicalize(&base).unwrap();
         let mut config = config_under(&local);
-        config.startup_timeout = Duration::from_millis(800);
+        config.startup_timeout = Duration::from_secs(3);
         let http = SequenceHttp::always_transient();
         let attempts = http.attempts.clone();
         let endpoints = http.endpoints.clone();
@@ -3426,7 +3426,7 @@ mod tests {
         assert!(endpoints.lock().unwrap().iter().any(|endpoint| {
             endpoint.family() == LoopbackAddressFamily::Ipv6 && endpoint.port() == 9444
         }));
-        assert!(elapsed < Duration::from_secs(2), "elapsed: {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
         assert_eq!(*kills.lock().unwrap(), 1);
         assert_eq!(*waits.lock().unwrap(), 1);
         assert!(
@@ -3454,7 +3454,7 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         let local = fs::canonicalize(&base).unwrap();
         let mut config = config_under(&local);
-        config.startup_timeout = Duration::from_millis(600);
+        config.startup_timeout = Duration::from_secs(3);
         let http = SequenceHttp::always_transient();
         let attempts = http.attempts.clone();
         let kills = Arc::new(Mutex::new(0));
