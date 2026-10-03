@@ -1548,7 +1548,7 @@ mod tests {
                     "kind": "discover_history_surfaces",
                     "ok": true,
                     "bridge_transport": "extension-cdp",
-                    "extension_version": "0.4.3",
+                    "extension_version": "0.4.4",
                     "chatgpt_tab_found": true,
                     "main_world_execution": false,
                     "account_context": true,
