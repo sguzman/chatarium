@@ -338,13 +338,77 @@ The single permitted evidence-driven correction is Edge Bridge 0.2.0:
 
 No claim is made yet that 0.2.0 fixes global history. It must pass automated checks before its one final live validation.
 
-### Stage K — stop decision
+### Stage J3 — Edge 0.2.0 proves exact-request replay is not a reliable runtime dependency
 
-The project stopped iterating on Tampermonkey as a critical runtime transport.
+Edge Bridge 0.2.0 passed its complete automated gate before the final allowed live validation.
 
-Future browser integration will use a purpose-built Edge/Chromium extension with explicit instrumentation and a real browser integration harness.
+The operator then tested it twice:
 
-Tampermonkey may remain useful for disposable experiments or capture helpers. It is not an acceptable production dependency for Chatarium account synchronization.
+1. with the existing authenticated ChatGPT tab;
+2. after fully reloading that tab.
+
+Both runs failed at the same boundary:
+
+```text
+extension=0.2.0
+transport=extension
+tab=yes
+account-context=yes
+request-context=no
+first-party-http=unknown
+context-headers=0
+profile=2026-10-03.003
+first_party_request_context_unavailable
+```
+
+The second run is decisive for the architecture. The extension was alive, could identify the ChatGPT tab, and had valid account context, but the exact frozen ordinary-history C01 request did not appear and therefore could not seed request-context replay.
+
+The project must not reinterpret this as another missing-header problem. The dependency itself was wrong: **a runtime history bridge cannot require the current ChatGPT frontend to emit one exact historical request shape on demand.**
+
+Per the human-QA stop rule:
+
+- no third 0.2 live run was requested;
+- no broader `webRequest` permission experiment was requested;
+- no DevTools/console inspection was delegated to the operator;
+- no guessed replacement header set was added;
+- issue #102 was closed as an abandoned architecture.
+
+### Stage K — escalation to live CDP surface discovery
+
+The project now has two retired critical-path browser architectures:
+
+1. Tampermonkey transport;
+2. Edge exact-C01 reconstruction/replay.
+
+The next architecture is Edge Bridge 0.3, tracked by #103. It uses a bounded `chrome.debugger` attachment to the selected ChatGPT tab and observes the browser's **actual current successful first-party Network traffic**.
+
+For one discovery operation it automatically reloads the tab, watches successful JSON `/backend-api/*` responses, reads completed candidate bodies through CDP, extracts only bounded typed conversation summaries and structural cursor evidence, then detaches.
+
+This changes the epistemic direction:
+
+```text
+old:
+historical endpoint assumption
+    ↓
+wait/reconstruct/replay
+    ↓
+hope current frontend semantics match
+
+new:
+current first-party successful traffic
+    ↓
+classify observed list-like surfaces
+    ↓
+prove pagination/completeness separately
+    ↓
+only then promote a ConversationList baseline
+```
+
+The `debugger` permission is deliberately more powerful than the retired `webRequest` observer and is therefore treated as an explicit architectural cost. It is bounded to the selected ChatGPT tab and discovery interval; raw cookies, authorization values, request-header sets, and browser storage are not returned to Rust.
+
+Successful CDP candidate discovery is still **partial proof**. It does not establish account-wide completeness by itself.
+
+Tampermonkey may remain useful for disposable experiments or capture helpers. Exact-C01 replay remains useful only as historical evidence. Neither is an acceptable production account-history synchronization dependency.
 
 ## 3. Where engineering/assistant behavior failed
 
@@ -781,6 +845,6 @@ The permanent response is not "be more careful." It is:
 - diagnostics before human QA;
 - explicit architecture stop rules;
 - userscripts limited to prototype/observation roles for this critical path;
-- a proper extension as the next implementation boundary.
+- escalating browser architecture when the documented stop condition fires.
 
-No Edge-extension work begins until this postmortem and its rule changes are merged.
+The purpose-built Edge extension proved that extension transport itself is viable, but its exact-request replay strategy was also falsified. The active implementation boundary is now bounded CDP observation of current first-party traffic, not another replay attempt.
