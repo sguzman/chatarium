@@ -19,10 +19,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Browser userscript syntax
+      - name: Browser runtime syntax and invariants
         run: |
           node --check browser/flight-recorder.user.js
           node --check browser/account-bridge.user.js
+          node --check browser/edge-bridge/service-worker.js
+          node browser/edge-bridge/check.mjs
       - name: Sign in with ChatGPT bridge syntax
         run: |
           node --check tools/siwc-bridge/bridge.mjs
