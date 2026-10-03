@@ -329,8 +329,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EventStore, MemoryEventStore};
     use crate::historical_conversation_audit::record_historical_conversation_snapshot;
+    use crate::{EventStore, MemoryEventStore};
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
 
