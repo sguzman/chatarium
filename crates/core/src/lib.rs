@@ -256,6 +256,7 @@ impl TurnEvidence {
             | EventKind::ReconciliationObserved
             | EventKind::ImportStarted
             | EventKind::ImportCompleted
+            | EventKind::HistoricalConversationSnapshotImported
             | EventKind::RouteProposed
             | EventKind::RouteUserDecisionRecorded
             | EventKind::RouteDispatched
@@ -332,6 +333,8 @@ pub enum EventKind {
     ImportStarted,
     /// Import of an external/local capture completed.
     ImportCompleted,
+    /// One historical conversation snapshot from an account export was imported locally.
+    HistoricalConversationSnapshotImported,
     /// A supervisory route was durably proposed.
     RouteProposed,
     /// An explicit user allow/deny decision for a supervisory route was recorded.
@@ -402,6 +405,9 @@ impl EventKind {
             Self::ReconciliationObserved => "reconciliation_observed",
             Self::ImportStarted => "import_started",
             Self::ImportCompleted => "import_completed",
+            Self::HistoricalConversationSnapshotImported => {
+                "historical_conversation_snapshot_imported"
+            }
             Self::RouteProposed => "route_proposed",
             Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
             Self::RouteDispatched => "route_dispatched",
@@ -451,6 +457,9 @@ impl EventKind {
             "reconciliation_observed" => Some(Self::ReconciliationObserved),
             "import_started" => Some(Self::ImportStarted),
             "import_completed" => Some(Self::ImportCompleted),
+            "historical_conversation_snapshot_imported" => {
+                Some(Self::HistoricalConversationSnapshotImported)
+            }
             "route_proposed" => Some(Self::RouteProposed),
             "route_user_decision_recorded" => Some(Self::RouteUserDecisionRecorded),
             "route_dispatched" => Some(Self::RouteDispatched),
