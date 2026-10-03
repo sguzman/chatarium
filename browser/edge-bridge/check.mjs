@@ -46,6 +46,7 @@ for (const required of [
   'chrome.storage.session',
   "const ACCOUNT_HEADER = 'ChatGPT-Account-ID'",
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
+  "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
 ]) {
   if (!worker.includes(required)) {
     throw new Error(`required Edge bridge invariant missing: ${required}`);
