@@ -67,6 +67,7 @@ for (const required of [
   'chrome.tabs.remove',
   'activeConversationCaptures',
   'captureConversationByNavigation',
+  'settleWithin',
 ]) {
   if (!worker.includes(required)) {
     throw new Error(`required Edge bridge invariant missing: ${required}`);
