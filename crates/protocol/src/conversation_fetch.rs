@@ -290,12 +290,10 @@ fn parse_content(
                 source_analysis_msg_id,
             })
         }
-        _ if protocol_revision == "2026-10-03.001" => {
-            Ok(ConversationMessageContent::Opaque {
-                content_type,
-                fields: object.clone(),
-            })
-        }
+        _ if protocol_revision == "2026-10-03.001" => Ok(ConversationMessageContent::Opaque {
+            content_type,
+            fields: object.clone(),
+        }),
         _ => Err(ConversationFetchParseError::InvalidContentShape {
             message_index: index,
         }),
@@ -608,12 +606,9 @@ mod tests {
             }
         });
 
-        let parsed = parse_conversation_fetch_response(
-            "2026-10-03.001",
-            &body,
-            Some("fixture-id-7"),
-        )
-        .expect("current live revision should preserve unknown content opaquely");
+        let parsed =
+            parse_conversation_fetch_response("2026-10-03.001", &body, Some("fixture-id-7"))
+                .expect("current live revision should preserve unknown content opaquely");
 
         assert!(matches!(
             &parsed.messages[1].content,
