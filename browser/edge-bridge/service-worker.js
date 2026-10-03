@@ -5,6 +5,11 @@ import {
   isCandidateResponse,
   mergeDiscoveryCandidates,
 } from './history-discovery.mjs';
+import {
+  conversationRoute,
+  isJsonMimeType,
+  matchConversationResponse,
+} from './conversation-capture.mjs';
 
 const BRIDGE_ORIGIN = 'http://127.0.0.1:43117';
 const BRIDGE_HEADER = 'X-Chatarium-Bridge';
@@ -19,6 +24,8 @@ const DISCOVERY_PROFILE = 'cdp-history-discovery-v1';
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const DISCOVERY_WINDOW_MS = 8_000;
 const DISCOVERY_BODY_GRACE_MS = 500;
+const CONVERSATION_CAPTURE_WINDOW_MS = 20_000;
+const CONVERSATION_CAPTURE_BODY_GRACE_MS = 500;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const NEXT_TIMEOUT_MS = 29_000;
 const RESULT_TIMEOUT_MS = 10_000;
@@ -27,6 +34,7 @@ const LOOPBACK_RETRY_MS = 1_000;
 let loopRunning = false;
 let lastLoopbackError = '';
 const activeDiscoveries = new Map();
+const activeConversationCaptures = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -292,6 +300,44 @@ async function captureCandidateBody(session, requestId) {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source?.tabId;
   if (!Number.isInteger(tabId)) return;
+
+  const capture = activeConversationCaptures.get(tabId);
+  if (capture && !capture.closed) {
+    if (method === 'Network.responseReceived') {
+      capture.responses_seen += 1;
+      const response = params?.response;
+      const matched = matchConversationResponse(response, capture.remoteId);
+      if (matched !== null) {
+        capture.exact_response_seen = true;
+        capture.responseMeta = matched;
+        if (matched.http_status !== 200) {
+          capture.resolve?.('http-status');
+        } else if (!isJsonMimeType(matched.mime_type)) {
+          capture.non_json_response = true;
+          capture.resolve?.('non-json');
+        } else {
+          capture.pendingRequestId = params.requestId;
+        }
+      }
+      return;
+    }
+
+    if (method === 'Network.loadingFinished') {
+      const requestId = params?.requestId;
+      if (typeof requestId !== 'string' || capture.pendingRequestId !== requestId) return;
+      capture.pendingRequestId = null;
+      if (Number(params.encodedDataLength) > MAX_RESPONSE_BYTES) {
+        capture.body_too_large += 1;
+        capture.resolve?.('body-too-large');
+        return;
+      }
+      void captureExactConversationBody(capture, requestId);
+      return;
+    }
+
+    return;
+  }
+
   const session = activeDiscoveries.get(tabId);
   if (!session || session.closed) return;
 
@@ -339,6 +385,14 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source?.tabId;
   if (!Number.isInteger(tabId)) return;
+
+  const capture = activeConversationCaptures.get(tabId);
+  if (capture) {
+    capture.detached_reason = typeof reason === 'string' ? reason : 'unknown';
+    capture.resolve?.('detached');
+    return;
+  }
+
   const session = activeDiscoveries.get(tabId);
   if (!session) return;
   session.detached_reason = typeof reason === 'string' ? reason : 'unknown';
@@ -458,12 +512,227 @@ function percentEncodePathSegment(value) {
   return encoded;
 }
 
-async function fetchConversation(command) {
+async function captureExactConversationBody(session, requestId) {
+  if (session.closed || session.bodyTask !== null) return;
+
+  const task = (async () => {
+    let payload;
+    try {
+      payload = await chrome.debugger.sendCommand(
+        session.debuggee,
+        'Network.getResponseBody',
+        { requestId },
+      );
+    } catch {
+      session.body_read_failures += 1;
+      session.resolve?.('body-read-failed');
+      return;
+    }
+
+    const text = decodeCdpBody(payload);
+    if (text === null) {
+      session.body_read_failures += 1;
+      session.resolve?.('body-decode-failed');
+      return;
+    }
+    if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
+      session.body_too_large += 1;
+      session.resolve?.('body-too-large');
+      return;
+    }
+
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      session.invalid_json += 1;
+      session.resolve?.('invalid-json');
+      return;
+    }
+
+    session.body = body;
+    session.resolve?.('captured');
+  })();
+
+  session.bodyTask = task;
+  try {
+    await task;
+  } finally {
+    session.bodyTask = null;
+  }
+}
+
+async function captureConversationByNavigation(command, remoteId) {
   const result = baseResult(command, FETCH_PROFILE);
+  result.capture_tab_created = false;
+  result.navigation_started = false;
+  result.exact_response_seen = false;
+  result.responses_seen = 0;
+  result.body_read_failures = 0;
+  result.body_too_large = 0;
+  result.invalid_json = 0;
+  result.detached_reason = null;
+
+  const sourceTab = await findChatGptTab();
+  if (!sourceTab) {
+    result.error = 'chatgpt_tab_not_found';
+    return result;
+  }
+  result.chatgpt_tab_found = true;
+
+  const accountId = await accountContextForTab(sourceTab.id);
+  if (accountId === null) {
+    result.error = 'account_context_unavailable_run_history_discovery_first';
+    return result;
+  }
+  result.account_context = true;
+
+  const route = conversationRoute(remoteId);
+  if (route === null) {
+    result.error = 'invalid_remote_conversation_id';
+    return result;
+  }
+
+  let captureTab = null;
+  let attached = false;
+  let session = null;
+
+  try {
+    captureTab = await chrome.tabs.create({
+      active: false,
+      url: 'about:blank',
+      ...(Number.isInteger(sourceTab.windowId) ? { windowId: sourceTab.windowId } : {}),
+    });
+    if (!captureTab || !Number.isInteger(captureTab.id)) {
+      result.error = 'capture_tab_creation_failed';
+      return result;
+    }
+    result.capture_tab_created = true;
+
+    let resolveCapture;
+    const captureDone = new Promise((resolve) => {
+      resolveCapture = resolve;
+    });
+
+    const debuggee = { tabId: captureTab.id };
+    session = {
+      debuggee,
+      tabId: captureTab.id,
+      remoteId,
+      closed: false,
+      resolve: resolveCapture,
+      responses_seen: 0,
+      exact_response_seen: false,
+      responseMeta: null,
+      pendingRequestId: null,
+      bodyTask: null,
+      body: null,
+      non_json_response: false,
+      body_read_failures: 0,
+      body_too_large: 0,
+      invalid_json: 0,
+      detached_reason: null,
+    };
+    activeConversationCaptures.set(captureTab.id, session);
+
+    await chrome.debugger.attach(debuggee, DEBUGGER_PROTOCOL_VERSION);
+    attached = true;
+    result.debugger_attached = true;
+
+    await chrome.debugger.sendCommand(debuggee, 'Network.enable', {
+      maxTotalBufferSize: 16 * 1024 * 1024,
+      maxResourceBufferSize: MAX_RESPONSE_BYTES,
+      maxPostDataSize: 0,
+    });
+    result.network_enabled = true;
+
+    await chrome.debugger.sendCommand(debuggee, 'Page.navigate', { url: route });
+    result.navigation_started = true;
+
+    const outcome = await Promise.race([
+      captureDone,
+      sleep(CONVERSATION_CAPTURE_WINDOW_MS).then(() => 'timeout'),
+    ]);
+
+    await sleep(CONVERSATION_CAPTURE_BODY_GRACE_MS);
+    if (session.bodyTask !== null) {
+      await Promise.allSettled([session.bodyTask]);
+    }
+
+    result.responses_seen = session.responses_seen;
+    result.exact_response_seen = session.exact_response_seen;
+    result.body_read_failures = session.body_read_failures;
+    result.body_too_large = session.body_too_large;
+    result.invalid_json = session.invalid_json;
+    result.detached_reason = session.detached_reason;
+
+    if (session.responseMeta !== null) {
+      result.first_party_http_status = session.responseMeta.http_status;
+      result.http_status = session.responseMeta.http_status;
+      result.content_type = session.responseMeta.mime_type;
+    }
+
+    if (outcome === 'timeout') {
+      result.error = session.exact_response_seen
+        ? 'exact_conversation_body_not_completed_before_timeout'
+        : 'exact_conversation_response_not_observed_before_timeout';
+      return result;
+    }
+    if (session.responseMeta !== null && session.responseMeta.http_status !== 200) {
+      result.error = 'first_party_conversation_http_status';
+      return result;
+    }
+    if (session.non_json_response) {
+      result.error = 'first_party_conversation_non_json';
+      return result;
+    }
+    if (session.body_too_large > 0) {
+      result.error = 'first_party_conversation_body_too_large';
+      return result;
+    }
+    if (session.invalid_json > 0) {
+      result.error = 'first_party_conversation_invalid_json';
+      return result;
+    }
+    if (session.body_read_failures > 0 || session.body === null) {
+      result.error = 'first_party_conversation_body_unavailable';
+      return result;
+    }
+
+    result.ok = true;
+    result.body = session.body;
+    return result;
+  } catch (error) {
+    result.error = error instanceof Error ? error.message : 'cdp_conversation_capture_failed';
+    return result;
+  } finally {
+    if (session !== null) {
+      session.closed = true;
+      if (Number.isInteger(session.tabId)) activeConversationCaptures.delete(session.tabId);
+    }
+    if (attached && captureTab && Number.isInteger(captureTab.id)) {
+      try {
+        await chrome.debugger.detach({ tabId: captureTab.id });
+      } catch {
+        // Navigation, browser shutdown, or tab teardown may already have detached the debugger.
+      }
+    }
+    if (captureTab && Number.isInteger(captureTab.id)) {
+      try {
+        await chrome.tabs.remove(captureTab.id);
+      } catch {
+        // The temporary capture tab may already be gone.
+      }
+    }
+  }
+}
+
+async function fetchConversation(command) {
   const remoteId = typeof command.remote_conversation_id === 'string'
     ? command.remote_conversation_id
     : '';
   if (!remoteId) {
+    const result = baseResult(command, FETCH_PROFILE);
     result.error = 'missing_remote_conversation_id';
     return result;
   }
@@ -471,54 +740,12 @@ async function fetchConversation(command) {
   const expectedResource =
     `/backend-api/conversations/${percentEncodePathSegment(remoteId)}?num_turns=10&include_has_versions=true`;
   if (command.resource !== expectedResource || command.request_profile !== FETCH_PROFILE) {
+    const result = baseResult(command, FETCH_PROFILE);
     result.error = 'resource_profile_mismatch';
     return result;
   }
 
-  const tab = await findChatGptTab();
-  if (!tab) {
-    result.error = 'chatgpt_tab_not_found';
-    return result;
-  }
-  result.chatgpt_tab_found = true;
-
-  const accountId = await accountContextForTab(tab.id);
-  if (accountId === null) {
-    result.error = 'account_context_unavailable_run_history_discovery_first';
-    return result;
-  }
-  result.account_context = true;
-
-  let pageResult;
-  try {
-    pageResult = await executePageGet(
-      tab.id,
-      expectedResource,
-      { [ACCOUNT_HEADER]: accountId },
-    );
-    result.main_world_execution = true;
-  } catch (error) {
-    result.error = error instanceof Error ? error.message : 'main_world_execution_failed';
-    return result;
-  }
-
-  if (!pageResult || typeof pageResult !== 'object') {
-    result.error = 'main_world_invalid_result';
-    return result;
-  }
-
-  result.http_status = pageResult.http_status;
-  result.content_type = pageResult.content_type;
-  if (pageResult.ok !== true) {
-    result.error = typeof pageResult.error === 'string'
-      ? pageResult.error
-      : 'remote_fetch_failed';
-    return result;
-  }
-
-  result.ok = true;
-  result.body = pageResult.body;
-  return result;
+  return captureConversationByNavigation(command, remoteId);
 }
 
 async function execute(command) {
