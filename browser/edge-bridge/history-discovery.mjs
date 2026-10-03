@@ -1,8 +1,8 @@
 'use strict';
 
-const MAX_VISITED_NODES = 50_000;
+const MAX_VISITED_NODES = 20_000;
 const MAX_CONVERSATIONS = 5_000;
-const MAX_DEPTH = 16;
+const MAX_DEPTH = 8;
 
 function normalizeCandidateUrl(rawUrl) {
   let url;
@@ -13,6 +13,15 @@ function normalizeCandidateUrl(rawUrl) {
   }
   if (url.origin !== 'https://chatgpt.com') return null;
   if (!url.pathname.startsWith('/backend-api/')) return null;
+
+  const lowerPath = url.pathname.toLowerCase();
+  if (
+    !lowerPath.includes('conversation')
+    && !lowerPath.includes('sidebar')
+    && !lowerPath.includes('/pins')
+  ) {
+    return null;
+  }
 
   return {
     path: url.pathname,
@@ -27,7 +36,7 @@ function classifySurfaceKind(path) {
     return 'gizmo_conversations';
   }
   if (path === '/backend-api/pins') return 'pins';
-  return 'backend_json';
+  return 'conversation_like';
 }
 
 function looksLikeConversation(object) {
@@ -77,27 +86,23 @@ export function classifyHistoryBody(rawUrl, body) {
   const normalized = normalizeCandidateUrl(rawUrl);
   if (normalized === null || body === null || typeof body !== 'object') return null;
 
-  const queue = [{ value: body, depth: 0 }];
-  let queueIndex = 0;
+  const stack = [{ value: body, depth: 0 }];
   const conversations = new Map();
   let visited = 0;
   let cursorCount = 0;
   let nullCursorCount = 0;
   let stringCursorCount = 0;
 
-  while (queueIndex < queue.length && visited < MAX_VISITED_NODES) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
+  while (stack.length > 0 && visited < MAX_VISITED_NODES) {
+    const current = stack.pop();
     if (!current) break;
     const { value, depth } = current;
     visited += 1;
 
     if (Array.isArray(value)) {
       if (depth >= MAX_DEPTH) continue;
-      for (const child of value) {
-        if (child !== null && typeof child === 'object') {
-          queue.push({ value: child, depth: depth + 1 });
-        }
+      for (let index = value.length - 1; index >= 0; index -= 1) {
+        stack.push({ value: value[index], depth: depth + 1 });
       }
       continue;
     }
@@ -116,7 +121,7 @@ export function classifyHistoryBody(rawUrl, body) {
         if (typeof child === 'string' && child.length > 0) stringCursorCount += 1;
       }
       if (depth < MAX_DEPTH && child !== null && typeof child === 'object') {
-        queue.push({ value: child, depth: depth + 1 });
+        stack.push({ value: child, depth: depth + 1 });
       }
     }
   }
