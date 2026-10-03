@@ -113,6 +113,14 @@ The local archive contains conversation text. Version 0.7.2 exports may also con
 
 Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed. A v0.7.2 private export may contain the narrowly approved C02 query literals above; older v0.7.0/v0.7.1 exports contain only query-key names, so their query values remain unknown and must never be backfilled from assumption.
 
+## Edge account-history bridge (current critical-path implementation)
+
+The replacement runtime now lives in [`edge-bridge/`](edge-bridge/). It is a sideloadable Manifest V3 Edge/Chromium extension with narrow `chatgpt.com` + loopback host permissions, a service-worker-owned typed loopback client, passive first-party account-context observation, and explicit MAIN-world execution for the evidence-backed authenticated GETs.
+
+The desktop no longer accepts `page` or `tampermonkey` as successful critical-path history transports. Extension results must carry proof of extension version, correlated desktop roundtrip, exact ChatGPT tab, MAIN-world execution, account-context presence, request-profile identity, and HTTP status. Rust then adds parser/semantic evidence; exact-conversation synchronization is not called complete until the matching live mirror is durably committed.
+
+**Implementation is not live-browser validation.** Do not infer that the extension works in the target Edge environment merely because the files or automated checks pass. Human QA remains blocked behind the instrumentation and CI gate in `docs/HUMAN_QA.md` and issue #102.
+
 ## Account bridge (retired critical-path prototype)
 
 > **Retired for production account-history transport.** `account-bridge.user.js` is retained as protocol/engineering evidence only. Do not continue iterating it as Chatarium's critical runtime bridge. The 2026-10-03 live QA sequence demonstrated unstable environment-dependent transport and insufficient execution/request-context guarantees. See [the complete postmortem](../docs/postmortems/2026-10-03-chatgpt-history-bridge.md).
