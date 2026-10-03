@@ -112,3 +112,23 @@ Visible-error capture is intentionally conservative: it observes `role="alert"` 
 The local archive contains conversation text. Version 0.7.2 exports may also contain raw decoded response-stream content from controlled or personal turns. This is **private evidence**, not a publication-ready sanitized artifact. It remains in browser storage until the browser profile/site data is cleared. Exports contain that material too. Do not commit personal exports to this public repository.
 
 Protocol fixtures should use controlled non-sensitive test conversations and follow `protocol/CAPTURE_PLAYBOOK.md` before anything is committed. A v0.7.2 private export may contain the narrowly approved C02 query literals above; older v0.7.0/v0.7.1 exports contain only query-key names, so their query values remain unknown and must never be backfilled from assumption.
+
+## Account bridge (live remote reads)
+
+`account-bridge.user.js` is a separate, deliberately narrow Tampermonkey userscript for P3 live mirroring. It is **not** a generic HTTP proxy and it does not copy reusable ChatGPT credentials into Chatarium.
+
+The bridge splits authority deliberately:
+
+- authenticated ChatGPT requests execute inside the already-signed-in `chatgpt.com` browser context;
+- Tampermonkey's privileged loopback transport carries only typed bridge commands/results to `127.0.0.1:43117`;
+- cookies, bearer/session tokens, request headers, Sentinel material, browser storage, and account identifiers never cross the bridge;
+- the only remote conversation read command constructs the exact C02 resource observed in protocol snapshot `2026-10-03.001`: `/backend-api/conversations/<id>?num_turns=10&include_has_versions=true`;
+- non-200 responses return status metadata but not remote body text;
+- successful JSON bodies are bounded to 4 MiB before crossing loopback;
+- authentication probing reads only the HTTP status of `/backend-api/me` and discards its body.
+
+The bridge uses long-polling rather than a timer-driven command scan, so an idle bridge does not continuously wake the page and an available command can be delivered immediately.
+
+This userscript is intentionally separate from `flight-recorder.user.js`. The recorder remains `@grant none` and keeps its page-context durability semantics; adding privileged Tampermonkey grants to it would unnecessarily change that execution boundary.
+
+The desktop half of this bridge must bind loopback only, require the bridge marker header, expose typed endpoints only, and never add a generic arbitrary-URL/method forwarding surface.

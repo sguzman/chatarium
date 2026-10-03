@@ -19,8 +19,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Browser recorder syntax
-        run: node --check browser/flight-recorder.user.js
+      - name: Browser userscript syntax
+        run: |
+          node --check browser/flight-recorder.user.js
+          node --check browser/account-bridge.user.js
       - name: Sign in with ChatGPT bridge syntax
         run: |
           node --check tools/siwc-bridge/bridge.mjs
