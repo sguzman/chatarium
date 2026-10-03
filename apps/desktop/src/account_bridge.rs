@@ -35,6 +35,8 @@ const NEXT_WAIT: Duration = Duration::from_secs(25);
 const AUTH_RESULT_WAIT: Duration = Duration::from_secs(5);
 const FETCH_RESULT_WAIT: Duration = Duration::from_secs(45);
 const AUTH_REQUEST_PROFILE: &str = "chatgpt-me-v1";
+const HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-discovery-v1";
+const DISCOVERY_RESULT_WAIT: Duration = Duration::from_secs(20);
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,12 +176,14 @@ impl Drop for AccountBridgeRuntime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeTransport {
     Extension,
+    ExtensionCdp,
 }
 
 impl BridgeTransport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Extension => "extension",
+            Self::ExtensionCdp => "extension-cdp",
         }
     }
 }
@@ -218,6 +222,44 @@ pub struct ConversationFetchObservation {
     pub http_status: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistorySurfaceCandidate {
+    pub path: String,
+    pub query_keys: Vec<String>,
+    pub surface_kind: String,
+    pub conversation_count: u64,
+    pub cursor_count: u64,
+    pub top_level_cursor: String,
+    pub traversal_truncated: bool,
+    pub observations: u64,
+    pub items: Vec<ConversationListItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryDiscoveryProof {
+    pub extension_version: String,
+    pub desktop_roundtrip: bool,
+    pub chatgpt_tab_found: bool,
+    pub debugger_attached: bool,
+    pub network_enabled: bool,
+    pub reload_started: bool,
+    pub account_context: bool,
+    pub responses_seen: u64,
+    pub backend_http_200_seen: u64,
+    pub json_candidates_seen: u64,
+    pub body_read_failures: u64,
+    pub body_too_large: u64,
+    pub invalid_json: u64,
+    pub request_profile: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryDiscoveryObservation {
+    pub discovery: String,
+    pub proof: HistoryDiscoveryProof,
+    pub candidates: Vec<HistorySurfaceCandidate>,
+}
+
 #[derive(Clone)]
 pub struct BrowserBridgeProvider {
     shared: Arc<Shared>,
@@ -231,7 +273,121 @@ impl BrowserBridgeProvider {
         self.probe_authentication_observation()
     }
 
-    /// Fetch and validate the single evidence-backed first page of ordinary account history.
+    /// Discover the current successful first-party history/list surfaces through a bounded CDP
+    /// observation window. Candidate observation is not proof of complete account enumeration.
+    pub fn discover_history_surfaces(
+        &mut self,
+    ) -> Result<HistoryDiscoveryObservation, BrowserBridgeError> {
+        let result = self.call(
+            "discover_history_surfaces",
+            |object| {
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(HISTORY_DISCOVERY_PROFILE),
+                );
+            },
+            DISCOVERY_RESULT_WAIT,
+        )?;
+
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+        if parse_bridge_transport(&result)? != BridgeTransport::ExtensionCdp {
+            return Err(BrowserBridgeError::Protocol(
+                "history discovery did not use the CDP extension transport".to_owned(),
+            ));
+        }
+
+        let request_profile = result
+            .get("request_profile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BrowserBridgeError::Protocol(
+                "history discovery result is missing request profile".to_owned(),
+            ))?;
+        if request_profile != HISTORY_DISCOVERY_PROFILE {
+            return Err(BrowserBridgeError::Protocol(format!(
+                "history discovery profile {request_profile:?} does not match expected {HISTORY_DISCOVERY_PROFILE:?}"
+            )));
+        }
+
+        let extension_version = result
+            .get("extension_version")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+            .ok_or_else(|| BrowserBridgeError::Protocol(
+                "history discovery result is missing extension version".to_owned(),
+            ))?
+            .to_owned();
+        let required_bool = |field: &str| {
+            result.get(field).and_then(Value::as_bool).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery result is missing boolean proof field {field:?}"
+                ))
+            })
+        };
+        let required_u64 = |field: &str| {
+            result.get(field).and_then(Value::as_u64).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery result is missing numeric proof field {field:?}"
+                ))
+            })
+        };
+
+        let proof = HistoryDiscoveryProof {
+            extension_version,
+            desktop_roundtrip: true,
+            chatgpt_tab_found: required_bool("chatgpt_tab_found")?,
+            debugger_attached: required_bool("debugger_attached")?,
+            network_enabled: required_bool("network_enabled")?,
+            reload_started: required_bool("reload_started")?,
+            account_context: required_bool("account_context")?,
+            responses_seen: required_u64("responses_seen")?,
+            backend_http_200_seen: required_u64("backend_http_200_seen")?,
+            json_candidates_seen: required_u64("json_candidates_seen")?,
+            body_read_failures: required_u64("body_read_failures")?,
+            body_too_large: required_u64("body_too_large")?,
+            invalid_json: required_u64("invalid_json")?,
+            request_profile: request_profile.to_owned(),
+        };
+        if !proof.chatgpt_tab_found
+            || !proof.debugger_attached
+            || !proof.network_enabled
+            || !proof.reload_started
+            || proof.responses_seen == 0
+        {
+            return Err(BrowserBridgeError::Protocol(
+                "history discovery returned success without complete CDP boundary proof".to_owned(),
+            ));
+        }
+
+        let candidates = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .ok_or_else(|| BrowserBridgeError::Protocol(
+                "history discovery result is missing candidates".to_owned(),
+            ))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_history_surface_candidate(value, index))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let discovery = result
+            .get("discovery")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BrowserBridgeError::Protocol(
+                "history discovery result is missing semantic state".to_owned(),
+            ))?
+            .to_owned();
+
+        Ok(HistoryDiscoveryObservation {
+            discovery,
+            proof,
+            candidates,
+        })
+    }
+
+    /// Historical exact-C01 replay is retained only for forensic compatibility and must not be
+    /// used by the desktop history-discovery flow.
     pub fn list_recent_conversations(
         &mut self,
     ) -> Result<ConversationListObservation, BrowserBridgeError> {
@@ -274,7 +430,7 @@ impl BrowserBridgeProvider {
         if status != 200 {
             return Err(status_error(status));
         }
-        let proof = parse_extension_proof(&result, CONVERSATION_LIST_OBSERVATION, true)?;
+        let proof = parse_extension_proof(&result, CONVERSATION_LIST_OBSERVATION, true, true)?;
 
         let body = result.get("body").ok_or_else(|| {
             BrowserBridgeError::Protocol(
@@ -336,7 +492,7 @@ impl BrowserBridgeProvider {
                 ));
             }
         };
-        let proof = parse_extension_proof(&result, AUTH_REQUEST_PROFILE, false)?;
+        let proof = parse_extension_proof(&result, AUTH_REQUEST_PROFILE, false, false)?;
         Ok(AuthenticationObservation {
             evidence,
             proof,
@@ -381,7 +537,7 @@ impl BrowserBridgeProvider {
         if http_status != 200 {
             return Err(status_error(http_status));
         }
-        let proof = parse_extension_proof(&result, protocol_revision.as_str(), true)?;
+        let proof = parse_extension_proof(&result, protocol_revision.as_str(), true, false)?;
         let body = result.get("body").cloned().ok_or_else(|| {
             BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
         })?;
@@ -482,6 +638,109 @@ impl RemoteConversationFetchProvider for BrowserBridgeProvider {
     }
 }
 
+fn parse_history_surface_candidate(
+    value: &Value,
+    index: usize,
+) -> Result<HistorySurfaceCandidate, BrowserBridgeError> {
+    let object = value.as_object().ok_or_else(|| {
+        BrowserBridgeError::Protocol(format!(
+            "history discovery candidate {index} is not an object"
+        ))
+    })?;
+    let string_field = |field: &str| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 4096)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} has invalid {field:?}"
+                ))
+            })
+    };
+    let u64_field = |field: &str| {
+        object.get(field).and_then(Value::as_u64).ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} has invalid {field:?}"
+            ))
+        })
+    };
+
+    let query_keys = object
+        .get("query_keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| BrowserBridgeError::Protocol(format!(
+            "history discovery candidate {index} is missing query keys"
+        )))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= 128)
+                .map(str::to_owned)
+                .ok_or_else(|| BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} has an invalid query key"
+                )))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let items = object
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| BrowserBridgeError::Protocol(format!(
+            "history discovery candidate {index} is missing items"
+        )))?
+        .iter()
+        .enumerate()
+        .map(|(item_index, item)| {
+            let item = item.as_object().ok_or_else(|| BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} item {item_index} is not an object"
+            )))?;
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 256)
+                .ok_or_else(|| BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} item {item_index} has invalid id"
+                )))?
+                .to_owned();
+            let title = match item.get("title") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(title)) if title.len() <= 4096 => Some(title.clone()),
+                _ => {
+                    return Err(BrowserBridgeError::Protocol(format!(
+                        "history discovery candidate {index} item {item_index} has invalid title"
+                    )));
+                }
+            };
+            Ok(ConversationListItem {
+                id,
+                title,
+                create_time: item.get("create_time").cloned(),
+                update_time: item.get("update_time").cloned(),
+            })
+        })
+        .collect::<Result<Vec<_>, BrowserBridgeError>>()?;
+
+    Ok(HistorySurfaceCandidate {
+        path: string_field("path")?,
+        query_keys,
+        surface_kind: string_field("surface_kind")?,
+        conversation_count: u64_field("conversation_count")?,
+        cursor_count: u64_field("cursor_count")?,
+        top_level_cursor: string_field("top_level_cursor")?,
+        traversal_truncated: object
+            .get("traversal_truncated")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} is missing traversal_truncated"
+            )))?,
+        observations: u64_field("observations")?,
+        items,
+    })
+}
+
 fn required_http_status(result: &Value, operation: &str) -> Result<u16, BrowserBridgeError> {
     result
         .get("http_status")
@@ -497,11 +756,13 @@ fn required_http_status(result: &Value, operation: &str) -> Result<u16, BrowserB
 fn parse_extension_proof(
     result: &Value,
     expected_profile: &str,
+    require_account_context: bool,
     require_request_context: bool,
 ) -> Result<BrowserProof, BrowserBridgeError> {
-    if parse_bridge_transport(result)? != BridgeTransport::Extension {
+    let transport = parse_bridge_transport(result)?;
+    if !matches!(transport, BridgeTransport::Extension | BridgeTransport::ExtensionCdp) {
         return Err(BrowserBridgeError::Protocol(
-            "critical history result did not use the Edge extension transport".to_owned(),
+            "critical history result did not use an Edge extension transport".to_owned(),
         ));
     }
 
@@ -562,7 +823,7 @@ fn parse_extension_proof(
             "extension result does not prove MAIN-world execution".to_owned(),
         ));
     }
-    if !account_context {
+    if require_account_context && !account_context {
         return Err(BrowserBridgeError::Protocol(
             "extension result does not prove ChatGPT account context".to_owned(),
         ));
@@ -594,6 +855,7 @@ fn parse_extension_proof(
 fn parse_bridge_transport(result: &Value) -> Result<BridgeTransport, BrowserBridgeError> {
     match result.get("bridge_transport").and_then(Value::as_str) {
         Some("extension") => Ok(BridgeTransport::Extension),
+        Some("extension-cdp") => Ok(BridgeTransport::ExtensionCdp),
         Some("page") | Some("tampermonkey") => Err(BrowserBridgeError::Protocol(
             "retired userscript transport is not accepted on the critical history path".to_owned(),
         )),
