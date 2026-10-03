@@ -8,6 +8,38 @@ Use a controlled, non-sensitive test conversation. Open browser developer tools 
 
 Do not intentionally expose reusable credentials for the sake of documentation. Raw captures may contain them incidentally; keep raw evidence outside Git and sanitize before committing.
 
+## Capture-before-code rule
+
+For undocumented consumer-web integration, current network evidence is mandatory before reproducing the request in runtime code.
+
+If the existing corpus does not establish the complete request, collect a raw HAR, CDP trace, or equivalent first-party network artifact from the exact target flow. Do not infer missing values from endpoint names, old captures, UI behavior, or successful authentication.
+
+The 2026-10-03 history-bridge incident is the canonical example: path/query evidence was insufficient because the first-party conversation-list request also carried account-selection context in a request header.
+
+A manual HAR is acceptable and should be requested immediately when it is the fastest safe way to obtain missing evidence. Do not delay or discourage capture merely because an automated harness is preferred.
+
+## Request-context checklist
+
+For every target request, record or classify:
+
+- method;
+- full path;
+- query keys and literal values needed for parity;
+- duplicate/order semantics where observed;
+- body/content type;
+- relevant origin/referrer/credential behavior;
+- request headers;
+- account/workspace/project selectors;
+- challenge/Sentinel dependencies;
+- request initiator and ordering prerequisites;
+- response status/content type;
+- response schema;
+- identity/pagination metadata.
+
+Committed evidence may redact private values, but it must preserve enough typed presence/classification information to show that a context-bearing header existed.
+
+Do not commit reusable credentials or raw account identifiers.
+
 ## Baseline captures
 
 ### C00 — idle page load
