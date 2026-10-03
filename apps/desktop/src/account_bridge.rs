@@ -1099,7 +1099,7 @@ fn result_diagnostic_summary(result: &Value) -> String {
     };
 
     format!(
-        "ok={} transport={} ext={} HTTP={} tab={} debugger={} network={} reload={} exact-response={} responses={} backend-200={} candidates={} stimulus-targets={} stimulus-steps={}",
+        "ok={} transport={} ext={} HTTP={} tab={} debugger={} network={} reload={} exact-response={} exact-responses={} rate-limited={} responses={} backend-200={} candidates={} stimulus-targets={} stimulus-steps={}",
         bool_field("ok"),
         text_field("bridge_transport"),
         text_field("extension_version"),
@@ -1109,6 +1109,8 @@ fn result_diagnostic_summary(result: &Value) -> String {
         bool_field("network_enabled"),
         bool_field("reload_started"),
         bool_field("exact_response_seen"),
+        number_field("exact_response_count"),
+        number_field("rate_limited_responses"),
         number_field("responses_seen"),
         number_field("backend_http_200_seen"),
         number_field("candidate_count"),
