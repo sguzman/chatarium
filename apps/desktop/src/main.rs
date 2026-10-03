@@ -509,7 +509,8 @@ impl ChatariumApp {
                             self.model_list_pending = false;
                         }
 
-                        let needs_models = !was_connected || account_changed || self.remote_models.is_empty();
+                        let needs_models =
+                            !was_connected || account_changed || self.remote_models.is_empty();
                         if needs_models && !self.model_list_pending {
                             match self.remote.send(siwc_bridge::BridgeCommand::ListModels) {
                                 Ok(()) => {
