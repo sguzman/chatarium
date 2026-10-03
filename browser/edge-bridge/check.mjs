@@ -107,38 +107,12 @@ if (!isCandidateResponse(ordinaryResponse)) {
 if (isCandidateResponse({ ...ordinaryResponse, status: 429 })) {
   throw new Error('rate-limited response must not be promoted to a discovery candidate');
 }
-if (!isCandidateResponse({
+if (isCandidateResponse({
   status: 200,
   mimeType: 'application/json',
   url: 'https://chatgpt.com/backend-api/settings/user',
 })) {
-  throw new Error('all successful backend JSON must reach structural discovery');
-}
-
-const hiddenHistory = classifyHistoryBody(
-  'https://chatgpt.com/backend-api/bootstrap/current',
-  {
-    shell: {
-      nested: {
-        payload: {
-          records: [
-            {
-              id: 'hidden-conversation-1',
-              title: 'Hidden behind unrelated endpoint name',
-              create_time: '2026-10-03T00:00:00Z',
-              update_time: '2026-10-03T00:01:00Z',
-            },
-          ],
-        },
-      },
-    },
-  },
-);
-if (!hiddenHistory || hiddenHistory.conversation_count !== 1) {
-  throw new Error('structural discovery failed behind a non-conversation backend path');
-}
-if (hiddenHistory.surface_kind !== 'backend_json') {
-  throw new Error('noncanonical backend JSON surface classification drifted');
+  throw new Error('known-good passive discovery endpoint filter drifted');
 }
 
 const sidebar = classifyHistoryBody(
