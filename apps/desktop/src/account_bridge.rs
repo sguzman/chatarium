@@ -611,11 +611,11 @@ mod tests {
             inspect(&command);
             let result = result(&command);
             let body = serde_json::to_vec(&result).unwrap();
-            let request = format!(
+            let request_head = format!(
                 "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             );
-            let mut raw = request.into_bytes();
+            let mut raw = request_head.into_bytes();
             raw.extend_from_slice(&body);
             let response = request(address, &raw);
             assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
