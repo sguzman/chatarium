@@ -19,10 +19,10 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.2.0') {
+if (manifest.version !== '0.3.0') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
-sameSet(manifest.permissions, ['scripting', 'storage', 'webRequest'], 'permissions');
+sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
 sameSet(
   manifest.host_permissions,
   ['https://chatgpt.com/*', 'http://127.0.0.1:43117/*'],
@@ -41,18 +41,35 @@ for (const forbidden of ['GM_xmlhttpRequest', 'unsafeWindow', 'Tampermonkey']) {
 }
 for (const required of [
   "world: 'MAIN'",
-  'chrome.webRequest.onBeforeSendHeaders',
-  'chrome.webRequest.onBeforeRequest',
-  'chrome.webRequest.onCompleted',
+  'chrome.debugger.attach',
+  "'Network.enable'",
+  "'Network.getResponseBody'",
+  'chrome.debugger.detach',
+  'chrome.tabs.reload',
   'chrome.storage.session',
   "const ACCOUNT_HEADER = 'ChatGPT-Account-ID'",
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
-  "const LIST_CONTEXT_KEY_PREFIX = 'chatarium-list-request-context:'",
-  'request_context_observed',
+  "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
+  "case 'discover_history_surfaces'",
 ]) {
   if (!worker.includes(required)) {
     throw new Error(`required Edge bridge invariant missing: ${required}`);
   }
 }
 console.log('Chatarium Edge Bridge package invariants OK');
+
+
+const discoveryModule = fs.readFileSync(new URL('history-discovery.mjs', root), 'utf8');
+for (const required of [
+  'export function isCandidateResponse',
+  'export function classifyHistoryBody',
+  'export function mergeDiscoveryCandidates',
+  "surface_kind: classifySurfaceKind",
+  'MAX_VISITED_NODES',
+  'MAX_CONVERSATIONS',
+]) {
+  if (!discoveryModule.includes(required)) {
+    throw new Error(`required CDP discovery invariant missing: ${required}`);
+  }
+}
