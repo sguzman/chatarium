@@ -662,6 +662,70 @@ Permanent process rule from this stage:
 
 Human browser QA is suspended during this reconstruction. Repository/CI work must be exhausted before another live operator validation is requested.
 
+### Stage K9 — isolate recovery instead of modifying the frozen discovery path
+
+The Git reconstruction exposed an important distinction that earlier debugging blurred.
+
+A live 0.4.5 run again produced:
+
+```text
+85 unique conversations
+7 observed surfaces
+```
+
+The subsequent 0.4.6 run produced zero conversation items. A mechanical comparison of the Edge service worker between the exact 0.4.5 and 0.4.6 heads found only three runtime changes:
+
+```text
++ SERVICE_WORKER_KEEPALIVE_MS = 20_000
++ installServiceWorkerKeepalive()
++ installServiceWorkerKeepalive() invocation
+```
+
+No discovery listener, classifier, capture-body helper, discovery timing, or `discoverHistorySurfaces` code changed between those two heads.
+
+Therefore the 85→0 transition cannot be honestly attributed to a discovery-code regression in 0.4.6. It confirms the earlier K4 conclusion more strongly: **active-tab reload discovery is opportunistic with respect to the frontend's in-memory/cache/bootstrap state.** The same discovery implementation can produce a useful list-bearing first-party response on one run and none on another.
+
+That changes the recovery goal. The frozen 0.3 path remains useful and must not be mutated, but it cannot be the only acquisition path when no durable catalog exists.
+
+Edge Bridge 0.4.10 adds a separate recovery command:
+
+```text
+discover_history_surfaces_fresh_tab
+```
+
+It does not alter the frozen 0.3 command. It instead reuses the already-established first-party-navigation principle from exact conversation mirroring:
+
+```text
+existing authenticated ChatGPT tab proves browser session exists
+        ↓
+create temporary background tab at about:blank
+        ↓
+attach CDP before navigation
+        ↓
+Network.enable
+        ↓
+Page.navigate("https://chatgpt.com/")
+        ↓
+let the real ChatGPT frontend boot from a fresh page context
+        ↓
+observe/classify its first-party successful history traffic
+        ↓
+detach + close temporary tab
+```
+
+No private history URL is synthesized. No `fetch()` is issued by Chatarium. No request headers are reconstructed. No cache policy is changed. The site owns the request construction and application bootstrap.
+
+The desktop invokes this recovery only when **both** conditions are true:
+
+1. the frozen 0.3 pass yields zero conversation IDs; and
+2. there is no durable last-known history catalog.
+
+Once a catalog has been durably acquired, a later sparse/empty passive pass does not trigger another recovery tab and cannot erase the cached catalog.
+
+This is composition around the frozen live-proven subsystem rather than another mutation of it. The new path has its own typed proof contract, runtime harness, cleanup assertions, duration-budget checks, and direct-command dispatch invariant.
+
+It still requires one eventual live validation because no automated harness can prove what the current ChatGPT frontend will request after real authenticated startup. That live validation must occur only after the repository gate is fully green; it is not a return to iterative operator debugging.
+
 ## 3. Where engineering/assistant behavior failed
 
 ### F1 — discouraging the HAR
