@@ -23,6 +23,8 @@ const ACCOUNT_KEY_PREFIX = 'chatarium-account-context:';
 const FETCH_PROFILE = '2026-10-03.001';
 const AUTH_PROFILE = 'chatgpt-me-v1';
 const DISCOVERY_PROFILE = 'cdp-history-discovery-v1';
+const FRESH_DISCOVERY_PROFILE = 'cdp-history-fresh-tab-v1';
+const FRESH_DISCOVERY_ROUTE = 'https://chatgpt.com/';
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const DISCOVERY_WINDOW_MS = 8_000;
 const DISCOVERY_BODY_GRACE_MS = 500;
@@ -209,6 +211,140 @@ async function executePageGet(tabId, resource, requestHeaders) {
     throw new Error('main_world_no_result');
   }
   return injection[0].result;
+}
+
+async function discoverHistorySurfacesFreshTab(command) {
+  const result = baseResult(command, FRESH_DISCOVERY_PROFILE);
+  result.capture_tab_created = false;
+  result.navigation_started = false;
+
+  const sourceTab = await findChatGptTab();
+  if (!sourceTab) {
+    result.error = 'chatgpt_tab_not_found';
+    return result;
+  }
+  result.chatgpt_tab_found = true;
+
+  let captureTab = null;
+  let attached = false;
+  let session = null;
+
+  try {
+    captureTab = await chrome.tabs.create({
+      active: false,
+      url: 'about:blank',
+      ...(Number.isInteger(sourceTab.windowId) ? { windowId: sourceTab.windowId } : {}),
+    });
+    if (!captureTab || !Number.isInteger(captureTab.id)) {
+      result.error = 'fresh_history_tab_creation_failed';
+      return result;
+    }
+    result.capture_tab_created = true;
+
+    const debuggee = { tabId: captureTab.id };
+    session = {
+      debuggee,
+      tabId: captureTab.id,
+      closed: false,
+      accountId: null,
+      responses_seen: 0,
+      backend_200_seen: 0,
+      json_candidates_seen: 0,
+      body_read_failures: 0,
+      body_too_large: 0,
+      invalid_json: 0,
+      detached_reason: null,
+      pendingCandidates: new Map(),
+      bodyTasks: new Set(),
+      candidates: [],
+    };
+
+    if (activeDiscoveries.has(captureTab.id)) {
+      result.error = 'fresh_history_discovery_already_active';
+      return result;
+    }
+    activeDiscoveries.set(captureTab.id, session);
+
+    await chrome.debugger.attach(debuggee, DEBUGGER_PROTOCOL_VERSION);
+    attached = true;
+    result.debugger_attached = true;
+
+    await chrome.debugger.sendCommand(debuggee, 'Network.enable', {
+      maxTotalBufferSize: 16 * 1024 * 1024,
+      maxResourceBufferSize: MAX_RESPONSE_BYTES,
+      maxPostDataSize: 0,
+    });
+    result.network_enabled = true;
+
+    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
+    await chrome.debugger.sendCommand(debuggee, 'Page.navigate', {
+      url: FRESH_DISCOVERY_ROUTE,
+    });
+    result.navigation_started = true;
+
+    await sleep(DISCOVERY_WINDOW_MS);
+    await sleep(DISCOVERY_BODY_GRACE_MS);
+    if (session.bodyTasks.size > 0) {
+      await Promise.allSettled([...session.bodyTasks]);
+    }
+  } catch (error) {
+    result.error = error instanceof Error ? error.message : 'cdp_fresh_history_discovery_failed';
+  } finally {
+    if (session !== null) {
+      session.closed = true;
+      activeDiscoveries.delete(session.tabId);
+    }
+    if (attached && captureTab && Number.isInteger(captureTab.id)) {
+      try {
+        await chrome.debugger.detach({ tabId: captureTab.id });
+      } catch {
+        // Navigation, browser shutdown, or tab teardown may already have detached the debugger.
+      }
+    }
+  }
+
+  const accountId = session?.accountId ?? await accountContextForTab(sourceTab.id);
+  result.account_context = accountId !== null;
+  result.responses_seen = session?.responses_seen ?? 0;
+  result.backend_http_200_seen = session?.backend_200_seen ?? 0;
+  result.json_candidates_seen = session?.json_candidates_seen ?? 0;
+  result.body_read_failures = session?.body_read_failures ?? 0;
+  result.body_too_large = session?.body_too_large ?? 0;
+  result.invalid_json = session?.invalid_json ?? 0;
+  result.detached_reason = session?.detached_reason ?? null;
+
+  const candidates = mergeDiscoveryCandidates(session?.candidates ?? []);
+  result.candidate_count = candidates.length;
+  result.candidates = candidates;
+
+  if (captureTab && Number.isInteger(captureTab.id)) {
+    try {
+      await chrome.tabs.remove(captureTab.id);
+    } catch {
+      // The temporary discovery tab may already be gone.
+    }
+  }
+
+  if (result.error) return result;
+  if (
+    !result.capture_tab_created
+    || !result.debugger_attached
+    || !result.network_enabled
+    || !result.navigation_started
+  ) {
+    result.error = 'cdp_fresh_history_proof_incomplete';
+    return result;
+  }
+  if (result.responses_seen === 0) {
+    result.error = 'cdp_fresh_history_no_network_responses';
+    return result;
+  }
+
+  result.ok = true;
+  result.discovery = candidates.length > 0
+    ? 'candidates_observed'
+    : 'no_candidate_surface_observed';
+  return result;
 }
 
 async function probeAuthentication(command) {
@@ -838,6 +974,8 @@ async function execute(command) {
       return probeAuthentication(command);
     case 'discover_history_surfaces':
       return discoverHistorySurfaces(command);
+    case 'discover_history_surfaces_fresh_tab':
+      return discoverHistorySurfacesFreshTab(command);
     case 'fetch_conversation':
       return fetchConversation(command);
     case 'list_conversations':
