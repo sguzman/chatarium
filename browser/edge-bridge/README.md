@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.8 first-party CDP observation
+## Current architecture: 0.4.9 frozen 0.3 discovery + isolated mirroring
 
 ```text
 Chatarium Desktop
@@ -86,6 +86,43 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.9 mechanical rollback to the live-proven 0.3 discovery boundary
+
+After repeated regressions, discovery is no longer being incrementally modified.
+
+Git history identifies commit `dca678f95442635cfc729d02c4ac612510d7efe7` as the last pre-0.4 repository state containing the 0.3 discovery implementation that had already produced the live 85-conversation result. A mechanical comparison established:
+
+- `history-discovery.mjs` in current `main` was already byte-for-byte identical to that 0.3 state;
+- the discovery debugger listener had drifted after 0.3;
+- `discoverHistorySurfaces` had drifted substantially through cache-bypass, request-context collection, sidebar stimulus, retries, and later timeout repair;
+- the Rust discovery proof contract and UI diagnostics had grown fields that existed only to support those later experiments.
+
+0.4.9 restores the **exact 0.3 discovery listener and exact 0.3 `discoverHistorySurfaces` implementation** from that known-good commit. In particular, history discovery is again:
+
+1. attach debugger;
+2. enable the Network domain;
+3. call `chrome.tabs.reload(tab.id)`;
+4. observe first-party traffic for the original bounded 8-second window;
+5. read candidate response bodies;
+6. detach.
+
+The following post-0.3 discovery mutations are removed from the active discovery path:
+
+- `Network.setCacheDisabled`;
+- CDP `Page.reload` for discovery;
+- application-context header harvesting for discovery;
+- synthetic sidebar bootstrap;
+- programmatic sidebar scrolling/stimulus;
+- stimulus retry loops and stimulus-specific proof fields.
+
+Later features are retained only outside that frozen boundary:
+
+- exact-conversation mirroring keeps its separate debugger listener and temporary-tab capture path;
+- the MV3 local keepalive remains independent of discovery;
+- the desktop's durable last-known discovery cache remains, so a future sparse/empty pass cannot erase a previously successful catalog.
+
+Two repository fixtures now contain the exact live-proven 0.3 discovery runtime and classifier. CI rejects any future discovery change unless those fixtures are deliberately changed too. This turns "discovery is frozen" from prose into a machine-enforced boundary.
 
 ### 0.4.8 discovery duration-budget repair
 
@@ -230,7 +267,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.8 manifest contains only:
+The 0.4.9 manifest contains only:
 
 - `debugger`
 - `scripting`
