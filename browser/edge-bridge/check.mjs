@@ -446,3 +446,45 @@ if (authWaitMs < pageFetchTimeoutMs + 2_000) {
     `authentication wait must exceed page fetch bound with margin: page=${pageFetchTimeoutMs}ms wait=${authWaitMs}ms`,
   );
 }
+
+const conversationCaptureWindowMs =
+  workerMilliseconds('CONVERSATION_CAPTURE_WINDOW_MS');
+const conversationCaptureBodyGraceMs =
+  workerMilliseconds('CONVERSATION_CAPTURE_BODY_GRACE_MS');
+const conversationRateLimitReloadDelayMs =
+  workerMilliseconds('CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS');
+const fetchWaitMs = rustDurationMilliseconds('FETCH_RESULT_WAIT');
+const conversationWorstCaseMs =
+  conversationCaptureWindowMs + conversationCaptureBodyGraceMs;
+if (conversationWorstCaseMs + 5_000 >= fetchWaitMs) {
+  throw new Error(
+    `conversation capture can outlive desktop result wait: worst=${conversationWorstCaseMs}ms wait=${fetchWaitMs}ms`,
+  );
+}
+if (conversationRateLimitReloadDelayMs + 5_000 >= conversationCaptureWindowMs) {
+  throw new Error(
+    `rate-limit recovery leaves too little capture window: reload=${conversationRateLimitReloadDelayMs}ms capture=${conversationCaptureWindowMs}ms`,
+  );
+}
+
+const nextTimeoutMs = workerMilliseconds('NEXT_TIMEOUT_MS');
+const resultTimeoutMs = workerMilliseconds('RESULT_TIMEOUT_MS');
+const nextWaitMs = rustDurationMilliseconds('NEXT_WAIT');
+const socketTimeoutMs = rustDurationMilliseconds('SOCKET_TIMEOUT');
+if (nextTimeoutMs < nextWaitMs + 2_000) {
+  throw new Error(
+    `extension long-poll timeout must exceed desktop next wait: next=${nextWaitMs}ms extension=${nextTimeoutMs}ms`,
+  );
+}
+if (socketTimeoutMs < nextTimeoutMs + 2_000) {
+  throw new Error(
+    `desktop socket timeout must exceed extension long-poll timeout: extension=${nextTimeoutMs}ms socket=${socketTimeoutMs}ms`,
+  );
+}
+if (resultTimeoutMs >= socketTimeoutMs) {
+  throw new Error(
+    `extension result-post timeout must stay inside desktop socket timeout: post=${resultTimeoutMs}ms socket=${socketTimeoutMs}ms`,
+  );
+}
+
+console.log('Chatarium browser/desktop duration contracts OK');
