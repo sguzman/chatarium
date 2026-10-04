@@ -5,6 +5,7 @@
     "launchOptions": {
       "headless": false,
       "args": [
+        "--class=chatarium-qa",
         "--disable-extensions-except=/home/sguzman/Code/Source/Rust/chatarium/browser/edge-bridge",
         "--load-extension=/home/sguzman/Code/Source/Rust/chatarium/browser/edge-bridge"
       ]
