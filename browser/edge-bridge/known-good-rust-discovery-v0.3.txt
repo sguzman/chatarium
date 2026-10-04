@@ -1,0 +1,260 @@
+CHATARIUM RUST KNOWN-GOOD 0.3 DISCOVERY CONTRACT
+source-commit: dca678f95442635cfc729d02c4ac612510d7efe7
+do-not-edit: this fixture freezes the desktop side of the live-proven discovery boundary
+
+--- HISTORY DISCOVERY PROOF ---
+pub struct HistoryDiscoveryProof {
+    pub extension_version: String,
+    pub desktop_roundtrip: bool,
+    pub chatgpt_tab_found: bool,
+    pub debugger_attached: bool,
+    pub network_enabled: bool,
+    pub reload_started: bool,
+    pub account_context: bool,
+    pub responses_seen: u64,
+    pub backend_http_200_seen: u64,
+    pub json_candidates_seen: u64,
+    pub body_read_failures: u64,
+    pub body_too_large: u64,
+    pub invalid_json: u64,
+    pub request_profile: String,
+}
+--- END HISTORY DISCOVERY PROOF ---
+
+--- HISTORY DISCOVERY METHOD ---
+    pub fn discover_history_surfaces(
+        &mut self,
+    ) -> Result<HistoryDiscoveryObservation, BrowserBridgeError> {
+        let result = self.call(
+            "discover_history_surfaces",
+            |object| {
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(HISTORY_DISCOVERY_PROFILE),
+                );
+            },
+            DISCOVERY_RESULT_WAIT,
+        )?;
+
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+        if parse_bridge_transport(&result)? != BridgeTransport::ExtensionCdp {
+            return Err(BrowserBridgeError::Protocol(
+                "history discovery did not use the CDP extension transport".to_owned(),
+            ));
+        }
+
+        let request_profile = result
+            .get("request_profile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing request profile".to_owned(),
+                )
+            })?;
+        if request_profile != HISTORY_DISCOVERY_PROFILE {
+            return Err(BrowserBridgeError::Protocol(format!(
+                "history discovery profile {request_profile:?} does not match expected {HISTORY_DISCOVERY_PROFILE:?}"
+            )));
+        }
+
+        let extension_version = result
+            .get("extension_version")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing extension version".to_owned(),
+                )
+            })?
+            .to_owned();
+        let required_bool = |field: &str| {
+            result.get(field).and_then(Value::as_bool).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery result is missing boolean proof field {field:?}"
+                ))
+            })
+        };
+        let required_u64 = |field: &str| {
+            result.get(field).and_then(Value::as_u64).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery result is missing numeric proof field {field:?}"
+                ))
+            })
+        };
+
+        let proof = HistoryDiscoveryProof {
+            extension_version,
+            desktop_roundtrip: true,
+            chatgpt_tab_found: required_bool("chatgpt_tab_found")?,
+            debugger_attached: required_bool("debugger_attached")?,
+            network_enabled: required_bool("network_enabled")?,
+            reload_started: required_bool("reload_started")?,
+            account_context: required_bool("account_context")?,
+            responses_seen: required_u64("responses_seen")?,
+            backend_http_200_seen: required_u64("backend_http_200_seen")?,
+            json_candidates_seen: required_u64("json_candidates_seen")?,
+            body_read_failures: required_u64("body_read_failures")?,
+            body_too_large: required_u64("body_too_large")?,
+            invalid_json: required_u64("invalid_json")?,
+            request_profile: request_profile.to_owned(),
+        };
+        if !proof.chatgpt_tab_found
+            || !proof.debugger_attached
+            || !proof.network_enabled
+            || !proof.reload_started
+            || proof.responses_seen == 0
+        {
+            return Err(BrowserBridgeError::Protocol(
+                "history discovery returned success without complete CDP boundary proof".to_owned(),
+            ));
+        }
+
+        let candidates = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing candidates".to_owned(),
+                )
+            })?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_history_surface_candidate(value, index))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let discovery = result
+            .get("discovery")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "history discovery result is missing semantic state".to_owned(),
+                )
+            })?
+            .to_owned();
+
+        Ok(HistoryDiscoveryObservation {
+            discovery,
+            proof,
+            candidates,
+        })
+    }
+--- END HISTORY DISCOVERY METHOD ---
+
+--- HISTORY CANDIDATE PARSER ---
+fn parse_history_surface_candidate(
+    value: &Value,
+    index: usize,
+) -> Result<HistorySurfaceCandidate, BrowserBridgeError> {
+    let object = value.as_object().ok_or_else(|| {
+        BrowserBridgeError::Protocol(format!(
+            "history discovery candidate {index} is not an object"
+        ))
+    })?;
+    let string_field = |field: &str| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 4096)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} has invalid {field:?}"
+                ))
+            })
+    };
+    let u64_field = |field: &str| {
+        object.get(field).and_then(Value::as_u64).ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} has invalid {field:?}"
+            ))
+        })
+    };
+
+    let query_keys = object
+        .get("query_keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} is missing query keys"
+            ))
+        })?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= 128)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    BrowserBridgeError::Protocol(format!(
+                        "history discovery candidate {index} has an invalid query key"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let items = object
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            BrowserBridgeError::Protocol(format!(
+                "history discovery candidate {index} is missing items"
+            ))
+        })?
+        .iter()
+        .enumerate()
+        .map(|(item_index, item)| {
+            let item = item.as_object().ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} item {item_index} is not an object"
+                ))
+            })?;
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 256)
+                .ok_or_else(|| {
+                    BrowserBridgeError::Protocol(format!(
+                        "history discovery candidate {index} item {item_index} has invalid id"
+                    ))
+                })?
+                .to_owned();
+            let title = match item.get("title") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(title)) if title.len() <= 4096 => Some(title.clone()),
+                _ => {
+                    return Err(BrowserBridgeError::Protocol(format!(
+                        "history discovery candidate {index} item {item_index} has invalid title"
+                    )));
+                }
+            };
+            Ok(ConversationListItem {
+                id,
+                title,
+                create_time: item.get("create_time").cloned(),
+                update_time: item.get("update_time").cloned(),
+            })
+        })
+        .collect::<Result<Vec<_>, BrowserBridgeError>>()?;
+
+    Ok(HistorySurfaceCandidate {
+        path: string_field("path")?,
+        query_keys,
+        surface_kind: string_field("surface_kind")?,
+        conversation_count: u64_field("conversation_count")?,
+        cursor_count: u64_field("cursor_count")?,
+        top_level_cursor: string_field("top_level_cursor")?,
+        traversal_truncated: object
+            .get("traversal_truncated")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "history discovery candidate {index} is missing traversal_truncated"
+                ))
+            })?,
+        observations: u64_field("observations")?,
+        items,
+    })
+}
+--- END HISTORY CANDIDATE PARSER ---
