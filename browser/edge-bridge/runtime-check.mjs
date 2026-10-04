@@ -6,6 +6,10 @@ const fixture = fs.readFileSync(
   new URL('known-good-discovery-v0.3.txt', root),
   'utf8',
 ).replaceAll('\r\n', '\n');
+const worker = fs.readFileSync(
+  new URL('service-worker.js', root),
+  'utf8',
+).replaceAll('\r\n', '\n');
 
 function fixtureSection(text, startMarker, endMarker) {
   const start = text.indexOf(startMarker);
@@ -17,10 +21,67 @@ function fixtureSection(text, startMarker, endMarker) {
   return section;
 }
 
-const discoveryCommand = fixtureSection(
+const frozenDiscoveryCommand = fixtureSection(
   fixture,
   '--- DISCOVERY COMMAND ---',
   '--- END DISCOVERY COMMAND ---',
+);
+
+function extractAsyncFunction(source, name) {
+  const marker = `async function ${name}(`;
+  const starts = [];
+  let from = 0;
+  while (true) {
+    const index = source.indexOf(marker, from);
+    if (index < 0) break;
+    starts.push(index);
+    from = index + marker.length;
+  }
+  assert.equal(
+    starts.length,
+    1,
+    `expected exactly one ${name} definition in service-worker.js`,
+  );
+
+  const start = starts[0];
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+
+  throw new Error(`unterminated async function ${name}`);
+}
+
+const discoveryCommand = extractAsyncFunction(worker, 'discoverHistorySurfaces');
+assert.equal(
+  discoveryCommand,
+  frozenDiscoveryCommand,
+  'active discoverHistorySurfaces must exactly equal the live-proven 0.3 fixture',
 );
 
 function harness(options = {}) {
@@ -192,4 +253,4 @@ function harness(options = {}) {
   assert.equal(h.calls.length, 0);
 }
 
-console.log('Chatarium frozen 0.3 discovery runtime harness OK');
+console.log('Chatarium active frozen 0.3 discovery runtime harness OK');
