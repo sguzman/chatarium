@@ -602,6 +602,66 @@ The new 0.4.7 eligibility rule made navigation surfaces available for stimulus, 
 
 Permanent rule: every cross-process command must have a producer-side execution bound strictly below the consumer-side wait, and that relationship must be machine-checked.
 
+### Stage K8 — stop patching; restore and freeze the last live-proven discovery runtime
+
+The 0.4.7/0.4.8 sequence established that continuing to mutate discovery under live human QA was itself the process failure.
+
+The recovery therefore changed from "find the next plausible fix" to a mechanical Git-history reconstruction.
+
+The last pre-0.4 repository state containing the 0.3 discovery implementation is:
+
+```text
+dca678f95442635cfc729d02c4ac612510d7efe7
+```
+
+That lineage contains the implementation that had already produced the live 85-conversation discovery result before exact-conversation mirroring work began.
+
+A direct file comparison against current `main` found:
+
+```text
+history-discovery.mjs:
+  baseline blob = 9d835480e0af99d4dc769623d5dc6e9574319917
+  current blob  = 9d835480e0af99d4dc769623d5dc6e9574319917
+  result        = identical
+
+service-worker discovery listener:
+  result        = drifted after 0.3
+
+discoverHistorySurfaces:
+  result        = drifted substantially after 0.3
+```
+
+The classifier was therefore not the thing that had been repeatedly destroyed. The runtime orchestration around it was.
+
+0.4.9 restores the exact 0.3 discovery debugger listener and exact 0.3 `discoverHistorySurfaces` body from the known-good commit. It also restores the Rust-side discovery proof contract to the 0.3 field set and removes stimulus/cache-bypass fields from discovery UI diagnostics.
+
+The active discovery path again consists only of:
+
+```text
+attach debugger
+→ Network.enable
+→ chrome.tabs.reload(tab.id)
+→ bounded passive observation
+→ response-body classification
+→ detach
+```
+
+No sidebar replay, cache bypass, CDP Page.reload, programmatic sidebar scrolling, request-context harvesting, or stimulus retry logic remains inside discovery.
+
+Later features are isolated instead of being allowed to rewrite that boundary:
+
+- exact-conversation mirroring keeps a separate debugger listener/session map;
+- the MV3 keepalive remains a transport-lifecycle concern only;
+- the durable last-known discovery cache remains a desktop persistence concern only.
+
+The exact 0.3 discovery listener/command and classifier are now copied into immutable repository fixtures. CI checks the active implementation against those fixtures. Future mirror/local-viewer work is not allowed to alter discovery accidentally.
+
+Permanent process rule from this stage:
+
+> A subsystem that has passed live validation becomes a frozen compatibility boundary. Later work must compose around it. If a change to that boundary is truly necessary, it requires a deliberately updated baseline plus its own evidence, not incidental edits while implementing another feature.
+
+Human browser QA is suspended during this reconstruction. Repository/CI work must be exhausted before another live operator validation is requested.
+
 ## 3. Where engineering/assistant behavior failed
 
 ### F1 — discouraging the HAR
