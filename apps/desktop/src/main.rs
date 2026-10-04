@@ -588,7 +588,7 @@ impl ChatariumApp {
 
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
-        let fresh_tab_recovery_needed = self.remote_conversation_catalog.is_empty();
+        let durable_history_items_at_start = self.remote_conversation_catalog.len();
         self.history_list_pending = true;
         self.history_bridge_proven = false;
         self.account_bridge_status = "listener ready · checking Edge extension…".to_owned();
@@ -669,7 +669,10 @@ impl ChatariumApp {
                                 ),
                             );
                         }
-                        if unique_items > 0 || !fresh_tab_recovery_needed {
+                        if !should_run_fresh_tab_history_recovery(
+                            unique_items,
+                            durable_history_items_at_start,
+                        ) {
                             let _ = notices.send(
                                 LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation },
                             );
@@ -3060,6 +3063,13 @@ fn transcript_bubble(
         });
 }
 
+fn should_run_fresh_tab_history_recovery(
+    primary_current_pass_items: usize,
+    durable_catalog_items: usize,
+) -> bool {
+    primary_current_pass_items == 0 && durable_catalog_items == 0
+}
+
 fn history_observed_label(observed: usize, proven_total: Option<u64>) -> String {
     match proven_total {
         Some(total) => format!("CHATGPT HISTORY · {observed}/{total}"),
@@ -4176,6 +4186,14 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn fresh_tab_history_recovery_runs_only_for_empty_primary_and_empty_cache() {
+        assert!(should_run_fresh_tab_history_recovery(0, 0));
+        assert!(!should_run_fresh_tab_history_recovery(1, 0));
+        assert!(!should_run_fresh_tab_history_recovery(0, 85));
+        assert!(!should_run_fresh_tab_history_recovery(85, 85));
     }
 
     #[test]
