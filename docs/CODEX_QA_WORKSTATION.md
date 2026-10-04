@@ -98,7 +98,7 @@ A Codex stdio MCP configuration can use the user's preferred package manager:
 ```toml
 [mcp_servers.playwright]
 command = "pnpm"
-args = ["dlx", "@playwright/mcp@latest", "--extension"]
+args = ["dlx", "@playwright/mcp@latest", "--browser=msedge", "--extension"]
 ```
 
 Once the exact QA Edge profile directory name is known, pin it:
@@ -109,6 +109,7 @@ command = "pnpm"
 args = [
   "dlx",
   "@playwright/mcp@latest",
+  "--browser=msedge",
   "--extension",
   "--profile-dir-name=Profile N",
 ]
