@@ -26,7 +26,7 @@ use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -331,12 +331,23 @@ impl ChatariumApp {
                         Vec::new()
                     }
                 };
+                let remote_history_cache = remote_history_cache_path(&journal_path);
+                let remote_conversation_catalog =
+                    match load_remote_history_cache(&remote_history_cache) {
+                        Ok(catalog) => catalog,
+                        Err(error) => {
+                            startup_status =
+                                format!("{startup_status}; remote history cache warning: {error}");
+                            Vec::new()
+                        }
+                    };
                 diagnostics::info(
                     "startup",
                     format!(
-                        "catalogs ready: historical={} live-mirrors={}",
+                        "catalogs ready: historical={} live-mirrors={} discovered-history-cache={}",
                         historical_catalog.len(),
-                        live_mirror_catalog.len()
+                        live_mirror_catalog.len(),
+                        remote_conversation_catalog.len()
                     ),
                 );
                 let live_mirrored_conversations = live_mirror_catalog
@@ -378,7 +389,7 @@ impl ChatariumApp {
                         remote_mirror_retry_after: BTreeMap::new(),
                         mirror_status: "idle · no mirror in progress".to_owned(),
                         live_mirror_truncated_before: false,
-                        remote_conversation_catalog: Vec::new(),
+                        remote_conversation_catalog,
                         remote_conversation_total: None,
                         history_discovery_started: false,
                         history_list_pending: false,
@@ -442,6 +453,8 @@ impl ChatariumApp {
         let (account_bridge, account_bridge_provider, account_bridge_status) =
             start_account_bridge();
         let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
+        let remote_conversation_catalog =
+            load_remote_history_cache(&remote_history_cache_path(&journal_path)).unwrap_or_default();
 
         Self {
             draft,
@@ -468,7 +481,7 @@ impl ChatariumApp {
             remote_mirror_retry_after: BTreeMap::new(),
             mirror_status: "idle · no mirror in progress".to_owned(),
             live_mirror_truncated_before: false,
-            remote_conversation_catalog: Vec::new(),
+            remote_conversation_catalog,
             remote_conversation_total: None,
             history_discovery_started: false,
             history_list_pending: false,
@@ -968,15 +981,9 @@ impl ChatariumApp {
                     self.remote_conversation_total = None;
 
                     let candidate_count = observation.candidates.len();
-                    let mut catalog = self
-                        .remote_conversation_catalog
-                        .drain(..)
-                        .map(|item| (item.id.clone(), item))
-                        .collect::<BTreeMap<_, _>>();
-                    let previously_observed = catalog.len();
-                    let mut current_pass_observed = 0usize;
+                    let previously_observed = self.remote_conversation_catalog.len();
                     let mut best_surface = None::<(String, u64)>;
-                    for candidate in observation.candidates {
+                    for candidate in &observation.candidates {
                         if best_surface
                             .as_ref()
                             .is_none_or(|(_, count)| candidate.conversation_count > *count)
@@ -984,12 +991,12 @@ impl ChatariumApp {
                             best_surface =
                                 Some((candidate.path.clone(), candidate.conversation_count));
                         }
-                        for item in candidate.items {
-                            current_pass_observed = current_pass_observed.saturating_add(1);
-                            catalog.entry(item.id.clone()).or_insert(item);
-                        }
                     }
-                    self.remote_conversation_catalog = catalog.into_values().collect();
+                    let (catalog, current_pass_observed) = merge_history_discovery_catalog(
+                        std::mem::take(&mut self.remote_conversation_catalog),
+                        &observation.candidates,
+                    );
+                    self.remote_conversation_catalog = catalog;
 
                     let best_surface = best_surface
                         .map(|(path, count)| format!("{path} ({count})"))
@@ -1017,6 +1024,24 @@ impl ChatariumApp {
                                 self.remote_conversation_catalog.len()
                             ),
                         );
+                        let cache_path = remote_history_cache_path(&self.journal_path);
+                        match persist_remote_history_cache(
+                            &cache_path,
+                            &self.remote_conversation_catalog,
+                        ) {
+                            Ok(()) => diagnostics::info(
+                                "history",
+                                format!(
+                                    "discovered history cache updated: {} items at {}",
+                                    self.remote_conversation_catalog.len(),
+                                    cache_path.display()
+                                ),
+                            ),
+                            Err(error) => diagnostics::warn(
+                                "history",
+                                format!("failed to update discovered history cache: {error}"),
+                            ),
+                        }
                         self.history_bridge_proven = true;
                         self.account_bridge_status = format!(
                             "DISCOVERED: {} · candidates={} · current-pass-items={} · accumulated-items={} · best-surface={} · coverage=unknown",
@@ -3563,6 +3588,144 @@ fn projected_local_conversation_id(
     Ok(None)
 }
 
+const REMOTE_HISTORY_CACHE_FILE: &str = "remote-history-cache.json";
+
+fn remote_history_cache_path(journal_path: &Path) -> PathBuf {
+    journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(REMOTE_HISTORY_CACHE_FILE)
+}
+
+fn merge_history_discovery_catalog(
+    existing: Vec<ConversationListItem>,
+    candidates: &[account_bridge::HistorySurfaceCandidate],
+) -> (Vec<ConversationListItem>, usize) {
+    let mut catalog = existing
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut current_pass_ids = HashSet::new();
+
+    for candidate in candidates {
+        for item in &candidate.items {
+            current_pass_ids.insert(item.id.clone());
+            catalog
+                .entry(item.id.clone())
+                .or_insert_with(|| item.clone());
+        }
+    }
+
+    (catalog.into_values().collect(), current_pass_ids.len())
+}
+
+fn load_remote_history_cache(path: &Path) -> Result<Vec<ConversationListItem>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
+    };
+    let value = serde_json::from_str::<Value>(&text)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    if value.get("schema").and_then(Value::as_str) != Some("chatarium-remote-history-cache")
+        || value.get("version").and_then(Value::as_u64) != Some(1)
+    {
+        return Err(format!(
+            "unsupported remote history cache schema in {}",
+            path.display()
+        ));
+    }
+    let items = value
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("remote history cache {} is missing items", path.display()))?;
+
+    let mut catalog = BTreeMap::new();
+    for (index, item) in items.iter().enumerate() {
+        let object = item.as_object().ok_or_else(|| {
+            format!(
+                "remote history cache {} item {index} is not an object",
+                path.display()
+            )
+        })?;
+        let id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 512)
+            .ok_or_else(|| {
+                format!(
+                    "remote history cache {} item {index} has invalid id",
+                    path.display()
+                )
+            })?
+            .to_owned();
+        let title = match object.get("title") {
+            Some(Value::String(title)) => Some(title.clone()),
+            Some(Value::Null) | None => None,
+            Some(_) => {
+                return Err(format!(
+                    "remote history cache {} item {index} has invalid title",
+                    path.display()
+                ));
+            }
+        };
+        let optional_value = |field: &str| match object.get(field) {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(value.clone()),
+        };
+        catalog.entry(id.clone()).or_insert(ConversationListItem {
+            id,
+            title,
+            create_time: optional_value("create_time"),
+            update_time: optional_value("update_time"),
+        });
+    }
+
+    Ok(catalog.into_values().collect())
+}
+
+fn persist_remote_history_cache(
+    path: &Path,
+    items: &[ConversationListItem],
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "schema": "chatarium-remote-history-cache",
+        "version": 1,
+        "items": items
+            .iter()
+            .map(|item| serde_json::json!({
+                "id": item.id,
+                "title": item.title,
+                "create_time": item.create_time,
+                "update_time": item.update_time,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let bytes = serde_json::to_vec_pretty(&body)
+        .map_err(|error| format!("failed to encode remote history cache: {error}"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create remote history cache directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, bytes).map_err(|error| {
+        format!(
+            "failed to write temporary remote history cache {}: {error}",
+            temporary.display()
+        )
+    })?;
+    std::fs::rename(&temporary, path).map_err(|error| {
+        format!(
+            "failed to replace remote history cache {}: {error}",
+            path.display()
+        )
+    })
+}
+
 fn default_journal_path() -> PathBuf {
     if let Some(override_dir) = std::env::var_os("CHATARIUM_DATA_DIR") {
         return PathBuf::from(override_dir).join("journal.jsonl");
@@ -3847,6 +4010,50 @@ mod tests {
     fn zero_item_discovery_is_not_a_success_claim() {
         let current_pass_observed = 0usize;
         assert_eq!(current_pass_observed, 0);
+    }
+
+    #[test]
+    fn zero_item_discovery_retains_last_known_catalog() {
+        let existing = vec![ConversationListItem {
+            id: "remote-1".to_owned(),
+            title: Some("Known conversation".to_owned()),
+            create_time: None,
+            update_time: None,
+        }];
+
+        let (merged, current_pass_observed) =
+            merge_history_discovery_catalog(existing.clone(), &[]);
+
+        assert_eq!(current_pass_observed, 0);
+        assert_eq!(merged, existing);
+    }
+
+    #[test]
+    fn remote_history_cache_round_trips_last_known_catalog() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "chatarium-remote-history-cache-{}-{nonce}",
+            std::process::id()
+        ));
+        let path = directory.join(REMOTE_HISTORY_CACHE_FILE);
+        let expected = vec![ConversationListItem {
+            id: "remote-1".to_owned(),
+            title: Some("Known conversation".to_owned()),
+            create_time: Some(serde_json::json!(1.25)),
+            update_time: Some(serde_json::json!("2026-10-03T00:01:00Z")),
+        }];
+
+        persist_remote_history_cache(&path, &expected).unwrap();
+        let loaded = load_remote_history_cache(&path).unwrap();
+
+        assert_eq!(loaded, expected);
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
