@@ -135,13 +135,18 @@ for (const required of [
   }
 }
 
+function normalizeNewlines(text) {
+  return text.replaceAll('\r\n', '\n');
+}
+
 function fixtureSection(text, startMarker, endMarker) {
-  const start = text.indexOf(startMarker);
-  const end = text.indexOf(endMarker, start + startMarker.length);
+  const normalized = normalizeNewlines(text);
+  const start = normalized.indexOf(startMarker);
+  const end = normalized.indexOf(endMarker, start + startMarker.length);
   if (start < 0 || end < 0) {
     throw new Error(`malformed known-good fixture section: ${startMarker}`);
   }
-  let section = text.slice(start + startMarker.length, end);
+  let section = normalized.slice(start + startMarker.length, end);
   if (section.startsWith('\n')) section = section.slice(1);
   if (section.endsWith('\n')) section = section.slice(0, -1);
   return section;
@@ -163,17 +168,17 @@ const knownGoodClassifierModule = fixtureSection(
   '--- END HISTORY DISCOVERY MODULE ---',
 );
 
-if (!worker.includes(knownGoodDiscoveryListener)) {
+if (!normalizeNewlines(worker).includes(knownGoodDiscoveryListener)) {
   throw new Error(
     'history discovery debugger listener drifted from the live-proven 0.3 baseline',
   );
 }
-if (!worker.includes(knownGoodDiscoveryCommand)) {
+if (!normalizeNewlines(worker).includes(knownGoodDiscoveryCommand)) {
   throw new Error(
     'discoverHistorySurfaces drifted from the live-proven 0.3 baseline',
   );
 }
-if (discoveryModule !== knownGoodClassifierModule) {
+if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
   throw new Error(
     'history-discovery.mjs drifted from the live-proven 0.3 baseline',
   );
