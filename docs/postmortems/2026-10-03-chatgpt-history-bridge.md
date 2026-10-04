@@ -578,6 +578,30 @@ scrolling is supposed to cause lazy history links to load
 
 A package invariant now rejects reintroducing the old unconditional zero-link skip.
 
+### Stage K7 — 0.4.7 fixes target selection but overruns the bridge timeout
+
+The first 0.4.7 live run changed the failure shape again:
+
+```text
+authentication=true HTTP=200
+discover_history_surfaces timeout=30000ms
+next probe_auth timeout=5000ms
+```
+
+The second authentication timeout was downstream damage, not evidence that authentication suddenly failed. The extension bridge loop executes one command at a time and awaits `execute(command)` before polling for the next command. Rust abandoned the discovery command after 30 seconds, but the extension was still inside the injected history stimulus, so the next `probe_auth` could sit uncollected until its own shorter timeout expired.
+
+The new 0.4.7 eligibility rule made navigation surfaces available for stimulus, but exposed a duration bug that had been latent in the 0.4.4 design. One stimulus could visit up to three targets, perform up to 28 delayed scroll steps per target, and add bottom-of-list waits while lazy content continued extending the scroll range. In the lazy-loading case the operation could exceed the desktop's discovery result wait.
+
+0.4.8 repairs the contract instead of increasing the discovery timeout blindly:
+
+- one injected history stimulus has a hard 8-second wall-clock budget;
+- the extension still uses the same first-party reload + UI-stimulus architecture;
+- the package test calculates the worst-case discovery budget, including retries and grace time;
+- the calculated budget must retain at least five seconds of margin before Rust's discovery timeout;
+- Rust's authentication result wait now exceeds the extension's page-fetch timeout, preventing the same abandoned-command mismatch on auth.
+
+Permanent rule: every cross-process command must have a producer-side execution bound strictly below the consumer-side wait, and that relationship must be machine-checked.
+
 ## 3. Where engineering/assistant behavior failed
 
 ### F1 — discouraging the HAR
