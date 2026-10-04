@@ -1,0 +1,209 @@
+CHATARIUM EDGE BRIDGE KNOWN-GOOD HISTORY CLASSIFIER BASELINE
+source-commit: dca678f95442635cfc729d02c4ac612510d7efe7
+do-not-edit: the classifier below must remain byte-for-byte equivalent to the live-proven 0.3 classifier
+
+--- HISTORY DISCOVERY MODULE ---
+'use strict';
+
+const MAX_VISITED_NODES = 20_000;
+const MAX_CONVERSATIONS = 5_000;
+const MAX_DEPTH = 8;
+
+function normalizeCandidateUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (url.origin !== 'https://chatgpt.com') return null;
+  if (!url.pathname.startsWith('/backend-api/')) return null;
+
+  const lowerPath = url.pathname.toLowerCase();
+  if (
+    !lowerPath.includes('conversation')
+    && !lowerPath.includes('sidebar')
+    && !lowerPath.includes('/pins')
+  ) {
+    return null;
+  }
+
+  return {
+    path: url.pathname,
+    query_keys: [...url.searchParams.keys()].sort(),
+  };
+}
+
+function classifySurfaceKind(path) {
+  if (path === '/backend-api/conversations') return 'ordinary_conversations';
+  if (path === '/backend-api/gizmos/snorlax/sidebar') return 'snorlax_sidebar';
+  if (/^\/backend-api\/gizmos\/[^/]+\/conversations$/.test(path)) {
+    return 'gizmo_conversations';
+  }
+  if (path === '/backend-api/pins') return 'pins';
+  return 'conversation_like';
+}
+
+function looksLikeConversation(object) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return false;
+  if (typeof object.id !== 'string' || object.id.length === 0 || object.id.length > 256) {
+    return false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(object, 'title')) return false;
+
+  return (
+    Object.prototype.hasOwnProperty.call(object, 'create_time')
+    || Object.prototype.hasOwnProperty.call(object, 'update_time')
+    || Object.prototype.hasOwnProperty.call(object, 'conversation_template_id')
+    || Object.prototype.hasOwnProperty.call(object, 'current_node')
+    || Object.prototype.hasOwnProperty.call(object, 'mapping')
+  );
+}
+
+function safeScalar(value) {
+  if (value === null) return null;
+  if (typeof value === 'string' && value.length <= 4096) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'boolean') return value;
+  return null;
+}
+
+function conversationSummary(object) {
+  return {
+    id: object.id,
+    title: typeof object.title === 'string' && object.title.length <= 4096
+      ? object.title
+      : null,
+    create_time: safeScalar(object.create_time),
+    update_time: safeScalar(object.update_time),
+  };
+}
+
+export function isCandidateResponse(response) {
+  if (!response || typeof response !== 'object') return false;
+  if (response.status !== 200) return false;
+  const mime = typeof response.mimeType === 'string' ? response.mimeType.toLowerCase() : '';
+  if (!mime.includes('json')) return false;
+  return normalizeCandidateUrl(response.url) !== null;
+}
+
+export function classifyHistoryBody(rawUrl, body) {
+  const normalized = normalizeCandidateUrl(rawUrl);
+  if (normalized === null || body === null || typeof body !== 'object') return null;
+
+  const stack = [{ value: body, depth: 0 }];
+  const conversations = new Map();
+  let visited = 0;
+  let cursorCount = 0;
+  let nullCursorCount = 0;
+  let stringCursorCount = 0;
+
+  while (stack.length > 0 && visited < MAX_VISITED_NODES) {
+    const current = stack.pop();
+    if (!current) break;
+    const { value, depth } = current;
+    visited += 1;
+
+    if (Array.isArray(value)) {
+      if (depth >= MAX_DEPTH) continue;
+      for (let index = value.length - 1; index >= 0; index -= 1) {
+        stack.push({ value: value[index], depth: depth + 1 });
+      }
+      continue;
+    }
+
+    if (!value || typeof value !== 'object') continue;
+
+    if (looksLikeConversation(value) && conversations.size < MAX_CONVERSATIONS) {
+      const summary = conversationSummary(value);
+      if (!conversations.has(summary.id)) conversations.set(summary.id, summary);
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'cursor') {
+        cursorCount += 1;
+        if (child === null) nullCursorCount += 1;
+        if (typeof child === 'string' && child.length > 0) stringCursorCount += 1;
+      }
+      if (depth < MAX_DEPTH && child !== null && typeof child === 'object') {
+        stack.push({ value: child, depth: depth + 1 });
+      }
+    }
+  }
+
+  const topLevelKeys = Array.isArray(body)
+    ? []
+    : Object.keys(body).slice(0, 64).sort();
+  const topLevelCursor = !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'cursor')
+    ? (body.cursor === null ? 'null' : typeof body.cursor === 'string' ? 'string' : 'other')
+    : 'absent';
+
+  return {
+    path: normalized.path,
+    query_keys: normalized.query_keys,
+    surface_kind: classifySurfaceKind(normalized.path),
+    conversation_count: conversations.size,
+    cursor_count: cursorCount,
+    string_cursor_count: stringCursorCount,
+    null_cursor_count: nullCursorCount,
+    top_level_cursor: topLevelCursor,
+    top_level_keys: topLevelKeys,
+    traversal_truncated: visited >= MAX_VISITED_NODES || conversations.size >= MAX_CONVERSATIONS,
+    items: [...conversations.values()],
+  };
+}
+
+export function mergeDiscoveryCandidates(candidates) {
+  const byKey = new Map();
+  for (const candidate of candidates ?? []) {
+    if (!candidate || typeof candidate.path !== 'string') continue;
+    const key = JSON.stringify([
+      candidate.path,
+      Array.isArray(candidate.query_keys) ? candidate.query_keys : [],
+    ]);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        ...candidate,
+        items: Array.isArray(candidate.items) ? [...candidate.items] : [],
+        observations: 1,
+      });
+      continue;
+    }
+
+    existing.observations += 1;
+    existing.conversation_count = Math.max(
+      Number(existing.conversation_count) || 0,
+      Number(candidate.conversation_count) || 0,
+    );
+    existing.cursor_count = Math.max(
+      Number(existing.cursor_count) || 0,
+      Number(candidate.cursor_count) || 0,
+    );
+    existing.string_cursor_count = Math.max(
+      Number(existing.string_cursor_count) || 0,
+      Number(candidate.string_cursor_count) || 0,
+    );
+    existing.null_cursor_count = Math.max(
+      Number(existing.null_cursor_count) || 0,
+      Number(candidate.null_cursor_count) || 0,
+    );
+    existing.traversal_truncated = existing.traversal_truncated || candidate.traversal_truncated;
+
+    const ids = new Set(existing.items.map((item) => item.id));
+    for (const item of candidate.items ?? []) {
+      if (!ids.has(item.id) && existing.items.length < MAX_CONVERSATIONS) {
+        ids.add(item.id);
+        existing.items.push(item);
+      }
+    }
+  }
+
+  return [...byKey.values()].sort((left, right) => {
+    const count = (right.conversation_count ?? 0) - (left.conversation_count ?? 0);
+    if (count !== 0) return count;
+    return left.path.localeCompare(right.path);
+  });
+}
+
+--- END HISTORY DISCOVERY MODULE ---
