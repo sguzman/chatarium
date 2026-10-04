@@ -15,6 +15,14 @@ import {
 const root = new URL('./', import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(new URL('manifest.json', root), 'utf8'));
 const worker = fs.readFileSync(new URL('service-worker.js', root), 'utf8');
+const knownGoodDiscoveryRuntime = fs.readFileSync(
+  new URL('known-good-discovery-v0.3.txt', root),
+  'utf8',
+);
+const knownGoodHistoryClassifier = fs.readFileSync(
+  new URL('known-good-history-discovery-v0.3.txt', root),
+  'utf8',
+);
 const desktopBridge = fs.readFileSync(
   new URL('../../apps/desktop/src/account_bridge.rs', root),
   'utf8',
@@ -49,7 +57,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.8') {
+if (manifest.version !== '0.4.9') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -75,27 +83,15 @@ for (const required of [
   "'Network.enable'",
   "'Network.getResponseBody'",
   'chrome.debugger.detach',
-  "'Network.setCacheDisabled'",
   "'Page.reload'",
-  'ignoreCache: true',
-  'stimulateHistoryUi',
-  'ui_stimulus_attempted',
-  'ui_stimulus_attempts',
-  'DISCOVERY_STIMULUS_MAX_ATTEMPTS',
-  'DISCOVERY_STIMULUS_MAX_RUNTIME_MS',
-  'DISCOVERY_STIMULUS_RETRY_MS',
-  'budgetExpired',
-  'budget_exhausted',
-  'ui_stimulus_targets',
-  'ui_stimulus_steps',
   'chrome.storage.session',
   "const ACCOUNT_HEADER = 'ChatGPT-Account-ID'",
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
   "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
-  'collectApplicationContextHeaders',
   'PAGE_FETCH_TIMEOUT_MS',
   "case 'discover_history_surfaces'",
+  'chrome.tabs.reload(tab.id)',
   'chrome.tabs.create',
   "'Page.navigate'",
   'chrome.tabs.remove',
@@ -138,6 +134,52 @@ for (const required of [
     throw new Error(`required CDP discovery invariant missing: ${required}`);
   }
 }
+
+function fixtureSection(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  const end = text.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) {
+    throw new Error(`malformed known-good fixture section: ${startMarker}`);
+  }
+  let section = text.slice(start + startMarker.length, end);
+  if (section.startsWith('\n')) section = section.slice(1);
+  if (section.endsWith('\n')) section = section.slice(0, -1);
+  return section;
+}
+
+const knownGoodDiscoveryListener = fixtureSection(
+  knownGoodDiscoveryRuntime,
+  '--- DISCOVERY LISTENER ---',
+  '--- END DISCOVERY LISTENER ---',
+);
+const knownGoodDiscoveryCommand = fixtureSection(
+  knownGoodDiscoveryRuntime,
+  '--- DISCOVERY COMMAND ---',
+  '--- END DISCOVERY COMMAND ---',
+);
+const knownGoodClassifierModule = fixtureSection(
+  knownGoodHistoryClassifier,
+  '--- HISTORY DISCOVERY MODULE ---',
+  '--- END HISTORY DISCOVERY MODULE ---',
+);
+
+if (!worker.includes(knownGoodDiscoveryListener)) {
+  throw new Error(
+    'history discovery debugger listener drifted from the live-proven 0.3 baseline',
+  );
+}
+if (!worker.includes(knownGoodDiscoveryCommand)) {
+  throw new Error(
+    'discoverHistorySurfaces drifted from the live-proven 0.3 baseline',
+  );
+}
+if (discoveryModule !== knownGoodClassifierModule) {
+  throw new Error(
+    'history-discovery.mjs drifted from the live-proven 0.3 baseline',
+  );
+}
+
+console.log('Chatarium live-proven 0.3 discovery baseline is frozen');
 
 
 const ordinaryResponse = {
@@ -361,42 +403,20 @@ if (!scheduleBody.includes('if (capture.rate_limit_reload_scheduled) return;')) 
 if (worker.includes('SIDEBAR_BOOTSTRAP_RESOURCE')) {
   throw new Error('synthetic sidebar history replay must remain retired');
 }
-if (!worker.includes("chrome.debugger.sendCommand(debuggee, 'Network.setCacheDisabled'")) {
-  throw new Error('discovery must disable browser cache before first-party reload');
+if (worker.includes('stimulateHistoryUi')) {
+  throw new Error('post-0.3 history UI stimulus must remain outside the frozen discovery path');
 }
-if (!worker.includes("chrome.debugger.sendCommand(debuggee, 'Page.reload'")) {
-  throw new Error('discovery must use browser-level CDP reload');
-}
-if (!worker.includes('ignoreCache: true')) {
-  throw new Error('history discovery reload must bypass cache');
-}
-if (!worker.includes("a[href^=\"/c/\"]")) {
-  throw new Error('history UI stimulus must target real conversation-bearing scroll surfaces');
-}
-if (!worker.includes('if (!navigationLike && chatLinks === 0 && projectLinks === 0) continue;')) {
-  throw new Error('history UI stimulus must permit zero-link navigation scroll surfaces');
-}
-if (worker.includes('if (chatLinks === 0 && projectLinks === 0) continue;')) {
-  throw new Error('history UI stimulus regressed to requiring history links before stimulation');
+if (worker.includes("'Network.setCacheDisabled'")) {
+  throw new Error('post-0.3 discovery cache-bypass mutation must remain retired');
 }
 
-const discoveryPreStimulusMs = workerMilliseconds('DISCOVERY_PRE_STIMULUS_MS');
 const discoveryWindowMs = workerMilliseconds('DISCOVERY_WINDOW_MS');
 const discoveryBodyGraceMs = workerMilliseconds('DISCOVERY_BODY_GRACE_MS');
-const discoveryStimulusMaxRuntimeMs =
-  workerMilliseconds('DISCOVERY_STIMULUS_MAX_RUNTIME_MS');
-const discoveryStimulusAttempts = workerMilliseconds('DISCOVERY_STIMULUS_MAX_ATTEMPTS');
-const discoveryStimulusRetryMs = workerMilliseconds('DISCOVERY_STIMULUS_RETRY_MS');
 const discoveryWaitMs = rustDurationMilliseconds('DISCOVERY_RESULT_WAIT');
-const discoveryWorstCaseMs =
-  discoveryPreStimulusMs
-  + discoveryStimulusMaxRuntimeMs
-  + Math.max(0, discoveryStimulusAttempts - 1) * discoveryStimulusRetryMs
-  + Math.max(0, discoveryWindowMs - discoveryPreStimulusMs)
-  + discoveryBodyGraceMs;
+const discoveryWorstCaseMs = discoveryWindowMs + discoveryBodyGraceMs;
 if (discoveryWorstCaseMs + 5_000 >= discoveryWaitMs) {
   throw new Error(
-    `history discovery can outlive desktop result wait: worst=${discoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
+    `frozen 0.3 discovery can outlive desktop result wait: worst=${discoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
   );
 }
 
