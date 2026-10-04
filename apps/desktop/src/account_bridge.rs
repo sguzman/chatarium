@@ -1609,36 +1609,13 @@ mod tests {
                 assert_eq!(command.as_object().unwrap().len(), 4);
             },
             |command| {
-                let candidate = json!({
-                    "path": "/backend-api/gizmos/snorlax/sidebar",
-                    "query_keys": [
-                        "conversations_per_gizmo",
-                        "limit",
-                        "owned_only"
-                    ],
-                    "surface_kind": "snorlax_sidebar",
-                    "conversation_count": 1,
-                    "cursor_count": 2,
-                    "string_cursor_count": 1,
-                    "null_cursor_count": 1,
-                    "top_level_cursor": "string",
-                    "top_level_keys": ["cursor", "items"],
-                    "traversal_truncated": false,
-                    "observations": 1,
-                    "items": [{
-                        "id": "remote-1",
-                        "title": "Observed live",
-                        "create_time": "2026-10-03T00:00:00Z",
-                        "update_time": "2026-10-03T00:01:00Z"
-                    }]
-                });
-                let mut result = json!({
+                json!({
                     "version": 1,
                     "id": command["id"],
                     "kind": "discover_history_surfaces",
                     "ok": true,
                     "bridge_transport": "extension-cdp",
-                    "extension_version": "0.4.4",
+                    "extension_version": "0.3.0",
                     "chatgpt_tab_found": true,
                     "main_world_execution": false,
                     "account_context": true,
@@ -1652,27 +1629,43 @@ mod tests {
                     "body_read_failures": 0,
                     "body_too_large": 0,
                     "invalid_json": 0,
-                    "application_context_header_count": 6,
-                    "cache_disabled": true,
-                    "ui_stimulus_attempted": true,
-                    "ui_stimulus_attempts": 2,
-                    "ui_stimulus_targets": 1,
-                    "ui_stimulus_steps": 12,
-                    "ui_stimulus_chat_links_before": 8,
-                    "ui_stimulus_chat_links_after": 20,
-                    "ui_stimulus_error": null,
                     "candidate_count": 1,
-                    "discovery": "candidates_observed"
-                });
-                result["candidates"] = json!([candidate]);
-                result
+                    "discovery": "candidates_observed",
+                    "candidates": [
+                        {
+                            "path": "/backend-api/gizmos/snorlax/sidebar",
+                            "query_keys": [
+                                "conversations_per_gizmo",
+                                "limit",
+                                "owned_only"
+                            ],
+                            "surface_kind": "snorlax_sidebar",
+                            "conversation_count": 1,
+                            "cursor_count": 2,
+                            "string_cursor_count": 1,
+                            "null_cursor_count": 1,
+                            "top_level_cursor": "string",
+                            "top_level_keys": ["cursor", "items"],
+                            "traversal_truncated": false,
+                            "observations": 1,
+                            "items": [
+                                {
+                                    "id": "remote-1",
+                                    "title": "Observed live",
+                                    "create_time": "2026-10-03T00:00:00Z",
+                                    "update_time": "2026-10-03T00:01:00Z"
+                                }
+                            ]
+                        }
+                    ]
+                })
             },
         );
 
         let mut provider = runtime.provider();
         let observation = provider.discover_history_surfaces().unwrap();
         assert_eq!(observation.discovery, "candidates_observed");
-        assert_eq!(observation.proof.extension_version, "0.4.4");
+        assert_eq!(observation.proof.extension_version, "0.3.0");
         assert!(observation.proof.desktop_roundtrip);
         assert!(observation.proof.debugger_attached);
         assert!(observation.proof.network_enabled);
