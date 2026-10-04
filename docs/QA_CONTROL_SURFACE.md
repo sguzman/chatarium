@@ -42,7 +42,7 @@ A workspace is only window organization.
 
 Likewise, saying "Playwright can control Edge" is insufficient unless one of these control channels is actually configured and demonstrated against the QA browser:
 
-1. Playwright MCP browser-extension mode;
+1. Playwright MCP browser-extension mode explicitly pinned to the `msedge` channel;
 2. DevTools/CDP against a QA-only Edge instance;
 3. WebDriver against a QA-only Edge instance;
 4. desktop/native automation capable of operating the QA Edge window.
@@ -50,6 +50,30 @@ Likewise, saying "Playwright can control Edge" is insufficient unless one of the
 Until one of those is proven, Edge control is **UNPROVEN**.
 
 The 2026-10-04 screenshot shows an authenticated QA Edge profile with Chatarium Edge Bridge 0.4.7 loaded. It does **not** show or prove a Playwright MCP connection. Therefore the browser is provisioned for QA, but autonomous browser control is not yet proven.
+
+## 2026-10-04 control-plane evidence
+
+The first autonomous control-plane proof failed before any tab access. Codex reported that Playwright MCP resolved `Profile 1` under `~/.config/google-chrome/`, not Edge. The active config had `--extension` and `--profile-dir-name=Profile 1` but no browser/channel override.
+
+Root cause: Playwright MCP defaults its browser channel to Chrome. In extension mode, profile-directory resolution therefore targeted Chrome's user-data root.
+
+Permanent configuration rule for this workstation:
+
+```toml
+[mcp_servers.playwright]
+command = "pnpm"
+args = [
+  "dlx",
+  "@playwright/mcp@latest",
+  "--browser=msedge",
+  "--extension",
+  "--profile-dir-name=Profile 1",
+]
+```
+
+The profile-specific extension token remains required in the MCP environment.
+
+This failure is useful isolation evidence: no browser tabs were accessed, created, or modified, and the personal profile was not touched. Browser control remains UNPROVEN until the Edge-pinned configuration passes the control-plane proof.
 
 ## Current control matrix
 
