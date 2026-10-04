@@ -626,7 +626,7 @@ impl ChatariumApp {
 
                 diagnostics::info(
                     "history",
-                    "authenticated; starting bounded CDP reload + sidebar stimulus discovery",
+                    "authenticated; starting frozen 0.3 bounded CDP reload discovery",
                 );
                 match provider.discover_history_surfaces() {
                     Ok(observation) => {
@@ -639,16 +639,11 @@ impl ChatariumApp {
                         diagnostics::info(
                             "history",
                             format!(
-                                "discovery complete: candidates={} unique-items={} responses={} backend-200={} stimulus-attempts={} targets={} steps={} links={}->{}",
+                                "discovery complete: candidates={} unique-items={} responses={} backend-200={}",
                                 observation.candidates.len(),
                                 unique_items,
                                 observation.proof.responses_seen,
                                 observation.proof.backend_http_200_seen,
-                                observation.proof.ui_stimulus_attempts,
-                                observation.proof.ui_stimulus_targets,
-                                observation.proof.ui_stimulus_steps,
-                                observation.proof.ui_stimulus_chat_links_before,
-                                observation.proof.ui_stimulus_chat_links_after,
                             ),
                         );
                         for candidate in &observation.candidates {
@@ -3000,15 +2995,13 @@ fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
 }
 
 fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) -> String {
-    let stimulus_error = proof.ui_stimulus_error.as_deref().unwrap_or("none");
     format!(
-        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · cache-bypass={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · app-context-headers={} · ui-stimulus={} · stimulus-attempts={} · stimulus-targets={} · stimulus-steps={} · chat-links={}->{} · stimulus-error={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
         yes_no(proof.debugger_attached),
         yes_no(proof.network_enabled),
-        yes_no(proof.cache_disabled),
         yes_no(proof.reload_started),
         yes_no(proof.account_context),
         proof.responses_seen,
@@ -3017,14 +3010,6 @@ fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) 
         proof.body_read_failures,
         proof.body_too_large,
         proof.invalid_json,
-        proof.application_context_header_count,
-        yes_no(proof.ui_stimulus_attempted),
-        proof.ui_stimulus_attempts,
-        proof.ui_stimulus_targets,
-        proof.ui_stimulus_steps,
-        proof.ui_stimulus_chat_links_before,
-        proof.ui_stimulus_chat_links_after,
-        stimulus_error,
         proof.request_profile,
     )
 }
