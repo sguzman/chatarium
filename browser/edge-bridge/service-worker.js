@@ -243,6 +243,10 @@ async function discoverHistorySurfacesFreshTab(command) {
     result.capture_tab_created = true;
 
     const debuggee = { tabId: captureTab.id };
+    if (activeDiscoveries.has(captureTab.id)) {
+      result.error = 'fresh_history_discovery_already_active';
+      return result;
+    }
     session = {
       debuggee,
       tabId: captureTab.id,
@@ -259,11 +263,6 @@ async function discoverHistorySurfacesFreshTab(command) {
       bodyTasks: new Set(),
       candidates: [],
     };
-
-    if (activeDiscoveries.has(captureTab.id)) {
-      result.error = 'fresh_history_discovery_already_active';
-      return result;
-    }
     activeDiscoveries.set(captureTab.id, session);
 
     await chrome.debugger.attach(debuggee, DEBUGGER_PROTOCOL_VERSION);
