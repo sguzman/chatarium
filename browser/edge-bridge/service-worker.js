@@ -224,6 +224,7 @@ async function discoverHistorySurfacesFreshTab(command) {
     return result;
   }
   result.chatgpt_tab_found = true;
+  const sourceAccountId = await accountContextForTab(sourceTab.id);
 
   let captureTab = null;
   let attached = false;
@@ -294,6 +295,20 @@ async function discoverHistorySurfacesFreshTab(command) {
       session.closed = true;
       activeDiscoveries.delete(session.tabId);
     }
+
+    result.account_context = (session?.accountId ?? sourceAccountId) !== null;
+    result.responses_seen = session?.responses_seen ?? 0;
+    result.backend_http_200_seen = session?.backend_200_seen ?? 0;
+    result.json_candidates_seen = session?.json_candidates_seen ?? 0;
+    result.body_read_failures = session?.body_read_failures ?? 0;
+    result.body_too_large = session?.body_too_large ?? 0;
+    result.invalid_json = session?.invalid_json ?? 0;
+    result.detached_reason = session?.detached_reason ?? null;
+
+    const candidates = mergeDiscoveryCandidates(session?.candidates ?? []);
+    result.candidate_count = candidates.length;
+    result.candidates = candidates;
+
     if (attached && captureTab && Number.isInteger(captureTab.id)) {
       try {
         await chrome.debugger.detach({ tabId: captureTab.id });
@@ -301,27 +316,12 @@ async function discoverHistorySurfacesFreshTab(command) {
         // Navigation, browser shutdown, or tab teardown may already have detached the debugger.
       }
     }
-  }
-
-  const accountId = session?.accountId ?? await accountContextForTab(sourceTab.id);
-  result.account_context = accountId !== null;
-  result.responses_seen = session?.responses_seen ?? 0;
-  result.backend_http_200_seen = session?.backend_200_seen ?? 0;
-  result.json_candidates_seen = session?.json_candidates_seen ?? 0;
-  result.body_read_failures = session?.body_read_failures ?? 0;
-  result.body_too_large = session?.body_too_large ?? 0;
-  result.invalid_json = session?.invalid_json ?? 0;
-  result.detached_reason = session?.detached_reason ?? null;
-
-  const candidates = mergeDiscoveryCandidates(session?.candidates ?? []);
-  result.candidate_count = candidates.length;
-  result.candidates = candidates;
-
-  if (captureTab && Number.isInteger(captureTab.id)) {
-    try {
-      await chrome.tabs.remove(captureTab.id);
-    } catch {
-      // The temporary discovery tab may already be gone.
+    if (captureTab && Number.isInteger(captureTab.id)) {
+      try {
+        await chrome.tabs.remove(captureTab.id);
+      } catch {
+        // The temporary discovery tab may already be gone.
+      }
     }
   }
 
@@ -341,7 +341,7 @@ async function discoverHistorySurfacesFreshTab(command) {
   }
 
   result.ok = true;
-  result.discovery = candidates.length > 0
+  result.discovery = result.candidate_count > 0
     ? 'candidates_observed'
     : 'no_candidate_surface_observed';
   return result;
