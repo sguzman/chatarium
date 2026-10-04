@@ -15,6 +15,24 @@ import {
 const root = new URL('./', import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(new URL('manifest.json', root), 'utf8'));
 const worker = fs.readFileSync(new URL('service-worker.js', root), 'utf8');
+const desktopBridge = fs.readFileSync(
+  new URL('../../apps/desktop/src/account_bridge.rs', root),
+  'utf8',
+);
+
+function workerMilliseconds(name) {
+  const match = worker.match(new RegExp(`const ${name} = ([\\d_]+);`));
+  if (!match) throw new Error(`missing worker duration constant ${name}`);
+  return Number(match[1].replaceAll('_', ''));
+}
+
+function rustDurationMilliseconds(name) {
+  const match = desktopBridge.match(
+    new RegExp(`const ${name}: Duration = Duration::from_secs\\((\\d+)\\);`),
+  );
+  if (!match) throw new Error(`missing Rust duration constant ${name}`);
+  return Number(match[1]) * 1_000;
+}
 
 function sameSet(actual, expected, label) {
   if (!Array.isArray(actual)) throw new Error(`${label} must be an array`);
@@ -31,7 +49,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.7') {
+if (manifest.version !== '0.4.8') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -64,7 +82,10 @@ for (const required of [
   'ui_stimulus_attempted',
   'ui_stimulus_attempts',
   'DISCOVERY_STIMULUS_MAX_ATTEMPTS',
+  'DISCOVERY_STIMULUS_MAX_RUNTIME_MS',
   'DISCOVERY_STIMULUS_RETRY_MS',
+  'budgetExpired',
+  'budget_exhausted',
   'ui_stimulus_targets',
   'ui_stimulus_steps',
   'chrome.storage.session',
@@ -357,4 +378,32 @@ if (!worker.includes('if (!navigationLike && chatLinks === 0 && projectLinks ===
 }
 if (worker.includes('if (chatLinks === 0 && projectLinks === 0) continue;')) {
   throw new Error('history UI stimulus regressed to requiring history links before stimulation');
+}
+
+const discoveryPreStimulusMs = workerMilliseconds('DISCOVERY_PRE_STIMULUS_MS');
+const discoveryWindowMs = workerMilliseconds('DISCOVERY_WINDOW_MS');
+const discoveryBodyGraceMs = workerMilliseconds('DISCOVERY_BODY_GRACE_MS');
+const discoveryStimulusMaxRuntimeMs =
+  workerMilliseconds('DISCOVERY_STIMULUS_MAX_RUNTIME_MS');
+const discoveryStimulusAttempts = workerMilliseconds('DISCOVERY_STIMULUS_MAX_ATTEMPTS');
+const discoveryStimulusRetryMs = workerMilliseconds('DISCOVERY_STIMULUS_RETRY_MS');
+const discoveryWaitMs = rustDurationMilliseconds('DISCOVERY_RESULT_WAIT');
+const discoveryWorstCaseMs =
+  discoveryPreStimulusMs
+  + discoveryStimulusMaxRuntimeMs
+  + Math.max(0, discoveryStimulusAttempts - 1) * discoveryStimulusRetryMs
+  + Math.max(0, discoveryWindowMs - discoveryPreStimulusMs)
+  + discoveryBodyGraceMs;
+if (discoveryWorstCaseMs + 5_000 >= discoveryWaitMs) {
+  throw new Error(
+    `history discovery can outlive desktop result wait: worst=${discoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
+  );
+}
+
+const pageFetchTimeoutMs = workerMilliseconds('PAGE_FETCH_TIMEOUT_MS');
+const authWaitMs = rustDurationMilliseconds('AUTH_RESULT_WAIT');
+if (authWaitMs < pageFetchTimeoutMs + 2_000) {
+  throw new Error(
+    `authentication wait must exceed page fetch bound with margin: page=${pageFetchTimeoutMs}ms wait=${authWaitMs}ms`,
+  );
 }
