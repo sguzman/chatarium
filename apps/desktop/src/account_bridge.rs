@@ -1946,10 +1946,7 @@ mod tests {
                     assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
                     extension_auth_result(&command)
                 } else if expected_kind == "discover_history_surfaces" {
-                    assert_eq!(
-                        command["request_profile"],
-                        json!(HISTORY_DISCOVERY_PROFILE)
-                    );
+                    assert_eq!(command["request_profile"], json!(HISTORY_DISCOVERY_PROFILE));
                     json!({
                         "version": 1,
                         "id": command["id"],
