@@ -1948,8 +1948,7 @@ mod tests {
             .windows(4)
             .position(|window| window == b"\r\n\r\n")
             .unwrap();
-        let first_command: Value =
-            serde_json::from_slice(&first_raw[first_split + 4..]).unwrap();
+        let first_command: Value = serde_json::from_slice(&first_raw[first_split + 4..]).unwrap();
         assert_eq!(first_command["kind"], json!("slow_test"));
 
         assert_eq!(slow.join().unwrap(), Err(BrowserBridgeError::Timeout));
@@ -1971,9 +1970,8 @@ mod tests {
         assert!(String::from_utf8_lossy(&late_response).starts_with("HTTP/1.1 409"));
 
         let mut next_provider = runtime.provider();
-        let next = thread::spawn(move || {
-            next_provider.call("next_test", |_| {}, Duration::from_secs(2))
-        });
+        let next =
+            thread::spawn(move || next_provider.call("next_test", |_| {}, Duration::from_secs(2)));
 
         let next_raw = request(
             address,
@@ -1983,8 +1981,7 @@ mod tests {
             .windows(4)
             .position(|window| window == b"\r\n\r\n")
             .unwrap();
-        let next_command: Value =
-            serde_json::from_slice(&next_raw[next_split + 4..]).unwrap();
+        let next_command: Value = serde_json::from_slice(&next_raw[next_split + 4..]).unwrap();
         assert_eq!(next_command["kind"], json!("next_test"));
 
         let next_result = json!({
