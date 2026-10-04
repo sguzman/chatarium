@@ -66,7 +66,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.9') {
+if (manifest.version !== '0.4.10') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -98,8 +98,12 @@ for (const required of [
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
   "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
+  "const FRESH_DISCOVERY_PROFILE = 'cdp-history-fresh-tab-v1'",
+  "const FRESH_DISCOVERY_ROUTE = 'https://chatgpt.com/'",
   'PAGE_FETCH_TIMEOUT_MS',
   "case 'discover_history_surfaces'",
+  "case 'discover_history_surfaces_fresh_tab'",
+  'discoverHistorySurfacesFreshTab',
   'chrome.tabs.reload(tab.id)',
   'chrome.tabs.create',
   "'Page.navigate'",
@@ -251,6 +255,18 @@ if (
 ) {
   throw new Error('discover_history_surfaces must dispatch directly to the frozen function');
 }
+
+if (countOccurrences(normalizedWorker, "case 'discover_history_surfaces_fresh_tab':") !== 1) {
+  throw new Error('fresh-tab discovery dispatch must exist exactly once');
+}
+if (
+  countOccurrences(
+    normalizedWorker,
+    "case 'discover_history_surfaces_fresh_tab':\n      return discoverHistorySurfacesFreshTab(command);",
+  ) !== 1
+) {
+  throw new Error('fresh-tab discovery must dispatch directly to its isolated function');
+}
 if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
   throw new Error(
     'history-discovery.mjs drifted from the live-proven 0.3 baseline',
@@ -258,6 +274,16 @@ if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
 }
 
 const normalizedDesktopBridge = normalizeNewlines(desktopBridge);
+for (const required of [
+  'const FRESH_HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-fresh-tab-v1";',
+  'pub struct FreshTabHistoryDiscoveryProof',
+  'pub struct FreshTabHistoryDiscoveryObservation',
+  'pub fn discover_history_surfaces_fresh_tab',
+]) {
+  if (!normalizedDesktopBridge.includes(required)) {
+    throw new Error(`fresh-tab Rust discovery invariant missing: ${required}`);
+  }
+}
 for (const [label, expected] of [
   ['HistoryDiscoveryProof', knownGoodRustProof],
   ['BrowserBridgeProvider::discover_history_surfaces', knownGoodRustMethod],
@@ -516,6 +542,12 @@ const discoveryWorstCaseMs = discoveryWindowMs + discoveryBodyGraceMs;
 if (discoveryWorstCaseMs + 5_000 >= discoveryWaitMs) {
   throw new Error(
     `frozen 0.3 discovery can outlive desktop result wait: worst=${discoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
+  );
+}
+const freshDiscoveryWorstCaseMs = discoveryWindowMs + discoveryBodyGraceMs;
+if (freshDiscoveryWorstCaseMs + 5_000 >= discoveryWaitMs) {
+  throw new Error(
+    `fresh-tab discovery can outlive desktop result wait: worst=${freshDiscoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
   );
 }
 
