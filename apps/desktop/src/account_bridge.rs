@@ -37,6 +37,7 @@ const AUTH_RESULT_WAIT: Duration = Duration::from_secs(12);
 const FETCH_RESULT_WAIT: Duration = Duration::from_secs(45);
 const AUTH_REQUEST_PROFILE: &str = "chatgpt-me-v1";
 const HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-discovery-v1";
+const FRESH_HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-fresh-tab-v1";
 const DISCOVERY_RESULT_WAIT: Duration = Duration::from_secs(30);
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(35);
 
@@ -267,6 +268,32 @@ pub struct HistoryDiscoveryObservation {
     pub candidates: Vec<HistorySurfaceCandidate>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreshTabHistoryDiscoveryProof {
+    pub extension_version: String,
+    pub desktop_roundtrip: bool,
+    pub chatgpt_tab_found: bool,
+    pub capture_tab_created: bool,
+    pub debugger_attached: bool,
+    pub network_enabled: bool,
+    pub navigation_started: bool,
+    pub account_context: bool,
+    pub responses_seen: u64,
+    pub backend_http_200_seen: u64,
+    pub json_candidates_seen: u64,
+    pub body_read_failures: u64,
+    pub body_too_large: u64,
+    pub invalid_json: u64,
+    pub request_profile: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreshTabHistoryDiscoveryObservation {
+    pub discovery: String,
+    pub proof: FreshTabHistoryDiscoveryProof,
+    pub candidates: Vec<HistorySurfaceCandidate>,
+}
+
 #[derive(Clone)]
 pub struct BrowserBridgeProvider {
     shared: Arc<Shared>,
@@ -395,6 +422,131 @@ impl BrowserBridgeProvider {
             .to_owned();
 
         Ok(HistoryDiscoveryObservation {
+            discovery,
+            proof,
+            candidates,
+        })
+    }
+
+    /// Recovery-only discovery path that boots ChatGPT in a temporary background tab and
+    /// observes the first-party application startup traffic. This composes around the frozen
+    /// 0.3 active-tab discovery path instead of mutating it.
+    pub fn discover_history_surfaces_fresh_tab(
+        &mut self,
+    ) -> Result<FreshTabHistoryDiscoveryObservation, BrowserBridgeError> {
+        let result = self.call(
+            "discover_history_surfaces_fresh_tab",
+            |object| {
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(FRESH_HISTORY_DISCOVERY_PROFILE),
+                );
+            },
+            DISCOVERY_RESULT_WAIT,
+        )?;
+
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+        if parse_bridge_transport(&result)? != BridgeTransport::ExtensionCdp {
+            return Err(BrowserBridgeError::Protocol(
+                "fresh-tab history discovery did not use the CDP extension transport".to_owned(),
+            ));
+        }
+
+        let request_profile = result
+            .get("request_profile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing request profile".to_owned(),
+                )
+            })?;
+        if request_profile != FRESH_HISTORY_DISCOVERY_PROFILE {
+            return Err(BrowserBridgeError::Protocol(format!(
+                "fresh-tab history discovery profile {request_profile:?} does not match expected {FRESH_HISTORY_DISCOVERY_PROFILE:?}"
+            )));
+        }
+
+        let extension_version = result
+            .get("extension_version")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing extension version".to_owned(),
+                )
+            })?
+            .to_owned();
+        let required_bool = |field: &str| {
+            result.get(field).and_then(Value::as_bool).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "fresh-tab history discovery result is missing boolean proof field {field:?}"
+                ))
+            })
+        };
+        let required_u64 = |field: &str| {
+            result.get(field).and_then(Value::as_u64).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "fresh-tab history discovery result is missing numeric proof field {field:?}"
+                ))
+            })
+        };
+
+        let proof = FreshTabHistoryDiscoveryProof {
+            extension_version,
+            desktop_roundtrip: true,
+            chatgpt_tab_found: required_bool("chatgpt_tab_found")?,
+            capture_tab_created: required_bool("capture_tab_created")?,
+            debugger_attached: required_bool("debugger_attached")?,
+            network_enabled: required_bool("network_enabled")?,
+            navigation_started: required_bool("navigation_started")?,
+            account_context: required_bool("account_context")?,
+            responses_seen: required_u64("responses_seen")?,
+            backend_http_200_seen: required_u64("backend_http_200_seen")?,
+            json_candidates_seen: required_u64("json_candidates_seen")?,
+            body_read_failures: required_u64("body_read_failures")?,
+            body_too_large: required_u64("body_too_large")?,
+            invalid_json: required_u64("invalid_json")?,
+            request_profile: request_profile.to_owned(),
+        };
+        if !proof.chatgpt_tab_found
+            || !proof.capture_tab_created
+            || !proof.debugger_attached
+            || !proof.network_enabled
+            || !proof.navigation_started
+            || proof.responses_seen == 0
+        {
+            return Err(BrowserBridgeError::Protocol(
+                "fresh-tab history discovery returned success without complete CDP boundary proof"
+                    .to_owned(),
+            ));
+        }
+
+        let candidates = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing candidates".to_owned(),
+                )
+            })?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_history_surface_candidate(value, index))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let discovery = result
+            .get("discovery")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing semantic state".to_owned(),
+                )
+            })?
+            .to_owned();
+
+        Ok(FreshTabHistoryDiscoveryObservation {
             discovery,
             proof,
             candidates,
@@ -1678,6 +1830,92 @@ mod tests {
         );
         assert_eq!(observation.candidates[0].items.len(), 1);
         assert_eq!(observation.candidates[0].items[0].id, "remote-1");
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn fresh_tab_history_discovery_crosses_only_typed_candidates_and_proof() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+        let browser = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(
+                    command["kind"],
+                    json!("discover_history_surfaces_fresh_tab")
+                );
+                assert_eq!(
+                    command["request_profile"],
+                    json!(FRESH_HISTORY_DISCOVERY_PROFILE)
+                );
+                assert_eq!(command.as_object().unwrap().len(), 4);
+            },
+            |command| {
+                json!({
+                    "version": 1,
+                    "id": command["id"],
+                    "kind": "discover_history_surfaces_fresh_tab",
+                    "ok": true,
+                    "bridge_transport": "extension-cdp",
+                    "extension_version": "0.4.10",
+                    "chatgpt_tab_found": true,
+                    "capture_tab_created": true,
+                    "debugger_attached": true,
+                    "network_enabled": true,
+                    "navigation_started": true,
+                    "account_context": true,
+                    "request_profile": FRESH_HISTORY_DISCOVERY_PROFILE,
+                    "responses_seen": 55,
+                    "backend_http_200_seen": 18,
+                    "json_candidates_seen": 4,
+                    "body_read_failures": 0,
+                    "body_too_large": 0,
+                    "invalid_json": 0,
+                    "candidate_count": 1,
+                    "discovery": "candidates_observed",
+                    "candidates": [{
+                        "path": "/backend-api/gizmos/snorlax/sidebar",
+                        "query_keys": ["conversations_per_gizmo", "limit", "owned_only"],
+                        "surface_kind": "snorlax_sidebar",
+                        "conversation_count": 2,
+                        "cursor_count": 1,
+                        "string_cursor_count": 1,
+                        "null_cursor_count": 0,
+                        "top_level_cursor": "string",
+                        "top_level_keys": ["cursor", "items"],
+                        "traversal_truncated": false,
+                        "observations": 1,
+                        "items": [
+                            {
+                                "id": "fresh-1",
+                                "title": "Fresh one",
+                                "create_time": null,
+                                "update_time": null
+                            },
+                            {
+                                "id": "fresh-2",
+                                "title": "Fresh two",
+                                "create_time": null,
+                                "update_time": null
+                            }
+                        ]
+                    }]
+                })
+            },
+        );
+
+        let mut provider = runtime.provider();
+        let observation = provider.discover_history_surfaces_fresh_tab().unwrap();
+        assert_eq!(observation.discovery, "candidates_observed");
+        assert_eq!(observation.proof.extension_version, "0.4.10");
+        assert!(observation.proof.capture_tab_created);
+        assert!(observation.proof.debugger_attached);
+        assert!(observation.proof.network_enabled);
+        assert!(observation.proof.navigation_started);
+        assert_eq!(observation.proof.responses_seen, 55);
+        assert_eq!(observation.candidates.len(), 1);
+        assert_eq!(observation.candidates[0].items.len(), 2);
+        assert_eq!(observation.candidates[0].items[0].id, "fresh-1");
         browser.join().unwrap();
     }
 
