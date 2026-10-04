@@ -1927,6 +1927,7 @@ mod tests {
 
         let browser = thread::spawn(move || {
             for expected_kind in [
+                "probe_auth",
                 "discover_history_surfaces",
                 "discover_history_surfaces_fresh_tab",
             ] {
@@ -1941,7 +1942,10 @@ mod tests {
                 let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
                 assert_eq!(command["kind"], json!(expected_kind));
 
-                let result = if expected_kind == "discover_history_surfaces" {
+                let result = if expected_kind == "probe_auth" {
+                    assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
+                    extension_auth_result(&command)
+                } else if expected_kind == "discover_history_surfaces" {
                     assert_eq!(
                         command["request_profile"],
                         json!(HISTORY_DISCOVERY_PROFILE)
@@ -2039,6 +2043,12 @@ mod tests {
         });
 
         let mut provider = runtime.provider();
+        let auth = provider.probe_authentication().unwrap();
+        assert_eq!(
+            auth.evidence,
+            SessionAuthenticationEvidence::Authenticated
+        );
+
         let primary = provider.discover_history_surfaces().unwrap();
         assert!(primary.candidates.is_empty());
         assert_eq!(primary.proof.responses_seen, 21);
