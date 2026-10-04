@@ -251,11 +251,15 @@ async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
 
     const chatLinks = element.querySelectorAll('a[href^="/c/"]').length;
     const projectLinks = element.querySelectorAll('a[href*="/g/"], a[href*="/project"]').length;
-    if (chatLinks === 0 && projectLinks === 0) continue;
-
     const navigationLike =
       element.matches('nav, aside, [role="navigation"]')
       || element.closest('nav, aside, [role="navigation"]') !== null;
+
+    // The history list can be lazy/virtualized and contain zero conversation links
+    // immediately after reload. Requiring links before scrolling makes recovery circular:
+    // the list must already be loaded before Chatarium is willing to stimulate it.
+    // Navigation-owned scroll surfaces are therefore eligible even at zero links.
+    if (!navigationLike && chatLinks === 0 && projectLinks === 0) continue;
     const score =
       (navigationLike ? 10_000 : 0)
       + Math.min(chatLinks, 100) * 20
