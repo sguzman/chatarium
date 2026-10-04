@@ -454,7 +454,8 @@ impl ChatariumApp {
             start_account_bridge();
         let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
         let remote_conversation_catalog =
-            load_remote_history_cache(&remote_history_cache_path(&journal_path)).unwrap_or_default();
+            load_remote_history_cache(&remote_history_cache_path(&journal_path))
+                .unwrap_or_default();
 
         Self {
             draft,
@@ -3684,10 +3685,7 @@ fn load_remote_history_cache(path: &Path) -> Result<Vec<ConversationListItem>, S
     Ok(catalog.into_values().collect())
 }
 
-fn persist_remote_history_cache(
-    path: &Path,
-    items: &[ConversationListItem],
-) -> Result<(), String> {
+fn persist_remote_history_cache(path: &Path, items: &[ConversationListItem]) -> Result<(), String> {
     let body = serde_json::json!({
         "schema": "chatarium-remote-history-cache",
         "version": 1,
