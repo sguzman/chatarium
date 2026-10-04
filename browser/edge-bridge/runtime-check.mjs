@@ -314,7 +314,11 @@ function freshHarness(options = {}) {
       async create(args) {
         calls.push(['create', args]);
         if (options.createFailure) return null;
-        return { id: nextTabId++, windowId: 7 };
+        const tab = { id: nextTabId++, windowId: 7 };
+        if (options.prepopulateTempSession) {
+          activeDiscoveries.set(tab.id, { sentinel: true });
+        }
+        return tab;
       },
       async remove(tabId) {
         calls.push(['remove', tabId]);
@@ -479,6 +483,19 @@ function freshHarness(options = {}) {
   assert.equal(result.ok, false);
   assert.equal(result.error, 'chatgpt_tab_not_found');
   assert.equal(h.calls.length, 0);
+}
+
+{
+  const h = freshHarness({ prepopulateTempSession: true });
+  const result = await h.run({
+    id: 'f6',
+    kind: 'discover_history_surfaces_fresh_tab',
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'fresh_history_discovery_already_active');
+  assert.equal(h.activeDiscoveries.size, 1);
+  assert.ok(h.calls.some((call) => call[0] === 'remove'));
+  assert.ok(!h.calls.some((call) => call[0] === 'attach'));
 }
 
 console.log('Chatarium isolated fresh-tab discovery runtime harness OK');
