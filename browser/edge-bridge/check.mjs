@@ -172,6 +172,18 @@ for (const [name, text, expectedSha] of frozenFixtureBlobs) {
   }
 }
 
+function countOccurrences(text, needle) {
+  if (!needle) return 0;
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    const index = text.indexOf(needle, offset);
+    if (index < 0) return count;
+    count += 1;
+    offset = index + needle.length;
+  }
+}
+
 function fixtureSection(text, startMarker, endMarker) {
   const normalized = normalizeNewlines(text);
   const start = normalized.indexOf(startMarker);
@@ -217,15 +229,27 @@ const knownGoodRustCandidateParser = fixtureSection(
   '--- END HISTORY CANDIDATE PARSER ---',
 );
 
-if (!normalizeNewlines(worker).includes(knownGoodDiscoveryListener)) {
+const normalizedWorker = normalizeNewlines(worker);
+if (countOccurrences(normalizedWorker, knownGoodDiscoveryListener) !== 1) {
   throw new Error(
-    'history discovery debugger listener drifted from the live-proven 0.3 baseline',
+    'history discovery debugger listener must exist exactly once and equal the live-proven 0.3 baseline',
   );
 }
-if (!normalizeNewlines(worker).includes(knownGoodDiscoveryCommand)) {
+if (countOccurrences(normalizedWorker, knownGoodDiscoveryCommand) !== 1) {
   throw new Error(
-    'discoverHistorySurfaces drifted from the live-proven 0.3 baseline',
+    'discoverHistorySurfaces must exist exactly once and equal the live-proven 0.3 baseline',
   );
+}
+if (countOccurrences(normalizedWorker, "case 'discover_history_surfaces':") !== 1) {
+  throw new Error('discover_history_surfaces dispatch must exist exactly once');
+}
+if (
+  countOccurrences(
+    normalizedWorker,
+    "case 'discover_history_surfaces':\n      return discoverHistorySurfaces(command);",
+  ) !== 1
+) {
+  throw new Error('discover_history_surfaces must dispatch directly to the frozen function');
 }
 if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
   throw new Error(
@@ -244,13 +268,13 @@ for (const [label, expected] of [
   }
 }
 for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.constants)) {
-  if (!normalizeNewlines(worker).includes(normalizeNewlines(expected))) {
-    throw new Error(`0.3 discovery constant drifted: ${name}`);
+  if (countOccurrences(normalizedWorker, normalizeNewlines(expected)) !== 1) {
+    throw new Error(`0.3 discovery constant missing, duplicated, or drifted: ${name}`);
   }
 }
 for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.functions)) {
-  if (!normalizeNewlines(worker).includes(normalizeNewlines(expected))) {
-    throw new Error(`0.3 discovery helper drifted: ${name}`);
+  if (countOccurrences(normalizedWorker, normalizeNewlines(expected)) !== 1) {
+    throw new Error(`0.3 discovery helper missing, duplicated, or drifted: ${name}`);
   }
 }
 
