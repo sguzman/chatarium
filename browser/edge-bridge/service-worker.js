@@ -30,6 +30,7 @@ const DISCOVERY_BODY_GRACE_MS = 500;
 const DISCOVERY_STIMULUS_MAX_TARGETS = 3;
 const DISCOVERY_STIMULUS_MAX_STEPS = 28;
 const DISCOVERY_STIMULUS_STEP_DELAY_MS = 120;
+const DISCOVERY_STIMULUS_MAX_RUNTIME_MS = 8_000;
 const DISCOVERY_STIMULUS_MAX_ATTEMPTS = 4;
 const DISCOVERY_STIMULUS_RETRY_MS = 750;
 const CONVERSATION_CAPTURE_WINDOW_MS = 32_000;
@@ -238,8 +239,10 @@ async function executePageGet(tabId, resource, requestHeaders) {
   return injection[0].result;
 }
 
-async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
+async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs, maxRuntimeMs) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const startedAt = performance.now();
+  const budgetExpired = () => performance.now() - startedAt >= maxRuntimeMs;
   const all = [...document.querySelectorAll('nav, aside, [role="navigation"], div')];
   const scored = [];
 
@@ -283,8 +286,13 @@ async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
 
   const linksBefore = document.querySelectorAll('a[href^="/c/"]').length;
   let totalSteps = 0;
+  let budgetExhausted = false;
 
   for (const target of targets) {
+    if (budgetExpired()) {
+      budgetExhausted = true;
+      break;
+    }
     const originalTop = target.scrollTop;
     target.scrollTop = 0;
     target.dispatchEvent(new Event('scroll', { bubbles: true }));
@@ -292,6 +300,10 @@ async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
 
     let stableBottomPasses = 0;
     for (let step = 0; step < maxSteps; step += 1) {
+      if (budgetExpired()) {
+        budgetExhausted = true;
+        break;
+      }
       const maxTop = Math.max(0, target.scrollHeight - target.clientHeight);
       const increment = Math.max(320, Math.floor(target.clientHeight * 0.82));
       const nextTop = Math.min(maxTop, target.scrollTop + increment);
@@ -301,9 +313,17 @@ async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
       target.dispatchEvent(new Event('scroll', { bubbles: true }));
       totalSteps += 1;
       await delay(stepDelayMs);
+      if (budgetExpired()) {
+        budgetExhausted = true;
+        break;
+      }
 
       if (target.scrollTop >= maxTop - 2) {
         await delay(stepDelayMs * 2);
+        if (budgetExpired()) {
+          budgetExhausted = true;
+          break;
+        }
         if (target.scrollHeight <= beforeHeight + 2) {
           stableBottomPasses += 1;
           if (stableBottomPasses >= 2) break;
@@ -321,6 +341,7 @@ async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
     ok: true,
     targets: targets.length,
     steps: totalSteps,
+    budget_exhausted: budgetExhausted,
     chat_links_before: linksBefore,
     chat_links_after: document.querySelectorAll('a[href^="/c/"]').length,
   };
@@ -334,6 +355,7 @@ async function stimulateHistoryUi(tabId) {
       DISCOVERY_STIMULUS_MAX_TARGETS,
       DISCOVERY_STIMULUS_MAX_STEPS,
       DISCOVERY_STIMULUS_STEP_DELAY_MS,
+      DISCOVERY_STIMULUS_MAX_RUNTIME_MS,
     ],
   });
   if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
