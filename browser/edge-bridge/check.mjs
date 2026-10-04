@@ -31,7 +31,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.6') {
+if (manifest.version !== '0.4.7') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -351,4 +351,10 @@ if (!worker.includes('ignoreCache: true')) {
 }
 if (!worker.includes("a[href^=\"/c/\"]")) {
   throw new Error('history UI stimulus must target real conversation-bearing scroll surfaces');
+}
+if (!worker.includes('if (!navigationLike && chatLinks === 0 && projectLinks === 0) continue;')) {
+  throw new Error('history UI stimulus must permit zero-link navigation scroll surfaces');
+}
+if (worker.includes('if (chatLinks === 0 && projectLinks === 0) continue;')) {
+  throw new Error('history UI stimulus regressed to requiring history links before stimulation');
 }
