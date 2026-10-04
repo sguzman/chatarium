@@ -1921,6 +1921,138 @@ mod tests {
     }
 
     #[test]
+    fn primary_zero_then_fresh_tab_success_roundtrips_sequentially() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+
+        let browser = thread::spawn(move || {
+            for expected_kind in [
+                "discover_history_surfaces",
+                "discover_history_surfaces_fresh_tab",
+            ] {
+                let raw = request(
+                    address,
+                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
+                );
+                let split = raw
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .unwrap();
+                let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
+                assert_eq!(command["kind"], json!(expected_kind));
+
+                let result = if expected_kind == "discover_history_surfaces" {
+                    assert_eq!(
+                        command["request_profile"],
+                        json!(HISTORY_DISCOVERY_PROFILE)
+                    );
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": expected_kind,
+                        "ok": true,
+                        "bridge_transport": "extension-cdp",
+                        "extension_version": "0.4.10",
+                        "chatgpt_tab_found": true,
+                        "debugger_attached": true,
+                        "network_enabled": true,
+                        "reload_started": true,
+                        "account_context": true,
+                        "request_profile": HISTORY_DISCOVERY_PROFILE,
+                        "responses_seen": 21,
+                        "backend_http_200_seen": 7,
+                        "json_candidates_seen": 1,
+                        "body_read_failures": 0,
+                        "body_too_large": 0,
+                        "invalid_json": 0,
+                        "candidate_count": 0,
+                        "discovery": "no_candidate_surface_observed",
+                        "candidates": []
+                    })
+                } else {
+                    assert_eq!(
+                        command["request_profile"],
+                        json!(FRESH_HISTORY_DISCOVERY_PROFILE)
+                    );
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": expected_kind,
+                        "ok": true,
+                        "bridge_transport": "extension-cdp",
+                        "extension_version": "0.4.10",
+                        "chatgpt_tab_found": true,
+                        "capture_tab_created": true,
+                        "debugger_attached": true,
+                        "network_enabled": true,
+                        "navigation_started": true,
+                        "account_context": true,
+                        "request_profile": FRESH_HISTORY_DISCOVERY_PROFILE,
+                        "responses_seen": 61,
+                        "backend_http_200_seen": 19,
+                        "json_candidates_seen": 3,
+                        "body_read_failures": 0,
+                        "body_too_large": 0,
+                        "invalid_json": 0,
+                        "candidate_count": 1,
+                        "discovery": "candidates_observed",
+                        "candidates": [{
+                            "path": "/backend-api/gizmos/snorlax/sidebar",
+                            "query_keys": ["conversations_per_gizmo", "limit", "owned_only"],
+                            "surface_kind": "snorlax_sidebar",
+                            "conversation_count": 2,
+                            "cursor_count": 1,
+                            "string_cursor_count": 1,
+                            "null_cursor_count": 0,
+                            "top_level_cursor": "string",
+                            "top_level_keys": ["cursor", "items"],
+                            "traversal_truncated": false,
+                            "observations": 1,
+                            "items": [
+                                {
+                                    "id": "fresh-a",
+                                    "title": "Fresh A",
+                                    "create_time": null,
+                                    "update_time": null
+                                },
+                                {
+                                    "id": "fresh-b",
+                                    "title": "Fresh B",
+                                    "create_time": null,
+                                    "update_time": null
+                                }
+                            ]
+                        }]
+                    })
+                };
+
+                let body = serde_json::to_vec(&result).unwrap();
+                let request_head = format!(
+                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let mut raw = request_head.into_bytes();
+                raw.extend_from_slice(&body);
+                let response = request(address, &raw);
+                assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
+            }
+        });
+
+        let mut provider = runtime.provider();
+        let primary = provider.discover_history_surfaces().unwrap();
+        assert!(primary.candidates.is_empty());
+        assert_eq!(primary.proof.responses_seen, 21);
+
+        let fresh = provider.discover_history_surfaces_fresh_tab().unwrap();
+        assert_eq!(fresh.candidates.len(), 1);
+        assert_eq!(fresh.candidates[0].items.len(), 2);
+        assert_eq!(fresh.candidates[0].items[0].id, "fresh-a");
+        assert_eq!(fresh.proof.responses_seen, 61);
+
+        browser.join().unwrap();
+    }
+
+    #[test]
     fn c01_command_uses_exact_first_page_resource_and_parses_extension_proof() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
