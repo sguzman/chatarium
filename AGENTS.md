@@ -43,14 +43,18 @@ Chatarium is a reliability project first and a UI project second.
 - Do not make the desktop app the source of truth for protocol knowledge.
 - Prefer explicit state machines and typed uncertainty over booleans such as `sent = true`.
 
-## Human QA budget
+## Codex-owned QA / zero operator regression labor
 
-- Human QA is a scarce fallback for observations the program cannot reasonably obtain itself, not a substitute for automation.
-- If code can create a temporary directory, launch a controlled process, insert synthetic text, collect logs, hash, sanitize, import, diff, validate, or clean up test state, implement that automation instead of writing a checklist for the operator.
-- Prefer one command and one returned artifact over multi-command operator choreography.
-- Never ask the operator to copy cookies, authorization values, CSRF/session tokens, browser profile databases, or other reusable credentials.
-- A human handoff must state exactly what will be installed, launched, touched, persisted, and returned before the operator acts.
-- Repeated QA for a previously observed failure shape should normally become an automated regression test.
+- The principal is not Chatarium's manual QA runner. Routine browser/application validation has an operator QA budget of **zero**.
+- Codex owns the engineering loop end to end: Git sync/status/diff, edit, build, launch/restart, QA Edge control, extension reload/version verification, browser interaction, log/console/screenshot/trace collection, regression reruns, commit, push, and final evidence report.
+- The dedicated authenticated QA Edge profile is the browser test target. It is visually grouped with Codex on Hyprland workspace 6. Workspace 6 is organizational, not a security boundary.
+- The principal's normal Edge profile/windows are outside the automation boundary. Never attach broad automation to the whole shared Edge user-data root when that could expose or manipulate normal browsing state.
+- Preferred browser control is Playwright MCP browser-extension mode scoped to the QA profile. A QA-only DevTools/CDP instance is an acceptable alternative. See `docs/CODEX_QA_WORKSTATION.md`.
+- If browser control is missing or broken, fixing/bootstraping that automation is the next engineering task. Do not convert missing automation into instructions for the principal to click, reload, watch logs, copy output, take screenshots, or "try again."
+- If a native egui action is repeatedly needed, add a CLI/test hook, typed localhost/test RPC, or other deterministic machine-controlled surface. Compositor/native input automation is a fallback; human repetition is not.
+- Human involvement is reserved for a true identity/consent boundary that automation cannot satisfy, such as CAPTCHA, MFA, or an explicit security permission requiring the account holder. Stop with a precise `AUTH/CONSENT BLOCKED` state; do not package the remaining engineering work as a human QA checklist.
+- Never ask the principal to copy cookies, authorization values, CSRF/session tokens, browser profile databases, or other reusable credentials.
+- Repeated QA for a previously observed failure shape must become an automated regression test.
 
 ## Scope boundaries
 
