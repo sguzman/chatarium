@@ -147,7 +147,13 @@ The first 0.4.x discovery retests regressed from the live-proven 85-chat 0.3 res
 
 **Edge Bridge 0.4.9 restores and freezes the exact live-proven 0.3 discovery runtime from commit `dca678f95442635cfc729d02c4ac612510d7efe7`.** The active discovery boundary is again only debugger attach, `Network.enable`, ordinary `chrome.tabs.reload(tab.id)`, bounded passive observation, response-body classification, and detach. The current classifier is byte-for-byte identical to the 0.3 classifier. Exact baseline fixtures are checked by CI so later mirror/local-viewer work cannot silently mutate discovery again.
 
-The later exact-conversation mirror path, MV3 keepalive, and durable last-known discovery cache remain isolated outside that frozen boundary.
+A direct 0.4.5→0.4.6 service-worker comparison proved that the later 85→0 live transition happened even though the discovery implementation did not change; only the MV3 keepalive was added. The active-tab reload path is therefore retained as a frozen live-proven observer, but is treated as opportunistic rather than deterministic.
+
+**Edge Bridge 0.4.10 composes a separate recovery path around that frozen observer.** If the frozen pass yields zero conversation IDs and Chatarium has no durable history catalog, the extension creates a temporary background tab, attaches CDP at `about:blank`, then navigates it to `https://chatgpt.com/` so the real first-party frontend performs a fresh application boot. Chatarium observes/classifies that startup traffic and always detaches/closes the temporary tab. It does not synthesize private history requests, reconstruct headers, disable cache, scroll the user's page, or modify the frozen 0.3 command.
+
+Once any history catalog has been durably acquired, later zero-item passive passes retain that catalog and suppress the fresh-tab recovery. This makes the expensive recovery a bootstrap-only path rather than a repeated remote read.
+
+The later exact-conversation mirror path, MV3 keepalive, durable last-known discovery cache, and fresh-tab recovery remain isolated outside the frozen 0.3 boundary.
 
 Human browser QA is suspended during this reconstruction. Before another live validation is requested, the repository gate requires:
 
