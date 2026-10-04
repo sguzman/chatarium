@@ -1,0 +1,13 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "userDataDir": "/home/sguzman/.local/share/chatarium-qa-browser",
+    "launchOptions": {
+      "headless": false,
+      "args": [
+        "--disable-extensions-except=/home/sguzman/Code/Source/Rust/chatarium/browser/edge-bridge",
+        "--load-extension=/home/sguzman/Code/Source/Rust/chatarium/browser/edge-bridge"
+      ]
+    }
+  }
+}

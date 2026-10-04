@@ -18,3 +18,7 @@ protocol/private/
 *.sqlite
 *.sqlite3
 *.db
+
+# Local Playwright/browser tooling.
+.playwright-mcp/
+tools/qa-browser/node_modules/
