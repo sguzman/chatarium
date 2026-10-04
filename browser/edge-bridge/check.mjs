@@ -23,6 +23,10 @@ const knownGoodHistoryClassifier = fs.readFileSync(
   new URL('known-good-history-discovery-v0.3.txt', root),
   'utf8',
 );
+const knownGoodDiscoveryDependencies = JSON.parse(fs.readFileSync(
+  new URL('known-good-discovery-dependencies-v0.3.json', root),
+  'utf8',
+));
 const desktopBridge = fs.readFileSync(
   new URL('../../apps/desktop/src/account_bridge.rs', root),
   'utf8',
@@ -183,8 +187,18 @@ if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
     'history-discovery.mjs drifted from the live-proven 0.3 baseline',
   );
 }
+for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.constants)) {
+  if (!normalizeNewlines(worker).includes(normalizeNewlines(expected))) {
+    throw new Error(`0.3 discovery constant drifted: ${name}`);
+  }
+}
+for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.functions)) {
+  if (!normalizeNewlines(worker).includes(normalizeNewlines(expected))) {
+    throw new Error(`0.3 discovery helper drifted: ${name}`);
+  }
+}
 
-console.log('Chatarium live-proven 0.3 discovery baseline is frozen');
+console.log('Chatarium live-proven 0.3 discovery baseline and dependencies are frozen');
 
 
 const ordinaryResponse = {
