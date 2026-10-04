@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.9 frozen 0.3 discovery + isolated mirroring
+## Current architecture: 0.4.10 frozen 0.3 discovery + fresh-tab recovery + isolated mirroring
 
 ```text
 Chatarium Desktop
@@ -86,6 +86,27 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.10 isolated fresh-tab history recovery
+
+0.4.10 keeps the exact live-proven 0.3 active-tab discovery implementation frozen. It adds a separate recovery command only for the case where that passive pass observes zero conversation IDs **and** Chatarium has no durable last-known history catalog.
+
+The recovery command creates an inactive temporary tab at `about:blank`, attaches CDP before navigation, enables the Network domain, and lets the actual ChatGPT frontend boot at `https://chatgpt.com/`. It classifies the first-party JSON traffic through the same frozen history classifier and then always detaches and closes the temporary tab.
+
+The recovery path deliberately does **not**:
+
+- construct or replay a private `/backend-api/*` history URL;
+- issue page-world `fetch()`;
+- reconstruct application headers;
+- disable or bypass browser cache policy;
+- programmatically scroll or mutate the user's active ChatGPT tab;
+- replace the frozen 0.3 discovery command.
+
+This design follows the same first-party-navigation boundary already used by exact conversation mirroring: ChatGPT constructs its own requests; Chatarium only observes them.
+
+A durable cached catalog suppresses this fallback. Once Chatarium has acquired history successfully, a later zero-item passive run retains the cache and does not open another recovery tab.
+
+Automated gates cover the active frozen function, the new fresh-tab function, temporary-tab cleanup, command dispatch, Rust proof parsing, timeout budgets, cache-retention policy, and the condition that recovery runs only for `primary-items=0 && durable-cache=0`.
 
 ### 0.4.9 mechanical rollback to the live-proven 0.3 discovery boundary
 
@@ -267,7 +288,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.9 manifest contains only:
+The 0.4.10 manifest contains only:
 
 - `debugger`
 - `scripting`
