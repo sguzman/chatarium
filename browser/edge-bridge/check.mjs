@@ -24,6 +24,10 @@ const knownGoodHistoryClassifier = fs.readFileSync(
   new URL('known-good-history-discovery-v0.3.txt', root),
   'utf8',
 );
+const knownGoodRustDiscovery = fs.readFileSync(
+  new URL('known-good-rust-discovery-v0.3.txt', root),
+  'utf8',
+);
 const knownGoodDiscoveryDependencies = JSON.parse(fs.readFileSync(
   new URL('known-good-discovery-dependencies-v0.3.json', root),
   'utf8',
@@ -157,6 +161,7 @@ const frozenFixtureBlobs = [
   ['known-good-discovery-v0.3.txt', knownGoodDiscoveryRuntime, 'c04fabc8c0ebfb42b44ab75092e749fafb321bad'],
   ['known-good-history-discovery-v0.3.txt', knownGoodHistoryClassifier, '4e1d6ddf8a5f147eee33ab7d8b4e5a686a120e22'],
   ['known-good-discovery-dependencies-v0.3.json', JSON.stringify(knownGoodDiscoveryDependencies, null, 2) + '\n', 'e341f1adb929ad3aac86de3876accbc2bbcb2efb'],
+  ['known-good-rust-discovery-v0.3.txt', knownGoodRustDiscovery, 'b344546fce62b980ca7323c6417c3c484a98e3fd'],
 ];
 for (const [name, text, expectedSha] of frozenFixtureBlobs) {
   const actualSha = gitBlobSha(text);
@@ -196,6 +201,22 @@ const knownGoodClassifierModule = fixtureSection(
   '--- END HISTORY DISCOVERY MODULE ---',
 );
 
+const knownGoodRustProof = fixtureSection(
+  knownGoodRustDiscovery,
+  '--- HISTORY DISCOVERY PROOF ---',
+  '--- END HISTORY DISCOVERY PROOF ---',
+);
+const knownGoodRustMethod = fixtureSection(
+  knownGoodRustDiscovery,
+  '--- HISTORY DISCOVERY METHOD ---',
+  '--- END HISTORY DISCOVERY METHOD ---',
+);
+const knownGoodRustCandidateParser = fixtureSection(
+  knownGoodRustDiscovery,
+  '--- HISTORY CANDIDATE PARSER ---',
+  '--- END HISTORY CANDIDATE PARSER ---',
+);
+
 if (!normalizeNewlines(worker).includes(knownGoodDiscoveryListener)) {
   throw new Error(
     'history discovery debugger listener drifted from the live-proven 0.3 baseline',
@@ -210,6 +231,17 @@ if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
   throw new Error(
     'history-discovery.mjs drifted from the live-proven 0.3 baseline',
   );
+}
+
+const normalizedDesktopBridge = normalizeNewlines(desktopBridge);
+for (const [label, expected] of [
+  ['HistoryDiscoveryProof', knownGoodRustProof],
+  ['BrowserBridgeProvider::discover_history_surfaces', knownGoodRustMethod],
+  ['parse_history_surface_candidate', knownGoodRustCandidateParser],
+]) {
+  if (!normalizedDesktopBridge.includes(expected)) {
+    throw new Error(`Rust discovery boundary drifted from live-proven 0.3: ${label}`);
+  }
 }
 for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.constants)) {
   if (!normalizeNewlines(worker).includes(normalizeNewlines(expected))) {
