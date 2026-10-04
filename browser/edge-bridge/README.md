@@ -1,5 +1,7 @@
 # Chatarium Edge Bridge
 
+> **Current QA browser (2026-10-04):** despite the historical component name, automated validation now runs in Playwright-managed bundled Chromium using the dedicated persistent profile `~/.local/share/chatarium-qa-browser/`. The principal's normal Microsoft Edge installation is not a QA target. The bridge remains a Chromium-compatible MV3 extension and keeps the `edge-bridge` name for source/history continuity.
+
 This directory contains the **critical-path browser runtime** for Chatarium's read-only interoperability with the user's existing ChatGPT conversation corpus.
 
 It replaces three failed/retired assumptions:
@@ -392,7 +394,7 @@ Chatarium independently:
 
 Native Messaging is not used.
 
-## Human QA gate
+## Automated live-QA gate
 
 Before each browser validation:
 
@@ -403,9 +405,9 @@ Before each browser validation:
 - Linux desktop check/tests must pass;
 - the issue must state exactly what the run can prove.
 
-History discovery performs its own reload. Exact mirroring performs its own temporary-tab navigation and cleanup. The operator should not need DevTools, console inspection, manual tab traversal, or another HAR merely to exercise these paths.
+History discovery performs its own reload. Exact mirroring performs its own temporary-tab navigation and cleanup. Codex owns browser launch, extension load/reload, DevTools/console inspection, tab traversal, screenshots, logs, and evidence collection. The operator should not perform those regression steps.
 
-Follow `docs/HUMAN_QA.md`, #103 for discovery history, and #104 for exact mirroring.
+The canonical target is the Playwright-managed Chromium QA profile. Follow `docs/CODEX_QA_WORKSTATION.md`, `docs/QA_CONTROL_SURFACE.md`, `docs/HUMAN_QA.md`, #103 for discovery history, and #104 for exact mirroring.
 
 ## Automated package check
 

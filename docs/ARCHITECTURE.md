@@ -164,6 +164,8 @@ This layer is intentionally disposable once the native client supersedes it, but
 
 ## Browser integration boundary
 
+**QA execution environment (2026-10-04):** browser-facing Chatarium QA now runs in Playwright-managed bundled Chromium with persistent private state under `~/.local/share/chatarium-qa-browser/`. The principal's normal Microsoft Edge installation is outside the automation boundary. The historical component name `Edge Bridge` remains because it names the MV3 integration lineage; the extension itself is Chromium-compatible and the name does not select the QA browser.
+
 The 2026-10-03 account-history incident established a hard architectural distinction between **browser observation prototypes**, **request replay**, and **critical runtime interoperability**.
 
 Tampermonkey remains valid for:

@@ -1,5 +1,7 @@
 # Evidence ledger: 2026-10-03 ChatGPT history bridge incident
 
+> **Current policy note (2026-10-04):** this ledger is historical evidence and its Edge/Tampermonkey references describe the incident as it occurred. The current browser-QA architecture is Playwright-managed bundled Chromium with a dedicated persistent user-data directory; personal Microsoft Edge is outside the automation boundary. Do not reinterpret historical Edge observations as current QA instructions.
+
 This appendix records the concrete sequence of claims, evidence, QA observations, and corrected conclusions from the ChatGPT-history interoperability incident.
 
 It is intentionally redundant with the narrative postmortem. The purpose is auditability.

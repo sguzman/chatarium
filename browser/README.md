@@ -1,5 +1,7 @@
 # Browser flight recorder
 
+> **QA runtime note (2026-10-04):** the canonical automated browser is Playwright-managed bundled Chromium with persistent state under `~/.local/share/chatarium-qa-browser/`. Personal Microsoft Edge is not part of the QA control plane. Historical Edge/Chrome/Tampermonkey instructions below describe the recorder/prototype environments in which those components were developed; they are not the current Codex browser-automation boundary.
+
 This directory contains Chatarium's **P0 emergency durability layer** for the official ChatGPT web client.
 
 `flight-recorder.user.js` is a Tampermonkey-compatible userscript. It does not replace ChatGPT's network stack. Its job is narrower and urgent: make the current site much less capable of destroying text that has already existed on your machine while the native client and direct protocol adapter are being built.
@@ -119,13 +121,13 @@ The replacement runtime now lives in [`edge-bridge/`](edge-bridge/). It is a sid
 
 The desktop no longer accepts `page` or `tampermonkey` as successful critical-path history transports. Extension results must carry proof of extension version, correlated desktop roundtrip, exact ChatGPT tab, MAIN-world execution, account-context presence, request-profile identity, and HTTP status. Rust then adds parser/semantic evidence; exact-conversation synchronization is not called complete until the matching live mirror is durably committed.
 
-**Implementation is not live-browser validation.** Do not infer that the extension works in the target Edge environment merely because the files or automated checks pass. Human QA remains blocked behind the instrumentation and CI gate in `docs/HUMAN_QA.md` and issue #102.
+**Implementation is not live-browser validation.** Do not infer that the extension works in the target Chromium environment merely because the files or automated checks pass. Live validation is Codex-owned and runs in the dedicated Playwright-managed QA Chromium profile under the instrumentation/CI policy in `docs/HUMAN_QA.md`; the principal is not the regression runner.
 
 ## Account bridge (retired critical-path prototype)
 
 > **Retired for production account-history transport.** `account-bridge.user.js` is retained as protocol/engineering evidence only. Do not continue iterating it as Chatarium's critical runtime bridge. The 2026-10-03 live QA sequence demonstrated unstable environment-dependent transport and insufficient execution/request-context guarantees. See [the complete postmortem](../docs/postmortems/2026-10-03-chatgpt-history-bridge.md).
 >
-> Tampermonkey remains acceptable for disposable experiments, observation, and the separate emergency flight recorder. The replacement account-history transport must be a purpose-built Edge/Chromium extension with explicit end-to-end diagnostics before human QA.
+> Tampermonkey remains acceptable for disposable experiments, observation, and the separate emergency flight recorder. The replacement account-history transport is a purpose-built Chromium-compatible MV3 extension with explicit end-to-end diagnostics before automated live QA.
 
 `account-bridge.user.js` was a deliberately narrow Tampermonkey prototype for P3 live mirroring. It is **not** a generic HTTP proxy and it does not copy reusable ChatGPT credentials into Chatarium.
 

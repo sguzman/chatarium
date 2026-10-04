@@ -2,7 +2,9 @@
 
 **Incident window:** 2026-10-02 through 2026-10-03  
 **Scope:** existing ChatGPT conversation discovery/read interoperability in Chatarium  
-**Status:** Tampermonkey is retired as a critical runtime transport. A purpose-built Edge extension is the next browser-integration architecture.  
+**Historical status at incident close:** Tampermonkey was retired as a critical runtime transport and a purpose-built Chromium-compatible MV3 extension was the next browser-integration architecture.
+
+> **Current QA policy (2026-10-04):** the postmortem below preserves the incident history. Automated browser validation now uses Playwright-managed bundled Chromium with persistent state under `~/.local/share/chatarium-qa-browser/`; the principal's normal Microsoft Edge installation is outside the QA control plane.  
 **Related issues:** #88, #92, #94, #95, #96, #97, #98, #99, #100, #101
 
 For the audit-oriented timeline and claim/proof matrix, see [the companion evidence ledger](2026-10-03-chatgpt-history-bridge-ledger.md).
