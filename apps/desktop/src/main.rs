@@ -1109,10 +1109,7 @@ impl ChatariumApp {
                         );
                     }
                 }
-                LiveMirrorFetchNotice::HistoryFreshTabDiscoveryLoaded {
-                    primary,
-                    fallback,
-                } => {
+                LiveMirrorFetchNotice::HistoryFreshTabDiscoveryLoaded { primary, fallback } => {
                     diagnostics::info(
                         "history",
                         format!(
