@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.6 first-party CDP observation
+## Current architecture: 0.4.7 first-party CDP observation
 
 ```text
 Chatarium Desktop
@@ -87,6 +87,21 @@ For a discovered conversation, the extension now:
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
 
+### 0.4.7 zero-link history stimulus repair
+
+A later live run authenticated successfully and observed 147 browser responses, including 34 successful backend responses, but discovery still produced zero conversation items. The decisive proof was `stimulus-targets=0` and `chat-links=0->0`.
+
+The 0.4.4 stimulus contained a circular precondition: a scrollable element was eligible only if it already contained a conversation or project link. That meant the lazy history UI had to be loaded before Chatarium would perform the scroll intended to make it load.
+
+0.4.7 removes that circular gate while keeping the first-party-only architecture:
+
+- a scrollable surface owned by `nav`, `aside`, or `[role="navigation"]` is eligible even when it currently contains zero conversation links;
+- non-navigation scroll surfaces still require real conversation/project links;
+- Chatarium still issues no synthetic history API request;
+- the package invariant rejects any regression back to "links must already exist before stimulation".
+
+This repair is intentionally narrow. It does not touch exact conversation mirroring, rate-limit recovery, the MV3 keepalive, or the history response classifier.
+
 ### 0.4.6 MV3 worker lifecycle repair
 
 A later live run exposed a separate transport regression after the extension had been idle for hours: Chatarium's localhost listener was ready, but every `probe_auth` command timed out because the Manifest V3 service worker was no longer alive to poll `/v1/next`.
@@ -150,7 +165,7 @@ A second live run of 0.4.1 still produced zero observed conversations even thoug
 2. disables browser cache for the bounded discovery session;
 3. performs a CDP `Page.reload` with `ignoreCache: true`;
 4. waits briefly for the first-party UI to initialize;
-5. finds bounded scrollable navigation surfaces that already contain real ChatGPT conversation/project links;
+5. finds bounded scrollable navigation surfaces, including navigation-owned surfaces whose lazy history content has not produced links yet;
 6. scrolls those surfaces programmatically so ChatGPT's own lazy loaders run;
 7. observes and classifies the resulting first-party history responses with the existing 0.3 classifier;
 8. restores the sidebar scroll position and detaches CDP.
@@ -205,7 +220,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.6 manifest contains only:
+The 0.4.7 manifest contains only:
 
 - `debugger`
 - `scripting`
