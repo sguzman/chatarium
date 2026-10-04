@@ -10,7 +10,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.7 first-party CDP observation
+## Current architecture: 0.4.8 first-party CDP observation
 
 ```text
 Chatarium Desktop
@@ -86,6 +86,16 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.8 discovery duration-budget repair
+
+The first 0.4.7 live run exposed a second bug in the same stimulus path. Authentication completed successfully, but the discovery command hit the desktop's 30-second result timeout. A following authentication probe then timed out too because the extension bridge loop was still serially awaiting the overlong discovery command.
+
+The cause was a violated cross-process duration contract. The stimulus could visit up to three scroll targets for up to 28 delayed steps each, and lazy-loading at the bottom added extra waits. In the exact case the stimulus is designed to provoke, its runtime could therefore exceed the Rust `DISCOVERY_RESULT_WAIT`.
+
+0.4.8 hard-bounds one injected UI stimulus to 8 seconds. A repository invariant now computes the full worst-case discovery budget, including retry delays and body grace, and requires at least five seconds of margin before the Rust result timeout. The Rust authentication wait was also raised above the extension's bounded page-fetch timeout so an ordinary slow auth request cannot abandon the extension command while it still owns the serial bridge loop.
+
+This is a timeout-contract repair, not another history-discovery strategy change.
 
 ### 0.4.7 zero-link history stimulus repair
 
@@ -220,7 +230,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.7 manifest contains only:
+The 0.4.8 manifest contains only:
 
 - `debugger`
 - `scripting`
