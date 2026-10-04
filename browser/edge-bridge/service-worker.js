@@ -25,14 +25,7 @@ const AUTH_PROFILE = 'chatgpt-me-v1';
 const DISCOVERY_PROFILE = 'cdp-history-discovery-v1';
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const DISCOVERY_WINDOW_MS = 8_000;
-const DISCOVERY_PRE_STIMULUS_MS = 1_750;
 const DISCOVERY_BODY_GRACE_MS = 500;
-const DISCOVERY_STIMULUS_MAX_TARGETS = 3;
-const DISCOVERY_STIMULUS_MAX_STEPS = 28;
-const DISCOVERY_STIMULUS_STEP_DELAY_MS = 120;
-const DISCOVERY_STIMULUS_MAX_RUNTIME_MS = 8_000;
-const DISCOVERY_STIMULUS_MAX_ATTEMPTS = 4;
-const DISCOVERY_STIMULUS_RETRY_MS = 750;
 const CONVERSATION_CAPTURE_WINDOW_MS = 32_000;
 const CONVERSATION_CAPTURE_BODY_GRACE_MS = 500;
 const CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS = 12_000;
@@ -128,27 +121,6 @@ function headerValue(headers, name) {
   return null;
 }
 
-function isApplicationContextHeader(name) {
-  const lower = name.toLowerCase();
-  return lower === 'chatgpt-account-id'
-    || lower === 'oai-did'
-    || lower === 'oai-language'
-    || lower === 'originator'
-    || lower.startsWith('x-oai-')
-    || lower.startsWith('x-openai-');
-}
-
-function collectApplicationContextHeaders(headers) {
-  if (!headers || typeof headers !== 'object') return {};
-  const selected = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (!isApplicationContextHeader(name)) continue;
-    if (typeof value !== 'string' || value.length === 0 || value.length > 2048) continue;
-    selected[name] = value;
-  }
-  return selected;
-}
-
 function safeBackendUrl(rawUrl) {
   let url;
   try {
@@ -235,131 +207,6 @@ async function executePageGet(tabId, resource, requestHeaders) {
   });
   if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
     throw new Error('main_world_no_result');
-  }
-  return injection[0].result;
-}
-
-async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs, maxRuntimeMs) {
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const startedAt = performance.now();
-  const budgetExpired = () => performance.now() - startedAt >= maxRuntimeMs;
-  const all = [...document.querySelectorAll('nav, aside, [role="navigation"], div')];
-  const scored = [];
-
-  for (const element of all) {
-    if (!(element instanceof HTMLElement)) continue;
-    const style = getComputedStyle(element);
-    if (!['auto', 'scroll'].includes(style.overflowY)) continue;
-    if (element.scrollHeight <= element.clientHeight + 96) continue;
-
-    const chatLinks = element.querySelectorAll('a[href^="/c/"]').length;
-    const projectLinks = element.querySelectorAll('a[href*="/g/"], a[href*="/project"]').length;
-    const navigationLike =
-      element.matches('nav, aside, [role="navigation"]')
-      || element.closest('nav, aside, [role="navigation"]') !== null;
-
-    // The history list can be lazy/virtualized and contain zero conversation links
-    // immediately after reload. Requiring links before scrolling makes recovery circular:
-    // the list must already be loaded before Chatarium is willing to stimulate it.
-    // Navigation-owned scroll surfaces are therefore eligible even at zero links.
-    if (!navigationLike && chatLinks === 0 && projectLinks === 0) continue;
-    const score =
-      (navigationLike ? 10_000 : 0)
-      + Math.min(chatLinks, 100) * 20
-      + Math.min(projectLinks, 50) * 10
-      + Math.min(element.clientHeight, 2_000);
-
-    scored.push({ element, score });
-  }
-
-  scored.sort((left, right) => right.score - left.score);
-
-  const targets = [];
-  for (const candidate of scored) {
-    if (targets.length >= maxTargets) break;
-    if (targets.some((existing) =>
-      existing.contains(candidate.element) || candidate.element.contains(existing))) {
-      continue;
-    }
-    targets.push(candidate.element);
-  }
-
-  const linksBefore = document.querySelectorAll('a[href^="/c/"]').length;
-  let totalSteps = 0;
-  let budgetExhausted = false;
-
-  for (const target of targets) {
-    if (budgetExpired()) {
-      budgetExhausted = true;
-      break;
-    }
-    const originalTop = target.scrollTop;
-    target.scrollTop = 0;
-    target.dispatchEvent(new Event('scroll', { bubbles: true }));
-    await delay(stepDelayMs);
-
-    let stableBottomPasses = 0;
-    for (let step = 0; step < maxSteps; step += 1) {
-      if (budgetExpired()) {
-        budgetExhausted = true;
-        break;
-      }
-      const maxTop = Math.max(0, target.scrollHeight - target.clientHeight);
-      const increment = Math.max(320, Math.floor(target.clientHeight * 0.82));
-      const nextTop = Math.min(maxTop, target.scrollTop + increment);
-      const beforeHeight = target.scrollHeight;
-
-      target.scrollTop = nextTop;
-      target.dispatchEvent(new Event('scroll', { bubbles: true }));
-      totalSteps += 1;
-      await delay(stepDelayMs);
-      if (budgetExpired()) {
-        budgetExhausted = true;
-        break;
-      }
-
-      if (target.scrollTop >= maxTop - 2) {
-        await delay(stepDelayMs * 2);
-        if (budgetExpired()) {
-          budgetExhausted = true;
-          break;
-        }
-        if (target.scrollHeight <= beforeHeight + 2) {
-          stableBottomPasses += 1;
-          if (stableBottomPasses >= 2) break;
-        } else {
-          stableBottomPasses = 0;
-        }
-      }
-    }
-
-    target.scrollTop = Math.min(originalTop, Math.max(0, target.scrollHeight - target.clientHeight));
-    target.dispatchEvent(new Event('scroll', { bubbles: true }));
-  }
-
-  return {
-    ok: true,
-    targets: targets.length,
-    steps: totalSteps,
-    budget_exhausted: budgetExhausted,
-    chat_links_before: linksBefore,
-    chat_links_after: document.querySelectorAll('a[href^="/c/"]').length,
-  };
-}
-
-async function stimulateHistoryUi(tabId) {
-  const injection = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: stimulateHistoryUiInPage,
-    args: [
-      DISCOVERY_STIMULUS_MAX_TARGETS,
-      DISCOVERY_STIMULUS_MAX_STEPS,
-      DISCOVERY_STIMULUS_STEP_DELAY_MS,
-      DISCOVERY_STIMULUS_MAX_RUNTIME_MS,
-    ],
-  });
-  if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
-    throw new Error('history_ui_stimulus_no_result');
   }
   return injection[0].result;
 }
@@ -479,13 +326,6 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     const headers = method === 'Network.requestWillBeSent'
       ? params?.request?.headers
       : params?.headers;
-    const applicationHeaders = collectApplicationContextHeaders(headers);
-    if (Object.keys(applicationHeaders).length > 0) {
-      session.applicationHeaders = {
-        ...session.applicationHeaders,
-        ...applicationHeaders,
-      };
-    }
     const accountId = headerValue(headers, ACCOUNT_HEADER);
     if (validAccountId(accountId)) {
       session.accountId = accountId;
@@ -530,7 +370,6 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   if (!session) return;
   session.detached_reason = typeof reason === 'string' ? reason : 'unknown';
 });
-
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source?.tabId;
@@ -604,7 +443,6 @@ async function discoverHistorySurfaces(command) {
     tabId: tab.id,
     closed: false,
     accountId: null,
-    applicationHeaders: {},
     responses_seen: 0,
     backend_200_seen: 0,
     json_candidates_seen: 0,
@@ -636,53 +474,10 @@ async function discoverHistorySurfaces(command) {
     });
     result.network_enabled = true;
 
-    await chrome.debugger.sendCommand(debuggee, 'Network.setCacheDisabled', {
-      cacheDisabled: true,
-    });
-    result.cache_disabled = true;
-
-    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
-    await chrome.debugger.sendCommand(debuggee, 'Page.reload', {
-      ignoreCache: true,
-    });
+    await chrome.tabs.reload(tab.id);
     result.reload_started = true;
 
-    result.ui_stimulus_attempted = false;
-    result.ui_stimulus_attempts = 0;
-    result.ui_stimulus_targets = 0;
-    result.ui_stimulus_steps = 0;
-    result.ui_stimulus_chat_links_before = 0;
-    result.ui_stimulus_chat_links_after = 0;
-    result.ui_stimulus_error = null;
-
-    await sleep(DISCOVERY_PRE_STIMULUS_MS);
-    result.ui_stimulus_attempted = true;
-    for (let attempt = 0; attempt < DISCOVERY_STIMULUS_MAX_ATTEMPTS; attempt += 1) {
-      result.ui_stimulus_attempts += 1;
-      try {
-        const stimulus = await stimulateHistoryUi(tab.id);
-        if (stimulus && typeof stimulus === 'object') {
-          result.ui_stimulus_targets =
-            Number.isInteger(stimulus.targets) ? stimulus.targets : 0;
-          result.ui_stimulus_steps +=
-            Number.isInteger(stimulus.steps) ? stimulus.steps : 0;
-          result.ui_stimulus_chat_links_before =
-            Number.isInteger(stimulus.chat_links_before) ? stimulus.chat_links_before : 0;
-          result.ui_stimulus_chat_links_after =
-            Number.isInteger(stimulus.chat_links_after) ? stimulus.chat_links_after : 0;
-        }
-        if (result.ui_stimulus_targets > 0) break;
-      } catch (error) {
-        result.ui_stimulus_error =
-          error instanceof Error ? error.message : 'history_ui_stimulus_failed';
-      }
-      if (attempt + 1 < DISCOVERY_STIMULUS_MAX_ATTEMPTS) {
-        await sleep(DISCOVERY_STIMULUS_RETRY_MS);
-      }
-    }
-
-    const remainingWindow = Math.max(0, DISCOVERY_WINDOW_MS - DISCOVERY_PRE_STIMULUS_MS);
-    await sleep(remainingWindow);
+    await sleep(DISCOVERY_WINDOW_MS);
     await sleep(DISCOVERY_BODY_GRACE_MS);
     if (session.bodyTasks.size > 0) {
       await Promise.allSettled([...session.bodyTasks]);
@@ -710,7 +505,6 @@ async function discoverHistorySurfaces(command) {
   result.body_too_large = session.body_too_large;
   result.invalid_json = session.invalid_json;
   result.detached_reason = session.detached_reason;
-  result.application_context_header_count = Object.keys(session.applicationHeaders).length;
 
   const candidates = mergeDiscoveryCandidates(session.candidates);
   result.candidate_count = candidates.length;
