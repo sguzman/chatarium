@@ -257,15 +257,6 @@ pub struct HistoryDiscoveryProof {
     pub body_read_failures: u64,
     pub body_too_large: u64,
     pub invalid_json: u64,
-    pub application_context_header_count: u64,
-    pub cache_disabled: bool,
-    pub ui_stimulus_attempted: bool,
-    pub ui_stimulus_attempts: u64,
-    pub ui_stimulus_targets: u64,
-    pub ui_stimulus_steps: u64,
-    pub ui_stimulus_chat_links_before: u64,
-    pub ui_stimulus_chat_links_after: u64,
-    pub ui_stimulus_error: Option<String>,
     pub request_profile: String,
 }
 
@@ -367,18 +358,6 @@ impl BrowserBridgeProvider {
             body_read_failures: required_u64("body_read_failures")?,
             body_too_large: required_u64("body_too_large")?,
             invalid_json: required_u64("invalid_json")?,
-            application_context_header_count: required_u64("application_context_header_count")?,
-            cache_disabled: required_bool("cache_disabled")?,
-            ui_stimulus_attempted: required_bool("ui_stimulus_attempted")?,
-            ui_stimulus_attempts: required_u64("ui_stimulus_attempts")?,
-            ui_stimulus_targets: required_u64("ui_stimulus_targets")?,
-            ui_stimulus_steps: required_u64("ui_stimulus_steps")?,
-            ui_stimulus_chat_links_before: required_u64("ui_stimulus_chat_links_before")?,
-            ui_stimulus_chat_links_after: required_u64("ui_stimulus_chat_links_after")?,
-            ui_stimulus_error: result
-                .get("ui_stimulus_error")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
             request_profile: request_profile.to_owned(),
         };
         if !proof.chatgpt_tab_found
@@ -1699,15 +1678,6 @@ mod tests {
         assert!(observation.proof.network_enabled);
         assert!(observation.proof.reload_started);
         assert_eq!(observation.proof.responses_seen, 37);
-        assert_eq!(observation.proof.application_context_header_count, 6);
-        assert!(observation.proof.cache_disabled);
-        assert!(observation.proof.ui_stimulus_attempted);
-        assert_eq!(observation.proof.ui_stimulus_attempts, 2);
-        assert_eq!(observation.proof.ui_stimulus_targets, 1);
-        assert_eq!(observation.proof.ui_stimulus_steps, 12);
-        assert_eq!(observation.proof.ui_stimulus_chat_links_before, 8);
-        assert_eq!(observation.proof.ui_stimulus_chat_links_after, 20);
-        assert_eq!(observation.proof.ui_stimulus_error, None);
         assert_eq!(observation.candidates.len(), 1);
         assert_eq!(
             observation.candidates[0].path,
