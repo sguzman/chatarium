@@ -1,50 +1,259 @@
-# Codex QA workstation
+# Codex-owned QA workstation
 
-Chatarium's Codex browser QA target is Playwright-managed bundled Chromium. It is intentionally separate from the principal's Microsoft Edge profile and from the retired Playwright extension-mode setup.
+This document defines the operating contract for Chatarium development after the 2026-10-03/04 browser-integration failure cycle.
 
-## Canonical locations
+The principal is **not** the project's manual QA runner. Routine engineering must not depend on the principal repeatedly pulling, launching, clicking, watching logs, copying output, taking screenshots, reloading extensions, or retrying browser flows.
 
-- Persistent QA profile: `~/.local/share/chatarium-qa-browser/`
-- Human/Codex launcher: `~/.local/bin/chatarium-qa-browser`
-- Browser tooling: `tools/qa-browser/`
-- Chromium extension source: `browser/edge-bridge/`
-- MCP JSON config: `tools/qa-browser/mcp-config.json`
+## Canonical browser decision
 
-The QA profile is created empty by Playwright. It must never be seeded from Edge, Chrome, or another browser profile, and it must never be committed.
+As of 2026-10-04, Chatarium browser QA uses **Playwright-managed bundled Chromium**.
 
-## Setup and validation
+This supersedes the earlier plan to automate a UI-created Microsoft Edge QA profile.
 
-From the repository root:
+The old Edge approach was rejected because a second Edge profile under the same Edge user-data root did not provide the hard isolation that had been assumed. During a Playwright extension-mode control proof, the principal's personal Edge window displayed the browser debugging indicator even though the Playwright Extension was installed only in the QA profile. That was enough to reject profile-only isolation.
 
-```sh
-pnpm --dir tools/qa-browser install
-pnpm --dir tools/qa-browser exec playwright install chromium
-pnpm --dir tools/qa-browser run validate
+The canonical boundary is now:
+
+```text
+personal Microsoft Edge
+  ~/.config/microsoft-edge/
+  NO Playwright extension
+  NO MCP attachment
+  NO CDP QA endpoint
+  NO Chatarium automation
+  ↓ completely out of scope
+
+Chatarium QA browser
+  Playwright-managed bundled Chromium
+  ~/.local/share/chatarium-qa-browser/
+  Chatarium MV3 bridge loaded from the repository
+  persistent ChatGPT QA authentication
+  Codex/Playwright control
 ```
 
-`validate.mjs` launches a headed persistent context, reports Playwright's resolved executable and browser version, opens a disposable `example.com` page, observes the extension MV3 service worker, reads its manifest version/ID, and closes the context. It does not inspect or launch Microsoft Edge.
+Do not reintroduce personal Edge into the QA path for convenience.
 
-The launcher opens the same headed persistent context:
+## Browser ownership
 
-```sh
+Playwright owns the QA browser binary/runtime dependency. The user does not need an Arch `chromium` package merely to satisfy Chatarium QA.
+
+Playwright's Chromium installation/cache is tooling state. The durable browser profile is separately fixed at:
+
+```text
+~/.local/share/chatarium-qa-browser/
+```
+
+That profile is private local state. It may contain the QA ChatGPT login, cookies, local storage, IndexedDB, extension state, and other browser data. Never commit it, copy it into the repository, or seed it from the principal's personal Edge profile.
+
+A persistent browser profile may only be opened by one Chromium process at a time. QA tooling and the manual launcher must detect/reuse or cleanly report that lock rather than creating ambiguous duplicate instances.
+
+## Manual launcher
+
+Codex must provide and maintain a durable launcher:
+
+```text
+~/.local/bin/chatarium-qa-browser
+```
+
+The operator-facing command is therefore simply:
+
+```text
 chatarium-qa-browser
 ```
 
-It uses an OS lock to reject a competing launcher for the same profile and prints a diagnostic when the Playwright browser or extension path is unavailable.
+It opens the same headed Playwright-managed Chromium profile used by automated QA.
 
-## MCP configuration
+The launcher exists for unavoidable human identity actions such as initial ChatGPT login, MFA, CAPTCHA, or account consent. It is **not** a manual QA surface.
 
-The active Codex MCP entry must use:
+The launcher must:
+
+- resolve the correct Playwright-managed Chromium executable instead of hard-coding a versioned cache path;
+- use `~/.local/share/chatarium-qa-browser/`;
+- load the current Chatarium MV3 bridge from the repository when browser flags are part of the chosen harness;
+- avoid the principal's Edge/Chrome profiles entirely;
+- fail clearly or reuse the existing QA process if the profile is already locked.
+
+## Playwright control mode
+
+Do **not** use Playwright browser-extension mode for the canonical Chatarium QA browser.
+
+The canonical mode is a Playwright-launched persistent Chromium context with a dedicated user-data directory. Playwright MCP supports persistent state and a custom `--user-data-dir`; extension-specific options such as `--extension`, `--profile-dir-name`, and `PLAYWRIGHT_MCP_EXTENSION_TOKEN` belong only to the retired attach-to-existing-browser experiment.
+
+The operational MCP configuration should use Playwright's Chromium browser plus the dedicated QA user-data directory. If extension launch arguments require an advanced Playwright config file or a dedicated launcher/harness, Codex owns that configuration.
+
+The MV3 bridge itself is Chromium-compatible even though the repository directory/component name remains `edge-bridge`.
+
+For extension testing, use Playwright's bundled Chromium because branded Google Chrome and Microsoft Edge no longer reliably support the command-line side-loading flags required for unpacked-extension automation.
+
+## Extension lifecycle
+
+The Chatarium MV3 bridge must be loaded from the repository automatically when QA Chromium starts.
+
+The target source is:
 
 ```text
-@playwright/mcp
---config=/home/sguzman/Code/Source/Rust/chatarium/tools/qa-browser/mcp-config.json
+browser/edge-bridge/
 ```
 
-The JSON selects `browserName: "chromium"`, the persistent QA profile, headed mode, and the current repository extension. It must not contain `--browser=msedge`, `--extension`, `--profile-dir-name`, or `PLAYWRIGHT_MCP_EXTENSION_TOKEN`.
+The historical component name `Edge Bridge` is retained for source/history continuity; it does **not** mean Edge is the QA browser.
 
-The executable path is deliberately not hard-coded: the installed Playwright package resolves its own managed Chromium revision. If this repository moves, regenerate the absolute extension paths in the local MCP JSON and launcher setup rather than pointing at a browser profile from another product.
+The automated browser harness should launch persistent Chromium with the repository extension directory using the supported Chromium extension-loading arguments. This makes source update + browser restart the deterministic extension reload path.
 
-## Safety boundary
+Do not create a permanent dependency on:
 
-This setup never reads `~/.config/microsoft-edge/`, attaches to Edge, or uses CDP against Edge. Login/MFA/account consent may occur in the dedicated Chromium profile only. The launcher is not a substitute for automated regression validation.
+- `edge://extensions`;
+- manual Load unpacked;
+- manual Reload;
+- copying extension files into a browser profile;
+- installing the Playwright Extension into a personal browser.
+
+Codex verifies the running bridge version/service worker itself.
+
+## Authentication
+
+Authentication belongs to the dedicated QA Chromium profile.
+
+The principal may perform the initial interactive ChatGPT login in `chatarium-qa-browser` and may satisfy later MFA/CAPTCHA/account-consent challenges when genuinely required.
+
+Do not migrate authentication by copying cookies, browser databases, or profile directories from Edge.
+
+Once authenticated, the persistent QA profile is reused across Codex sessions. Authentication failure is reported as an identity boundary, not converted into repeated manual QA.
+
+Example blocker:
+
+```text
+AUTH/CONSENT BLOCKED
+Needed: sign in to ChatGPT in chatarium-qa-browser
+Testing completed by Codex: no operator QA pending
+Resume point: <exact machine state>
+```
+
+## Ownership contract
+
+For a normal Chatarium engineering goal, Codex owns the whole loop:
+
+```text
+git sync
+  ↓
+inspect/reproduce
+  ↓
+edit
+  ↓
+build
+  ↓
+ensure Playwright Chromium dependency is present
+  ↓
+launch/reuse dedicated QA Chromium
+  ↓
+load/verify current Chatarium MV3 bridge
+  ↓
+launch/restart Chatarium or QA harness
+  ↓
+exercise browser flow
+  ↓
+collect logs / DOM / console / screenshots / traces
+  ↓
+diagnose
+  ↓
+edit again
+  ↓
+repeat until acceptance criteria pass
+  ↓
+run repository gate
+  ↓
+git status/diff review
+  ↓
+commit
+  ↓
+push
+  ↓
+report exact head + evidence
+```
+
+The principal performs no intermediate regression steps.
+
+## Shell / terminal
+
+Codex uses its ordinary local shell for Git, Cargo/pnpm, browser dependency bootstrap, browser launch/cleanup, Chatarium launch/restart, log capture, regression suites, artifact generation, and temporary test state.
+
+Do not ask the principal to run a command that Codex can run itself.
+
+## Native Chatarium GUI
+
+Playwright cannot operate egui. That does **not** restore a human-QA requirement.
+
+Order of preference for native application control:
+
+1. CLI/test harness;
+2. typed localhost/debug/test RPC;
+3. deterministic test-only command or fixture;
+4. accessibility/native automation;
+5. compositor-level automation as a last automated fallback.
+
+If a native action is repeatedly needed for regression testing, add a programmatic test surface rather than making the principal click it.
+
+## Evidence rules
+
+A Codex QA run should collect its own machine evidence, including whichever of these are relevant:
+
+- exact Git head;
+- Playwright/Chromium version;
+- QA user-data directory;
+- extension version/service-worker identity;
+- browser console errors;
+- browser screenshot;
+- DOM/accessibility snapshot;
+- CDP/network summary;
+- terminal logs;
+- generated test artifacts;
+- local cache/journal proof;
+- repository-gate exit status.
+
+Private browser/session material is never committed.
+
+## Git completion contract
+
+Codex owns Git hygiene for the goal: sync safely, inspect status/diff, run the required gate, exclude private QA state, commit directly to the requested branch, push, and verify the remote head.
+
+A task is not complete merely because code was edited locally.
+
+## No-operator regression rule
+
+Routine handoffs such as "pull this commit", "reload the extension", "run this command", "click this conversation", "copy the logs", "take a screenshot", "open DevTools", or "try again" are prohibited.
+
+If Codex cannot perform one, the next engineering task is to remove that limitation or report a precise machine/environment blocker.
+
+## Acceptance target
+
+The next browser-integration automation milestone is to establish this Chromium control plane end to end:
+
+1. install/resolve the Playwright-managed Chromium dependency;
+2. create `~/.local/share/chatarium-qa-browser/`;
+3. create `chatarium-qa-browser`;
+4. launch headed QA Chromium;
+5. load the current `browser/edge-bridge/` build automatically;
+6. permit one-time interactive ChatGPT login only if required;
+7. prove Codex can navigate, inspect DOM/accessibility, read console state, take screenshots, and exercise the bridge;
+8. prove the principal's Edge processes/data are not browser automation targets;
+9. run the Chatarium history-discovery acceptance flow without egui clicking where possible;
+10. collect evidence, iterate, commit, and push without operator regression labor.
+
+## Completion report
+
+A browser-facing Codex final report should include:
+
+```text
+HEAD: <sha>
+PUSHED: yes/no
+QA BROWSER: Playwright Chromium
+QA PROFILE: ~/.local/share/chatarium-qa-browser/
+BRIDGE VERSION: <version>
+LIVE ACCEPTANCE: pass/fail/blocker
+AUTOMATED EVIDENCE: <short summary>
+PERSONAL EDGE TOUCHED: no/yes
+REPOSITORY GATE: pass/fail
+CHANGES: <short summary>
+REMAINING BLOCKER: <none or exact machine/identity boundary>
+```
+
+No human QA checklist is included unless the principal explicitly asks for one.

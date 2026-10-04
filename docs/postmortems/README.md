@@ -1,5 +1,7 @@
 # Postmortems
 
+> Historical browser names and workflows inside incident reports describe what happened at the time. Current browser QA policy is defined by `docs/CODEX_QA_WORKSTATION.md` and uses Playwright-managed bundled Chromium; personal Microsoft Edge is outside the automation boundary.
+
 Postmortems are permanent engineering inputs, not blame-free summaries that disappear after an incident. Each postmortem must record:
 
 - what the product target was;

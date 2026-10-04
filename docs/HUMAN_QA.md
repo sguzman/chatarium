@@ -1,6 +1,8 @@
 # Human QA protocol
 
-Chatarium assumes human testing should be explicit, reproducible, low-risk, and **rare**. A request such as "try it" is not sufficient, but neither is turning the operator into a manual CI runner.
+> **Current project override:** routine operator QA is disabled. Codex owns browser/application validation end to end under `docs/CODEX_QA_WORKSTATION.md`. The canonical browser is Playwright-managed bundled Chromium with persistent state under `~/.local/share/chatarium-qa-browser/`; personal Microsoft Edge is not a QA target. The principal is not asked to pull, launch, reload extensions, click through regression flows, watch logs, copy output, take screenshots, or rerun speculative tests. The remaining human-only exception is a true identity/consent boundary such as CAPTCHA, MFA, or an explicit browser/account security confirmation that automation cannot lawfully or technically perform.
+
+Chatarium assumes any unavoidable human action should be explicit, reproducible, low-risk, and **exceptional**. A request such as "try it" is not sufficient, and turning the operator into a manual CI/integration runner is prohibited.
 
 ## Automation-first rule
 
@@ -15,9 +17,11 @@ Before asking for human QA, automate everything that does not intrinsically requ
 - diffing and structural inspection;
 - cleanup where it is safe to automate.
 
-Human QA exists for observations Chatarium cannot yet obtain itself, such as interacting with the current ChatGPT UI, confirming a visual state, or producing a browser/network artifact that requires an authenticated human session.
+The existence of an authenticated browser session is not, by itself, a reason to require human QA. Codex should control the dedicated Playwright-managed QA Chromium profile at `~/.local/share/chatarium-qa-browser/` and collect its own logs, screenshots, DOM/console evidence, and network diagnostics. The principal's normal Microsoft Edge profiles are outside the automation boundary.
 
-**Do not push mechanical setup or diagnostic labor onto the operator merely because it is convenient for development.**
+If Chatarium cannot yet obtain a browser or native-app observation automatically, that is normally missing test infrastructure. Build the harness, test hook, MCP connection, debug surface, or automation needed to obtain it.
+
+**Do not push mechanical setup, browser interaction, Git operation, evidence collection, or diagnostic labor onto the operator merely because it is convenient for development.**
 
 ## Human burden budget
 

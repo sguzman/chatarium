@@ -23,15 +23,11 @@ const ACCOUNT_KEY_PREFIX = 'chatarium-account-context:';
 const FETCH_PROFILE = '2026-10-03.001';
 const AUTH_PROFILE = 'chatgpt-me-v1';
 const DISCOVERY_PROFILE = 'cdp-history-discovery-v1';
+const FRESH_DISCOVERY_PROFILE = 'cdp-history-fresh-tab-v1';
+const FRESH_DISCOVERY_ROUTE = 'https://chatgpt.com/';
 const DEBUGGER_PROTOCOL_VERSION = '1.3';
 const DISCOVERY_WINDOW_MS = 8_000;
-const DISCOVERY_PRE_STIMULUS_MS = 1_750;
 const DISCOVERY_BODY_GRACE_MS = 500;
-const DISCOVERY_STIMULUS_MAX_TARGETS = 3;
-const DISCOVERY_STIMULUS_MAX_STEPS = 28;
-const DISCOVERY_STIMULUS_STEP_DELAY_MS = 120;
-const DISCOVERY_STIMULUS_MAX_ATTEMPTS = 4;
-const DISCOVERY_STIMULUS_RETRY_MS = 750;
 const CONVERSATION_CAPTURE_WINDOW_MS = 32_000;
 const CONVERSATION_CAPTURE_BODY_GRACE_MS = 500;
 const CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS = 12_000;
@@ -127,27 +123,6 @@ function headerValue(headers, name) {
   return null;
 }
 
-function isApplicationContextHeader(name) {
-  const lower = name.toLowerCase();
-  return lower === 'chatgpt-account-id'
-    || lower === 'oai-did'
-    || lower === 'oai-language'
-    || lower === 'originator'
-    || lower.startsWith('x-oai-')
-    || lower.startsWith('x-openai-');
-}
-
-function collectApplicationContextHeaders(headers) {
-  if (!headers || typeof headers !== 'object') return {};
-  const selected = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (!isApplicationContextHeader(name)) continue;
-    if (typeof value !== 'string' || value.length === 0 || value.length > 2048) continue;
-    selected[name] = value;
-  }
-  return selected;
-}
-
 function safeBackendUrl(rawUrl) {
   let url;
   try {
@@ -238,108 +213,137 @@ async function executePageGet(tabId, resource, requestHeaders) {
   return injection[0].result;
 }
 
-async function stimulateHistoryUiInPage(maxTargets, maxSteps, stepDelayMs) {
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const all = [...document.querySelectorAll('nav, aside, [role="navigation"], div')];
-  const scored = [];
+async function discoverHistorySurfacesFreshTab(command) {
+  const result = baseResult(command, FRESH_DISCOVERY_PROFILE);
+  result.capture_tab_created = false;
+  result.navigation_started = false;
 
-  for (const element of all) {
-    if (!(element instanceof HTMLElement)) continue;
-    const style = getComputedStyle(element);
-    if (!['auto', 'scroll'].includes(style.overflowY)) continue;
-    if (element.scrollHeight <= element.clientHeight + 96) continue;
-
-    const chatLinks = element.querySelectorAll('a[href^="/c/"]').length;
-    const projectLinks = element.querySelectorAll('a[href*="/g/"], a[href*="/project"]').length;
-    const navigationLike =
-      element.matches('nav, aside, [role="navigation"]')
-      || element.closest('nav, aside, [role="navigation"]') !== null;
-
-    // The history list can be lazy/virtualized and contain zero conversation links
-    // immediately after reload. Requiring links before scrolling makes recovery circular:
-    // the list must already be loaded before Chatarium is willing to stimulate it.
-    // Navigation-owned scroll surfaces are therefore eligible even at zero links.
-    if (!navigationLike && chatLinks === 0 && projectLinks === 0) continue;
-    const score =
-      (navigationLike ? 10_000 : 0)
-      + Math.min(chatLinks, 100) * 20
-      + Math.min(projectLinks, 50) * 10
-      + Math.min(element.clientHeight, 2_000);
-
-    scored.push({ element, score });
+  const sourceTab = await findChatGptTab();
+  if (!sourceTab) {
+    result.error = 'chatgpt_tab_not_found';
+    return result;
   }
+  result.chatgpt_tab_found = true;
+  const sourceAccountId = await accountContextForTab(sourceTab.id);
 
-  scored.sort((left, right) => right.score - left.score);
+  let captureTab = null;
+  let attached = false;
+  let session = null;
 
-  const targets = [];
-  for (const candidate of scored) {
-    if (targets.length >= maxTargets) break;
-    if (targets.some((existing) =>
-      existing.contains(candidate.element) || candidate.element.contains(existing))) {
-      continue;
+  try {
+    captureTab = await chrome.tabs.create({
+      active: false,
+      url: 'about:blank',
+      ...(Number.isInteger(sourceTab.windowId) ? { windowId: sourceTab.windowId } : {}),
+    });
+    if (!captureTab || !Number.isInteger(captureTab.id)) {
+      result.error = 'fresh_history_tab_creation_failed';
+      return result;
     }
-    targets.push(candidate.element);
-  }
+    result.capture_tab_created = true;
 
-  const linksBefore = document.querySelectorAll('a[href^="/c/"]').length;
-  let totalSteps = 0;
+    const debuggee = { tabId: captureTab.id };
+    if (activeDiscoveries.has(captureTab.id)) {
+      result.error = 'fresh_history_discovery_already_active';
+      return result;
+    }
+    session = {
+      debuggee,
+      tabId: captureTab.id,
+      closed: false,
+      accountId: null,
+      responses_seen: 0,
+      backend_200_seen: 0,
+      json_candidates_seen: 0,
+      body_read_failures: 0,
+      body_too_large: 0,
+      invalid_json: 0,
+      detached_reason: null,
+      pendingCandidates: new Map(),
+      bodyTasks: new Set(),
+      candidates: [],
+    };
+    activeDiscoveries.set(captureTab.id, session);
 
-  for (const target of targets) {
-    const originalTop = target.scrollTop;
-    target.scrollTop = 0;
-    target.dispatchEvent(new Event('scroll', { bubbles: true }));
-    await delay(stepDelayMs);
+    await chrome.debugger.attach(debuggee, DEBUGGER_PROTOCOL_VERSION);
+    attached = true;
+    result.debugger_attached = true;
 
-    let stableBottomPasses = 0;
-    for (let step = 0; step < maxSteps; step += 1) {
-      const maxTop = Math.max(0, target.scrollHeight - target.clientHeight);
-      const increment = Math.max(320, Math.floor(target.clientHeight * 0.82));
-      const nextTop = Math.min(maxTop, target.scrollTop + increment);
-      const beforeHeight = target.scrollHeight;
+    await chrome.debugger.sendCommand(debuggee, 'Network.enable', {
+      maxTotalBufferSize: 16 * 1024 * 1024,
+      maxResourceBufferSize: MAX_RESPONSE_BYTES,
+      maxPostDataSize: 0,
+    });
+    result.network_enabled = true;
 
-      target.scrollTop = nextTop;
-      target.dispatchEvent(new Event('scroll', { bubbles: true }));
-      totalSteps += 1;
-      await delay(stepDelayMs);
+    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
+    await chrome.debugger.sendCommand(debuggee, 'Page.navigate', {
+      url: FRESH_DISCOVERY_ROUTE,
+    });
+    result.navigation_started = true;
 
-      if (target.scrollTop >= maxTop - 2) {
-        await delay(stepDelayMs * 2);
-        if (target.scrollHeight <= beforeHeight + 2) {
-          stableBottomPasses += 1;
-          if (stableBottomPasses >= 2) break;
-        } else {
-          stableBottomPasses = 0;
-        }
+    await sleep(DISCOVERY_WINDOW_MS);
+    await sleep(DISCOVERY_BODY_GRACE_MS);
+    if (session.bodyTasks.size > 0) {
+      await Promise.allSettled([...session.bodyTasks]);
+    }
+  } catch (error) {
+    result.error = error instanceof Error ? error.message : 'cdp_fresh_history_discovery_failed';
+  } finally {
+    if (session !== null) {
+      session.closed = true;
+      activeDiscoveries.delete(session.tabId);
+    }
+
+    result.account_context = (session?.accountId ?? sourceAccountId) !== null;
+    result.responses_seen = session?.responses_seen ?? 0;
+    result.backend_http_200_seen = session?.backend_200_seen ?? 0;
+    result.json_candidates_seen = session?.json_candidates_seen ?? 0;
+    result.body_read_failures = session?.body_read_failures ?? 0;
+    result.body_too_large = session?.body_too_large ?? 0;
+    result.invalid_json = session?.invalid_json ?? 0;
+    result.detached_reason = session?.detached_reason ?? null;
+
+    const candidates = mergeDiscoveryCandidates(session?.candidates ?? []);
+    result.candidate_count = candidates.length;
+    result.candidates = candidates;
+
+    if (attached && captureTab && Number.isInteger(captureTab.id)) {
+      try {
+        await chrome.debugger.detach({ tabId: captureTab.id });
+      } catch {
+        // Navigation, browser shutdown, or tab teardown may already have detached the debugger.
       }
     }
-
-    target.scrollTop = Math.min(originalTop, Math.max(0, target.scrollHeight - target.clientHeight));
-    target.dispatchEvent(new Event('scroll', { bubbles: true }));
+    if (captureTab && Number.isInteger(captureTab.id)) {
+      try {
+        await chrome.tabs.remove(captureTab.id);
+      } catch {
+        // The temporary discovery tab may already be gone.
+      }
+    }
   }
 
-  return {
-    ok: true,
-    targets: targets.length,
-    steps: totalSteps,
-    chat_links_before: linksBefore,
-    chat_links_after: document.querySelectorAll('a[href^="/c/"]').length,
-  };
-}
-
-async function stimulateHistoryUi(tabId) {
-  const injection = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: stimulateHistoryUiInPage,
-    args: [
-      DISCOVERY_STIMULUS_MAX_TARGETS,
-      DISCOVERY_STIMULUS_MAX_STEPS,
-      DISCOVERY_STIMULUS_STEP_DELAY_MS,
-    ],
-  });
-  if (!Array.isArray(injection) || injection.length !== 1 || !injection[0]) {
-    throw new Error('history_ui_stimulus_no_result');
+  if (result.error) return result;
+  if (
+    !result.capture_tab_created
+    || !result.debugger_attached
+    || !result.network_enabled
+    || !result.navigation_started
+  ) {
+    result.error = 'cdp_fresh_history_proof_incomplete';
+    return result;
   }
-  return injection[0].result;
+  if (result.responses_seen === 0) {
+    result.error = 'cdp_fresh_history_no_network_responses';
+    return result;
+  }
+
+  result.ok = true;
+  result.discovery = result.candidate_count > 0
+    ? 'candidates_observed'
+    : 'no_candidate_surface_observed';
+  return result;
 }
 
 async function probeAuthentication(command) {
@@ -457,13 +461,6 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     const headers = method === 'Network.requestWillBeSent'
       ? params?.request?.headers
       : params?.headers;
-    const applicationHeaders = collectApplicationContextHeaders(headers);
-    if (Object.keys(applicationHeaders).length > 0) {
-      session.applicationHeaders = {
-        ...session.applicationHeaders,
-        ...applicationHeaders,
-      };
-    }
     const accountId = headerValue(headers, ACCOUNT_HEADER);
     if (validAccountId(accountId)) {
       session.accountId = accountId;
@@ -508,7 +505,6 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   if (!session) return;
   session.detached_reason = typeof reason === 'string' ? reason : 'unknown';
 });
-
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source?.tabId;
@@ -582,7 +578,6 @@ async function discoverHistorySurfaces(command) {
     tabId: tab.id,
     closed: false,
     accountId: null,
-    applicationHeaders: {},
     responses_seen: 0,
     backend_200_seen: 0,
     json_candidates_seen: 0,
@@ -614,53 +609,10 @@ async function discoverHistorySurfaces(command) {
     });
     result.network_enabled = true;
 
-    await chrome.debugger.sendCommand(debuggee, 'Network.setCacheDisabled', {
-      cacheDisabled: true,
-    });
-    result.cache_disabled = true;
-
-    await chrome.debugger.sendCommand(debuggee, 'Page.enable');
-    await chrome.debugger.sendCommand(debuggee, 'Page.reload', {
-      ignoreCache: true,
-    });
+    await chrome.tabs.reload(tab.id);
     result.reload_started = true;
 
-    result.ui_stimulus_attempted = false;
-    result.ui_stimulus_attempts = 0;
-    result.ui_stimulus_targets = 0;
-    result.ui_stimulus_steps = 0;
-    result.ui_stimulus_chat_links_before = 0;
-    result.ui_stimulus_chat_links_after = 0;
-    result.ui_stimulus_error = null;
-
-    await sleep(DISCOVERY_PRE_STIMULUS_MS);
-    result.ui_stimulus_attempted = true;
-    for (let attempt = 0; attempt < DISCOVERY_STIMULUS_MAX_ATTEMPTS; attempt += 1) {
-      result.ui_stimulus_attempts += 1;
-      try {
-        const stimulus = await stimulateHistoryUi(tab.id);
-        if (stimulus && typeof stimulus === 'object') {
-          result.ui_stimulus_targets =
-            Number.isInteger(stimulus.targets) ? stimulus.targets : 0;
-          result.ui_stimulus_steps +=
-            Number.isInteger(stimulus.steps) ? stimulus.steps : 0;
-          result.ui_stimulus_chat_links_before =
-            Number.isInteger(stimulus.chat_links_before) ? stimulus.chat_links_before : 0;
-          result.ui_stimulus_chat_links_after =
-            Number.isInteger(stimulus.chat_links_after) ? stimulus.chat_links_after : 0;
-        }
-        if (result.ui_stimulus_targets > 0) break;
-      } catch (error) {
-        result.ui_stimulus_error =
-          error instanceof Error ? error.message : 'history_ui_stimulus_failed';
-      }
-      if (attempt + 1 < DISCOVERY_STIMULUS_MAX_ATTEMPTS) {
-        await sleep(DISCOVERY_STIMULUS_RETRY_MS);
-      }
-    }
-
-    const remainingWindow = Math.max(0, DISCOVERY_WINDOW_MS - DISCOVERY_PRE_STIMULUS_MS);
-    await sleep(remainingWindow);
+    await sleep(DISCOVERY_WINDOW_MS);
     await sleep(DISCOVERY_BODY_GRACE_MS);
     if (session.bodyTasks.size > 0) {
       await Promise.allSettled([...session.bodyTasks]);
@@ -688,7 +640,6 @@ async function discoverHistorySurfaces(command) {
   result.body_too_large = session.body_too_large;
   result.invalid_json = session.invalid_json;
   result.detached_reason = session.detached_reason;
-  result.application_context_header_count = Object.keys(session.applicationHeaders).length;
 
   const candidates = mergeDiscoveryCandidates(session.candidates);
   result.candidate_count = candidates.length;
@@ -1022,6 +973,8 @@ async function execute(command) {
       return probeAuthentication(command);
     case 'discover_history_surfaces':
       return discoverHistorySurfaces(command);
+    case 'discover_history_surfaces_fresh_tab':
+      return discoverHistorySurfacesFreshTab(command);
     case 'fetch_conversation':
       return fetchConversation(command);
     case 'list_conversations':

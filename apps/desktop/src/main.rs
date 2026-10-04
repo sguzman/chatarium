@@ -147,6 +147,14 @@ enum LiveMirrorFetchNotice {
     HistoryDiscoveryLoaded {
         observation: account_bridge::HistoryDiscoveryObservation,
     },
+    HistoryFreshTabDiscoveryLoaded {
+        primary: account_bridge::HistoryDiscoveryObservation,
+        fallback: account_bridge::FreshTabHistoryDiscoveryObservation,
+    },
+    HistoryFreshTabDiscoveryFailed {
+        primary: account_bridge::HistoryDiscoveryObservation,
+        error: String,
+    },
     HistoryDiscoveryFailed {
         error: String,
     },
@@ -580,6 +588,7 @@ impl ChatariumApp {
 
         let notices = self.live_mirror_fetch_tx.clone();
         let repaint = repaint.clone();
+        let durable_history_items_at_start = self.remote_conversation_catalog.len();
         self.history_list_pending = true;
         self.history_bridge_proven = false;
         self.account_bridge_status = "listener ready · checking Edge extension…".to_owned();
@@ -626,7 +635,7 @@ impl ChatariumApp {
 
                 diagnostics::info(
                     "history",
-                    "authenticated; starting bounded CDP reload + sidebar stimulus discovery",
+                    "authenticated; starting frozen 0.3 bounded CDP reload discovery",
                 );
                 match provider.discover_history_surfaces() {
                     Ok(observation) => {
@@ -639,16 +648,11 @@ impl ChatariumApp {
                         diagnostics::info(
                             "history",
                             format!(
-                                "discovery complete: candidates={} unique-items={} responses={} backend-200={} stimulus-attempts={} targets={} steps={} links={}->{}",
+                                "discovery complete: candidates={} unique-items={} responses={} backend-200={}",
                                 observation.candidates.len(),
                                 unique_items,
                                 observation.proof.responses_seen,
                                 observation.proof.backend_http_200_seen,
-                                observation.proof.ui_stimulus_attempts,
-                                observation.proof.ui_stimulus_targets,
-                                observation.proof.ui_stimulus_steps,
-                                observation.proof.ui_stimulus_chat_links_before,
-                                observation.proof.ui_stimulus_chat_links_after,
                             ),
                         );
                         for candidate in &observation.candidates {
@@ -665,8 +669,59 @@ impl ChatariumApp {
                                 ),
                             );
                         }
-                        let _ = notices
-                            .send(LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation });
+                        if !should_run_fresh_tab_history_recovery(
+                            unique_items,
+                            durable_history_items_at_start,
+                        ) {
+                            let _ = notices.send(
+                                LiveMirrorFetchNotice::HistoryDiscoveryLoaded { observation },
+                            );
+                        } else {
+                            diagnostics::warn(
+                                "history",
+                                "frozen 0.3 discovery observed zero conversations with no durable cache; starting isolated fresh-tab recovery",
+                            );
+                            match provider.discover_history_surfaces_fresh_tab() {
+                                Ok(fallback) => {
+                                    let fallback_unique_items = fallback
+                                        .candidates
+                                        .iter()
+                                        .flat_map(|candidate| {
+                                            candidate.items.iter().map(|item| item.id.as_str())
+                                        })
+                                        .collect::<HashSet<_>>()
+                                        .len();
+                                    diagnostics::info(
+                                        "history",
+                                        format!(
+                                            "fresh-tab recovery complete: candidates={} unique-items={} responses={} backend-200={}",
+                                            fallback.candidates.len(),
+                                            fallback_unique_items,
+                                            fallback.proof.responses_seen,
+                                            fallback.proof.backend_http_200_seen,
+                                        ),
+                                    );
+                                    let _ = notices.send(
+                                        LiveMirrorFetchNotice::HistoryFreshTabDiscoveryLoaded {
+                                            primary: observation,
+                                            fallback,
+                                        },
+                                    );
+                                }
+                                Err(error) => {
+                                    diagnostics::error(
+                                        "history",
+                                        format!("fresh-tab recovery failed: {error}"),
+                                    );
+                                    let _ = notices.send(
+                                        LiveMirrorFetchNotice::HistoryFreshTabDiscoveryFailed {
+                                            primary: observation,
+                                            error: error.to_string(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
                     }
                     Err(error) => {
                         diagnostics::error("history", format!("discovery failed: {error}"));
@@ -1053,6 +1108,112 @@ impl ChatariumApp {
                             best_surface,
                         );
                     }
+                }
+                LiveMirrorFetchNotice::HistoryFreshTabDiscoveryLoaded { primary, fallback } => {
+                    diagnostics::info(
+                        "history",
+                        format!(
+                            "UI received fresh-tab recovery: primary-responses={} fallback-surfaces={} fallback-responses={} fallback-backend-200={}",
+                            primary.proof.responses_seen,
+                            fallback.candidates.len(),
+                            fallback.proof.responses_seen,
+                            fallback.proof.backend_http_200_seen,
+                        ),
+                    );
+                    self.history_list_pending = false;
+                    self.remote_conversation_total = None;
+
+                    let previously_observed = self.remote_conversation_catalog.len();
+                    let candidate_count = fallback.candidates.len();
+                    let mut best_surface = None::<(String, u64)>;
+                    for candidate in &fallback.candidates {
+                        if best_surface
+                            .as_ref()
+                            .is_none_or(|(_, count)| candidate.conversation_count > *count)
+                        {
+                            best_surface =
+                                Some((candidate.path.clone(), candidate.conversation_count));
+                        }
+                    }
+                    let (catalog, current_pass_observed) = merge_history_discovery_catalog(
+                        std::mem::take(&mut self.remote_conversation_catalog),
+                        &fallback.candidates,
+                    );
+                    self.remote_conversation_catalog = catalog;
+
+                    let best_surface = best_surface
+                        .map(|(path, count)| format!("{path} ({count})"))
+                        .unwrap_or_else(|| "none".to_owned());
+
+                    if current_pass_observed == 0 {
+                        diagnostics::warn(
+                            "history",
+                            format!(
+                                "fresh-tab recovery completed with zero items; retained-items={previously_observed}"
+                            ),
+                        );
+                        self.history_bridge_proven = false;
+                        self.account_bridge_status = format!(
+                            "DISCOVERY INCOMPLETE: primary={} · fresh-tab={} · candidates={} · current-pass-items=0 · retained-items={} · best-surface={} · coverage=unknown",
+                            history_discovery_proof_label(&primary.proof),
+                            fresh_tab_history_discovery_proof_label(&fallback.proof),
+                            candidate_count,
+                            previously_observed,
+                            best_surface,
+                        );
+                    } else {
+                        diagnostics::info(
+                            "history",
+                            format!(
+                                "fresh-tab history catalog ready: current-pass-items={current_pass_observed} accumulated-items={} best-surface={best_surface}",
+                                self.remote_conversation_catalog.len()
+                            ),
+                        );
+                        let cache_path = remote_history_cache_path(&self.journal_path);
+                        match persist_remote_history_cache(
+                            &cache_path,
+                            &self.remote_conversation_catalog,
+                        ) {
+                            Ok(()) => diagnostics::info(
+                                "history",
+                                format!(
+                                    "discovered history cache updated: {} items at {}",
+                                    self.remote_conversation_catalog.len(),
+                                    cache_path.display()
+                                ),
+                            ),
+                            Err(error) => diagnostics::warn(
+                                "history",
+                                format!("failed to update discovered history cache: {error}"),
+                            ),
+                        }
+                        self.history_bridge_proven = true;
+                        self.account_bridge_status = format!(
+                            "DISCOVERED VIA FRESH TAB: primary={} · fresh-tab={} · candidates={} · current-pass-items={} · accumulated-items={} · best-surface={} · coverage=unknown",
+                            history_discovery_proof_label(&primary.proof),
+                            fresh_tab_history_discovery_proof_label(&fallback.proof),
+                            candidate_count,
+                            current_pass_observed,
+                            self.remote_conversation_catalog.len(),
+                            best_surface,
+                        );
+                    }
+                }
+                LiveMirrorFetchNotice::HistoryFreshTabDiscoveryFailed { primary, error } => {
+                    diagnostics::error(
+                        "history",
+                        format!(
+                            "UI received fresh-tab recovery failure after primary zero-result: {error}"
+                        ),
+                    );
+                    self.history_list_pending = false;
+                    self.history_bridge_proven = false;
+                    self.account_bridge_status = format!(
+                        "DISCOVERY INCOMPLETE: primary={} · fresh-tab-recovery-failed={} · retained-items={} · coverage=unknown",
+                        history_discovery_proof_label(&primary.proof),
+                        error,
+                        self.remote_conversation_catalog.len(),
+                    );
                 }
                 LiveMirrorFetchNotice::HistoryDiscoveryFailed { error } => {
                     diagnostics::error(
@@ -2899,6 +3060,13 @@ fn transcript_bubble(
         });
 }
 
+fn should_run_fresh_tab_history_recovery(
+    primary_current_pass_items: usize,
+    durable_catalog_items: usize,
+) -> bool {
+    primary_current_pass_items == 0 && durable_catalog_items == 0
+}
+
 fn history_observed_label(observed: usize, proven_total: Option<u64>) -> String {
     match proven_total {
         Some(total) => format!("CHATGPT HISTORY · {observed}/{total}"),
@@ -3000,15 +3168,13 @@ fn browser_proof_label(proof: &account_bridge::BrowserProof) -> String {
 }
 
 fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) -> String {
-    let stimulus_error = proof.ui_stimulus_error.as_deref().unwrap_or("none");
     format!(
-        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · cache-bypass={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · app-context-headers={} · ui-stimulus={} · stimulus-attempts={} · stimulus-targets={} · stimulus-steps={} · chat-links={}->{} · stimulus-error={} · profile={}",
+        "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · profile={}",
         proof.extension_version,
         yes_no(proof.desktop_roundtrip),
         yes_no(proof.chatgpt_tab_found),
         yes_no(proof.debugger_attached),
         yes_no(proof.network_enabled),
-        yes_no(proof.cache_disabled),
         yes_no(proof.reload_started),
         yes_no(proof.account_context),
         proof.responses_seen,
@@ -3017,14 +3183,29 @@ fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) 
         proof.body_read_failures,
         proof.body_too_large,
         proof.invalid_json,
-        proof.application_context_header_count,
-        yes_no(proof.ui_stimulus_attempted),
-        proof.ui_stimulus_attempts,
-        proof.ui_stimulus_targets,
-        proof.ui_stimulus_steps,
-        proof.ui_stimulus_chat_links_before,
-        proof.ui_stimulus_chat_links_after,
-        stimulus_error,
+        proof.request_profile,
+    )
+}
+
+fn fresh_tab_history_discovery_proof_label(
+    proof: &account_bridge::FreshTabHistoryDiscoveryProof,
+) -> String {
+    format!(
+        "extension={} · roundtrip={} · tab={} · temp-tab={} · debugger={} · network={} · navigate={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · profile={}",
+        proof.extension_version,
+        yes_no(proof.desktop_roundtrip),
+        yes_no(proof.chatgpt_tab_found),
+        yes_no(proof.capture_tab_created),
+        yes_no(proof.debugger_attached),
+        yes_no(proof.network_enabled),
+        yes_no(proof.navigation_started),
+        yes_no(proof.account_context),
+        proof.responses_seen,
+        proof.backend_http_200_seen,
+        proof.json_candidates_seen,
+        proof.body_read_failures,
+        proof.body_too_large,
+        proof.invalid_json,
         proof.request_profile,
     )
 }
@@ -4002,6 +4183,14 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn fresh_tab_history_recovery_runs_only_for_empty_primary_and_empty_cache() {
+        assert!(should_run_fresh_tab_history_recovery(0, 0));
+        assert!(!should_run_fresh_tab_history_recovery(1, 0));
+        assert!(!should_run_fresh_tab_history_recovery(0, 85));
+        assert!(!should_run_fresh_tab_history_recovery(85, 85));
     }
 
     #[test]

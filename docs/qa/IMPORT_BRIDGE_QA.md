@@ -48,8 +48,8 @@ CI should cover the mechanical properties that the operator previously had to pr
 - browser recorder syntax;
 - native journal compatibility.
 
-## Future human QA
+## Future human involvement
 
-Human involvement should be limited to authenticated browser behavior that cannot yet be simulated locally. The expected pattern is one short interaction and one generated artifact. Setup, hashing, importing, diffing, logs, and validation should be automated by Chatarium tooling.
+Routine browser QA is now Codex-owned in the dedicated Playwright-managed Chromium environment. Human involvement is limited to a true account-holder identity/consent boundary such as initial ChatGPT login, MFA, CAPTCHA, or an explicit security confirmation that automation cannot perform. Setup, browser driving, hashing, importing, diffing, logs, screenshots, and validation are automated by Chatarium tooling.
 
 See [`../HUMAN_QA.md`](../HUMAN_QA.md) for the automation-first QA policy.

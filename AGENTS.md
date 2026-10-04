@@ -43,14 +43,22 @@ Chatarium is a reliability project first and a UI project second.
 - Do not make the desktop app the source of truth for protocol knowledge.
 - Prefer explicit state machines and typed uncertainty over booleans such as `sent = true`.
 
-## Human QA budget
+## Codex-owned QA / zero operator regression labor
 
-- Human QA is a scarce fallback for observations the program cannot reasonably obtain itself, not a substitute for automation.
-- If code can create a temporary directory, launch a controlled process, insert synthetic text, collect logs, hash, sanitize, import, diff, validate, or clean up test state, implement that automation instead of writing a checklist for the operator.
-- Prefer one command and one returned artifact over multi-command operator choreography.
-- Never ask the operator to copy cookies, authorization values, CSRF/session tokens, browser profile databases, or other reusable credentials.
-- A human handoff must state exactly what will be installed, launched, touched, persisted, and returned before the operator acts.
-- Repeated QA for a previously observed failure shape should normally become an automated regression test.
+- The principal is not Chatarium's manual QA runner. Routine browser/application validation has an operator QA budget of **zero**.
+- Codex owns the engineering loop end to end: Git sync/status/diff, edit, build, launch/restart, QA-browser control, extension load/version verification, browser interaction, log/console/screenshot/trace collection, regression reruns, commit, push, and final evidence report.
+- The canonical QA browser is **Playwright-managed bundled Chromium**, not Microsoft Edge, Google Chrome, or an Arch-installed Chromium package.
+- The canonical persistent QA browser state is `~/.local/share/chatarium-qa-browser/`. It is Chatarium-owned private local state and must never be copied from the principal's normal browser profile.
+- The principal's normal Microsoft Edge installation, profiles, windows, cookies, and browser data are completely outside the automation boundary. Do not install Playwright tooling into personal Edge and do not attach MCP/CDP/WebDriver automation to it.
+- The retired UI-created Edge QA profile is not a security boundary and is no longer a Chatarium automation target. A second profile under one Edge user-data root is insufficient isolation.
+- Preferred browser control is Playwright launching its own persistent Chromium context with the dedicated QA user-data directory. The Chatarium MV3 bridge is loaded automatically from the repository into that Chromium context.
+- The principal may use the same headed QA Chromium manually through a durable launcher such as `chatarium-qa-browser` for unavoidable account login/MFA. The browser profile persists so ordinary authentication is not repeated every run.
+- Do not claim that Codex can control a browser/native GUI merely because it is visible in the same Hyprland workspace. A control surface is usable only after its Playwright/CDP/CLI/native-automation path has been demonstrated. Track the matrix in `docs/QA_CONTROL_SURFACE.md`.
+- If browser control is missing or broken, fixing/bootstraping that automation is the next engineering task. Do not convert missing automation into instructions for the principal to click, reload, watch logs, copy output, take screenshots, or "try again."
+- If a native egui action is repeatedly needed, add a CLI/test hook, typed localhost/test RPC, or other deterministic machine-controlled surface. Compositor/native input automation is a fallback; human repetition is not.
+- Human involvement is reserved for a true identity/consent boundary that automation cannot satisfy, such as CAPTCHA, MFA, or an explicit security permission requiring the account holder. Stop with a precise `AUTH/CONSENT BLOCKED` state; do not package the remaining engineering work as a human QA checklist.
+- Never ask the principal to copy cookies, authorization values, CSRF/session tokens, browser profile databases, or other reusable credentials.
+- Repeated QA for a previously observed failure shape must become an automated regression test.
 
 ## Scope boundaries
 

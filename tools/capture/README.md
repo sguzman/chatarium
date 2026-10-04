@@ -1,5 +1,7 @@
 # Chatarium capture harness
 
+> **Legacy implementation note (2026-10-04):** this tool is the repository's Windows-first Edge capture harness and its Edge-specific behavior below remains factual. It is no longer the canonical Codex/browser QA environment. New extension/browser QA uses Playwright-managed bundled Chromium with persistent state under `~/.local/share/chatarium-qa-browser/`; the principal's normal Edge installation is outside automation.
+
 `chatarium-capture` is the Windows-first automation boundary for controlled observations of the official ChatGPT web client.
 
 Current status: **read-only capture foundation**. The experiment model, dedicated-profile safety rules, Edge discovery, read-only `doctor`, smoke diagnostics, reusable transport, and manual profile bootstrap exist. Canonical experiment execution remains unavailable.

@@ -45,7 +45,7 @@ protocol snapshot / diff / typed interpretation
 
 Longer-term automation should preserve the useful harness properties:
 
-- dedicated Chatarium Edge profile with one-time normal login;
+- dedicated Playwright-managed Chromium QA profile at `~/.local/share/chatarium-qa-browser/` with one-time normal login;
 - read-only diagnostics (`chatarium-capture doctor`);
 - automated canonical experiment execution;
 - incremental private capture journal;
@@ -143,11 +143,19 @@ History discovery and mirror state are now separate UI domains. A failed individ
 
 The extension never returns raw cookies, authorization values, complete request-header sets, or browser storage to Rust. Exact private conversation bodies cross only into the local process for exact-ID validation and durable local storage.
 
-The first 0.4.0 and 0.4.1 discovery retests regressed from the live-proven 85-chat 0.3 result to zero observed items. 0.4.1 restored the exact 0.3 listener/wait path but still produced zero, proving that the 0.3 success depended on whether the frontend happened to emit a list-bearing response during the bounded reload window.
+The first 0.4.x discovery retests regressed from the live-proven 85-chat 0.3 result to zero observed items and then accumulated additional recovery mechanisms. The synthetic sidebar replay returned HTTP 403. Programmatic first-party sidebar stimulus later introduced both target-selection and duration-budget regressions. These attempts are retained in the postmortem as evidence but are retired from the active discovery path.
 
-The private HAR already supplies a deterministic successful list-bearing surface: HTTP 200 on `/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=5&limit=20&owned_only=false`, with nested conversation summaries and pagination cursors. Edge Bridge 0.4.3 therefore freezes the complete 0.3 passive observer and adds an evidence-backed fallback only when that passive pass yields zero conversations. The fallback reuses browser-local first-party application context, performs one bounded MAIN-world GET of the successful sidebar resource, reduces the response through the same classifier, and returns only safe proof metadata plus typed summaries. If passive discovery already found conversations, the bootstrap does not run.
+**Edge Bridge 0.4.9 restores and freezes the exact live-proven 0.3 discovery runtime from commit `dca678f95442635cfc729d02c4ac612510d7efe7`.** The active discovery boundary is again only debugger attach, `Network.enable`, ordinary `chrome.tabs.reload(tab.id)`, bounded passive observation, response-body classification, and detach. The current classifier is byte-for-byte identical to the 0.3 classifier. Exact baseline fixtures are checked by CI so later mirror/local-viewer work cannot silently mutate discovery again.
 
-Before 0.4 reaches live QA, the repository gate requires:
+A direct 0.4.5→0.4.6 service-worker comparison proved that the later 85→0 live transition happened even though the discovery implementation did not change; only the MV3 keepalive was added. The active-tab reload path is therefore retained as a frozen live-proven observer, but is treated as opportunistic rather than deterministic.
+
+**Edge Bridge 0.4.10 composes a separate recovery path around that frozen observer.** If the frozen pass yields zero conversation IDs and Chatarium has no durable history catalog, the extension creates a temporary background tab, attaches CDP at `about:blank`, then navigates it to `https://chatgpt.com/` so the real first-party frontend performs a fresh application boot. Chatarium observes/classifies that startup traffic and always detaches/closes the temporary tab. It does not synthesize private history requests, reconstruct headers, disable cache, scroll the user's page, or modify the frozen 0.3 command.
+
+Once any history catalog has been durably acquired, later zero-item passive passes retain that catalog and suppress the fresh-tab recovery. This makes the expensive recovery a bootstrap-only path rather than a repeated remote read.
+
+The later exact-conversation mirror path, MV3 keepalive, durable last-known discovery cache, and fresh-tab recovery remain isolated outside the frozen 0.3 boundary.
+
+Human browser QA is suspended during this reconstruction. Before another live validation is requested, the repository gate requires:
 
 1. Edge extension syntax and permission invariants;
 2. pure history-classifier tests;

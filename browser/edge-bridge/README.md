@@ -1,5 +1,7 @@
 # Chatarium Edge Bridge
 
+> **Current QA browser (2026-10-04):** despite the historical component name, automated validation now runs in Playwright-managed bundled Chromium using the dedicated persistent profile `~/.local/share/chatarium-qa-browser/`. The principal's normal Microsoft Edge installation is not a QA target. The bridge remains a Chromium-compatible MV3 extension and keeps the `edge-bridge` name for source/history continuity.
+
 This directory contains the **critical-path browser runtime** for Chatarium's read-only interoperability with the user's existing ChatGPT conversation corpus.
 
 It replaces three failed/retired assumptions:
@@ -10,7 +12,7 @@ It replaces three failed/retired assumptions:
 
 The Flight Recorder elsewhere in `browser/` remains a separate durability/evidence tool.
 
-## Current architecture: 0.4.7 first-party CDP observation
+## Current architecture: 0.4.10 frozen 0.3 discovery + fresh-tab recovery + isolated mirroring
 
 ```text
 Chatarium Desktop
@@ -86,6 +88,74 @@ For a discovered conversation, the extension now:
 14. detaches the debugger and closes the temporary tab in all outcomes.
 
 The user's active ChatGPT tab is not navigated away from the current conversation.
+
+### 0.4.10 isolated fresh-tab history recovery
+
+0.4.10 keeps the exact live-proven 0.3 active-tab discovery implementation frozen. It adds a separate recovery command only for the case where that passive pass observes zero conversation IDs **and** Chatarium has no durable last-known history catalog.
+
+The recovery command creates an inactive temporary tab at `about:blank`, attaches CDP before navigation, enables the Network domain, and lets the actual ChatGPT frontend boot at `https://chatgpt.com/`. It classifies the first-party JSON traffic through the same frozen history classifier and then always detaches and closes the temporary tab.
+
+The recovery path deliberately does **not**:
+
+- construct or replay a private `/backend-api/*` history URL;
+- issue page-world `fetch()`;
+- reconstruct application headers;
+- disable or bypass browser cache policy;
+- programmatically scroll or mutate the user's active ChatGPT tab;
+- replace the frozen 0.3 discovery command.
+
+This design follows the same first-party-navigation boundary already used by exact conversation mirroring: ChatGPT constructs its own requests; Chatarium only observes them.
+
+A durable cached catalog suppresses this fallback. Once Chatarium has acquired history successfully, a later zero-item passive run retains the cache and does not open another recovery tab.
+
+Automated gates cover the active frozen function, the new fresh-tab function, temporary-tab cleanup, command dispatch, Rust proof parsing, timeout budgets, cache-retention policy, and the condition that recovery runs only for `primary-items=0 && durable-cache=0`.
+
+### 0.4.9 mechanical rollback to the live-proven 0.3 discovery boundary
+
+After repeated regressions, discovery is no longer being incrementally modified.
+
+Git history identifies commit `dca678f95442635cfc729d02c4ac612510d7efe7` as the last pre-0.4 repository state containing the 0.3 discovery implementation that had already produced the live 85-conversation result. A mechanical comparison established:
+
+- `history-discovery.mjs` in current `main` was already byte-for-byte identical to that 0.3 state;
+- the discovery debugger listener had drifted after 0.3;
+- `discoverHistorySurfaces` had drifted substantially through cache-bypass, request-context collection, sidebar stimulus, retries, and later timeout repair;
+- the Rust discovery proof contract and UI diagnostics had grown fields that existed only to support those later experiments.
+
+0.4.9 restores the **exact 0.3 discovery listener and exact 0.3 `discoverHistorySurfaces` implementation** from that known-good commit. In particular, history discovery is again:
+
+1. attach debugger;
+2. enable the Network domain;
+3. call `chrome.tabs.reload(tab.id)`;
+4. observe first-party traffic for the original bounded 8-second window;
+5. read candidate response bodies;
+6. detach.
+
+The following post-0.3 discovery mutations are removed from the active discovery path:
+
+- `Network.setCacheDisabled`;
+- CDP `Page.reload` for discovery;
+- application-context header harvesting for discovery;
+- synthetic sidebar bootstrap;
+- programmatic sidebar scrolling/stimulus;
+- stimulus retry loops and stimulus-specific proof fields.
+
+Later features are retained only outside that frozen boundary:
+
+- exact-conversation mirroring keeps its separate debugger listener and temporary-tab capture path;
+- the MV3 local keepalive remains independent of discovery;
+- the desktop's durable last-known discovery cache remains, so a future sparse/empty pass cannot erase a previously successful catalog.
+
+Two repository fixtures now contain the exact live-proven 0.3 discovery runtime and classifier. CI rejects any future discovery change unless those fixtures are deliberately changed too. This turns "discovery is frozen" from prose into a machine-enforced boundary.
+
+### 0.4.8 discovery duration-budget repair
+
+The first 0.4.7 live run exposed a second bug in the same stimulus path. Authentication completed successfully, but the discovery command hit the desktop's 30-second result timeout. A following authentication probe then timed out too because the extension bridge loop was still serially awaiting the overlong discovery command.
+
+The cause was a violated cross-process duration contract. The stimulus could visit up to three scroll targets for up to 28 delayed steps each, and lazy-loading at the bottom added extra waits. In the exact case the stimulus is designed to provoke, its runtime could therefore exceed the Rust `DISCOVERY_RESULT_WAIT`.
+
+0.4.8 hard-bounds one injected UI stimulus to 8 seconds. A repository invariant now computes the full worst-case discovery budget, including retry delays and body grace, and requires at least five seconds of margin before the Rust result timeout. The Rust authentication wait was also raised above the extension's bounded page-fetch timeout so an ordinary slow auth request cannot abandon the extension command while it still owns the serial bridge loop.
+
+This is a timeout-contract repair, not another history-discovery strategy change.
 
 ### 0.4.7 zero-link history stimulus repair
 
@@ -220,7 +290,7 @@ The runtime dependency itself was invalid, so exact-C01 replay was retired.
 
 ## Permissions
 
-The 0.4.7 manifest contains only:
+The 0.4.10 manifest contains only:
 
 - `debugger`
 - `scripting`
@@ -324,7 +394,7 @@ Chatarium independently:
 
 Native Messaging is not used.
 
-## Human QA gate
+## Automated live-QA gate
 
 Before each browser validation:
 
@@ -335,9 +405,9 @@ Before each browser validation:
 - Linux desktop check/tests must pass;
 - the issue must state exactly what the run can prove.
 
-History discovery performs its own reload. Exact mirroring performs its own temporary-tab navigation and cleanup. The operator should not need DevTools, console inspection, manual tab traversal, or another HAR merely to exercise these paths.
+History discovery performs its own reload. Exact mirroring performs its own temporary-tab navigation and cleanup. Codex owns browser launch, extension load/reload, DevTools/console inspection, tab traversal, screenshots, logs, and evidence collection. The operator should not perform those regression steps.
 
-Follow `docs/HUMAN_QA.md`, #103 for discovery history, and #104 for exact mirroring.
+The canonical target is the Playwright-managed Chromium QA profile. Follow `docs/CODEX_QA_WORKSTATION.md`, `docs/QA_CONTROL_SURFACE.md`, `docs/HUMAN_QA.md`, #103 for discovery history, and #104 for exact mirroring.
 
 ## Automated package check
 

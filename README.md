@@ -32,6 +32,7 @@ See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product in
 - **The UI thread does not perform heavy work.** Network, persistence, parsing, capture processing, and reconciliation stay outside rendering.
 - **Chatarium does not require a second OpenAI API subscription as its architectural premise.** Its target is the consumer ChatGPT service already used through the official web client.
 - **Human QA is automation-first.** If Chatarium can create directories, drive a synthetic experiment, collect evidence, hash, sanitize, import, diff, or validate a result itself, the program does that work rather than delegating it to the operator.
+- **Browser QA is isolated from personal Edge.** The canonical automation browser is Playwright-managed bundled Chromium with persistent QA state at `~/.local/share/chatarium-qa-browser/`. Microsoft Edge is not part of the QA control plane.
 
 ## Repository map
 

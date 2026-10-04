@@ -33,10 +33,11 @@ const BRIDGE_HEADER_VALUE: &str = "edge-mv3-v1";
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BODY_BYTES: usize = 6 * 1024 * 1024;
 const NEXT_WAIT: Duration = Duration::from_secs(25);
-const AUTH_RESULT_WAIT: Duration = Duration::from_secs(5);
+const AUTH_RESULT_WAIT: Duration = Duration::from_secs(12);
 const FETCH_RESULT_WAIT: Duration = Duration::from_secs(45);
 const AUTH_REQUEST_PROFILE: &str = "chatgpt-me-v1";
 const HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-discovery-v1";
+const FRESH_HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-fresh-tab-v1";
 const DISCOVERY_RESULT_WAIT: Duration = Duration::from_secs(30);
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(35);
 
@@ -257,15 +258,6 @@ pub struct HistoryDiscoveryProof {
     pub body_read_failures: u64,
     pub body_too_large: u64,
     pub invalid_json: u64,
-    pub application_context_header_count: u64,
-    pub cache_disabled: bool,
-    pub ui_stimulus_attempted: bool,
-    pub ui_stimulus_attempts: u64,
-    pub ui_stimulus_targets: u64,
-    pub ui_stimulus_steps: u64,
-    pub ui_stimulus_chat_links_before: u64,
-    pub ui_stimulus_chat_links_after: u64,
-    pub ui_stimulus_error: Option<String>,
     pub request_profile: String,
 }
 
@@ -273,6 +265,32 @@ pub struct HistoryDiscoveryProof {
 pub struct HistoryDiscoveryObservation {
     pub discovery: String,
     pub proof: HistoryDiscoveryProof,
+    pub candidates: Vec<HistorySurfaceCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreshTabHistoryDiscoveryProof {
+    pub extension_version: String,
+    pub desktop_roundtrip: bool,
+    pub chatgpt_tab_found: bool,
+    pub capture_tab_created: bool,
+    pub debugger_attached: bool,
+    pub network_enabled: bool,
+    pub navigation_started: bool,
+    pub account_context: bool,
+    pub responses_seen: u64,
+    pub backend_http_200_seen: u64,
+    pub json_candidates_seen: u64,
+    pub body_read_failures: u64,
+    pub body_too_large: u64,
+    pub invalid_json: u64,
+    pub request_profile: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreshTabHistoryDiscoveryObservation {
+    pub discovery: String,
+    pub proof: FreshTabHistoryDiscoveryProof,
     pub candidates: Vec<HistorySurfaceCandidate>,
 }
 
@@ -367,18 +385,6 @@ impl BrowserBridgeProvider {
             body_read_failures: required_u64("body_read_failures")?,
             body_too_large: required_u64("body_too_large")?,
             invalid_json: required_u64("invalid_json")?,
-            application_context_header_count: required_u64("application_context_header_count")?,
-            cache_disabled: required_bool("cache_disabled")?,
-            ui_stimulus_attempted: required_bool("ui_stimulus_attempted")?,
-            ui_stimulus_attempts: required_u64("ui_stimulus_attempts")?,
-            ui_stimulus_targets: required_u64("ui_stimulus_targets")?,
-            ui_stimulus_steps: required_u64("ui_stimulus_steps")?,
-            ui_stimulus_chat_links_before: required_u64("ui_stimulus_chat_links_before")?,
-            ui_stimulus_chat_links_after: required_u64("ui_stimulus_chat_links_after")?,
-            ui_stimulus_error: result
-                .get("ui_stimulus_error")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
             request_profile: request_profile.to_owned(),
         };
         if !proof.chatgpt_tab_found
@@ -416,6 +422,131 @@ impl BrowserBridgeProvider {
             .to_owned();
 
         Ok(HistoryDiscoveryObservation {
+            discovery,
+            proof,
+            candidates,
+        })
+    }
+
+    /// Recovery-only discovery path that boots ChatGPT in a temporary background tab and
+    /// observes the first-party application startup traffic. This composes around the frozen
+    /// 0.3 active-tab discovery path instead of mutating it.
+    pub fn discover_history_surfaces_fresh_tab(
+        &mut self,
+    ) -> Result<FreshTabHistoryDiscoveryObservation, BrowserBridgeError> {
+        let result = self.call(
+            "discover_history_surfaces_fresh_tab",
+            |object| {
+                object.insert(
+                    "request_profile".to_owned(),
+                    json!(FRESH_HISTORY_DISCOVERY_PROFILE),
+                );
+            },
+            DISCOVERY_RESULT_WAIT,
+        )?;
+
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(remote_result_error(&result));
+        }
+        if parse_bridge_transport(&result)? != BridgeTransport::ExtensionCdp {
+            return Err(BrowserBridgeError::Protocol(
+                "fresh-tab history discovery did not use the CDP extension transport".to_owned(),
+            ));
+        }
+
+        let request_profile = result
+            .get("request_profile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing request profile".to_owned(),
+                )
+            })?;
+        if request_profile != FRESH_HISTORY_DISCOVERY_PROFILE {
+            return Err(BrowserBridgeError::Protocol(format!(
+                "fresh-tab history discovery profile {request_profile:?} does not match expected {FRESH_HISTORY_DISCOVERY_PROFILE:?}"
+            )));
+        }
+
+        let extension_version = result
+            .get("extension_version")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing extension version".to_owned(),
+                )
+            })?
+            .to_owned();
+        let required_bool = |field: &str| {
+            result.get(field).and_then(Value::as_bool).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "fresh-tab history discovery result is missing boolean proof field {field:?}"
+                ))
+            })
+        };
+        let required_u64 = |field: &str| {
+            result.get(field).and_then(Value::as_u64).ok_or_else(|| {
+                BrowserBridgeError::Protocol(format!(
+                    "fresh-tab history discovery result is missing numeric proof field {field:?}"
+                ))
+            })
+        };
+
+        let proof = FreshTabHistoryDiscoveryProof {
+            extension_version,
+            desktop_roundtrip: true,
+            chatgpt_tab_found: required_bool("chatgpt_tab_found")?,
+            capture_tab_created: required_bool("capture_tab_created")?,
+            debugger_attached: required_bool("debugger_attached")?,
+            network_enabled: required_bool("network_enabled")?,
+            navigation_started: required_bool("navigation_started")?,
+            account_context: required_bool("account_context")?,
+            responses_seen: required_u64("responses_seen")?,
+            backend_http_200_seen: required_u64("backend_http_200_seen")?,
+            json_candidates_seen: required_u64("json_candidates_seen")?,
+            body_read_failures: required_u64("body_read_failures")?,
+            body_too_large: required_u64("body_too_large")?,
+            invalid_json: required_u64("invalid_json")?,
+            request_profile: request_profile.to_owned(),
+        };
+        if !proof.chatgpt_tab_found
+            || !proof.capture_tab_created
+            || !proof.debugger_attached
+            || !proof.network_enabled
+            || !proof.navigation_started
+            || proof.responses_seen == 0
+        {
+            return Err(BrowserBridgeError::Protocol(
+                "fresh-tab history discovery returned success without complete CDP boundary proof"
+                    .to_owned(),
+            ));
+        }
+
+        let candidates = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing candidates".to_owned(),
+                )
+            })?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_history_surface_candidate(value, index))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let discovery = result
+            .get("discovery")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                BrowserBridgeError::Protocol(
+                    "fresh-tab history discovery result is missing semantic state".to_owned(),
+                )
+            })?
+            .to_owned();
+
+        Ok(FreshTabHistoryDiscoveryObservation {
             discovery,
             proof,
             candidates,
@@ -1099,7 +1230,7 @@ fn result_diagnostic_summary(result: &Value) -> String {
     };
 
     format!(
-        "ok={} transport={} ext={} HTTP={} tab={} debugger={} network={} reload={} exact-response={} exact-responses={} rate-limited={} responses={} backend-200={} candidates={} stimulus-targets={} stimulus-steps={}",
+        "ok={} transport={} ext={} HTTP={} tab={} debugger={} network={} reload={} temp-tab={} navigate={} account-context={} exact-response={} exact-responses={} rate-limited={} responses={} backend-200={} candidates={}",
         bool_field("ok"),
         text_field("bridge_transport"),
         text_field("extension_version"),
@@ -1108,14 +1239,15 @@ fn result_diagnostic_summary(result: &Value) -> String {
         bool_field("debugger_attached"),
         bool_field("network_enabled"),
         bool_field("reload_started"),
+        bool_field("capture_tab_created"),
+        bool_field("navigation_started"),
+        bool_field("account_context"),
         bool_field("exact_response_seen"),
         number_field("exact_response_count"),
         number_field("rate_limited_responses"),
         number_field("responses_seen"),
         number_field("backend_http_200_seen"),
         number_field("candidate_count"),
-        number_field("ui_stimulus_targets"),
-        number_field("ui_stimulus_steps"),
     )
 }
 
@@ -1490,6 +1622,42 @@ mod tests {
         })
     }
 
+    fn fresh_history_candidate(
+        first_id: &str,
+        first_title: &str,
+        second_id: &str,
+        second_title: &str,
+    ) -> Value {
+        let items = vec![
+            json!({
+                "id": first_id,
+                "title": first_title,
+                "create_time": null,
+                "update_time": null
+            }),
+            json!({
+                "id": second_id,
+                "title": second_title,
+                "create_time": null,
+                "update_time": null
+            }),
+        ];
+        json!({
+            "path": "/backend-api/gizmos/snorlax/sidebar",
+            "query_keys": ["conversations_per_gizmo", "limit", "owned_only"],
+            "surface_kind": "snorlax_sidebar",
+            "conversation_count": 2,
+            "cursor_count": 1,
+            "string_cursor_count": 1,
+            "null_cursor_count": 0,
+            "top_level_cursor": "string",
+            "top_level_keys": ["cursor", "items"],
+            "traversal_truncated": false,
+            "observations": 1,
+            "items": items
+        })
+    }
+
     fn extension_auth_result(command: &Value) -> Value {
         json!({
             "version": 1,
@@ -1630,36 +1798,13 @@ mod tests {
                 assert_eq!(command.as_object().unwrap().len(), 4);
             },
             |command| {
-                let candidate = json!({
-                    "path": "/backend-api/gizmos/snorlax/sidebar",
-                    "query_keys": [
-                        "conversations_per_gizmo",
-                        "limit",
-                        "owned_only"
-                    ],
-                    "surface_kind": "snorlax_sidebar",
-                    "conversation_count": 1,
-                    "cursor_count": 2,
-                    "string_cursor_count": 1,
-                    "null_cursor_count": 1,
-                    "top_level_cursor": "string",
-                    "top_level_keys": ["cursor", "items"],
-                    "traversal_truncated": false,
-                    "observations": 1,
-                    "items": [{
-                        "id": "remote-1",
-                        "title": "Observed live",
-                        "create_time": "2026-10-03T00:00:00Z",
-                        "update_time": "2026-10-03T00:01:00Z"
-                    }]
-                });
-                let mut result = json!({
+                json!({
                     "version": 1,
                     "id": command["id"],
                     "kind": "discover_history_surfaces",
                     "ok": true,
                     "bridge_transport": "extension-cdp",
-                    "extension_version": "0.4.4",
+                    "extension_version": "0.3.0",
                     "chatgpt_tab_found": true,
                     "main_world_execution": false,
                     "account_context": true,
@@ -1673,15 +1818,98 @@ mod tests {
                     "body_read_failures": 0,
                     "body_too_large": 0,
                     "invalid_json": 0,
-                    "application_context_header_count": 6,
-                    "cache_disabled": true,
-                    "ui_stimulus_attempted": true,
-                    "ui_stimulus_attempts": 2,
-                    "ui_stimulus_targets": 1,
-                    "ui_stimulus_steps": 12,
-                    "ui_stimulus_chat_links_before": 8,
-                    "ui_stimulus_chat_links_after": 20,
-                    "ui_stimulus_error": null,
+                    "candidate_count": 1,
+                    "discovery": "candidates_observed",
+                    "candidates": [
+                        {
+                            "path": "/backend-api/gizmos/snorlax/sidebar",
+                            "query_keys": [
+                                "conversations_per_gizmo",
+                                "limit",
+                                "owned_only"
+                            ],
+                            "surface_kind": "snorlax_sidebar",
+                            "conversation_count": 1,
+                            "cursor_count": 2,
+                            "string_cursor_count": 1,
+                            "null_cursor_count": 1,
+                            "top_level_cursor": "string",
+                            "top_level_keys": ["cursor", "items"],
+                            "traversal_truncated": false,
+                            "observations": 1,
+                            "items": [
+                                {
+                                    "id": "remote-1",
+                                    "title": "Observed live",
+                                    "create_time": "2026-10-03T00:00:00Z",
+                                    "update_time": "2026-10-03T00:01:00Z"
+                                }
+                            ]
+                        }
+                    ]
+                })
+            },
+        );
+
+        let mut provider = runtime.provider();
+        let observation = provider.discover_history_surfaces().unwrap();
+        assert_eq!(observation.discovery, "candidates_observed");
+        assert_eq!(observation.proof.extension_version, "0.3.0");
+        assert!(observation.proof.desktop_roundtrip);
+        assert!(observation.proof.debugger_attached);
+        assert!(observation.proof.network_enabled);
+        assert!(observation.proof.reload_started);
+        assert_eq!(observation.proof.responses_seen, 37);
+        assert_eq!(observation.candidates.len(), 1);
+        assert_eq!(
+            observation.candidates[0].path,
+            "/backend-api/gizmos/snorlax/sidebar"
+        );
+        assert_eq!(observation.candidates[0].items.len(), 1);
+        assert_eq!(observation.candidates[0].items[0].id, "remote-1");
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn fresh_tab_history_discovery_crosses_only_typed_candidates_and_proof() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+        let browser = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(
+                    command["kind"],
+                    json!("discover_history_surfaces_fresh_tab")
+                );
+                assert_eq!(
+                    command["request_profile"],
+                    json!(FRESH_HISTORY_DISCOVERY_PROFILE)
+                );
+                assert_eq!(command.as_object().unwrap().len(), 4);
+            },
+            |command| {
+                let candidate =
+                    fresh_history_candidate("fresh-1", "Fresh one", "fresh-2", "Fresh two");
+                let mut result = json!({
+                    "version": 1,
+                    "id": command["id"],
+                    "kind": "discover_history_surfaces_fresh_tab",
+                    "ok": true,
+                    "bridge_transport": "extension-cdp",
+                    "extension_version": "0.4.10",
+                    "chatgpt_tab_found": true,
+                    "capture_tab_created": true,
+                    "debugger_attached": true,
+                    "network_enabled": true,
+                    "navigation_started": true,
+                    "account_context": true,
+                    "request_profile": FRESH_HISTORY_DISCOVERY_PROFILE,
+                    "responses_seen": 55,
+                    "backend_http_200_seen": 18,
+                    "json_candidates_seen": 4,
+                    "body_read_failures": 0,
+                    "body_too_large": 0,
+                    "invalid_json": 0,
                     "candidate_count": 1,
                     "discovery": "candidates_observed"
                 });
@@ -1691,30 +1919,130 @@ mod tests {
         );
 
         let mut provider = runtime.provider();
-        let observation = provider.discover_history_surfaces().unwrap();
+        let observation = provider.discover_history_surfaces_fresh_tab().unwrap();
         assert_eq!(observation.discovery, "candidates_observed");
-        assert_eq!(observation.proof.extension_version, "0.4.4");
-        assert!(observation.proof.desktop_roundtrip);
+        assert_eq!(observation.proof.extension_version, "0.4.10");
+        assert!(observation.proof.capture_tab_created);
         assert!(observation.proof.debugger_attached);
         assert!(observation.proof.network_enabled);
-        assert!(observation.proof.reload_started);
-        assert_eq!(observation.proof.responses_seen, 37);
-        assert_eq!(observation.proof.application_context_header_count, 6);
-        assert!(observation.proof.cache_disabled);
-        assert!(observation.proof.ui_stimulus_attempted);
-        assert_eq!(observation.proof.ui_stimulus_attempts, 2);
-        assert_eq!(observation.proof.ui_stimulus_targets, 1);
-        assert_eq!(observation.proof.ui_stimulus_steps, 12);
-        assert_eq!(observation.proof.ui_stimulus_chat_links_before, 8);
-        assert_eq!(observation.proof.ui_stimulus_chat_links_after, 20);
-        assert_eq!(observation.proof.ui_stimulus_error, None);
+        assert!(observation.proof.navigation_started);
+        assert_eq!(observation.proof.responses_seen, 55);
         assert_eq!(observation.candidates.len(), 1);
-        assert_eq!(
-            observation.candidates[0].path,
-            "/backend-api/gizmos/snorlax/sidebar"
-        );
-        assert_eq!(observation.candidates[0].items.len(), 1);
-        assert_eq!(observation.candidates[0].items[0].id, "remote-1");
+        assert_eq!(observation.candidates[0].items.len(), 2);
+        assert_eq!(observation.candidates[0].items[0].id, "fresh-1");
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn primary_zero_then_fresh_tab_success_roundtrips_sequentially() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+
+        let browser = thread::spawn(move || {
+            for expected_kind in [
+                "probe_auth",
+                "discover_history_surfaces",
+                "discover_history_surfaces_fresh_tab",
+            ] {
+                let raw = request(
+                    address,
+                    b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
+                );
+                let split = raw
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .unwrap();
+                let command: Value = serde_json::from_slice(&raw[split + 4..]).unwrap();
+                assert_eq!(command["kind"], json!(expected_kind));
+
+                let result = if expected_kind == "probe_auth" {
+                    assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
+                    extension_auth_result(&command)
+                } else if expected_kind == "discover_history_surfaces" {
+                    assert_eq!(command["request_profile"], json!(HISTORY_DISCOVERY_PROFILE));
+                    json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": expected_kind,
+                        "ok": true,
+                        "bridge_transport": "extension-cdp",
+                        "extension_version": "0.4.10",
+                        "chatgpt_tab_found": true,
+                        "debugger_attached": true,
+                        "network_enabled": true,
+                        "reload_started": true,
+                        "account_context": true,
+                        "request_profile": HISTORY_DISCOVERY_PROFILE,
+                        "responses_seen": 21,
+                        "backend_http_200_seen": 7,
+                        "json_candidates_seen": 1,
+                        "body_read_failures": 0,
+                        "body_too_large": 0,
+                        "invalid_json": 0,
+                        "candidate_count": 0,
+                        "discovery": "no_candidate_surface_observed",
+                        "candidates": []
+                    })
+                } else {
+                    assert_eq!(
+                        command["request_profile"],
+                        json!(FRESH_HISTORY_DISCOVERY_PROFILE)
+                    );
+                    let candidate =
+                        fresh_history_candidate("fresh-a", "Fresh A", "fresh-b", "Fresh B");
+                    let mut result = json!({
+                        "version": 1,
+                        "id": command["id"],
+                        "kind": expected_kind,
+                        "ok": true,
+                        "bridge_transport": "extension-cdp",
+                        "extension_version": "0.4.10",
+                        "chatgpt_tab_found": true,
+                        "capture_tab_created": true,
+                        "debugger_attached": true,
+                        "network_enabled": true,
+                        "navigation_started": true,
+                        "account_context": true,
+                        "request_profile": FRESH_HISTORY_DISCOVERY_PROFILE,
+                        "responses_seen": 61,
+                        "backend_http_200_seen": 19,
+                        "json_candidates_seen": 3,
+                        "body_read_failures": 0,
+                        "body_too_large": 0,
+                        "invalid_json": 0,
+                        "candidate_count": 1,
+                        "discovery": "candidates_observed"
+                    });
+                    result["candidates"] = json!([candidate]);
+                    result
+                };
+
+                let body = serde_json::to_vec(&result).unwrap();
+                let request_head = format!(
+                    "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let mut raw = request_head.into_bytes();
+                raw.extend_from_slice(&body);
+                let response = request(address, &raw);
+                assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 204"));
+            }
+        });
+
+        let mut provider = runtime.provider();
+        let auth = provider.probe_authentication().unwrap();
+        assert_eq!(auth.evidence, SessionAuthenticationEvidence::Authenticated);
+
+        let primary = provider.discover_history_surfaces().unwrap();
+        assert!(primary.candidates.is_empty());
+        assert_eq!(primary.proof.responses_seen, 21);
+
+        let fresh = provider.discover_history_surfaces_fresh_tab().unwrap();
+        assert_eq!(fresh.candidates.len(), 1);
+        assert_eq!(fresh.candidates[0].items.len(), 2);
+        assert_eq!(fresh.candidates[0].items[0].id, "fresh-a");
+        assert_eq!(fresh.proof.responses_seen, 61);
+
         browser.join().unwrap();
     }
 
@@ -1965,6 +2293,80 @@ mod tests {
         assert_eq!(observation.proof.first_party_http_status, Some(200));
         assert_eq!(observation.proof.context_header_count, 0);
         browser.join().unwrap();
+    }
+
+    #[test]
+    fn timed_out_command_rejects_late_result_and_next_command_still_roundtrips() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+
+        let mut slow_provider = runtime.provider();
+        let slow = thread::spawn(move || {
+            slow_provider.call("slow_test", |_| {}, Duration::from_millis(150))
+        });
+
+        let first_raw = request(
+            address,
+            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
+        );
+        let first_split = first_raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let first_command: Value = serde_json::from_slice(&first_raw[first_split + 4..]).unwrap();
+        assert_eq!(first_command["kind"], json!("slow_test"));
+
+        assert_eq!(slow.join().unwrap(), Err(BrowserBridgeError::Timeout));
+
+        let late_result = json!({
+            "version": 1,
+            "id": first_command["id"],
+            "kind": "slow_test",
+            "ok": true
+        });
+        let late_body = serde_json::to_vec(&late_result).unwrap();
+        let late_head = format!(
+            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            late_body.len()
+        );
+        let mut late_request = late_head.into_bytes();
+        late_request.extend_from_slice(&late_body);
+        let late_response = request(address, &late_request);
+        assert!(String::from_utf8_lossy(&late_response).starts_with("HTTP/1.1 409"));
+
+        let mut next_provider = runtime.provider();
+        let next =
+            thread::spawn(move || next_provider.call("next_test", |_| {}, Duration::from_secs(2)));
+
+        let next_raw = request(
+            address,
+            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
+        );
+        let next_split = next_raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let next_command: Value = serde_json::from_slice(&next_raw[next_split + 4..]).unwrap();
+        assert_eq!(next_command["kind"], json!("next_test"));
+
+        let next_result = json!({
+            "version": 1,
+            "id": next_command["id"],
+            "kind": "next_test",
+            "ok": true
+        });
+        let next_body = serde_json::to_vec(&next_result).unwrap();
+        let next_head = format!(
+            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            next_body.len()
+        );
+        let mut next_request = next_head.into_bytes();
+        next_request.extend_from_slice(&next_body);
+        let next_response = request(address, &next_request);
+        assert!(String::from_utf8_lossy(&next_response).starts_with("HTTP/1.1 204"));
+
+        let returned = next.join().unwrap().unwrap();
+        assert_eq!(returned["ok"], json!(true));
     }
 
     #[test]

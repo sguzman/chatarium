@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import {
   classifyHistoryBody,
   isCandidateResponse,
@@ -15,6 +16,40 @@ import {
 const root = new URL('./', import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(new URL('manifest.json', root), 'utf8'));
 const worker = fs.readFileSync(new URL('service-worker.js', root), 'utf8');
+const knownGoodDiscoveryRuntime = fs.readFileSync(
+  new URL('known-good-discovery-v0.3.txt', root),
+  'utf8',
+);
+const knownGoodHistoryClassifier = fs.readFileSync(
+  new URL('known-good-history-discovery-v0.3.txt', root),
+  'utf8',
+);
+const knownGoodRustDiscovery = fs.readFileSync(
+  new URL('known-good-rust-discovery-v0.3.txt', root),
+  'utf8',
+);
+const knownGoodDiscoveryDependencies = JSON.parse(fs.readFileSync(
+  new URL('known-good-discovery-dependencies-v0.3.json', root),
+  'utf8',
+));
+const desktopBridge = fs.readFileSync(
+  new URL('../../apps/desktop/src/account_bridge.rs', root),
+  'utf8',
+);
+
+function workerMilliseconds(name) {
+  const match = worker.match(new RegExp(`const ${name} = ([\\d_]+);`));
+  if (!match) throw new Error(`missing worker duration constant ${name}`);
+  return Number(match[1].replaceAll('_', ''));
+}
+
+function rustDurationMilliseconds(name) {
+  const match = desktopBridge.match(
+    new RegExp(`const ${name}: Duration = Duration::from_secs\\((\\d+)\\);`),
+  );
+  if (!match) throw new Error(`missing Rust duration constant ${name}`);
+  return Number(match[1]) * 1_000;
+}
 
 function sameSet(actual, expected, label) {
   if (!Array.isArray(actual)) throw new Error(`${label} must be an array`);
@@ -31,7 +66,7 @@ if (manifest.manifest_version !== 3) {
 if (manifest.name !== 'Chatarium Edge Bridge') {
   throw new Error('unexpected extension name');
 }
-if (manifest.version !== '0.4.7') {
+if (manifest.version !== '0.4.10') {
   throw new Error(`unexpected extension version ${manifest.version}`);
 }
 sameSet(manifest.permissions, ['debugger', 'scripting', 'storage'], 'permissions');
@@ -57,24 +92,19 @@ for (const required of [
   "'Network.enable'",
   "'Network.getResponseBody'",
   'chrome.debugger.detach',
-  "'Network.setCacheDisabled'",
   "'Page.reload'",
-  'ignoreCache: true',
-  'stimulateHistoryUi',
-  'ui_stimulus_attempted',
-  'ui_stimulus_attempts',
-  'DISCOVERY_STIMULUS_MAX_ATTEMPTS',
-  'DISCOVERY_STIMULUS_RETRY_MS',
-  'ui_stimulus_targets',
-  'ui_stimulus_steps',
   'chrome.storage.session',
   "const ACCOUNT_HEADER = 'ChatGPT-Account-ID'",
   "const BRIDGE_ORIGIN = 'http://127.0.0.1:43117'",
   "const BRIDGE_HEADER_VALUE = 'edge-mv3-v1'",
   "const DISCOVERY_PROFILE = 'cdp-history-discovery-v1'",
-  'collectApplicationContextHeaders',
+  "const FRESH_DISCOVERY_PROFILE = 'cdp-history-fresh-tab-v1'",
+  "const FRESH_DISCOVERY_ROUTE = 'https://chatgpt.com/'",
   'PAGE_FETCH_TIMEOUT_MS',
   "case 'discover_history_surfaces'",
+  "case 'discover_history_surfaces_fresh_tab'",
+  'discoverHistorySurfacesFreshTab',
+  'chrome.tabs.reload(tab.id)',
   'chrome.tabs.create',
   "'Page.navigate'",
   'chrome.tabs.remove',
@@ -117,6 +147,164 @@ for (const required of [
     throw new Error(`required CDP discovery invariant missing: ${required}`);
   }
 }
+
+function normalizeNewlines(text) {
+  return text.replaceAll('\r\n', '\n');
+}
+
+function gitBlobSha(text) {
+  const normalized = normalizeNewlines(text);
+  const bytes = Buffer.from(normalized, 'utf8');
+  return createHash('sha1')
+    .update(Buffer.from(`blob ${bytes.length}\0`, 'utf8'))
+    .update(bytes)
+    .digest('hex');
+}
+
+const frozenFixtureBlobs = [
+  ['known-good-discovery-v0.3.txt', knownGoodDiscoveryRuntime, 'c04fabc8c0ebfb42b44ab75092e749fafb321bad'],
+  ['known-good-history-discovery-v0.3.txt', knownGoodHistoryClassifier, '4e1d6ddf8a5f147eee33ab7d8b4e5a686a120e22'],
+  ['known-good-discovery-dependencies-v0.3.json', JSON.stringify(knownGoodDiscoveryDependencies, null, 2) + '\n', 'e341f1adb929ad3aac86de3876accbc2bbcb2efb'],
+  ['known-good-rust-discovery-v0.3.txt', knownGoodRustDiscovery, 'b344546fce62b980ca7323c6417c3c484a98e3fd'],
+];
+for (const [name, text, expectedSha] of frozenFixtureBlobs) {
+  const actualSha = gitBlobSha(text);
+  if (actualSha !== expectedSha) {
+    throw new Error(
+      `frozen discovery fixture ${name} changed: expected ${expectedSha}, got ${actualSha}`,
+    );
+  }
+}
+
+function countOccurrences(text, needle) {
+  if (!needle) return 0;
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    const index = text.indexOf(needle, offset);
+    if (index < 0) return count;
+    count += 1;
+    offset = index + needle.length;
+  }
+}
+
+function fixtureSection(text, startMarker, endMarker) {
+  const normalized = normalizeNewlines(text);
+  const start = normalized.indexOf(startMarker);
+  const end = normalized.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) {
+    throw new Error(`malformed known-good fixture section: ${startMarker}`);
+  }
+  let section = normalized.slice(start + startMarker.length, end);
+  if (section.startsWith('\n')) section = section.slice(1);
+  if (section.endsWith('\n')) section = section.slice(0, -1);
+  return section;
+}
+
+const knownGoodDiscoveryListener = fixtureSection(
+  knownGoodDiscoveryRuntime,
+  '--- DISCOVERY LISTENER ---',
+  '--- END DISCOVERY LISTENER ---',
+);
+const knownGoodDiscoveryCommand = fixtureSection(
+  knownGoodDiscoveryRuntime,
+  '--- DISCOVERY COMMAND ---',
+  '--- END DISCOVERY COMMAND ---',
+);
+const knownGoodClassifierModule = fixtureSection(
+  knownGoodHistoryClassifier,
+  '--- HISTORY DISCOVERY MODULE ---',
+  '--- END HISTORY DISCOVERY MODULE ---',
+);
+
+const knownGoodRustProof = fixtureSection(
+  knownGoodRustDiscovery,
+  '--- HISTORY DISCOVERY PROOF ---',
+  '--- END HISTORY DISCOVERY PROOF ---',
+);
+const knownGoodRustMethod = fixtureSection(
+  knownGoodRustDiscovery,
+  '--- HISTORY DISCOVERY METHOD ---',
+  '--- END HISTORY DISCOVERY METHOD ---',
+);
+const knownGoodRustCandidateParser = fixtureSection(
+  knownGoodRustDiscovery,
+  '--- HISTORY CANDIDATE PARSER ---',
+  '--- END HISTORY CANDIDATE PARSER ---',
+);
+
+const normalizedWorker = normalizeNewlines(worker);
+if (countOccurrences(normalizedWorker, knownGoodDiscoveryListener) !== 1) {
+  throw new Error(
+    'history discovery debugger listener must exist exactly once and equal the live-proven 0.3 baseline',
+  );
+}
+if (countOccurrences(normalizedWorker, knownGoodDiscoveryCommand) !== 1) {
+  throw new Error(
+    'discoverHistorySurfaces must exist exactly once and equal the live-proven 0.3 baseline',
+  );
+}
+if (countOccurrences(normalizedWorker, "case 'discover_history_surfaces':") !== 1) {
+  throw new Error('discover_history_surfaces dispatch must exist exactly once');
+}
+if (
+  countOccurrences(
+    normalizedWorker,
+    "case 'discover_history_surfaces':\n      return discoverHistorySurfaces(command);",
+  ) !== 1
+) {
+  throw new Error('discover_history_surfaces must dispatch directly to the frozen function');
+}
+
+if (countOccurrences(normalizedWorker, "case 'discover_history_surfaces_fresh_tab':") !== 1) {
+  throw new Error('fresh-tab discovery dispatch must exist exactly once');
+}
+if (
+  countOccurrences(
+    normalizedWorker,
+    "case 'discover_history_surfaces_fresh_tab':\n      return discoverHistorySurfacesFreshTab(command);",
+  ) !== 1
+) {
+  throw new Error('fresh-tab discovery must dispatch directly to its isolated function');
+}
+if (normalizeNewlines(discoveryModule) !== knownGoodClassifierModule) {
+  throw new Error(
+    'history-discovery.mjs drifted from the live-proven 0.3 baseline',
+  );
+}
+
+const normalizedDesktopBridge = normalizeNewlines(desktopBridge);
+for (const required of [
+  'const FRESH_HISTORY_DISCOVERY_PROFILE: &str = "cdp-history-fresh-tab-v1";',
+  'pub struct FreshTabHistoryDiscoveryProof',
+  'pub struct FreshTabHistoryDiscoveryObservation',
+  'pub fn discover_history_surfaces_fresh_tab',
+]) {
+  if (!normalizedDesktopBridge.includes(required)) {
+    throw new Error(`fresh-tab Rust discovery invariant missing: ${required}`);
+  }
+}
+for (const [label, expected] of [
+  ['HistoryDiscoveryProof', knownGoodRustProof],
+  ['BrowserBridgeProvider::discover_history_surfaces', knownGoodRustMethod],
+  ['parse_history_surface_candidate', knownGoodRustCandidateParser],
+]) {
+  if (!normalizedDesktopBridge.includes(expected)) {
+    throw new Error(`Rust discovery boundary drifted from live-proven 0.3: ${label}`);
+  }
+}
+for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.constants)) {
+  if (countOccurrences(normalizedWorker, normalizeNewlines(expected)) !== 1) {
+    throw new Error(`0.3 discovery constant missing, duplicated, or drifted: ${name}`);
+  }
+}
+for (const [name, expected] of Object.entries(knownGoodDiscoveryDependencies.functions)) {
+  if (countOccurrences(normalizedWorker, normalizeNewlines(expected)) !== 1) {
+    throw new Error(`0.3 discovery helper missing, duplicated, or drifted: ${name}`);
+  }
+}
+
+console.log('Chatarium live-proven 0.3 discovery baseline and dependencies are frozen');
 
 
 const ordinaryResponse = {
@@ -340,21 +528,75 @@ if (!scheduleBody.includes('if (capture.rate_limit_reload_scheduled) return;')) 
 if (worker.includes('SIDEBAR_BOOTSTRAP_RESOURCE')) {
   throw new Error('synthetic sidebar history replay must remain retired');
 }
-if (!worker.includes("chrome.debugger.sendCommand(debuggee, 'Network.setCacheDisabled'")) {
-  throw new Error('discovery must disable browser cache before first-party reload');
+if (worker.includes('stimulateHistoryUi')) {
+  throw new Error('post-0.3 history UI stimulus must remain outside the frozen discovery path');
 }
-if (!worker.includes("chrome.debugger.sendCommand(debuggee, 'Page.reload'")) {
-  throw new Error('discovery must use browser-level CDP reload');
+if (worker.includes("'Network.setCacheDisabled'")) {
+  throw new Error('post-0.3 discovery cache-bypass mutation must remain retired');
 }
-if (!worker.includes('ignoreCache: true')) {
-  throw new Error('history discovery reload must bypass cache');
+
+const discoveryWindowMs = workerMilliseconds('DISCOVERY_WINDOW_MS');
+const discoveryBodyGraceMs = workerMilliseconds('DISCOVERY_BODY_GRACE_MS');
+const discoveryWaitMs = rustDurationMilliseconds('DISCOVERY_RESULT_WAIT');
+const discoveryWorstCaseMs = discoveryWindowMs + discoveryBodyGraceMs;
+if (discoveryWorstCaseMs + 5_000 >= discoveryWaitMs) {
+  throw new Error(
+    `frozen 0.3 discovery can outlive desktop result wait: worst=${discoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
+  );
 }
-if (!worker.includes("a[href^=\"/c/\"]")) {
-  throw new Error('history UI stimulus must target real conversation-bearing scroll surfaces');
+const freshDiscoveryWorstCaseMs = discoveryWindowMs + discoveryBodyGraceMs;
+if (freshDiscoveryWorstCaseMs + 5_000 >= discoveryWaitMs) {
+  throw new Error(
+    `fresh-tab discovery can outlive desktop result wait: worst=${freshDiscoveryWorstCaseMs}ms wait=${discoveryWaitMs}ms`,
+  );
 }
-if (!worker.includes('if (!navigationLike && chatLinks === 0 && projectLinks === 0) continue;')) {
-  throw new Error('history UI stimulus must permit zero-link navigation scroll surfaces');
+
+const pageFetchTimeoutMs = workerMilliseconds('PAGE_FETCH_TIMEOUT_MS');
+const authWaitMs = rustDurationMilliseconds('AUTH_RESULT_WAIT');
+if (authWaitMs < pageFetchTimeoutMs + 2_000) {
+  throw new Error(
+    `authentication wait must exceed page fetch bound with margin: page=${pageFetchTimeoutMs}ms wait=${authWaitMs}ms`,
+  );
 }
-if (worker.includes('if (chatLinks === 0 && projectLinks === 0) continue;')) {
-  throw new Error('history UI stimulus regressed to requiring history links before stimulation');
+
+const conversationCaptureWindowMs =
+  workerMilliseconds('CONVERSATION_CAPTURE_WINDOW_MS');
+const conversationCaptureBodyGraceMs =
+  workerMilliseconds('CONVERSATION_CAPTURE_BODY_GRACE_MS');
+const conversationRateLimitReloadDelayMs =
+  workerMilliseconds('CONVERSATION_RATE_LIMIT_RELOAD_DELAY_MS');
+const fetchWaitMs = rustDurationMilliseconds('FETCH_RESULT_WAIT');
+const conversationWorstCaseMs =
+  conversationCaptureWindowMs + conversationCaptureBodyGraceMs;
+if (conversationWorstCaseMs + 5_000 >= fetchWaitMs) {
+  throw new Error(
+    `conversation capture can outlive desktop result wait: worst=${conversationWorstCaseMs}ms wait=${fetchWaitMs}ms`,
+  );
 }
+if (conversationRateLimitReloadDelayMs + 5_000 >= conversationCaptureWindowMs) {
+  throw new Error(
+    `rate-limit recovery leaves too little capture window: reload=${conversationRateLimitReloadDelayMs}ms capture=${conversationCaptureWindowMs}ms`,
+  );
+}
+
+const nextTimeoutMs = workerMilliseconds('NEXT_TIMEOUT_MS');
+const resultTimeoutMs = workerMilliseconds('RESULT_TIMEOUT_MS');
+const nextWaitMs = rustDurationMilliseconds('NEXT_WAIT');
+const socketTimeoutMs = rustDurationMilliseconds('SOCKET_TIMEOUT');
+if (nextTimeoutMs < nextWaitMs + 2_000) {
+  throw new Error(
+    `extension long-poll timeout must exceed desktop next wait: next=${nextWaitMs}ms extension=${nextTimeoutMs}ms`,
+  );
+}
+if (socketTimeoutMs < nextTimeoutMs + 2_000) {
+  throw new Error(
+    `desktop socket timeout must exceed extension long-poll timeout: extension=${nextTimeoutMs}ms socket=${socketTimeoutMs}ms`,
+  );
+}
+if (resultTimeoutMs >= socketTimeoutMs) {
+  throw new Error(
+    `extension result-post timeout must stay inside desktop socket timeout: post=${resultTimeoutMs}ms socket=${socketTimeoutMs}ms`,
+  );
+}
+
+console.log('Chatarium browser/desktop duration contracts OK');
