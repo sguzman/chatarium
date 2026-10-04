@@ -1931,6 +1931,83 @@ mod tests {
     }
 
     #[test]
+    fn timed_out_command_rejects_late_result_and_next_command_still_roundtrips() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+
+        let mut slow_provider = runtime.provider();
+        let slow = thread::spawn(move || {
+            slow_provider.call("slow_test", |_| {}, Duration::from_millis(150))
+        });
+
+        let first_raw = request(
+            address,
+            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
+        );
+        let first_split = first_raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let first_command: Value =
+            serde_json::from_slice(&first_raw[first_split + 4..]).unwrap();
+        assert_eq!(first_command["kind"], json!("slow_test"));
+
+        assert_eq!(slow.join().unwrap(), Err(BrowserBridgeError::Timeout));
+
+        let late_result = json!({
+            "version": 1,
+            "id": first_command["id"],
+            "kind": "slow_test",
+            "ok": true
+        });
+        let late_body = serde_json::to_vec(&late_result).unwrap();
+        let late_head = format!(
+            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            late_body.len()
+        );
+        let mut late_request = late_head.into_bytes();
+        late_request.extend_from_slice(&late_body);
+        let late_response = request(address, &late_request);
+        assert!(String::from_utf8_lossy(&late_response).starts_with("HTTP/1.1 409"));
+
+        let mut next_provider = runtime.provider();
+        let next = thread::spawn(move || {
+            next_provider.call("next_test", |_| {}, Duration::from_secs(2))
+        });
+
+        let next_raw = request(
+            address,
+            b"GET /v1/next HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\n\r\n",
+        );
+        let next_split = next_raw
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let next_command: Value =
+            serde_json::from_slice(&next_raw[next_split + 4..]).unwrap();
+        assert_eq!(next_command["kind"], json!("next_test"));
+
+        let next_result = json!({
+            "version": 1,
+            "id": next_command["id"],
+            "kind": "next_test",
+            "ok": true
+        });
+        let next_body = serde_json::to_vec(&next_result).unwrap();
+        let next_head = format!(
+            "POST /v1/result HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Chatarium-Bridge: edge-mv3-v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            next_body.len()
+        );
+        let mut next_request = next_head.into_bytes();
+        next_request.extend_from_slice(&next_body);
+        let next_response = request(address, &next_request);
+        assert!(String::from_utf8_lossy(&next_response).starts_with("HTTP/1.1 204"));
+
+        let returned = next.join().unwrap().unwrap();
+        assert_eq!(returned["ok"], json!(true));
+    }
+
+    #[test]
     fn rate_limit_is_distinct_and_never_retried_here() {
         let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
         let address = runtime.address();
