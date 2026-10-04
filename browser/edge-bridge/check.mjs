@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import {
   classifyHistoryBody,
   isCandidateResponse,
@@ -141,6 +142,29 @@ for (const required of [
 
 function normalizeNewlines(text) {
   return text.replaceAll('\r\n', '\n');
+}
+
+function gitBlobSha(text) {
+  const normalized = normalizeNewlines(text);
+  const bytes = Buffer.from(normalized, 'utf8');
+  return createHash('sha1')
+    .update(Buffer.from(`blob ${bytes.length}\0`, 'utf8'))
+    .update(bytes)
+    .digest('hex');
+}
+
+const frozenFixtureBlobs = [
+  ['known-good-discovery-v0.3.txt', knownGoodDiscoveryRuntime, 'c04fabc8c0ebfb42b44ab75092e749fafb321bad'],
+  ['known-good-history-discovery-v0.3.txt', knownGoodHistoryClassifier, '4e1d6ddf8a5f147eee33ab7d8b4e5a686a120e22'],
+  ['known-good-discovery-dependencies-v0.3.json', JSON.stringify(knownGoodDiscoveryDependencies, null, 2) + '\n', 'e341f1adb929ad3aac86de3876accbc2bbcb2efb'],
+];
+for (const [name, text, expectedSha] of frozenFixtureBlobs) {
+  const actualSha = gitBlobSha(text);
+  if (actualSha !== expectedSha) {
+    throw new Error(
+      `frozen discovery fixture ${name} changed: expected ${expectedSha}, got ${actualSha}`,
+    );
+  }
 }
 
 function fixtureSection(text, startMarker, endMarker) {
