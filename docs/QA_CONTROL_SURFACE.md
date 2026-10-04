@@ -75,6 +75,19 @@ The profile-specific extension token remains required in the MCP environment.
 
 This failure is useful isolation evidence: no browser tabs were accessed, created, or modified, and the personal profile was not touched. Browser control remains UNPROVEN until the Edge-pinned configuration passes the control-plane proof.
 
+## 2026-10-04 profile-vs-process isolation finding
+
+During the Edge-pinned Playwright MCP proof, the principal's personal Edge window displayed the browser debugging infobar even though the Playwright Extension was installed only in the QA profile.
+
+This does not by itself prove that Playwright could enumerate or control personal-profile tabs, because Edge/Chromium can surface debugger state at browser/window scope. However, it is sufficient to reject the prior assumption that a second profile under the same Edge user-data root is a hard isolation boundary.
+
+Policy correction:
+
+- A profile-specific Playwright token plus `--profile-dir-name` selects the intended profile, but is not treated as process-level isolation.
+- For Chatarium QA, the preferred boundary is now a dedicated Edge browser instance launched with its own `--user-data-dir`, separate from the principal's normal Edge user-data root.
+- Browser-control QA must remain stopped until that dedicated instance is established and a new proof confirms that personal-profile tabs are not visible or controllable.
+- A visible debugger infobar in the principal's normal Edge instance is treated as an isolation warning, not as an acceptable steady state.
+
 ## Current control matrix
 
 | Surface | Needed for current history-discovery QA? | Codex control mechanism | Current status | Rule |
