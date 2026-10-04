@@ -4,6 +4,14 @@ This document defines the operating contract for Chatarium development after the
 
 The principal is **not** the project's manual QA runner. Routine engineering must not depend on the principal repeatedly pulling, launching, clicking, watching logs, copying output, taking screenshots, reloading extensions, or retrying browser flows.
 
+## Control-plane proof requirement
+
+See [QA control-surface map](QA_CONTROL_SURFACE.md).
+
+Do not equate "window is open on workspace 6" with "Codex can control it." Browser, extension-management, native-GUI, and compositor surfaces require an explicit, demonstrated control channel. Until that proof exists, mark the surface UNPROVEN and make establishing the control channel part of the engineering goal.
+
+For the current history-discovery failure, prefer a shell-driven QA executable/local bridge harness over egui clicking. Native desktop control is not required merely because the production app has a GUI.
+
 ## Current provisioned environment
 
 The principal has already provisioned a dedicated Microsoft Edge **QA profile**:
