@@ -16,7 +16,7 @@ cargo test --workspace
 
 ## Automated QA ownership
 
-For browser-facing and integration work, Codex owns the complete local QA/debug/Git loop. The principal is not a manual regression runner. Use the dedicated QA Edge profile and follow [Codex-owned QA workstation](CODEX_QA_WORKSTATION.md) plus [Human QA protocol](HUMAN_QA.md).
+For browser-facing and integration work, Codex owns the complete local QA/debug/Git loop. The principal is not a manual regression runner. Use the Playwright-managed bundled Chromium QA browser with persistent state at `~/.local/share/chatarium-qa-browser/`; do not automate the principal's normal Edge installation. Follow [Codex-owned QA workstation](CODEX_QA_WORKSTATION.md) plus [Human QA protocol](HUMAN_QA.md).
 
 If the automation path itself is missing, build or repair it before requesting another live validation.
 

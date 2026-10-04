@@ -1,5 +1,7 @@
 # Capture harness
 
+> **Current QA-browser policy (2026-10-04):** this document describes the legacy Windows-first Edge capture harness that still exists in the repository. It is not the canonical Codex/browser QA environment. New browser QA and extension validation use Playwright-managed bundled Chromium with persistent state under `~/.local/share/chatarium-qa-browser/`, while the principal's normal Edge installation is out of scope. Edge-specific sections below remain factual documentation of the legacy capture tool unless and until that tool is migrated.
+
 Chatarium's protocol-observation loop must not depend on a human manually operating DevTools, exporting HAR files, creating temporary directories, finding downloads, or running a chain of Cargo commands.
 
 The capture harness is the Windows-first automation boundary that turns a controlled ChatGPT web experiment into one portable sanitized artifact plus private local evidence.

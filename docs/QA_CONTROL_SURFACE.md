@@ -2,258 +2,184 @@
 
 This document answers one question before Chatarium asks Codex to perform live QA:
 
-> Can Codex actually control every moving part needed for this test without asking the principal to do anything except submit the Codex prompt?
-
-The answer must be based on a proven control channel, not on the fact that a window is visible on the same workspace.
+> Can Codex actually control every moving part needed for this test without turning the principal into the integration harness?
 
 ## Principal contract
 
 The principal's routine QA actions are exactly **zero**.
 
-The principal may:
+The principal may submit the Codex goal prompt, read the final result, and satisfy a genuine account-holder identity/consent gate such as initial login, MFA, CAPTCHA, or an account-security confirmation.
 
-- submit the Codex goal prompt;
-- read the final result.
+The principal does **not** run Git commands, build, launch Chatarium, reload extensions, select browser profiles, inspect DevTools, watch terminal output, copy logs, take screenshots, retry flows, or decide whether a regression "looks right."
 
-The principal does **not**:
+## 2026-10-04 Edge isolation correction
 
-- run Git commands;
-- build;
-- launch Chatarium;
-- reload extensions;
-- select profiles;
-- click browser pages;
-- open DevTools;
-- watch terminal output;
-- copy logs;
-- take screenshots;
-- retry a flow;
-- inspect the GUI;
-- decide whether a run "looks right";
-- commit or push.
+The first browser-control setup used a UI-created Microsoft Edge QA profile under the same Edge user-data root as the principal's normal browsing profiles.
 
-A true account-holder identity gate such as MFA/CAPTCHA is a blocker, not QA. Codex must report it explicitly rather than turning it into a testing checklist.
+That setup did prove a number of useful facts:
 
-## Important correction
+- Playwright MCP itself was available;
+- after adding `--browser=msedge`, Playwright could control a disposable tab;
+- DOM/accessibility, console, screenshot, and navigation operations worked;
+- no personal tabs were observed by the control proof.
 
-Putting Codex and QA Edge on Hyprland workspace 6 does **not** prove that Codex can control Edge.
+But the setup did **not** prove a hard isolation boundary. During the Edge-pinned run, the principal's personal Edge window displayed the browser debugging indicator even though the Playwright Extension was installed only in the QA profile.
 
-A workspace is only window organization.
+That invalidated the assumption that "separate Edge profile" meant "separate automation boundary."
 
-Likewise, saying "Playwright can control Edge" is insufficient unless one of these control channels is actually configured and demonstrated against the QA browser:
+The old Edge QA profile and Playwright browser-extension token are therefore **retired from the canonical Chatarium QA architecture**.
 
-1. Playwright MCP browser-extension mode explicitly pinned to the `msedge` channel;
-2. DevTools/CDP against a QA-only Edge instance;
-3. WebDriver against a QA-only Edge instance;
-4. desktop/native automation capable of operating the QA Edge window.
+## Canonical QA browser
 
-Until one of those is proven, Edge control is **UNPROVEN**.
+Moving forward, Chatarium QA uses:
 
-The 2026-10-04 screenshot shows an authenticated QA Edge profile with Chatarium Edge Bridge 0.4.7 loaded. It does **not** show or prove a Playwright MCP connection. Therefore the browser is provisioned for QA, but autonomous browser control is not yet proven.
-
-## 2026-10-04 control-plane evidence
-
-The first autonomous control-plane proof failed before any tab access. Codex reported that Playwright MCP resolved `Profile 1` under `~/.config/google-chrome/`, not Edge. The active config had `--extension` and `--profile-dir-name=Profile 1` but no browser/channel override.
-
-Root cause: Playwright MCP defaults its browser channel to Chrome. In extension mode, profile-directory resolution therefore targeted Chrome's user-data root.
-
-Permanent configuration rule for this workstation:
-
-```toml
-[mcp_servers.playwright]
-command = "pnpm"
-args = [
-  "dlx",
-  "@playwright/mcp@latest",
-  "--browser=msedge",
-  "--extension",
-  "--profile-dir-name=Profile 1",
-]
+```text
+Playwright-managed bundled Chromium
++
+persistent Chatarium-owned user-data directory
+~/.local/share/chatarium-qa-browser/
++
+Chatarium MV3 bridge loaded from browser/edge-bridge/
 ```
 
-The profile-specific extension token remains required in the MCP environment.
+The principal's normal Edge root:
 
-This failure is useful isolation evidence: no browser tabs were accessed, created, or modified, and the personal profile was not touched. Browser control remains UNPROVEN until the Edge-pinned configuration passes the control-plane proof.
+```text
+~/.config/microsoft-edge/
+```
 
-## 2026-10-04 profile-vs-process isolation finding
+is outside the browser-automation system.
 
-During the Edge-pinned Playwright MCP proof, the principal's personal Edge window displayed the browser debugging infobar even though the Playwright Extension was installed only in the QA profile.
+Do not attach Playwright MCP, CDP, WebDriver, or desktop browser automation to personal Edge for ordinary Chatarium QA.
 
-This does not by itself prove that Playwright could enumerate or control personal-profile tabs, because Edge/Chromium can surface debugger state at browser/window scope. However, it is sufficient to reject the prior assumption that a second profile under the same Edge user-data root is a hard isolation boundary.
+Do not install or depend on the Playwright browser extension in personal Edge.
 
-Policy correction:
+## Why bundled Chromium
 
-- A profile-specific Playwright token plus `--profile-dir-name` selects the intended profile, but is not treated as process-level isolation.
-- For Chatarium QA, the preferred boundary is now a dedicated Edge browser instance launched with its own `--user-data-dir`, separate from the principal's normal Edge user-data root.
-- Browser-control QA must remain stopped until that dedicated instance is established and a new proof confirms that personal-profile tabs are not visible or controllable.
-- A visible debugger infobar in the principal's normal Edge instance is treated as an isolation warning, not as an acceptable steady state.
+Bundled Chromium is preferred over Microsoft Edge, Google Chrome, or an Arch-installed Chromium package for this QA role because:
+
+- Playwright manages the matching browser dependency;
+- the QA binary/runtime becomes ordinary project-tooling state;
+- Playwright supports a dedicated persistent profile through `--user-data-dir`;
+- unpacked MV3 extension testing can be launched deterministically with Chromium;
+- branded Chrome/Edge command-line extension side-loading is restricted;
+- the QA browser can be headed for normal interactive login while still being fully agent-controlled;
+- personal Edge is removed from the architecture entirely.
+
+The repository component remains named `edge-bridge` for historical/source continuity; it is a Chromium-compatible MV3 extension.
 
 ## Current control matrix
 
-| Surface | Needed for current history-discovery QA? | Codex control mechanism | Current status | Rule |
-| --- | --- | --- | --- | --- |
-| Git pull/status/diff/commit/push | yes | shell | PROVEN CAPABILITY | Codex owns it |
-| Cargo/pnpm/build/tests | yes | shell | PROVEN CAPABILITY | Codex owns it |
-| Start/kill/restart Chatarium process | yes | shell | PROVEN CAPABILITY | Codex owns it |
-| Capture Chatarium stdout/stderr | yes | shell redirection / process harness | PROVEN CAPABILITY | Codex owns it |
-| Inspect journal/cache files | yes | shell | PROVEN CAPABILITY | Codex owns it |
-| Exercise history discovery logic | yes | localhost bridge / dedicated CLI QA harness | IMPLEMENTABLE WITHOUT GUI | Prefer this over egui clicking |
-| Native egui clicking | no for current history bug | test RPC/CLI first; native automation only if unavoidable | NOT REQUIRED | Do not make principal click |
-| Existing QA Edge normal web tabs | yes | Playwright MCP extension or CDP | UNPROVEN IN CURRENT SETUP | Must bootstrap and prove |
-| QA Edge authenticated session | yes | already present in QA profile | PROVISIONED, NOT YET AGENT-CONTROLLED | Preserve it |
-| Chatarium Edge Bridge current source files | yes | Git + filesystem | PROVEN CAPABILITY | Codex owns it |
-| Reload/update unpacked Chatarium extension in existing QA profile | yes for first autonomous run | browser-chrome/desktop control, or replace with an agent-launchable QA browser architecture | UNPROVEN | This is a real bootstrap gap |
-| `edge://extensions` browser chrome | only if using the existing unpacked-extension workflow | privileged browser UI / desktop automation | UNPROVEN | Do not assume normal page automation can operate it |
-| Browser DOM/accessibility/console/screenshots | useful | Playwright MCP once attached | UNPROVEN UNTIL MCP ATTACH WORKS | Prove once |
-| Browser network/CDP evidence | useful | CDP/DevTools or Chatarium extension instrumentation | PARTIALLY AVAILABLE | Prefer machine artifacts |
-| Hyprland workspace switching/window discovery | bootstrap only | `hyprctl` shell IPC | LIKELY, MUST VERIFY LOCALLY | Workspace 6 is not browser control |
-| Pointer/keyboard automation of arbitrary Wayland apps | bootstrap/fallback only | compositor/input automation | UNPROVEN | Only needed if API/CLI control cannot replace it |
-| Personal Edge windows/profile | never | none | OUT OF BOUNDS | Do not touch |
+| Surface | Needed? | Codex control mechanism | Current policy/status |
+| --- | --- | --- | --- |
+| Git pull/status/diff/commit/push | yes | shell | Codex owns it |
+| Cargo/pnpm/build/tests | yes | shell | Codex owns it |
+| Start/kill/restart Chatarium | yes | shell/process harness | Codex owns it |
+| Capture Chatarium stdout/stderr | yes | shell redirection/process harness | Codex owns it |
+| Inspect journal/cache files | yes | shell | Codex owns it |
+| Native egui clicking | usually no | CLI/test RPC first | Do not make principal click |
+| QA browser binary | yes | Playwright-managed Chromium | Canonical browser |
+| QA browser profile | yes | `~/.local/share/chatarium-qa-browser/` | Dedicated private state |
+| QA browser launch | yes | `chatarium-qa-browser` / Playwright | Codex-owned |
+| ChatGPT login/MFA | sometimes | headed QA Chromium | Principal only at true identity gate |
+| Chatarium MV3 bridge source | yes | Git/filesystem | Codex-owned |
+| Bridge load/reload | yes | launch persistent Chromium with current unpacked extension | Codex-owned |
+| Browser DOM/accessibility/console/screenshots | yes | Playwright | Must be proven in new Chromium setup |
+| Browser network/CDP evidence | useful | Playwright/CDP + bridge instrumentation | Machine-collected |
+| Personal Edge windows/profile | never | none | OUT OF BOUNDS |
 
-## Current history-discovery QA should not depend on egui
+## Browser bootstrap target
 
-For the current Chatarium failure, there is no reason to require Codex to click the desktop app.
+Codex must bootstrap the Chromium QA browser itself.
 
-The thing being tested is:
+The canonical durable pieces are:
 
 ```text
-authenticated Edge session
+Playwright browser cache/tooling
+    -> managed by Playwright
+
+~/.local/share/chatarium-qa-browser/
+    -> persistent QA browser state
+
+~/.local/bin/chatarium-qa-browser
+    -> stable human/Codex launcher
+
+browser/edge-bridge/
+    -> current unpacked Chatarium MV3 extension
+```
+
+The launcher must resolve the Playwright-managed Chromium executable rather than hard-code a versioned cache path.
+
+If the QA profile is already locked by a running browser, automation must reuse it through a supported path or fail with a precise lock/process blocker. Do not spawn a second competing browser against the same profile.
+
+## Authentication boundary
+
+Do not copy personal Edge cookies, databases, profile directories, storage state, or credentials into QA Chromium.
+
+If login is needed:
+
+1. Codex launches `chatarium-qa-browser`;
+2. Codex navigates it to the appropriate ChatGPT login surface;
+3. the principal performs only the identity/consent action;
+4. Codex resumes;
+5. the authenticated state persists in the dedicated QA profile.
+
+That is setup/authentication, not regression QA.
+
+## Extension lifecycle
+
+The extension lifecycle must be deterministic and agent-owned.
+
+For Playwright Chromium extension QA, the browser should be launched as a persistent context with the current repository extension loaded. Browser restart against the same QA profile is the normal reload mechanism after source changes.
+
+Do not depend on `edge://extensions`, manual extension reload, or the Playwright browser extension.
+
+The first successful bootstrap must prove:
+
+1. the expected MV3 service worker exists;
+2. its extension ID/version correspond to the current build;
+3. source changes are reflected after the automated restart/reload path;
+4. the localhost Chatarium bridge roundtrip succeeds.
+
+## History-discovery QA should not depend on egui
+
+The browser integration under test is:
+
+```text
+authenticated QA Chromium session
     ↕
-Chatarium Edge Bridge
+Chatarium MV3 bridge
     ↕ localhost command protocol
 history discovery / exact mirror logic
     ↕
 durable cache/journal
 ```
 
-That can be exercised by a machine-controlled executable.
+Prefer a dedicated CLI/test entry point or typed local RPC that exercises the same production logic. The desktop GUI may consume the same state machine, but it should not be required merely to validate browser integration.
 
-The preferred next implementation is a dedicated QA entry point such as:
+## Acceptance proof
 
-```text
-cargo run -p chatarium-desktop --bin chatarium-qa -- history-discovery
-```
+Do not mark the new Chromium control plane proven until one Codex run, with no principal interaction after any unavoidable login gate, can produce machine evidence for all of the following:
 
-or an equivalent test-only command/RPC.
+1. identify the Playwright-managed Chromium binary/version;
+2. prove the persistent profile path is `~/.local/share/chatarium-qa-browser/`;
+3. prove personal Edge is not the automation target;
+4. load the current Chatarium MV3 bridge from the repository;
+5. verify bridge version/service worker;
+6. navigate a normal QA page;
+7. inspect DOM/accessibility state;
+8. inspect browser console state;
+9. take a screenshot;
+10. launch the Chatarium QA executable/process;
+11. complete a localhost bridge roundtrip;
+12. exercise history discovery/mirroring acceptance;
+13. collect terminal + browser evidence;
+14. cleanly stop only its own test processes.
 
-Its job is to:
+## Next Codex goal
 
-1. start the localhost browser bridge;
-2. wait for the browser extension;
-3. probe authentication;
-4. run frozen primary discovery;
-5. run fresh-tab recovery when policy requires it;
-6. print a typed JSON result;
-7. write a sanitized diagnostic bundle;
-8. exit success/failure.
+The next goal is to establish the Playwright-managed Chromium QA environment, not to perform another Edge-profile test.
 
-This lets Codex test the actual browser integration from the shell without touching egui at all.
+Codex owns dependency installation, browser/profile/launcher creation, extension loading, control-plane proof, repository changes, testing, commit, and push.
 
-The desktop GUI can consume the same library/state machine. The QA executable is not a second implementation of discovery.
-
-## The browser bootstrap gap
-
-There is one important unresolved moving part right now:
-
-> How does Codex obtain reliable control of the already-authenticated QA Edge profile and reload/update the unpacked Chatarium extension without the principal touching Edge?
-
-This must be solved before claiming zero-touch live QA.
-
-### Path A — Playwright MCP extension on the existing QA profile
-
-Upstream Playwright supports connecting to existing Edge tabs through its browser extension and can target a specific browser profile.
-
-Advantages:
-
-- keeps the already-authenticated QA session;
-- does not require a separate compositor;
-- normal web-page interaction becomes directly agent-controlled;
-- personal profile can remain without the Playwright extension.
-
-Bootstrap problem:
-
-- the Playwright extension itself must be present and connected in the QA profile;
-- the current screenshot does not prove that it is installed;
-- browser-internal pages such as extension management must not be assumed controllable by ordinary page automation.
-
-Codex must either automate this bootstrap through a native/browser control channel or report that this path is blocked. The principal is not the fallback installer.
-
-### Path B — QA-only Edge process controlled by CDP/WebDriver
-
-Microsoft Edge supports a distinct user-data directory and DevTools/WebDriver control.
-
-Advantages:
-
-- complete process ownership by Codex;
-- no risk of attaching to the principal's personal Edge process;
-- launch/kill/restart is shell-controlled;
-- remote debugging is deterministic;
-- browser MCP can attach directly.
-
-Bootstrap problem:
-
-- the existing authenticated QA state currently lives in the UI-created profile under the normal Edge user-data root;
-- moving/copying that state into a dedicated QA-only user-data directory must be proven safe and complete;
-- do not copy live browser databases casually or assume cookies alone are sufficient.
-
-This path is stronger isolation, but authentication-state migration is real engineering work.
-
-### Path C — desktop automation on workspace 6
-
-If A and B cannot be bootstrapped without touching privileged browser UI, Codex may automate the current workspace directly.
-
-Potential building blocks include:
-
-- `hyprctl` for workspace/window discovery and focus;
-- screenshot tooling for visual state;
-- Wayland/XWayland keyboard/pointer automation;
-- accessibility tooling where available.
-
-This is the place where compositor/desktop automation becomes relevant.
-
-A **second** compositor is not automatically required. The existing Hyprland session may be sufficient if its automation surfaces can reliably target only workspace 6.
-
-But this must be demonstrated. It was wrong to claim categorically that no compositor/desktop-control work would be needed before proving one of the API-level browser paths.
-
-## Extension reload problem
-
-The current QA browser shows Chatarium Edge Bridge 0.4.7 while the repository has moved beyond it.
-
-That means the first fully autonomous run must solve extension update/reload.
-
-After the bootstrap is solved, Chatarium should make future reloads agent-owned as well. Options to investigate include:
-
-- an explicit QA/dev command in the extension that calls `chrome.runtime.reload()` after source files are updated;
-- an agent-owned browser process whose lifecycle reloads the tested extension deterministically;
-- a browser automation path that can reload the extension without operator action.
-
-Do not keep a permanent dependency on the principal opening `edge://extensions` and clicking Reload.
-
-## Acceptance proof for "Codex controls QA Edge"
-
-Do not mark browser control proven until one Codex run, with no principal interaction after the prompt, can produce machine evidence for all of the following:
-
-1. identify the QA Edge profile/session;
-2. prove it did not attach to the personal profile;
-3. read a normal page from the authenticated QA session;
-4. navigate a QA tab;
-5. take a screenshot;
-6. read browser console state;
-7. verify Chatarium Edge Bridge version;
-8. cause the tested extension/runtime to reload or otherwise launch the exact current build;
-9. launch the Chatarium QA executable;
-10. complete a localhost extension roundtrip;
-11. collect terminal + browser evidence;
-12. cleanly stop its own test processes.
-
-Only then is "Codex can control Edge" a proven project capability.
-
-## Goal for the next Codex prompt
-
-The next Codex goal is **not** "test Chatarium 0.4.10."
-
-It is:
-
-> Establish and prove the zero-touch QA control plane. Inventory the actual local QA Edge profile and available Hyprland/browser-control tooling; choose the least invasive control path that keeps the personal Edge profile out of scope; build a headless/CLI history-discovery QA entry point so egui is not part of the test; bootstrap autonomous control of the QA Edge profile or a QA-only equivalent; prove extension version/reload control; then run the history-discovery acceptance test. Codex owns all Git/build/run/browser/evidence/commit/push steps. The principal performs no QA actions.
-
-If the control plane itself cannot be established, stop with the exact technical blocker and the evidence gathered. Do not return a manual workaround.
+The only acceptable principal interruption is a true identity/consent gate inside the dedicated QA Chromium browser.

@@ -1,6 +1,6 @@
 # Human QA protocol
 
-> **Current project override:** routine operator QA is disabled. Codex owns browser/application validation end to end under `docs/CODEX_QA_WORKSTATION.md`. The principal is not asked to pull, launch, reload extensions, click through regression flows, watch logs, copy output, take screenshots, or rerun speculative tests. The remaining human-only exception is a true identity/consent boundary such as CAPTCHA, MFA, or an explicit browser/account security confirmation that automation cannot lawfully or technically perform.
+> **Current project override:** routine operator QA is disabled. Codex owns browser/application validation end to end under `docs/CODEX_QA_WORKSTATION.md`. The canonical browser is Playwright-managed bundled Chromium with persistent state under `~/.local/share/chatarium-qa-browser/`; personal Microsoft Edge is not a QA target. The principal is not asked to pull, launch, reload extensions, click through regression flows, watch logs, copy output, take screenshots, or rerun speculative tests. The remaining human-only exception is a true identity/consent boundary such as CAPTCHA, MFA, or an explicit browser/account security confirmation that automation cannot lawfully or technically perform.
 
 Chatarium assumes any unavoidable human action should be explicit, reproducible, low-risk, and **exceptional**. A request such as "try it" is not sufficient, and turning the operator into a manual CI/integration runner is prohibited.
 
@@ -17,7 +17,7 @@ Before asking for human QA, automate everything that does not intrinsically requ
 - diffing and structural inspection;
 - cleanup where it is safe to automate.
 
-The existence of an authenticated browser session is not, by itself, a reason to require human QA. Codex should control the dedicated QA Edge profile through browser automation and collect its own logs, screenshots, DOM/console evidence, and network diagnostics.
+The existence of an authenticated browser session is not, by itself, a reason to require human QA. Codex should control the dedicated Playwright-managed QA Chromium profile at `~/.local/share/chatarium-qa-browser/` and collect its own logs, screenshots, DOM/console evidence, and network diagnostics. The principal's normal Microsoft Edge profiles are outside the automation boundary.
 
 If Chatarium cannot yet obtain a browser or native-app observation automatically, that is normally missing test infrastructure. Build the harness, test hook, MCP connection, debug surface, or automation needed to obtain it.
 

@@ -45,7 +45,7 @@ protocol snapshot / diff / typed interpretation
 
 Longer-term automation should preserve the useful harness properties:
 
-- dedicated Chatarium Edge profile with one-time normal login;
+- dedicated Playwright-managed Chromium QA profile at `~/.local/share/chatarium-qa-browser/` with one-time normal login;
 - read-only diagnostics (`chatarium-capture doctor`);
 - automated canonical experiment execution;
 - incremental private capture journal;
