@@ -1622,6 +1622,42 @@ mod tests {
         })
     }
 
+    fn fresh_history_candidate(
+        first_id: &str,
+        first_title: &str,
+        second_id: &str,
+        second_title: &str,
+    ) -> Value {
+        let items = vec![
+            json!({
+                "id": first_id,
+                "title": first_title,
+                "create_time": null,
+                "update_time": null
+            }),
+            json!({
+                "id": second_id,
+                "title": second_title,
+                "create_time": null,
+                "update_time": null
+            }),
+        ];
+        json!({
+            "path": "/backend-api/gizmos/snorlax/sidebar",
+            "query_keys": ["conversations_per_gizmo", "limit", "owned_only"],
+            "surface_kind": "snorlax_sidebar",
+            "conversation_count": 2,
+            "cursor_count": 1,
+            "string_cursor_count": 1,
+            "null_cursor_count": 0,
+            "top_level_cursor": "string",
+            "top_level_keys": ["cursor", "items"],
+            "traversal_truncated": false,
+            "observations": 1,
+            "items": items
+        })
+    }
+
     fn extension_auth_result(command: &Value) -> Value {
         json!({
             "version": 1,
@@ -1852,7 +1888,9 @@ mod tests {
                 assert_eq!(command.as_object().unwrap().len(), 4);
             },
             |command| {
-                json!({
+                let candidate =
+                    fresh_history_candidate("fresh-1", "Fresh one", "fresh-2", "Fresh two");
+                let mut result = json!({
                     "version": 1,
                     "id": command["id"],
                     "kind": "discover_history_surfaces_fresh_tab",
@@ -1873,35 +1911,10 @@ mod tests {
                     "body_too_large": 0,
                     "invalid_json": 0,
                     "candidate_count": 1,
-                    "discovery": "candidates_observed",
-                    "candidates": [{
-                        "path": "/backend-api/gizmos/snorlax/sidebar",
-                        "query_keys": ["conversations_per_gizmo", "limit", "owned_only"],
-                        "surface_kind": "snorlax_sidebar",
-                        "conversation_count": 2,
-                        "cursor_count": 1,
-                        "string_cursor_count": 1,
-                        "null_cursor_count": 0,
-                        "top_level_cursor": "string",
-                        "top_level_keys": ["cursor", "items"],
-                        "traversal_truncated": false,
-                        "observations": 1,
-                        "items": [
-                            {
-                                "id": "fresh-1",
-                                "title": "Fresh one",
-                                "create_time": null,
-                                "update_time": null
-                            },
-                            {
-                                "id": "fresh-2",
-                                "title": "Fresh two",
-                                "create_time": null,
-                                "update_time": null
-                            }
-                        ]
-                    }]
-                })
+                    "discovery": "candidates_observed"
+                });
+                result["candidates"] = json!([candidate]);
+                result
             },
         );
 
@@ -1975,7 +1988,9 @@ mod tests {
                         command["request_profile"],
                         json!(FRESH_HISTORY_DISCOVERY_PROFILE)
                     );
-                    json!({
+                    let candidate =
+                        fresh_history_candidate("fresh-a", "Fresh A", "fresh-b", "Fresh B");
+                    let mut result = json!({
                         "version": 1,
                         "id": command["id"],
                         "kind": expected_kind,
@@ -1996,35 +2011,10 @@ mod tests {
                         "body_too_large": 0,
                         "invalid_json": 0,
                         "candidate_count": 1,
-                        "discovery": "candidates_observed",
-                        "candidates": [{
-                            "path": "/backend-api/gizmos/snorlax/sidebar",
-                            "query_keys": ["conversations_per_gizmo", "limit", "owned_only"],
-                            "surface_kind": "snorlax_sidebar",
-                            "conversation_count": 2,
-                            "cursor_count": 1,
-                            "string_cursor_count": 1,
-                            "null_cursor_count": 0,
-                            "top_level_cursor": "string",
-                            "top_level_keys": ["cursor", "items"],
-                            "traversal_truncated": false,
-                            "observations": 1,
-                            "items": [
-                                {
-                                    "id": "fresh-a",
-                                    "title": "Fresh A",
-                                    "create_time": null,
-                                    "update_time": null
-                                },
-                                {
-                                    "id": "fresh-b",
-                                    "title": "Fresh B",
-                                    "create_time": null,
-                                    "update_time": null
-                                }
-                            ]
-                        }]
-                    })
+                        "discovery": "candidates_observed"
+                    });
+                    result["candidates"] = json!([candidate]);
+                    result
                 };
 
                 let body = serde_json::to_vec(&result).unwrap();
@@ -2041,10 +2031,7 @@ mod tests {
 
         let mut provider = runtime.provider();
         let auth = provider.probe_authentication().unwrap();
-        assert_eq!(
-            auth.evidence,
-            SessionAuthenticationEvidence::Authenticated
-        );
+        assert_eq!(auth.evidence, SessionAuthenticationEvidence::Authenticated);
 
         let primary = provider.discover_history_surfaces().unwrap();
         assert!(primary.candidates.is_empty());
