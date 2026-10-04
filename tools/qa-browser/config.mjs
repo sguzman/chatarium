@@ -12,10 +12,12 @@ export const qaProfileDirectory = path.join(
   "chatarium-qa-browser",
 );
 export const extensionDirectory = path.join(repositoryRoot, "browser", "edge-bridge");
+export const qaWindowClass = "chatarium-qa";
 
 export const chromiumLaunchOptions = {
   headless: false,
   args: [
+    `--class=${qaWindowClass}`,
     `--disable-extensions-except=${extensionDirectory}`,
     `--load-extension=${extensionDirectory}`,
   ],
