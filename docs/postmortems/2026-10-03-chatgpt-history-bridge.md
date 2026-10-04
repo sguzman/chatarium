@@ -544,6 +544,40 @@ The mistake repeated an already-known failure mode: reconstructing a private req
 
 Permanent rule added by this incident: a successful HAR response proves a response shape, but does not by itself authorize synthetic runtime replay when the site may attach unobserved or dynamic request context.
 
+### Stage K6 — 0.4.6 live run exposes a circular UI-stimulus gate
+
+The 0.4.6 live run established that the bridge transport itself was healthy:
+
+```text
+authentication=true HTTP=200
+responses=147
+backend-200=34
+candidates=2
+current-pass-items=0
+stimulus-attempts=4
+stimulus-targets=0
+stimulus-steps=0
+chat-links=0->0
+```
+
+This is not an MV3-worker failure, authentication failure, or lack of browser traffic. Discovery attached successfully and observed substantial first-party traffic.
+
+The defect was in the 0.4.4 UI-stimulus eligibility rule. It rejected every scrollable element that contained zero conversation/project links before it calculated whether the element belonged to `nav`, `aside`, or `[role="navigation"]`.
+
+That made the recovery path circular:
+
+```text
+history links must already exist
+        ↓
+surface becomes eligible for scrolling
+        ↓
+scrolling is supposed to cause lazy history links to load
+```
+
+0.4.7 changes only that gate. Scrollable navigation-owned surfaces are eligible even with zero current history links; unrelated scroll surfaces still require real conversation/project links. Synthetic history API replay remains retired. Exact mirroring, 429 recovery, and the MV3 keepalive are unchanged.
+
+A package invariant now rejects reintroducing the old unconditional zero-link skip.
+
 ## 3. Where engineering/assistant behavior failed
 
 ### F1 — discouraging the HAR
