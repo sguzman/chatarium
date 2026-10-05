@@ -35,6 +35,7 @@ pub enum BridgeCommand {
 pub struct SessionState {
     pub status: String,
     pub sharing: bool,
+    pub profile_id: Option<String>,
     pub profile_label: Option<String>,
     pub email: Option<String>,
     pub error_message: Option<String>,
@@ -45,6 +46,7 @@ impl Default for SessionState {
         Self {
             status: "disconnected".to_owned(),
             sharing: false,
+            profile_id: None,
             profile_label: None,
             email: None,
             error_message: None,
@@ -481,6 +483,10 @@ fn parse_session(value: &Value) -> Option<SessionState> {
             .get("sharing")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        profile_id: value
+            .get("profileId")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         profile_label: value
             .get("profileLabel")
             .and_then(Value::as_str)
@@ -589,7 +595,7 @@ mod tests {
     #[test]
     fn parses_safe_session_without_credentials() {
         let event = parse_bridge_event(
-            r#"{"type":"session","session":{"status":"connected","sharing":true,"profileLabel":"Connection 1","identity":{"email":"user@example.com"}}}"#,
+            r#"{"type":"session","session":{"status":"connected","sharing":true,"profileId":"profile-1","profileLabel":"Connection 1","identity":{"email":"user@example.com"}}}"#,
         )
         .unwrap();
 
@@ -598,6 +604,7 @@ mod tests {
             BridgeEvent::Session(SessionState {
                 status: "connected".to_owned(),
                 sharing: true,
+                profile_id: Some("profile-1".to_owned()),
                 profile_label: Some("Connection 1".to_owned()),
                 email: Some("user@example.com".to_owned()),
                 error_message: None,
