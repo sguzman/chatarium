@@ -134,8 +134,7 @@ fn is_visible_transcript_message(message: &ConversationMessage) -> bool {
     }
 
     matches!(message.author.role.as_str(), "user" | "assistant")
-        && project_visible_content(&message.content)
-            .is_some_and(|text| !text.trim().is_empty())
+        && project_visible_content(&message.content).is_some_and(|text| !text.trim().is_empty())
 }
 
 fn project_visible_content(content: &ConversationMessageContent) -> Option<String> {
@@ -174,7 +173,11 @@ fn project_visible_content(content: &ConversationMessageContent) -> Option<Strin
         ConversationMessageContent::Content {
             content_type,
             content,
-        } if matches!(content_type.as_str(), "model_editable_context" | "reasoning_recap") => {
+        } if matches!(
+            content_type.as_str(),
+            "model_editable_context" | "reasoning_recap"
+        ) =>
+        {
             None
         }
         ConversationMessageContent::Content {
@@ -347,7 +350,12 @@ mod tests {
                     "assistant",
                     reasoning_recap,
                 ),
-                message("final", Some("internal"), "assistant", parts("synthetic answer")),
+                message(
+                    "final",
+                    Some("internal"),
+                    "assistant",
+                    parts("synthetic answer"),
+                ),
             ],
             "final",
         );
