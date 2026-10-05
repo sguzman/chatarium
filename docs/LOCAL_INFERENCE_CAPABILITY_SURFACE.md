@@ -19,6 +19,7 @@ Relevant Chatarium files:
 
 - `tools/siwc-bridge/bridge.mjs`
 - `tools/siwc-bridge/capability-probe.mjs`
+- `apps/desktop/src/capability_probes.rs`
 - `apps/desktop/src/siwc_bridge.rs`
 - `apps/desktop/src/main.rs`
 
@@ -155,6 +156,9 @@ The first local-first control milestone is now implemented.
 
 The desktop supports:
 
+- a fixed in-app SIWC capability probe suite under Diagnostics;
+- sanitized local probe-result persistence to `siwc-capability-probes.json`;
+- normal Send blocking while a capability probe is active, preserving the one-Responses-request probe invariant;
 - multiple isolated local conversations with durable active selection;
 - create, switch, rename, archive, and restore;
 - per-conversation draft isolation;
@@ -168,7 +172,7 @@ The desktop supports:
 
 The request inspector renders the request-shaping state Chatarium controls: selected model, optional instructions, developer context plus transcript input, and the fixed store=false / stream=true semantics.
 
-Linux desktop compile and test validation passed for the implementation milestone. The repository-wide Windows format gate still reports existing rustfmt drift across several files and remains a separate cleanup issue; it does not negate the Linux compile/test proof.
+Repository-wide validation is green on both Windows and Linux for this milestone: bridge syntax/smoke, formatting, compilation, protocol corpus validation, and tests all pass at commit `236b9f4a9e66d8f7ab25c7334ab221869618f936`. The Windows archive-restore test was also hardened to release open journal handles before replacement.
 
 ## Local behavioral levers Chatarium owns
 
@@ -196,9 +200,9 @@ One local conversation must not acquire another conversation's state implicitly.
 
 The first known-control exposure set is complete: instructions, developer context, stop/cancel, per-conversation model persistence, conversation isolation, and request inspection are now user-controllable.
 
-The route-documented and previously unknown capability probes are now executable without widening the product API.
+The route-documented and previously unknown capability probes are now executable from the desktop Diagnostics panel without widening the product API or exposing credentials. The same fixed suite also remains available through the standalone developer CLI.
 
-Next run the authenticated developer harness against an account-visible model and record each result as accepted, route-unsupported, rejected, or model/account constrained:
+Next run the in-app authenticated probe suite against the selected account-visible model and record each result as accepted, route-unsupported, rejected, or model/account constrained:
 
 1. image/file input;
 2. namespaced function/custom tools;
