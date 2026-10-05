@@ -55,11 +55,11 @@ Legend:
 | Multi-message context input | AVAILABLE NOW | Current desktop sends local transcript context. |
 | user role | AVAILABLE NOW | Supported. |
 | assistant role | AVAILABLE NOW | Supported. |
-| developer role | DEVKIT-READY | Pinned wrapper supports it; UI does not intentionally expose it yet. |
-| Top-level instructions | BRIDGE-READY | Pinned wrapper and Node bridge support it; Rust/UI do not. |
+| developer role | AVAILABLE NOW | Per-conversation Developer context is inserted as the first developer-role input message. |
+| Top-level instructions | AVAILABLE NOW | Per-conversation Instructions editor persists locally and is sent through the top-level field. |
 | Streamed text deltas | AVAILABLE NOW | End-to-end. |
 | Completed-response signal | AVAILABLE NOW | Required for success. |
-| Stop/cancel active inference | DEVKIT-READY | Pinned wrapper supports cancellation; current desktop lacks a stop control. |
+| Stop/cancel active inference | AVAILABLE NOW | Desktop Stop generation targets the active request through a bridge-owned AbortController. |
 | Image input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. |
 | File input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. |
 | Function/custom tools | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. |
@@ -115,13 +115,26 @@ with string content.
 
 The wrapper fixes server storage off and streaming on.
 
-## Current Chatarium gaps
+## Current Chatarium implementation
 
-The Node bridge already carries model, input, optional instructions, and streamed deltas.
+The first local-first control milestone is now implemented.
 
-The Rust bridge currently carries model and input but does not yet carry instructions or inference cancellation.
+The desktop supports:
 
-The desktop currently exposes model choice and ordinary local transcript input, but not explicit developer context or top-level instructions.
+- multiple isolated local conversations with durable active selection;
+- create, switch, rename, archive, and restore;
+- per-conversation draft isolation;
+- per-conversation persisted model selection;
+- per-conversation top-level instructions;
+- per-conversation developer-role context;
+- active response cancellation / Stop generation;
+- an Exact next-request context inspector;
+- local persistence of workspace metadata and inference settings;
+- inclusion of those local metadata files in archive backup/restore.
+
+The request inspector renders the request-shaping state Chatarium controls: selected model, optional instructions, developer context plus transcript input, and the fixed store=false / stream=true semantics.
+
+Linux desktop compile and test validation passed for the implementation milestone. The repository-wide Windows format gate still reports existing rustfmt drift across several files and remains a separate cleanup issue; it does not negate the Linux compile/test proof.
 
 ## Local behavioral levers Chatarium owns
 
@@ -145,16 +158,11 @@ These can be explored without more remote protocol work:
 
 One local conversation must not acquire another conversation's state implicitly.
 
-## Immediate exposure backlog
+## Immediate capability backlog
 
-Before elaborate lifecycle experiments, expose the controls already known to exist:
+The first known-control exposure set is complete: instructions, developer context, stop/cancel, per-conversation model persistence, conversation isolation, and request inspection are now user-controllable.
 
-1. top-level instructions;
-2. explicit developer-message context;
-3. stop/cancel active inference;
-4. per-conversation persisted model choice.
-
-Then investigate route-documented capabilities that the pinned wrapper does not yet expose:
+Next investigate route-documented capabilities that the pinned wrapper does not yet expose:
 
 1. image/file input;
 2. function/custom tools;
