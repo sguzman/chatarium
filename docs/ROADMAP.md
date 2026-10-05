@@ -2,6 +2,16 @@
 
 Chatarium is ordered by reliability value, not by visual completeness.
 
+## Active phase override — local-first behavioral exploration
+
+As of 2026-10-05, remote ChatGPT website mirroring/browser transport and P3V native-transport experiments are paused by principal decision. Do not advance those phases until explicitly unpaused.
+
+The active work track is local-first Chatarium conversation behavior: multiple local conversations, per-conversation isolation, model/control exploration, local memory/context, routing, MCP/tools, worker lifecycle, master/worker coordination, and session continuity.
+
+This is a scheduling override, not a deletion or weakening of P3/P3V. See [LOCAL_FIRST_EXPLORATION.md](LOCAL_FIRST_EXPLORATION.md).
+
+
+
 ## P0 — stop losing work
 
 The immediate objective is a browser-side flight recorder that can be deployed before the native client is ready.
