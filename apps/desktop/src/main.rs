@@ -853,7 +853,8 @@ impl ChatariumApp {
     }
 
     fn local_conversation_busy(&self) -> bool {
-        self.commit_in_flight.is_some()
+        self.saved_revision < self.draft_revision
+            || self.commit_in_flight.is_some()
             || self.pending_remote_turn.is_some()
             || self.active_remote_turn.is_some()
     }
