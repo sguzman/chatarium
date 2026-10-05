@@ -1,13 +1,11 @@
 use crate::siwc_bridge::BridgeError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 
-const TINY_PNG: &str =
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-const TINY_TEXT: &str =
-    "data:text/plain;base64,Q2hhdGFyaXVtIGNhcGFiaWxpdHkgcHJvYmUuCg==";
+const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const TINY_TEXT: &str = "data:text/plain;base64,Q2hhdGFyaXVtIGNhcGFiaWxpdHkgcHJvYmUuCg==";
 
 #[derive(Debug, Clone)]
 pub struct ProbeSpec {
@@ -174,8 +172,7 @@ pub fn save_report(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Resul
     });
     let encoded = serde_json::to_vec_pretty(&payload)
         .map_err(|error| format!("could not encode capability probe report: {error}"))?;
-    fs::write(path, encoded)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
+    fs::write(path, encoded).map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
 fn definitions() -> VecDeque<ProbeSpec> {
@@ -342,9 +339,11 @@ mod tests {
         );
         assert!(!run.running());
         assert_eq!(run.results[0].status, "rejected");
-        assert!(run.results[1..]
-            .iter()
-            .all(|result| result.status == "not_run"));
+        assert!(
+            run.results[1..]
+                .iter()
+                .all(|result| result.status == "not_run")
+        );
     }
 
     #[test]
