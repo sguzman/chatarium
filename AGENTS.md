@@ -72,6 +72,9 @@ Chatarium is a reliability project first and a UI project second.
 - Human involvement is reserved for a true identity/consent boundary that automation cannot satisfy, such as CAPTCHA, MFA, or an explicit security permission requiring the account holder. Stop with a precise `AUTH/CONSENT BLOCKED` state; do not package the remaining engineering work as a human QA checklist.
 - Never ask the principal to copy cookies, authorization values, CSRF/session tokens, browser profile databases, or other reusable credentials.
 - Repeated QA for a previously observed failure shape must become an automated regression test.
+- A remote GitHub commit is not proof that the principal's local checkout contains that code. Never hand the principal a command that references a newly created/changed path until local synchronization has been established; prefer integrating the operation into Chatarium or an automated QA surface instead.
+- When a handoff command fails before the intended operation begins (for example, a missing local file before authentication), diagnose the earliest failed precondition first. Do not redirect the diagnosis toward later auth/network/runtime stages that were never reached.
+- Developer-only probes, smoke plumbing, and routine capability experiments are engineering-owned. If they can be exposed safely through a fixed in-app Diagnostics action, CLI/test hook, or CI harness, implement that surface rather than converting the principal into the test runner.
 
 ## Scope boundaries
 
