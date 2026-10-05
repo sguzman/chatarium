@@ -19,7 +19,9 @@ The project should reuse/adapt the user's existing XML-oriented MCP/tool envelop
 
 These capabilities are sequenced after the reliability/protocol foundations; they are not a reason to skip them, and they are not optional evidence that Chatarium should be narrowed back to “just a chat client.”
 
-See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product intent.
+See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product intent and [`docs/SELF_SUSTAINING_TRANSPORT.md`](docs/SELF_SUSTAINING_TRANSPORT.md) for the hard native-transport viability contract.
+
+A browser may be used for protocol observation or occasional authentication bootstrap, but **Chromium-per-request is not an acceptable end state**. Ordinary conversation listing, retrieval, creation, continuation, send, and response streaming must ultimately be native Chatarium operations. Hiding or backgrounding Chromium does not satisfy this requirement.
 
 ## Core invariants
 
