@@ -18,6 +18,12 @@ pub enum BridgeCommand {
         input: Value,
         instructions: Option<String>,
     },
+    ProbeResponse {
+        request_id: String,
+        model: String,
+        input: Value,
+        request_patch: Value,
+    },
     CancelResponse {
         target_request_id: String,
     },
@@ -372,6 +378,18 @@ fn command_json(command: BridgeCommand) -> Value {
             "input": input,
             "instructions": instructions
         }),
+        BridgeCommand::ProbeResponse {
+            request_id,
+            model,
+            input,
+            request_patch,
+        } => json!({
+            "type": "probe_response",
+            "request_id": request_id,
+            "model": model,
+            "input": input,
+            "request_patch": request_patch
+        }),
         BridgeCommand::CancelResponse { target_request_id } => json!({
             "type": "cancel_response",
             "request_id": format!("cancel:{target_request_id}"),
@@ -531,6 +549,25 @@ mod tests {
                 "model": "gpt-example",
                 "input": [{"role":"user","content":"hi"}],
                 "instructions": "Be concise."
+            })
+        );
+    }
+
+    #[test]
+    fn probe_response_command_keeps_patch_inside_bridge_protocol() {
+        assert_eq!(
+            command_json(BridgeCommand::ProbeResponse {
+                request_id: "probe:reasoning".to_owned(),
+                model: "gpt-example".to_owned(),
+                input: serde_json::json!("Reply with exactly REASONING_OK."),
+                request_patch: serde_json::json!({"reasoning":{"effort":"low"}}),
+            }),
+            serde_json::json!({
+                "type": "probe_response",
+                "request_id": "probe:reasoning",
+                "model": "gpt-example",
+                "input": "Reply with exactly REASONING_OK.",
+                "request_patch": {"reasoning":{"effort":"low"}}
             })
         );
     }
