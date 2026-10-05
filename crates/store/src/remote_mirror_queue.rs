@@ -113,7 +113,10 @@ impl RemoteMirrorQueueSummary {
     /// Count items in a particular state.
     #[must_use]
     pub fn count(&self, status: RemoteMirrorQueueStatus) -> usize {
-        self.items.iter().filter(|item| item.status == status).count()
+        self.items
+            .iter()
+            .filter(|item| item.status == status)
+            .count()
     }
 }
 
@@ -165,7 +168,10 @@ pub fn derive_remote_mirror_queue(
             continue;
         };
         let payload: Value = serde_json::from_str(&event.payload).map_err(|error| {
-            format!("invalid remote mirror queue payload at sequence {}: {error}", event.sequence)
+            format!(
+                "invalid remote mirror queue payload at sequence {}: {error}",
+                event.sequence
+            )
         })?;
         let remote_id = payload
             .get("remote_conversation_id")
@@ -183,19 +189,18 @@ pub fn derive_remote_mirror_queue(
         item.status = match kind {
             QueueEventKind::Queued => RemoteMirrorQueueStatus::Queued,
             QueueEventKind::Capturing => RemoteMirrorQueueStatus::Capturing,
-            QueueEventKind::Completed => match payload
-                .get("mirror_state")
-                .and_then(Value::as_str)
-            {
-                Some("partial") => RemoteMirrorQueueStatus::MirroredPartial,
-                Some("fully_mirrored") => RemoteMirrorQueueStatus::MirroredFully,
-                _ => {
-                    return Err(format!(
-                        "remote mirror queue completion at sequence {} has invalid mirror state",
-                        event.sequence
-                    ));
+            QueueEventKind::Completed => {
+                match payload.get("mirror_state").and_then(Value::as_str) {
+                    Some("partial") => RemoteMirrorQueueStatus::MirroredPartial,
+                    Some("fully_mirrored") => RemoteMirrorQueueStatus::MirroredFully,
+                    _ => {
+                        return Err(format!(
+                            "remote mirror queue completion at sequence {} has invalid mirror state",
+                            event.sequence
+                        ));
+                    }
                 }
-            },
+            }
             QueueEventKind::RateLimited => RemoteMirrorQueueStatus::RateLimited,
             QueueEventKind::Failed => match payload.get("failure_class").and_then(Value::as_str) {
                 Some("structural") => RemoteMirrorQueueStatus::StructuralFailure,
@@ -313,7 +318,10 @@ fn append_queue_event(
     let mut payload = serde_json::Map::new();
     payload.insert("schema".to_owned(), json!(QUEUE_SCHEMA));
     payload.insert("version".to_owned(), json!(QUEUE_VERSION));
-    payload.insert("remote_conversation_id".to_owned(), json!(remote_conversation_id));
+    payload.insert(
+        "remote_conversation_id".to_owned(),
+        json!(remote_conversation_id),
+    );
     if let Value::Object(details) = details {
         payload.extend(details);
     }
