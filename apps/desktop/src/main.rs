@@ -56,6 +56,12 @@ fn unix_now_ms() -> u64 {
 }
 
 enum PersistCommand {
+    SaveInferenceSettings {
+        store: local_inference_settings::InferenceSettingsStore,
+    },
+    SaveLocalConversationCatalog {
+        catalog: local_conversations::LocalConversationCatalog,
+    },
     SaveDraft {
         conversation_id: LocalConversationId,
         revision: u64,
@@ -917,12 +923,11 @@ impl ChatariumApp {
         if let Err(error) = self
             .local_conversation_catalog
             .set_active(conversation_id, unix_now_ms())
-            .and_then(|_| {
-                self.local_conversation_catalog
-                    .save_atomic(&self.local_conversation_catalog_path)
-            })
         {
             self.status = format!("failed to select local conversation: {error}");
+            return;
+        }
+        if !self.persist_local_conversation_catalog() {
             return;
         }
         self.apply_local_conversation(conversation_id);
@@ -937,11 +942,7 @@ impl ChatariumApp {
         let conversation_id = LocalConversationId::new();
         self.local_conversation_catalog
             .create(conversation_id, unix_now_ms());
-        if let Err(error) = self
-            .local_conversation_catalog
-            .save_atomic(&self.local_conversation_catalog_path)
-        {
-            self.status = format!("failed to create local conversation: {error}");
+        if !self.persist_local_conversation_catalog() {
             return;
         }
         self.apply_local_conversation(conversation_id);
@@ -957,13 +958,9 @@ impl ChatariumApp {
                 Some(title),
                 unix_now_ms(),
             )
-            .and_then(|_| {
-                self.local_conversation_catalog
-                    .save_atomic(&self.local_conversation_catalog_path)
-            })
         {
             self.status = format!("failed to rename local conversation: {error}");
-        } else {
+        } else if self.persist_local_conversation_catalog() {
             self.local_conversation_rename = local_conversation_display_title(
                 &self.local_conversation_catalog,
                 self.local_conversation_id,
@@ -999,12 +996,11 @@ impl ChatariumApp {
         if let Err(error) = self
             .local_conversation_catalog
             .set_active(next, unix_now_ms())
-            .and_then(|_| {
-                self.local_conversation_catalog
-                    .save_atomic(&self.local_conversation_catalog_path)
-            })
         {
             self.status = format!("failed to archive local conversation: {error}");
+            return;
+        }
+        if !self.persist_local_conversation_catalog() {
             return;
         }
         self.apply_local_conversation(next);
@@ -2901,13 +2897,34 @@ impl ChatariumApp {
         if let Err(error) = self
             .inference_settings
             .set(self.local_conversation_id, settings)
-            .and_then(|_| {
-                self.inference_settings
-                    .save_atomic(&self.inference_settings_path)
-            })
         {
-            self.status = format!("failed to persist inference controls: {error}");
+            self.status = format!("failed to update inference controls: {error}");
+            return;
         }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot persist inference controls: persistence unavailable".to_owned();
+            return;
+        };
+        if let Err(error) = sender.send(PersistCommand::SaveInferenceSettings {
+            store: self.inference_settings.clone(),
+        }) {
+            self.status = format!("failed to queue inference controls: {error}");
+        }
+    }
+
+    fn persist_local_conversation_catalog(&mut self) -> bool {
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot persist local conversation workspace: persistence unavailable".to_owned();
+            return false;
+        };
+        if let Err(error) = sender.send(PersistCommand::SaveLocalConversationCatalog {
+            catalog: self.local_conversation_catalog.clone(),
+        }) {
+            self.status = format!("failed to queue local conversation workspace: {error}");
+            return false;
+        }
+        true
     }
 
     fn reader_conversation_key(&self) -> String {
@@ -4878,6 +4895,28 @@ fn persistence_worker(
     );
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::SaveInferenceSettings { store: settings } => {
+                if let Err(error) = settings.save_atomic(&data_dir.join("local-inference-settings.json")) {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "inference settings save",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            }
+            PersistCommand::SaveLocalConversationCatalog { catalog } => {
+                if let Err(error) = catalog.save_atomic(&data_dir.join("local-conversations.json")) {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "local conversation catalog save",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            }
             PersistCommand::SaveDraft {
                 conversation_id,
                 revision,
