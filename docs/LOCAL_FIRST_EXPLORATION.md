@@ -121,3 +121,26 @@ Remote/browser transport work remains paused until the principal explicitly says
 The self-sustaining native transport contract in `SELF_SUSTAINING_TRANSPORT.md` remains the long-term viability requirement. Pausing that investigation does not weaken it.
 
 During this phase, optimize for learning what Chatarium can become when its conversations, state, orchestration, and behavioral machinery are local-first.
+
+
+## Landed local-first substrate
+
+The first local conversation workspace/inference-control milestone is now implemented.
+
+Current local-first substrate:
+
+- multiple isolated local conversations;
+- durable active-conversation selection;
+- create/switch/rename/archive/restore workspace controls;
+- per-conversation draft isolation;
+- per-conversation persisted model choice;
+- per-conversation top-level instructions;
+- per-conversation developer context;
+- streamed assistant output;
+- Stop generation / active-request cancellation;
+- an Exact next-request context inspector;
+- local backup/restore coverage for conversation workspace metadata and inference settings.
+
+This is intentionally enough substrate to begin serious context-policy and behavioral experiments once the remaining capability unknowns are classified.
+
+The next capability work should stay narrow: route-documented image/file/custom-tool/web-search support, then targeted probes for reasoning, verbosity, and structured-output controls. Do not reopen browser/history work as part of this phase.
