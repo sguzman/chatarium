@@ -39,6 +39,14 @@ Chatarium is a reliability project first and a UI project second.
 - Do not hide/background Chromium and call the result self-contained. If ordinary reads/writes require a browser process, extension, CDP, Playwright, or page-context fetch on every operation, the product requirement is not met.
 - The absence of a documented/public API is not a blocker or excuse to stop first-party protocol investigation. Prefer existing HAR/Flight Recorder evidence, local raw mirror specimens, and passive capture before generating new traffic.
 
+## Active-phase guard
+
+- `docs/LOCAL_FIRST_EXPLORATION.md` is the current active-direction contract.
+- Remote ChatGPT website history/mirroring, Chromium/CDP/Playwright transport experiments, and the P3V self-sustaining transport investigation are formally **paused**.
+- Do not restart remote/browser work unless the principal explicitly unpauses that track.
+- Active work should prefer local-first Chatarium conversations, durable per-conversation state, model/control exploration, orchestration, MCP/tools, local context/memory, and master/worker behavior.
+- Local conversations are isolated by default. Cross-conversation context must be explicit, visible, durable, attributable, and policy-controlled.
+
 ## Architecture
 
 - Keep the egui render path cheap. Network, disk I/O, parsing, capture processing, reconciliation, and expensive transforms stay off the UI thread.
