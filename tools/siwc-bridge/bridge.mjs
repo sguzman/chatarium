@@ -272,24 +272,46 @@ async function handle(command) {
         ) {
           throw new Error("stream_response requires input");
         }
-        const result = await chatgpt.streamResponse({
-          model: command.model,
-          input: command.input,
-          ...(typeof command.instructions === "string"
-            ? { instructions: command.instructions }
-            : {}),
-          onDelta(delta) {
-            emit({
-              type: "delta",
-              request_id: requestId,
-              delta,
-            });
-          },
-        });
+        const controller = new AbortController();
+        if (requestId) responseControllers.set(requestId, controller);
+        try {
+          const result = await chatgpt.streamResponse({
+            model: command.model,
+            input: command.input,
+            ...(typeof command.instructions === "string"
+              ? { instructions: command.instructions }
+              : {}),
+            signal: controller.signal,
+            onDelta(delta) {
+              emit({
+                type: "delta",
+                request_id: requestId,
+                delta,
+              });
+            },
+          });
+          emit({
+            type: "result",
+            request_id: requestId,
+            result,
+          });
+        } finally {
+          if (requestId && responseControllers.get(requestId) === controller) {
+            responseControllers.delete(requestId);
+          }
+        }
+        break;
+      }
+      case "cancel_response": {
+        if (typeof command.target_request_id !== "string") {
+          throw new Error("cancel_response requires target_request_id");
+        }
+        const controller = responseControllers.get(command.target_request_id);
+        if (controller) controller.abort();
         emit({
           type: "result",
           request_id: requestId,
-          result,
+          result: { cancelled: Boolean(controller) },
         });
         break;
       }
@@ -311,6 +333,7 @@ const input = createInterface({
 });
 
 const inFlight = new Set();
+const responseControllers = new Map();
 
 input.on("line", (line) => {
   let command;
