@@ -26,8 +26,9 @@ pub struct RemoteTranscriptMessage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteTranscriptProjection {
     pub messages: Vec<RemoteTranscriptMessage>,
-    /// True when the fetched page explicitly says older pages exist and the parent walk reaches
-    /// beyond the messages in this page.
+    /// True when visible transcript ancestry is incomplete before the projected suffix, either
+    /// because the response explicitly paginates older messages or because it ends at a
+    /// non-visible internal node whose parent is absent.
     pub truncated_before: bool,
 }
 
@@ -63,6 +64,15 @@ pub fn project_remote_active_transcript(
         if by_id.contains_key(parent) {
             current = parent;
             continue;
+        }
+        // Some live responses terminate the active branch at an internal reasoning/context
+        // node whose parent is omitted even though page_info says there is no previous page.
+        // That omission is safe to represent as a partial visible suffix because this node is
+        // not itself eligible for transcript projection. A missing parent on a visible node
+        // remains ambiguous and must still fail closed below.
+        if !is_visible_transcript_message(message) {
+            truncated_before = true;
+            break;
         }
         if envelope.page_info.has_previous_page {
             truncated_before = true;
@@ -112,6 +122,22 @@ pub fn project_remote_active_transcript(
     })
 }
 
+fn is_visible_transcript_message(message: &ConversationMessage) -> bool {
+    if message.weight == 0.0
+        || message
+            .metadata
+            .get("is_visually_hidden_from_conversation")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        return false;
+    }
+
+    matches!(message.author.role.as_str(), "user" | "assistant")
+        && project_visible_content(&message.content)
+            .is_some_and(|text| !text.trim().is_empty())
+}
+
 fn project_visible_content(content: &ConversationMessageContent) -> Option<String> {
     match content {
         ConversationMessageContent::Thoughts { .. } | ConversationMessageContent::Opaque { .. } => {
@@ -144,6 +170,12 @@ fn project_visible_content(content: &ConversationMessageContent) -> Option<Strin
                 }
             }
             Some(projected.join("\n"))
+        }
+        ConversationMessageContent::Content {
+            content_type,
+            content,
+        } if matches!(content_type.as_str(), "model_editable_context" | "reasoning_recap") => {
+            None
         }
         ConversationMessageContent::Content {
             content_type,
@@ -299,6 +331,33 @@ mod tests {
         let projected = project_remote_active_transcript(&page).unwrap();
         assert!(projected.truncated_before);
         assert_eq!(projected.messages.len(), 1);
+    }
+
+    #[test]
+    fn missing_parent_on_internal_node_projects_a_partial_visible_suffix() {
+        let reasoning_recap = ConversationMessageContent::Content {
+            content_type: "reasoning_recap".to_owned(),
+            content: json!({"synthetic": true}),
+        };
+        let page = envelope(
+            vec![
+                message(
+                    "internal",
+                    Some("omitted-internal-parent"),
+                    "assistant",
+                    reasoning_recap,
+                ),
+                message("final", Some("internal"), "assistant", parts("synthetic answer")),
+            ],
+            "final",
+        );
+
+        let projected = project_remote_active_transcript(&page).unwrap();
+
+        assert!(projected.truncated_before);
+        assert_eq!(projected.messages.len(), 1);
+        assert_eq!(projected.messages[0].role, RemoteTranscriptRole::Assistant);
+        assert_eq!(projected.messages[0].text, "synthetic answer");
     }
 
     #[test]

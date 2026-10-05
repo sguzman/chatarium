@@ -35,3 +35,24 @@ worker was cleared by restarting only the Playwright QA Chromium, after which th
 fresh-tab command completed with debugger-before-navigation, Network, first-party navigation,
 observation, detach, and temporary-tab cleanup proof. A second bounded run retained the 85-item
 catalog and correctly suppressed fresh-tab recovery.
+
+## Exact single-conversation mirror acceptance (2026-10-05)
+
+One bounded production capture for the deterministic catalog item succeeded through the
+first-party navigation path: the exact response was observed with HTTP 200, valid JSON,
+validated remote identity, and no rate limiting. The response was promoted once into the
+append-only journal at snapshot sequence 92; the temporary tab and debugger were cleaned up.
+No raw response body, title, message text, or reusable account material was added to Git.
+
+The persisted C02 graph contained six messages. The active `current_node` was a visible
+assistant text node. Its parent chain passed through a `reasoning_recap` node whose parent was
+absent even though both pagination flags were false. The internal node was encoded as a
+`content` object rather than the `Thoughts` variant. The projector now treats the observed
+`reasoning_recap` and `model_editable_context` content types as non-visible internal scaffolding:
+it projects the visible suffix and marks the result partial, while still rejecting a missing
+parent on a visible node, cycles, identity mismatches, and unsupported completeness claims.
+
+Journal reopen/replay was then repeated without remote HTTP and reproduced one projected
+visible message with `truncated_before=true`, accurately recording a partial mirror rather than
+claiming a complete transcript. The regression test uses synthetic IDs and redacted structure
+only.

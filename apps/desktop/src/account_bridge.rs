@@ -228,6 +228,14 @@ pub struct ConversationFetchObservation {
     pub body: Value,
     pub proof: BrowserProof,
     pub http_status: u16,
+    pub content_type: String,
+    pub responses_seen: u64,
+    pub exact_response_count: u64,
+    pub rate_limited_responses: u64,
+    pub rate_limit_reload_count: u64,
+    pub body_read_failures: u64,
+    pub body_too_large: u64,
+    pub invalid_json: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -715,10 +723,25 @@ impl BrowserBridgeProvider {
             BrowserBridgeError::Protocol("successful fetch result is missing body".to_owned())
         })?;
 
+        let number = |field: &str| result.get(field).and_then(Value::as_u64).unwrap_or(0);
+        let content_type = result
+            .get("content_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+
         Ok(ConversationFetchObservation {
             body,
             proof,
             http_status,
+            content_type,
+            responses_seen: number("responses_seen"),
+            exact_response_count: number("exact_response_count"),
+            rate_limited_responses: number("rate_limited_responses"),
+            rate_limit_reload_count: number("rate_limit_reload_count"),
+            body_read_failures: number("body_read_failures"),
+            body_too_large: number("body_too_large"),
+            invalid_json: number("invalid_json"),
         })
     }
 
