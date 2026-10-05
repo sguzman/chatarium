@@ -64,7 +64,7 @@ chatarium/
 
 Remote ChatGPT website mirroring/browser-transport work is **formally paused**. The active exploration is local-first Chatarium conversations using ChatGPT plan-backed Responses inference plus Chatarium-owned durable state, with emphasis on conversation isolation, model/control surfaces, orchestration, tools, memory/context, and master/worker behavior.
 
-See [`docs/LOCAL_FIRST_EXPLORATION.md`](docs/LOCAL_FIRST_EXPLORATION.md). The long-term native transport viability contract remains in force but is not the current work track.
+See [`docs/LOCAL_FIRST_EXPLORATION.md`](docs/LOCAL_FIRST_EXPLORATION.md). The exact local inference/control inventory is maintained in [`docs/LOCAL_INFERENCE_CAPABILITY_SURFACE.md`](docs/LOCAL_INFERENCE_CAPABILITY_SURFACE.md). The long-term native transport viability contract remains in force but is not the current work track.
 
 ## Status
 
