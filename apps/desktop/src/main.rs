@@ -4081,13 +4081,8 @@ impl eframe::App for ChatariumApp {
                                     provenance_label: Some("current draft · commits before send".to_owned()),
                                 });
                             }
-                            let preview = serde_json::json!({
+                            let mut preview = serde_json::json!({
                                 "model": self.selected_model,
-                                "instructions": if self.conversation_instructions.trim().is_empty() {
-                                    Value::Null
-                                } else {
-                                    Value::String(self.conversation_instructions.clone())
-                                },
                                 "input": responses_input(
                                     &preview_messages,
                                     self.conversation_developer_context.as_str(),
@@ -4095,6 +4090,15 @@ impl eframe::App for ChatariumApp {
                                 "store": false,
                                 "stream": true,
                             });
+                            if !self.conversation_instructions.trim().is_empty() {
+                                preview
+                                    .as_object_mut()
+                                    .expect("request preview is an object")
+                                    .insert(
+                                        "instructions".to_owned(),
+                                        Value::String(self.conversation_instructions.clone()),
+                                    );
+                            }
                             let preview_text = serde_json::to_string_pretty(&preview)
                                 .unwrap_or_else(|_| "<failed to render request preview>".to_owned());
                             egui::ScrollArea::vertical()
