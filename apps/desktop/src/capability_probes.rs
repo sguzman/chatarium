@@ -27,6 +27,7 @@ pub struct ProbeResult {
 #[derive(Debug, Default)]
 pub struct ProbeRun {
     pub model: Option<String>,
+    pub generated_unix_ms: Option<u64>,
     pub queue: VecDeque<ProbeSpec>,
     pub active: Option<String>,
     pub results: Vec<ProbeResult>,
@@ -36,6 +37,7 @@ pub struct ProbeRun {
 impl ProbeRun {
     pub fn start(&mut self, model: String) {
         self.model = Some(model);
+        self.generated_unix_ms = None;
         self.queue = definitions();
         self.active = None;
         self.results.clear();
@@ -153,6 +155,77 @@ pub fn classify_error(error: &BridgeError) -> &'static str {
         return "rejected";
     }
     "error"
+}
+
+pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
+    let encoded = match fs::read(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "could not read capability probe report {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let value: Value = serde_json::from_slice(&encoded)
+        .map_err(|error| format!("invalid capability probe report {}: {error}", path.display()))?;
+    if value.get("schema").and_then(Value::as_str) != Some("chatarium-siwc-capability-probe")
+        || value.get("version").and_then(Value::as_u64) != Some(1)
+    {
+        return Err(format!(
+            "unsupported capability probe report format at {}",
+            path.display()
+        ));
+    }
+
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let generated_unix_ms = value.get("generated_unix_ms").and_then(Value::as_u64);
+    let probes = value
+        .get("probes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("capability probe report {} has no probes array", path.display()))?;
+
+    let mut results = Vec::with_capacity(probes.len());
+    for probe in probes {
+        let name = probe
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("capability probe report {} has a probe without a name", path.display()))?;
+        let status = probe
+            .get("status")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("capability probe report {} has a probe without a status", path.display()))?;
+        results.push(ProbeResult {
+            name: name.to_owned(),
+            status: status.to_owned(),
+            code: probe
+                .get("code")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            status_code: probe
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .and_then(|status| u16::try_from(status).ok()),
+            text_received: probe.get("text_received").and_then(Value::as_bool),
+            reason: probe
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        });
+    }
+
+    Ok(Some(ProbeRun {
+        model,
+        generated_unix_ms,
+        queue: VecDeque::new(),
+        active: None,
+        results,
+        status: format!("loaded {} saved capability probe results", probes.len()),
+    }))
 }
 
 pub fn save_report(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Result<(), String> {
@@ -344,6 +417,46 @@ mod tests {
                 .iter()
                 .all(|result| result.status == "not_run")
         );
+    }
+
+    #[test]
+    fn saved_probe_report_round_trips_without_credentials() {
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-capability-probe-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&root);
+        let mut run = ProbeRun::default();
+        run.model = Some("gpt-example".to_owned());
+        run.results.push(ProbeResult {
+            name: "reasoning".to_owned(),
+            status: "supported".to_owned(),
+            code: None,
+            status_code: None,
+            text_received: Some(true),
+            reason: None,
+        });
+        save_report(&root, &run, 1234).unwrap();
+
+        let loaded = load_report(&root).unwrap().unwrap();
+        assert_eq!(loaded.model.as_deref(), Some("gpt-example"));
+        assert_eq!(loaded.generated_unix_ms, Some(1234));
+        assert_eq!(loaded.results, run.results);
+        let encoded = fs::read_to_string(&root).unwrap();
+        assert!(!encoded.contains("access_token"));
+        assert!(!encoded.contains("refresh_token"));
+        let _ = fs::remove_file(root);
+    }
+
+    #[test]
+    fn malformed_probe_report_fails_closed() {
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-capability-probe-malformed-{}",
+            std::process::id()
+        ));
+        fs::write(&root, br#"{"schema":"wrong","version":1,"probes":[]}"#).unwrap();
+        assert!(load_report(&root).is_err());
+        let _ = fs::remove_file(root);
     }
 
     #[test]
