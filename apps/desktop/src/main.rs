@@ -57,6 +57,7 @@ fn unix_now_ms() -> u64 {
 
 enum PersistCommand {
     SaveDraft {
+        conversation_id: LocalConversationId,
         revision: u64,
         text: String,
     },
@@ -114,6 +115,7 @@ enum PersistCommand {
 
 enum PersistNotice {
     DraftSaved {
+        conversation_id: LocalConversationId,
         revision: u64,
         event: EventEnvelope,
     },
@@ -1895,6 +1897,7 @@ impl ChatariumApp {
         };
 
         if let Err(error) = sender.send(PersistCommand::SaveDraft {
+            conversation_id: self.local_conversation_id,
             revision,
             text: self.draft.clone(),
         }) {
@@ -1972,14 +1975,20 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
-                PersistNotice::DraftSaved { revision, event } => {
-                    self.saved_revision = self.saved_revision.max(revision);
+                PersistNotice::DraftSaved {
+                    conversation_id,
+                    revision,
+                    event,
+                } => {
                     self.events.push(event);
-                    if self.saved_revision == self.draft_revision
-                        && self.commit_in_flight.is_none()
-                        && self.active_remote_turn.is_none()
-                    {
-                        self.status = "draft durable".to_owned();
+                    if conversation_id == self.local_conversation_id {
+                        self.saved_revision = self.saved_revision.max(revision);
+                        if self.saved_revision == self.draft_revision
+                            && self.commit_in_flight.is_none()
+                            && self.active_remote_turn.is_none()
+                        {
+                            self.status = "draft durable".to_owned();
+                        }
                     }
                 }
                 PersistNotice::MessageCommitted {
@@ -4640,11 +4649,23 @@ fn persistence_worker(
     );
     while let Ok(command) = commands.recv() {
         match command {
-            PersistCommand::SaveDraft { revision, text } => {
-                match store.append(EventKind::DraftChanged, text) {
+            PersistCommand::SaveDraft {
+                conversation_id,
+                revision,
+                text,
+            } => {
+                match store.append_scoped(
+                    Some(local_conversation_scope(conversation_id)),
+                    EventKind::DraftChanged,
+                    text,
+                ) {
                     Ok(_) => {
                         if let Some(event) = store.events().last().cloned() {
-                            let _ = notices.send(PersistNotice::DraftSaved { revision, event });
+                            let _ = notices.send(PersistNotice::DraftSaved {
+                                conversation_id,
+                                revision,
+                                event,
+                            });
                         }
                     }
                     Err(error) => {
@@ -5745,16 +5766,36 @@ fn responses_input(messages: &[DisplayMessage], developer_context: &str) -> Valu
     Value::Array(input)
 }
 
-fn projected_working_draft(events: &[EventEnvelope]) -> String {
-    let latest_draft = events
-        .iter()
-        .rev()
-        .find(|event| event.scope.is_none() && event.kind == EventKind::DraftChanged);
+fn projected_working_draft(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+) -> String {
+    let scope = local_conversation_scope(conversation_id);
+    let scoped_draft = events.iter().rev().find(|event| {
+        event.kind == EventKind::DraftChanged && event.scope.as_deref() == Some(scope.as_str())
+    });
+    let legacy_owner = projected_local_conversation_id(events).ok().flatten();
+    let latest_draft = scoped_draft.or_else(|| {
+        (legacy_owner == Some(conversation_id))
+            .then(|| {
+                events
+                    .iter()
+                    .rev()
+                    .find(|event| event.kind == EventKind::DraftChanged && event.scope.is_none())
+            })
+            .flatten()
+    });
     let latest_commit_sequence = events
         .iter()
-        .rev()
-        .find(|event| event.kind == EventKind::UserMessageCommitted)
-        .map(|event| event.sequence)
+        .filter_map(|event| {
+            let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+                decode_user_message_commit(event)
+            else {
+                return None;
+            };
+            (message.conversation_id == conversation_id).then_some(event.sequence)
+        })
+        .next_back()
         .unwrap_or_default();
 
     match latest_draft {
@@ -7076,24 +7117,57 @@ mod tests {
 
     #[test]
     fn scoped_typed_commit_prevents_older_draft_from_reappearing() {
-        let events = vec![
-            EventEnvelope {
-                sequence: 1,
-                at_unix_ms: 1,
-                scope: None,
-                kind: EventKind::DraftChanged,
-                payload: "old draft".to_owned(),
-            },
-            EventEnvelope {
-                sequence: 2,
-                at_unix_ms: 2,
-                scope: Some("local-turn:test".to_owned()),
-                kind: EventKind::UserMessageCommitted,
-                payload: "committed".to_owned(),
-            },
-        ];
+        let conversation_id = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+        store
+            .append_scoped(
+                Some(local_conversation_scope(conversation_id)),
+                EventKind::DraftChanged,
+                "old draft".to_owned(),
+            )
+            .unwrap();
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                conversation_id,
+                LocalTurnId::new(),
+                LocalMessageId::new(),
+                "committed",
+            ),
+        )
+        .unwrap();
 
-        assert_eq!(projected_working_draft(&events), "");
+        assert_eq!(
+            projected_working_draft(store.events(), conversation_id),
+            ""
+        );
+    }
+
+    #[test]
+    fn drafts_are_isolated_between_local_conversations() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+        store
+            .append_scoped(
+                Some(local_conversation_scope(first)),
+                EventKind::DraftChanged,
+                "first draft".to_owned(),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some(local_conversation_scope(second)),
+                EventKind::DraftChanged,
+                "second draft".to_owned(),
+            )
+            .unwrap();
+
+        assert_eq!(projected_working_draft(store.events(), first), "first draft");
+        assert_eq!(
+            projected_working_draft(store.events(), second),
+            "second draft"
+        );
     }
 
     #[test]
