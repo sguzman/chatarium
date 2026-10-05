@@ -19,11 +19,19 @@ Validation notes:
 - bridge package checks, JavaScript syntax checks, MCP JSON parsing, and targeted `cargo check -p chatarium-core -p chatarium-protocol -p chatarium-store` passed;
 - full `cargo check` remains blocked by pre-existing `tools/capture` errors involving `EDGE_PIPE_NAME` and `EdgeBrowserTransport::Pipe`, unrelated to this migration.
 
-Post-restart proof still required:
+Post-restart control-plane proof completed on 2026-10-04:
 
-1. Inspect the fresh active MCP configuration and confirm it launches bundled Chromium with the dedicated profile.
-2. Use Playwright MCP to enumerate only the dedicated QA browser tabs.
-3. Open and close one disposable QA page and verify DOM, accessibility, console, and screenshot operations.
-4. Confirm no personal Edge profile or window was touched.
+1. Playwright MCP launched bundled Chromium 155.0.8059.12 with the dedicated profile.
+2. The QA window was `chatarium-qa` and Hyprland routed it automatically to workspace 6.
+3. Playwright verified navigation, DOM, accessibility, console, and screenshot control.
+4. The unpacked MV3 bridge loaded from `browser/edge-bridge/` and reported version 0.4.10.
+5. Personal Microsoft Edge was not controlled or used as the QA target.
 
-The prior Edge extension-mode MCP session must not be treated as proof for this new architecture.
+Live history-discovery acceptance completed on 2026-10-05 after the dedicated profile was
+authenticated. The production Rust QA entry point observed 85 conversation summaries from
+first-party traffic, persisted a structural catalog, and emitted no private bodies or titles.
+The empty-cache run also exercised the 0.4.10 fresh-tab recovery path; a reused stale service
+worker was cleared by restarting only the Playwright QA Chromium, after which the exact
+fresh-tab command completed with debugger-before-navigation, Network, first-party navigation,
+observation, detach, and temporary-tab cleanup proof. A second bounded run retained the 85-item
+catalog and correctly suppressed fresh-tab recovery.

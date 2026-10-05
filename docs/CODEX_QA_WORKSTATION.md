@@ -223,20 +223,26 @@ Routine handoffs such as "pull this commit", "reload the extension", "run this c
 
 If Codex cannot perform one, the next engineering task is to remove that limitation or report a precise machine/environment blocker.
 
-## Acceptance target
+## Completed control-plane proof and next acceptance target
 
-The next browser-integration automation milestone is to establish this Chromium control plane end to end:
+The Chromium control plane was proven end to end on 2026-10-04: Playwright-managed Chromium
+155.0.8059.12 used `~/.local/share/chatarium-qa-browser/`, loaded the repository bridge at
+version 0.4.10, routed class `chatarium-qa` automatically to workspace 6, supported DOM,
+accessibility, console, screenshot, and navigation control, and never targeted personal Edge.
 
-1. install/resolve the Playwright-managed Chromium dependency;
-2. create `~/.local/share/chatarium-qa-browser/`;
-3. create `chatarium-qa-browser`;
-4. launch headed QA Chromium;
-5. load the current `browser/edge-bridge/` build automatically;
-6. permit one-time interactive ChatGPT login only if required;
-7. prove Codex can navigate, inspect DOM/accessibility, read console state, take screenshots, and exercise the bridge;
-8. prove the principal's Edge processes/data are not browser automation targets;
-9. run the Chatarium history-discovery acceptance flow without egui clicking where possible;
-10. collect evidence, iterate, commit, and push without operator regression labor.
+The live history-discovery acceptance milestone completed on 2026-10-05:
+
+1. the dedicated profile was authenticated through the genuine identity/consent gate;
+2. the production Rust account-bridge/history-discovery path ran without egui clicking;
+3. bounded first-party ChatGPT traffic produced 85 observed conversation summaries;
+4. account context and debugger/Network/reload boundaries were proven;
+5. empty-cache fresh-tab recovery observed 3 candidate surfaces and completed cleanup;
+6. the safe 85-item observed catalog persisted through the durable cache boundary;
+7. a later sparse pass retained the catalog and suppressed recovery;
+8. personal Edge remained outside the automation boundary and no synthetic request was used.
+
+The next browser-integration milestone is exact single-conversation mirroring through the
+existing production bridge path.
 
 ## Completion report
 

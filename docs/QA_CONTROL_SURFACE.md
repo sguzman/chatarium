@@ -159,26 +159,35 @@ Prefer a dedicated CLI/test entry point or typed local RPC that exercises the sa
 
 ## Acceptance proof
 
-Do not mark the new Chromium control plane proven until one Codex run, with no principal interaction after any unavoidable login gate, can produce machine evidence for all of the following:
+The Chromium control plane was proven by Codex on 2026-10-04. Evidence included the
+Playwright-managed Chromium executable/version, dedicated persistent profile, automatic
+`chatarium-qa` workspace-6 routing, repository MV3 bridge version 0.4.10, service-worker
+observation, DOM/accessibility/console/screenshot operations, and no personal Edge control.
 
-1. identify the Playwright-managed Chromium binary/version;
-2. prove the persistent profile path is `~/.local/share/chatarium-qa-browser/`;
-3. prove personal Edge is not the automation target;
-4. load the current Chatarium MV3 bridge from the repository;
-5. verify bridge version/service worker;
-6. navigate a normal QA page;
-7. inspect DOM/accessibility state;
-8. inspect browser console state;
-9. take a screenshot;
-10. launch the Chatarium QA executable/process;
-11. complete a localhost bridge roundtrip;
-12. exercise history discovery/mirroring acceptance;
-13. collect terminal + browser evidence;
-14. cleanly stop only its own test processes.
+The live-history acceptance scope was completed by Codex on 2026-10-05. The new
+`apps/desktop/src/bin/chatarium-qa.rs` entry point reused the production Rust bridge/provider
+and emitted structural evidence only. In an authenticated dedicated profile, the primary
+pass observed 85 conversation summaries from real first-party traffic; the empty-cache branch
+then exercised 0.4.10 fresh-tab recovery, which observed 3 candidate surfaces and completed
+temporary-tab/debugger cleanup. A later bounded pass retained the 85-item durable catalog and
+suppressed recovery as required. No synthetic private history request was issued.
+
+The live-history acceptance scope was:
+
+1. authenticate the dedicated QA profile through a genuine identity/consent boundary;
+2. invoke the production Rust account-bridge/history-discovery path;
+3. observe bounded first-party traffic through the 0.4.10 CDP classifier;
+4. prove account context, debugger/network/reload boundaries, candidate surfaces, and observed counts;
+5. invoke fresh-tab recovery only under the zero-result/empty-cache production contract;
+6. persist a safe observed catalog through the normal durable cache boundary;
+7. prove temporary tabs and debugger sessions are cleaned up;
+8. collect sanitized evidence and targeted regression results without personal Edge access.
 
 ## Next Codex goal
 
-The next goal is to establish the Playwright-managed Chromium QA environment, not to perform another Edge-profile test.
+The next goal is exact single-conversation mirroring. It must continue using the authenticated
+dedicated QA profile and production bridge/Rust path, without reverting to the retired
+Edge-profile or userscript transport.
 
 Codex owns dependency installation, browser/profile/launcher creation, extension loading, control-plane proof, repository changes, testing, commit, and push.
 
