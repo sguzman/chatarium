@@ -26,6 +26,8 @@ The active product exploration is now **local-first Chatarium conversations** us
 
 The purpose of this phase is to find out how much of the intended "fancy behavioral" product can be built and learned locally before returning to remote ChatGPT-history interoperability.
 
+The exact current inference/control matrix lives in [LOCAL_INFERENCE_CAPABILITY_SURFACE.md](LOCAL_INFERENCE_CAPABILITY_SURFACE.md). The near-term rule is: expose and understand the knobs we actually have before building elaborate lifecycle behavior.
+
 Priority areas include:
 
 - multiple durable local conversations;
