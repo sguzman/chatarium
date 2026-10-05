@@ -2911,7 +2911,11 @@ impl eframe::App for ChatariumApp {
         self.process_remote_notices();
         let local_display_messages =
             projected_local_display_messages(&self.events, self.local_conversation_id);
-        let local_conversation_title = derived_conversation_title(&local_display_messages);
+        let local_conversation_title = local_conversation_display_title(
+            &self.local_conversation_catalog,
+            self.local_conversation_id,
+            &self.events,
+        );
         let remote_catalog_selected = self.selected_remote_catalog_id.is_some();
         let historical_mode =
             self.selected_historical_conversation.is_some() || remote_catalog_selected;
@@ -2945,7 +2949,10 @@ impl eframe::App for ChatariumApp {
                     local_conversation_title.clone()
                 }
             });
-        let mut select_local_requested = false;
+        let mut select_local_requested: Option<LocalConversationId> = None;
+        let mut create_local_requested = false;
+        let mut rename_local_requested = false;
+        let mut archive_local_requested = false;
         let mut select_historical_requested = None;
         let mut sync_live_requested = None;
         let mut select_remote_requested = None;
