@@ -1,6 +1,7 @@
 mod account_bridge;
 mod diagnostics;
 mod local_archive_search;
+mod local_inference_settings;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -316,11 +317,19 @@ struct DisplayMessage {
 }
 
 #[derive(Debug, Clone)]
+struct PendingInferenceIntent {
+    model: String,
+    instructions: Option<String>,
+    developer_context: String,
+}
+
+#[derive(Debug, Clone)]
 struct PendingRemoteTurn {
     turn_id: LocalTurnId,
     request_id: String,
     model: String,
     input: Value,
+    instructions: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +401,10 @@ struct ChatariumApp {
     reader_last_position_write: Instant,
     reader_search_query: String,
     reader_search_hit: Option<usize>,
+    inference_settings_path: PathBuf,
+    inference_settings: local_inference_settings::InferenceSettingsStore,
+    conversation_instructions: String,
+    conversation_developer_context: String,
     archive_backup_path: String,
     archive_maintenance_status: String,
     archive_restore_confirmation_pending: bool,
@@ -430,7 +443,7 @@ struct ChatariumApp {
     sign_in_pending: bool,
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
-    commit_remote_intents: BTreeMap<u64, String>,
+    commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
 }
 
 impl ChatariumApp {
@@ -536,6 +549,20 @@ impl ChatariumApp {
                 let reader_state_path = local_reader_state_path(&journal_path);
                 let reader_positions =
                     offline_reader::ReaderPositionStore::load(&reader_state_path);
+                let inference_settings_path = local_inference_settings_path(&journal_path);
+                let inference_settings =
+                    match local_inference_settings::InferenceSettingsStore::load(
+                        &inference_settings_path,
+                    ) {
+                        Ok(settings) => settings,
+                        Err(error) => {
+                            startup_status =
+                                format!("{startup_status}; inference settings warning: {error}");
+                            local_inference_settings::InferenceSettingsStore::default()
+                        }
+                    };
+                let active_inference_settings =
+                    inference_settings.for_conversation(local_conversation_id);
                 let worker_data_dir = data_dir.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
@@ -580,6 +607,10 @@ impl ChatariumApp {
                         reader_last_position_write: Instant::now(),
                         reader_search_query: String::new(),
                         reader_search_hit: None,
+                        inference_settings_path,
+                        inference_settings,
+                        conversation_instructions: active_inference_settings.instructions,
+                        conversation_developer_context: active_inference_settings.developer_context,
                         archive_backup_path: String::new(),
                         archive_maintenance_status: "archive maintenance idle".to_owned(),
                         archive_restore_confirmation_pending: false,
@@ -611,7 +642,7 @@ impl ChatariumApp {
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
                         model_list_pending: false,
-                        selected_model: None,
+                        selected_model: active_inference_settings.model,
                         remote_status: "starting sign-in runtime…".to_owned(),
                         remote_runtime_ready: false,
                         remote_runtime_failed: false,
@@ -665,6 +696,16 @@ impl ChatariumApp {
             build_local_archive_search_index(&remote_catalog_view, &events);
         let reader_state_path = local_reader_state_path(&journal_path);
         let reader_positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
+        let local_conversation_id = projected_local_conversation_id(&events)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let inference_settings_path = local_inference_settings_path(&journal_path);
+        let inference_settings =
+            local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
+                .unwrap_or_default();
+        let active_inference_settings =
+            inference_settings.for_conversation(local_conversation_id);
 
         Self {
             draft,
@@ -673,10 +714,7 @@ impl ChatariumApp {
             next_commit_request: 1,
             commit_in_flight: None,
             evidence: TurnEvidence::default(),
-            local_conversation_id: projected_local_conversation_id(&events)
-                .ok()
-                .flatten()
-                .unwrap_or_default(),
+            local_conversation_id,
             historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
             events: events.clone(),
             selected_historical_conversation: None,
@@ -705,6 +743,10 @@ impl ChatariumApp {
             reader_last_position_write: Instant::now(),
             reader_search_query: String::new(),
             reader_search_hit: None,
+            inference_settings_path,
+            inference_settings,
+            conversation_instructions: active_inference_settings.instructions,
+            conversation_developer_context: active_inference_settings.developer_context,
             archive_backup_path: String::new(),
             archive_maintenance_status: "archive maintenance idle".to_owned(),
             archive_restore_confirmation_pending: false,
@@ -736,7 +778,7 @@ impl ChatariumApp {
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
             model_list_pending: false,
-            selected_model: None,
+            selected_model: active_inference_settings.model,
             remote_status: "starting sign-in runtime…".to_owned(),
             remote_runtime_ready: false,
             remote_runtime_failed: false,
@@ -1829,7 +1871,15 @@ impl ChatariumApp {
         );
         if self.remote_connected() {
             if let Some(model) = self.selected_model.clone() {
-                self.commit_remote_intents.insert(request_id, model);
+                self.commit_remote_intents.insert(
+                    request_id,
+                    PendingInferenceIntent {
+                        model,
+                        instructions: (!self.conversation_instructions.trim().is_empty())
+                            .then(|| self.conversation_instructions.clone()),
+                        developer_context: self.conversation_developer_context.clone(),
+                    },
+                );
             }
         }
         match sender.send(PersistCommand::CommitMessage {
@@ -1894,22 +1944,26 @@ impl ChatariumApp {
                         self.evidence.commit_local_message();
                         self.draft.clear();
 
-                        if let Some(model) = self.commit_remote_intents.remove(&request_id) {
+                        if let Some(intent) = self.commit_remote_intents.remove(&request_id) {
                             let remote_request_id = message.turn_id.to_string();
-                            let input = responses_input(&projected_local_display_messages(
-                                &self.events,
-                                self.local_conversation_id,
-                            ));
+                            let input = responses_input(
+                                &projected_local_display_messages(
+                                    &self.events,
+                                    self.local_conversation_id,
+                                ),
+                                intent.developer_context.as_str(),
+                            );
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
-                                model: model.clone(),
+                                model: intent.model.clone(),
                                 input,
+                                instructions: intent.instructions.clone(),
                             });
                             let payload = remote_turn_payload(
                                 message.turn_id,
                                 &remote_request_id,
-                                Some(&model),
+                                Some(&intent.model),
                                 None,
                                 None,
                             );
@@ -1952,6 +2006,7 @@ impl ChatariumApp {
                             request_id: pending.request_id.clone(),
                             model: pending.model.clone(),
                             input: pending.input,
+                            instructions: pending.instructions,
                         };
                         match self.remote.send(command) {
                             Ok(()) => {
@@ -5481,21 +5536,24 @@ fn remote_turn_payload(
     .expect("remote turn observation is JSON-serializable")
 }
 
-fn responses_input(messages: &[DisplayMessage]) -> Value {
-    Value::Array(
-        messages
-            .iter()
-            .map(|message| {
-                serde_json::json!({
-                    "role": match message.role {
-                        DisplayRole::User => "user",
-                        DisplayRole::Assistant => "assistant",
-                    },
-                    "content": message.text,
-                })
-            })
-            .collect(),
-    )
+fn responses_input(messages: &[DisplayMessage], developer_context: &str) -> Value {
+    let mut input = Vec::with_capacity(messages.len() + usize::from(!developer_context.trim().is_empty()));
+    if !developer_context.trim().is_empty() {
+        input.push(serde_json::json!({
+            "role": "developer",
+            "content": developer_context,
+        }));
+    }
+    input.extend(messages.iter().map(|message| {
+        serde_json::json!({
+            "role": match message.role {
+                DisplayRole::User => "user",
+                DisplayRole::Assistant => "assistant",
+            },
+            "content": message.text,
+        })
+    }));
+    Value::Array(input)
 }
 
 fn projected_working_draft(events: &[EventEnvelope]) -> String {
@@ -5604,6 +5662,13 @@ fn local_reader_state_path(journal_path: &Path) -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("local-reader-state.json")
+}
+
+fn local_inference_settings_path(journal_path: &Path) -> PathBuf {
+    journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("local-inference-settings.json")
 }
 
 fn merge_history_discovery_catalog(
@@ -6979,8 +7044,9 @@ mod tests {
         ];
 
         assert_eq!(
-            responses_input(&messages),
+            responses_input(&messages, "behavior"),
             serde_json::json!([
+                {"role": "developer", "content": "behavior"},
                 {"role": "user", "content": "one"},
                 {"role": "assistant", "content": "two"},
                 {"role": "user", "content": "three"},
