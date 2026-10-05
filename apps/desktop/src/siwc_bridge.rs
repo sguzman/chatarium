@@ -16,6 +16,7 @@ pub enum BridgeCommand {
         request_id: String,
         model: String,
         input: Value,
+        instructions: Option<String>,
     },
     Disconnect,
     Shutdown,
@@ -360,11 +361,13 @@ fn command_json(command: BridgeCommand) -> Value {
             request_id,
             model,
             input,
+            instructions,
         } => json!({
             "type": "stream_response",
             "request_id": request_id,
             "model": model,
-            "input": input
+            "input": input,
+            "instructions": instructions
         }),
         BridgeCommand::Disconnect => json!({
             "type": "disconnect",
@@ -504,6 +507,25 @@ fn parse_error(value: &Value) -> Option<BridgeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_response_command_preserves_instructions() {
+        assert_eq!(
+            command_json(BridgeCommand::StreamResponse {
+                request_id: "turn-1".to_owned(),
+                model: "gpt-example".to_owned(),
+                input: serde_json::json!([{"role":"user","content":"hi"}]),
+                instructions: Some("Be concise.".to_owned()),
+            }),
+            serde_json::json!({
+                "type": "stream_response",
+                "request_id": "turn-1",
+                "model": "gpt-example",
+                "input": [{"role":"user","content":"hi"}],
+                "instructions": "Be concise."
+            })
+        );
+    }
 
     #[test]
     fn parses_safe_session_without_credentials() {
