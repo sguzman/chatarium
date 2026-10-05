@@ -7328,7 +7328,7 @@ mod tests {
         assert_eq!(projected[1].role, DisplayRole::Assistant);
         assert_eq!(projected[1].text, "second answer");
 
-        let input = responses_input(&projected);
+        let input = responses_input(&projected, "");
         let serialized = input.to_string();
         assert!(!serialized.contains("first private conversation"));
         assert!(!serialized.contains("first answer"));
