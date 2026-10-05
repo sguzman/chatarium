@@ -3280,6 +3280,7 @@ impl eframe::App for ChatariumApp {
                                             .map(|model| model.display_name.as_str())
                                     })
                                     .unwrap_or("Choose model");
+                                let model_before = self.selected_model.clone();
                                 egui::ComboBox::from_id_salt("chatgpt_model")
                                     .selected_text(selected_text)
                                     .width(sidebar_control_width)
@@ -3292,6 +3293,9 @@ impl eframe::App for ChatariumApp {
                                             );
                                         }
                                     });
+                                if self.selected_model != model_before {
+                                    self.persist_current_inference_settings();
+                                }
                             }
                             if ui
                                 .add_sized(
@@ -3716,6 +3720,99 @@ impl eframe::App for ChatariumApp {
                     egui::Color32::from_rgb(45, 29, 31)
                 };
 
+                let mut inference_controls_changed = false;
+                egui::CollapsingHeader::new("Context & inference controls")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "These controls belong to this local conversation. Chatarium assembles the request context locally.",
+                            )
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("Instructions").strong());
+                        ui.label(
+                            egui::RichText::new(
+                                "Sent through the top-level Responses instructions field.",
+                            )
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        inference_controls_changed |= ui
+                            .add(
+                                egui::TextEdit::multiline(&mut self.conversation_instructions)
+                                    .desired_rows(3)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("Persistent instructions for this conversation"),
+                            )
+                            .changed();
+
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Developer context").strong());
+                        ui.label(
+                            egui::RichText::new(
+                                "Inserted as the first developer-role message before the conversation transcript.",
+                            )
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        inference_controls_changed |= ui
+                            .add(
+                                egui::TextEdit::multiline(
+                                    &mut self.conversation_developer_context,
+                                )
+                                .desired_rows(4)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("Local behavior, memory, lifecycle, or policy context"),
+                            )
+                            .changed();
+
+                        ui.add_space(8.0);
+                        ui.collapsing("Exact next-request context", |ui| {
+                            let mut preview_messages = local_display_messages.clone();
+                            if !self.draft.trim().is_empty() {
+                                preview_messages.push(DisplayMessage {
+                                    role: DisplayRole::User,
+                                    text: self.draft.clone(),
+                                    sequence: u64::MAX,
+                                    timestamp: None,
+                                    provenance_label: Some("current draft · commits before send".to_owned()),
+                                });
+                            }
+                            let preview = serde_json::json!({
+                                "model": self.selected_model,
+                                "instructions": if self.conversation_instructions.trim().is_empty() {
+                                    Value::Null
+                                } else {
+                                    Value::String(self.conversation_instructions.clone())
+                                },
+                                "input": responses_input(
+                                    &preview_messages,
+                                    self.conversation_developer_context.as_str(),
+                                ),
+                                "store": false,
+                                "stream": true,
+                            });
+                            let preview_text = serde_json::to_string_pretty(&preview)
+                                .unwrap_or_else(|_| "<failed to render request preview>".to_owned());
+                            egui::ScrollArea::vertical()
+                                .max_height(220.0)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(preview_text)
+                                            .monospace()
+                                            .size(10.0),
+                                    );
+                                });
+                        });
+                    });
+                if inference_controls_changed {
+                    self.persist_current_inference_settings();
+                }
+
+                ui.add_space(8.0);
                 let response = egui::Frame::default()
                     .fill(composer_fill)
                     .stroke(egui::Stroke::new(
