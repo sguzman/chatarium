@@ -1,4 +1,5 @@
 mod account_bridge;
+mod capability_probes;
 mod diagnostics;
 mod local_archive_search;
 mod local_conversations;
@@ -445,6 +446,7 @@ struct ChatariumApp {
     remote: siwc_bridge::BridgeRuntime,
     remote_session: siwc_bridge::SessionState,
     remote_models: Vec<siwc_bridge::Model>,
+    capability_probe: capability_probes::ProbeRun,
     model_list_pending: bool,
     selected_model: Option<String>,
     remote_status: String,
@@ -677,6 +679,7 @@ impl ChatariumApp {
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
+                        capability_probe: capability_probes::ProbeRun::default(),
                         model_list_pending: false,
                         selected_model: active_inference_settings.model,
                         remote_status: "starting sign-in runtime…".to_owned(),
@@ -829,6 +832,7 @@ impl ChatariumApp {
             remote: siwc_bridge::BridgeRuntime::start(repaint),
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
+            capability_probe: capability_probes::ProbeRun::default(),
             model_list_pending: false,
             selected_model: active_inference_settings.model,
             remote_status: "starting sign-in runtime…".to_owned(),
@@ -2619,6 +2623,9 @@ impl ChatariumApp {
                     };
                 }
                 siwc_bridge::BridgeEvent::Delta { request_id, delta } => {
+                    if capability_probes::probe_name_from_request_id(&request_id).is_some() {
+                        continue;
+                    }
                     let Some(active) = self
                         .active_remote_turn
                         .as_mut()
@@ -2674,6 +2681,15 @@ impl ChatariumApp {
                     );
                 }
                 siwc_bridge::BridgeEvent::ResponseCompleted { request_id, text } => {
+                    if let Some(probe_name) =
+                        capability_probes::probe_name_from_request_id(&request_id)
+                    {
+                        let probe_name = probe_name.to_owned();
+                        self.capability_probe
+                            .complete_supported(&probe_name, !text.is_empty());
+                        self.dispatch_next_capability_probe();
+                        continue;
+                    }
                     if !self
                         .active_remote_turn
                         .as_ref()
@@ -2734,6 +2750,15 @@ impl ChatariumApp {
                     );
                 }
                 siwc_bridge::BridgeEvent::Failed { request_id, error } => {
+                    if let Some(probe_name) = request_id
+                        .as_deref()
+                        .and_then(capability_probes::probe_name_from_request_id)
+                    {
+                        let probe_name = probe_name.to_owned();
+                        self.capability_probe.complete_failed(&probe_name, &error);
+                        self.dispatch_next_capability_probe();
+                        continue;
+                    }
                     self.sign_in_pending = false;
                     if request_id.as_deref() == Some("models") {
                         self.model_list_pending = false;
@@ -2804,6 +2829,10 @@ impl ChatariumApp {
                     }
                 }
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
+                    if self.capability_probe.running() {
+                        self.capability_probe.abort(&detail);
+                        self.finish_capability_probes();
+                    }
                     self.remote_runtime_ready = false;
                     self.remote_runtime_failed = true;
                     self.sign_in_requested = false;
@@ -2869,6 +2898,66 @@ impl ChatariumApp {
         if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::Disconnect) {
             self.remote_status = error;
         }
+    }
+
+    fn start_capability_probes(&mut self) {
+        if !self.remote_connected() {
+            self.capability_probe.status = "capability probes require a connected ChatGPT plan".to_owned();
+            return;
+        }
+        if self.pending_remote_turn.is_some() || self.active_remote_turn.is_some() {
+            self.capability_probe.status =
+                "wait for the active ChatGPT response before probing capabilities".to_owned();
+            return;
+        }
+        let Some(model) = self.selected_model.clone() else {
+            self.capability_probe.status = "choose a ChatGPT model before probing".to_owned();
+            return;
+        };
+        if self.capability_probe.running() {
+            return;
+        }
+
+        self.capability_probe.start(model);
+        self.dispatch_next_capability_probe();
+    }
+
+    fn dispatch_next_capability_probe(&mut self) {
+        if self.capability_probe.active.is_some() {
+            return;
+        }
+        let Some(spec) = self.capability_probe.next() else {
+            self.finish_capability_probes();
+            return;
+        };
+        let probe_name = spec.name.to_owned();
+        let command = siwc_bridge::BridgeCommand::ProbeResponse {
+            request_id: capability_probes::request_id(spec.name),
+            model: self.capability_probe.model.clone().unwrap_or_default(),
+            input: spec.input,
+            request_patch: spec.request_patch,
+        };
+        match self.remote.send(command) {
+            Ok(()) => self.capability_probe.mark_active(&probe_name),
+            Err(error) => {
+                self.capability_probe
+                    .complete_dispatch_error(&probe_name, error);
+                self.dispatch_next_capability_probe();
+            }
+        }
+    }
+
+    fn finish_capability_probes(&mut self) {
+        if self.capability_probe.running() || self.capability_probe.results.is_empty() {
+            return;
+        }
+        let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+        let path = data_dir.join("siwc-capability-probes.json");
+        self.capability_probe.status =
+            match capability_probes::save_report(&path, &self.capability_probe, unix_now_ms()) {
+                Ok(()) => format!("capability probes complete · saved {}", path.display()),
+                Err(error) => format!("capability probes complete · {error}"),
+            };
     }
 
     fn remote_connected(&self) -> bool {
@@ -3679,6 +3768,54 @@ impl eframe::App for ChatariumApp {
                                     .color(egui::Color32::from_rgb(126, 130, 139)),
                             );
                             ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("SIWC CAPABILITY PROBES")
+                                    .size(10.0)
+                                    .strong(),
+                            );
+                            let probe_running = self.capability_probe.running();
+                            let can_probe = self.remote_connected()
+                                && self.selected_model.is_some()
+                                && self.pending_remote_turn.is_none()
+                                && self.active_remote_turn.is_none()
+                                && !probe_running;
+                            if ui
+                                .add_enabled(
+                                    can_probe,
+                                    egui::Button::new(if probe_running {
+                                        "RUNNING CAPABILITY PROBES…"
+                                    } else {
+                                        "RUN CAPABILITY PROBES"
+                                    }),
+                                )
+                                .clicked()
+                            {
+                                self.start_capability_probes();
+                            }
+                            if probe_running {
+                                ui.spinner();
+                            }
+                            if !self.capability_probe.status.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&self.capability_probe.status)
+                                        .monospace()
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
+                            for result in &self.capability_probe.results {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} · {}",
+                                        result.name, result.status
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
+
+                            ui.add_space(8.0);
                             ui.label(egui::RichText::new("LOCAL ARCHIVE").size(10.0).strong());
                             ui.horizontal(|ui| {
                                 if ui.button("CHECK ARCHIVE").clicked() {
@@ -4141,8 +4278,10 @@ impl eframe::App for ChatariumApp {
 
                 let remote_turn_idle =
                     self.pending_remote_turn.is_none() && self.active_remote_turn.is_none();
-                let remote_ready_for_send =
-                    !self.remote_connected() || (self.selected_model.is_some() && remote_turn_idle);
+                let remote_ready_for_send = !self.remote_connected()
+                    || (self.selected_model.is_some()
+                        && remote_turn_idle
+                        && !self.capability_probe.running());
                 let can_commit = self.persist_tx.is_some()
                     && self.commit_in_flight.is_none()
                     && remote_ready_for_send
