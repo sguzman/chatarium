@@ -3130,39 +3130,94 @@ impl eframe::App for ChatariumApp {
                         );
                         ui.add_space(6.0);
 
-                        egui::Frame::default()
-                            .fill(if historical_mode {
-                                egui::Color32::from_rgb(26, 28, 33)
-                            } else {
-                                egui::Color32::from_rgb(31, 33, 39)
-                            })
-                            .corner_radius(egui::CornerRadius::same(8))
-                            .inner_margin(egui::Margin::symmetric(10, 9))
-                            .show(ui, |ui| {
-                                if ui
-                                    .selectable_label(
-                                        !historical_mode,
-                                        egui::RichText::new(local_conversation_title.as_str())
-                                            .strong(),
-                                    )
-                                    .clicked()
-                                {
-                                    select_local_requested = true;
-                                }
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} local message{}",
-                                        local_display_messages.len(),
-                                        if local_display_messages.len() == 1 {
-                                            ""
-                                        } else {
-                                            "s"
+                        ui.horizontal(|ui| {
+                            if ui.button("+ New local").clicked() {
+                                create_local_requested = true;
+                            }
+                            ui.checkbox(
+                                &mut self.show_archived_local_conversations,
+                                "Show archived",
+                            );
+                        });
+                        ui.add_space(6.0);
+
+                        for entry in self.local_conversation_catalog.entries() {
+                            if entry.archived && !self.show_archived_local_conversations {
+                                continue;
+                            }
+                            let messages =
+                                projected_local_display_messages(&self.events, entry.id);
+                            let title = local_conversation_display_title(
+                                &self.local_conversation_catalog,
+                                entry.id,
+                                &self.events,
+                            );
+                            let selected =
+                                !historical_mode && entry.id == self.local_conversation_id;
+                            egui::Frame::default()
+                                .fill(if selected {
+                                    egui::Color32::from_rgb(31, 33, 39)
+                                } else {
+                                    egui::Color32::from_rgb(26, 28, 33)
+                                })
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .inner_margin(egui::Margin::symmetric(10, 9))
+                                .show(ui, |ui| {
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            egui::RichText::new(title).strong(),
+                                        )
+                                        .clicked()
+                                    {
+                                        select_local_requested = Some(entry.id);
+                                    }
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} message{}",
+                                                messages.len(),
+                                                if messages.len() == 1 { "" } else { "s" }
+                                            ))
+                                            .size(10.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                        );
+                                        if entry.archived {
+                                            ui.label(
+                                                egui::RichText::new("ARCHIVED")
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(egui::Color32::from_rgb(166, 139, 112)),
+                                            );
                                         }
-                                    ))
-                                    .size(11.0)
-                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    });
+                                });
+                            ui.add_space(4.0);
+                        }
+
+                        if !historical_mode {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("LOCAL CONVERSATION")
+                                    .size(9.0)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(112, 116, 126)),
+                            );
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.local_conversation_rename,
+                                    )
+                                    .hint_text("Conversation title"),
                                 );
+                                if ui.button("Save").clicked() {
+                                    rename_local_requested = true;
+                                }
                             });
+                            if ui.button("Archive local conversation").clicked() {
+                                archive_local_requested = true;
+                            }
+                        }
 
                         if !self.remote_conversation_catalog.is_empty() {
                             ui.add_space(16.0);
