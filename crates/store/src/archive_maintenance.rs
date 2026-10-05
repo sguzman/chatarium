@@ -550,6 +550,8 @@ mod tests {
         target_store
             .append(EventKind::DraftChanged, "target".into())
             .unwrap();
+        drop(source_store);
+        drop(target_store);
         let source_report = check_archive(&source).unwrap();
         create_backup(&source, &backup).unwrap();
         let mut corrupt = fs::read(backup.join(JOURNAL_FILE)).unwrap();
