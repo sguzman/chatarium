@@ -1,6 +1,7 @@
 mod account_bridge;
 mod diagnostics;
 mod local_archive_search;
+mod local_conversations;
 mod local_inference_settings;
 mod offline_reader;
 mod siwc_bridge;
@@ -373,6 +374,10 @@ struct ChatariumApp {
     commit_in_flight: Option<u64>,
     evidence: TurnEvidence,
     local_conversation_id: LocalConversationId,
+    local_conversation_catalog_path: PathBuf,
+    local_conversation_catalog: local_conversations::LocalConversationCatalog,
+    local_conversation_rename: String,
+    show_archived_local_conversations: bool,
     events: Vec<EventEnvelope>,
     historical_catalog: Vec<HistoricalConversationCatalogEntry>,
     selected_historical_conversation: Option<LocalConversationId>,
