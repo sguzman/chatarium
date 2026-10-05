@@ -168,8 +168,12 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
             ));
         }
     };
-    let value: Value = serde_json::from_slice(&encoded)
-        .map_err(|error| format!("invalid capability probe report {}: {error}", path.display()))?;
+    let value: Value = serde_json::from_slice(&encoded).map_err(|error| {
+        format!(
+            "invalid capability probe report {}: {error}",
+            path.display()
+        )
+    })?;
     if value.get("schema").and_then(Value::as_str) != Some("chatarium-siwc-capability-probe")
         || value.get("version").and_then(Value::as_u64) != Some(1)
     {
@@ -187,18 +191,27 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
     let probes = value
         .get("probes")
         .and_then(Value::as_array)
-        .ok_or_else(|| format!("capability probe report {} has no probes array", path.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "capability probe report {} has no probes array",
+                path.display()
+            )
+        })?;
 
     let mut results = Vec::with_capacity(probes.len());
     for probe in probes {
-        let name = probe
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("capability probe report {} has a probe without a name", path.display()))?;
-        let status = probe
-            .get("status")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("capability probe report {} has a probe without a status", path.display()))?;
+        let name = probe.get("name").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "capability probe report {} has a probe without a name",
+                path.display()
+            )
+        })?;
+        let status = probe.get("status").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "capability probe report {} has a probe without a status",
+                path.display()
+            )
+        })?;
         results.push(ProbeResult {
             name: name.to_owned(),
             status: status.to_owned(),
@@ -421,10 +434,8 @@ mod tests {
 
     #[test]
     fn saved_probe_report_round_trips_without_credentials() {
-        let root = std::env::temp_dir().join(format!(
-            "chatarium-capability-probe-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("chatarium-capability-probe-{}", std::process::id()));
         let _ = fs::remove_file(&root);
         let mut run = ProbeRun::default();
         run.model = Some("gpt-example".to_owned());
