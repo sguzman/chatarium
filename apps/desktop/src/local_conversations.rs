@@ -69,7 +69,10 @@ impl LocalConversationCatalog {
                 .get("title")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
-            if title.as_ref().is_some_and(|title| title.len() > MAX_TITLE_BYTES) {
+            if title
+                .as_ref()
+                .is_some_and(|title| title.len() > MAX_TITLE_BYTES)
+            {
                 return Err("local conversation title is too large".to_owned());
             }
             let archived = object
@@ -132,8 +135,9 @@ impl LocalConversationCatalog {
         }))
         .map_err(|error| format!("failed to encode local conversation catalog: {error}"))?;
         let temporary = path.with_extension("json.tmp");
-        fs::write(&temporary, bytes)
-            .map_err(|error| format!("failed to write temporary local conversation catalog: {error}"))?;
+        fs::write(&temporary, bytes).map_err(|error| {
+            format!("failed to write temporary local conversation catalog: {error}")
+        })?;
         fs::rename(&temporary, path)
             .map_err(|error| format!("failed to replace local conversation catalog: {error}"))
     }
@@ -156,7 +160,11 @@ impl LocalConversationCatalog {
     ) -> bool {
         let key = id.to_string();
         if let Some(entry) = self.entries.get_mut(&key) {
-            if entry.title.is_none() && derived_title.as_ref().is_some_and(|title| !title.trim().is_empty()) {
+            if entry.title.is_none()
+                && derived_title
+                    .as_ref()
+                    .is_some_and(|title| !title.trim().is_empty())
+            {
                 entry.title = derived_title;
                 return true;
             }
@@ -205,7 +213,10 @@ impl LocalConversationCatalog {
         title: Option<String>,
         now_ms: u64,
     ) -> Result<(), String> {
-        if title.as_ref().is_some_and(|title| title.len() > MAX_TITLE_BYTES) {
+        if title
+            .as_ref()
+            .is_some_and(|title| title.len() > MAX_TITLE_BYTES)
+        {
             return Err("local conversation title is too large".to_owned());
         }
         let entry = self
@@ -294,7 +305,10 @@ mod tests {
 
         let loaded = LocalConversationCatalog::load(&path).unwrap();
         assert_eq!(loaded.active(), Some(first));
-        assert_eq!(loaded.entry(first).and_then(|entry| entry.title.as_deref()), Some("First"));
+        assert_eq!(
+            loaded.entry(first).and_then(|entry| entry.title.as_deref()),
+            Some("First")
+        );
         assert!(loaded.entry(second).is_some_and(|entry| entry.archived));
 
         let _ = fs::remove_file(path);
@@ -309,7 +323,17 @@ mod tests {
         catalog.create(second, 2);
         catalog.rename(first, Some("Alpha".to_owned()), 3).unwrap();
 
-        assert_eq!(catalog.entry(first).and_then(|entry| entry.title.as_deref()), Some("Alpha"));
-        assert_eq!(catalog.entry(second).and_then(|entry| entry.title.as_deref()), None);
+        assert_eq!(
+            catalog
+                .entry(first)
+                .and_then(|entry| entry.title.as_deref()),
+            Some("Alpha")
+        );
+        assert_eq!(
+            catalog
+                .entry(second)
+                .and_then(|entry| entry.title.as_deref()),
+            None
+        );
     }
 }
