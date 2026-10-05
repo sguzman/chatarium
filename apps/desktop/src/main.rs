@@ -2907,7 +2907,8 @@ impl ChatariumApp {
             return;
         }
 
-        self.capability_probe.start(model);
+        self.capability_probe
+            .start(model, self.remote_session.profile_id.clone());
         self.dispatch_next_capability_probe();
     }
 
@@ -3809,9 +3810,19 @@ impl eframe::App for ChatariumApp {
                                 } else {
                                     " · SELECTED MODEL DIFFERS"
                                 };
+                                let profile_note = match (
+                                    self.capability_probe.profile_id.as_deref(),
+                                    self.remote_session.profile_id.as_deref(),
+                                ) {
+                                    (Some(report), Some(current)) if report == current => "",
+                                    (Some(_), Some(_)) => " · PROFILE DIFFERS",
+                                    (Some(_), None) => " · PROFILE NOT CONNECTED",
+                                    (None, Some(_)) => " · REPORT PROFILE UNKNOWN",
+                                    (None, None) => "",
+                                };
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "saved report · {report_model} · {age}{model_note}"
+                                        "saved report · {report_model} · {age}{model_note}{profile_note}"
                                     ))
                                     .monospace()
                                     .size(10.0)
