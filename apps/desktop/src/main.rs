@@ -6185,12 +6185,13 @@ fn discovered_local_conversation_ids(
     let mut seen = HashSet::new();
     let mut ids = Vec::new();
     for event in events {
-        let Ok(Some(DecodedUserMessageCommit::Typed(message))) = decode_user_message_commit(event)
-        else {
+        let Some(decoded) = decode_user_message_commit(event)? else {
             continue;
         };
-        if seen.insert(message.conversation_id) {
-            ids.push(message.conversation_id);
+        if let DecodedUserMessageCommit::Typed(message) = decoded {
+            if seen.insert(message.conversation_id) {
+                ids.push(message.conversation_id);
+            }
         }
     }
     Ok(ids)
@@ -6228,16 +6229,21 @@ fn load_local_conversation_workspace(
         changed |= catalog.ensure(conversation_id, Some(title), now_ms);
     }
 
-    let active = catalog
+    let mut active = catalog
         .active()
-        .filter(|id| catalog.entry(*id).is_some_and(|entry| !entry.archived))
-        .or_else(|| catalog.first_unarchived())
-        .unwrap_or_else(|| {
+        .filter(|id| catalog.entry(*id).is_some_and(|entry| !entry.archived));
+    if active.is_none() {
+        active = catalog.first_unarchived();
+    }
+    let active = match active {
+        Some(id) => id,
+        None => {
             let id = LocalConversationId::new();
             catalog.create(id, now_ms);
             changed = true;
             id
-        });
+        }
+    };
 
     if catalog.active() != Some(active) {
         catalog.set_active(active, now_ms)?;
