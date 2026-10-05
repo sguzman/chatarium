@@ -33,6 +33,20 @@ Before changing code because ChatGPT behavior appears to have changed:
 7. adapt code and add/update fixtures;
 8. test degraded/mismatch behavior as well as the happy path.
 
+## Native transport anti-drift gate
+
+The hard product contract is [SELF_SUSTAINING_TRANSPORT.md](SELF_SUSTAINING_TRANSPORT.md).
+
+Before adding browser-control, retry, bridge, cooldown, or remote-health machinery to the ordinary conversation path, answer:
+
+> Does this materially advance native browser-independent ChatGPT reads/writes, or produce protocol evidence required to determine whether those reads/writes are viable?
+
+If not, the work needs explicit architectural justification.
+
+For undocumented first-party transport work, prefer existing HAR/Flight Recorder evidence, local raw mirror specimens, and passive recording of traffic the real client already generated. Active browser automation should answer a specific remaining question rather than manufacture broad duplicate traffic.
+
+The existence or absence of a documented public API is not a substitute for this investigation.
+
 ## Undocumented browser integration gate
 
 The 2026-10-03 history-bridge incident established that this project cannot treat partial browser evidence as sufficient merely because implementation is convenient. See [the full postmortem](postmortems/2026-10-03-chatgpt-history-bridge.md).
