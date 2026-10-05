@@ -1,0 +1,176 @@
+# Local inference capability surface
+
+Status: ACTIVE REFERENCE, 2026-10-05.
+
+This document inventories the local-first inference controls available to Chatarium before higher-level lifecycle/orchestration work.
+
+## Evidence baseline
+
+Chatarium pins `openai/sign-in-with-chatgpt-devkit` at commit `f723814abdccec135b519c451fb6e1992ee5e933`.
+
+Relevant pinned files:
+
+- `packages/local/src/types.ts`
+- `packages/local/src/models.ts`
+- `packages/local/src/responses.ts`
+- `packages/local/src/index.ts`
+
+Relevant Chatarium files:
+
+- `tools/siwc-bridge/bridge.mjs`
+- `apps/desktop/src/siwc_bridge.rs`
+- `apps/desktop/src/main.rs`
+
+The current OpenAI Sign in with ChatGPT documentation was also reviewed on 2026-10-05. Do not infer support merely because a control exists in the general Responses API.
+
+## Core local-first behavior
+
+The current inference path is intentionally local-state-driven:
+
+- Chatarium chooses an account-visible model.
+- Chatarium assembles required conversation context locally.
+- Server-side response storage is disabled.
+- Streaming is required.
+- Chatarium persists resulting user/assistant state locally.
+- HTTP continuation resends required history in input rather than relying on a persistent server conversation.
+
+Therefore Chatarium owns the most important behavioral control: context construction.
+
+## Capability matrix
+
+Legend:
+
+- AVAILABLE NOW: exposed in the current desktop.
+- BRIDGE-READY: already supported by Chatarium's Node bridge but not fully surfaced in Rust/UI.
+- DEVKIT-READY: supported by the pinned DevKit but not fully carried through Chatarium.
+- ROUTE-DOCUMENTED: OpenAI documents the capability for this plan-usage route, but the pinned wrapper used by Chatarium does not expose it.
+- UNSUPPORTED: explicitly unsupported for this route.
+- UNKNOWN: not established by the pinned SDK or the current route documentation reviewed here.
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Account-specific model discovery | AVAILABLE NOW | Runtime catalog, not a hardcoded model list. |
+| Model selection | AVAILABLE NOW | Desktop picker exists. |
+| Text user input | AVAILABLE NOW | End-to-end. |
+| Multi-message context input | AVAILABLE NOW | Current desktop sends local transcript context. |
+| user role | AVAILABLE NOW | Supported. |
+| assistant role | AVAILABLE NOW | Supported. |
+| developer role | DEVKIT-READY | Pinned wrapper supports it; UI does not intentionally expose it yet. |
+| Top-level instructions | BRIDGE-READY | Pinned wrapper and Node bridge support it; Rust/UI do not. |
+| Streamed text deltas | AVAILABLE NOW | End-to-end. |
+| Completed-response signal | AVAILABLE NOW | Required for success. |
+| Stop/cancel active inference | DEVKIT-READY | Pinned wrapper supports cancellation; current desktop lacks a stop control. |
+| Image input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. |
+| File input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. |
+| Function/custom tools | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. |
+| additional_tools input items | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. |
+| Web search | ROUTE-DOCUMENTED | Subject to model/account/workspace policy; not exposed by current pinned wrapper. |
+| Audio/video input | UNSUPPORTED | Explicitly unsupported. |
+| Image-generation tool | UNSUPPORTED | Explicitly unsupported. |
+| File-search tool | UNSUPPORTED | Explicitly unsupported. |
+| Code Interpreter | UNSUPPORTED | Explicitly unsupported. |
+| Native computer use | UNSUPPORTED | Explicitly unsupported. |
+| Hosted MCP/connectors | UNSUPPORTED | Explicitly unsupported. |
+| Responses tool_search | UNSUPPORTED | Explicitly unsupported. |
+| Persistent Responses conversation | UNSUPPORTED | Local context ownership is required instead. |
+| HTTP previous_response_id continuation | UNSUPPORTED | Required history must be supplied in input. |
+| Server-side response storage | UNSUPPORTED BY DESIGN | store=false is required. |
+| Non-streaming HTTP inference | UNSUPPORTED BY DESIGN | stream=true is required. |
+| temperature | UNSUPPORTED | Explicitly unsupported. |
+| top_p | UNSUPPORTED | Explicitly unsupported. |
+| top_logprobs | UNSUPPORTED | Explicitly unsupported. |
+| max_output_tokens | UNSUPPORTED | Explicitly unsupported. |
+| max_tool_calls | UNSUPPORTED | Explicitly unsupported. |
+| background | UNSUPPORTED | Explicitly unsupported. |
+| metadata | UNSUPPORTED | Explicitly unsupported. |
+| prompt | UNSUPPORTED | Explicitly unsupported. |
+| prompt_cache_retention | UNSUPPORTED | Explicitly unsupported. |
+| safety_identifier | UNSUPPORTED | Explicitly unsupported. |
+| truncation | UNSUPPORTED | Explicitly unsupported. |
+| top-level user request field | UNSUPPORTED | Explicitly unsupported. |
+| moderation | UNSUPPORTED | Explicitly unsupported. |
+| multi_agent | UNSUPPORTED | Explicitly unsupported. |
+| Explicit system-role message item | UNSUPPORTED | Use instructions or developer messages instead. |
+| Reasoning controls | UNKNOWN | Not established by the pinned wrapper or current route docs reviewed here. |
+| Text verbosity control | UNKNOWN | Not established by the pinned wrapper or current route docs reviewed here. |
+| Structured-output controls | UNKNOWN | Not established by the pinned wrapper or current route docs reviewed here. |
+
+## Exact pinned inference interface
+
+The pinned wrapper exposes:
+
+- `model`
+- `input`
+- optional `instructions`
+- optional cancellation signal
+- optional streamed-text callback
+
+Its text message type exposes:
+
+- `user`
+- `assistant`
+- `developer`
+
+with string content.
+
+The wrapper fixes server storage off and streaming on.
+
+## Current Chatarium gaps
+
+The Node bridge already carries model, input, optional instructions, and streamed deltas.
+
+The Rust bridge currently carries model and input but does not yet carry instructions or inference cancellation.
+
+The desktop currently exposes model choice and ordinary local transcript input, but not explicit developer context or top-level instructions.
+
+## Local behavioral levers Chatarium owns
+
+These can be explored without more remote protocol work:
+
+- which local conversation's history is supplied;
+- exactly which messages are included;
+- transcript order;
+- explicit developer messages;
+- top-level instructions;
+- local summaries replacing older raw turns;
+- local memory/context artifacts inserted into selected requests;
+- per-conversation default model;
+- per-conversation instruction profile;
+- worker/controller role context;
+- lifecycle state represented as explicit developer context;
+- routed messages between local conversations;
+- context handoff between successor sessions;
+- local tool results inserted back into context;
+- provenance and policy-controlled context inclusion.
+
+One local conversation must not acquire another conversation's state implicitly.
+
+## Immediate exposure backlog
+
+Before elaborate lifecycle experiments, expose the controls already known to exist:
+
+1. top-level instructions;
+2. explicit developer-message context;
+3. stop/cancel active inference;
+4. per-conversation persisted model choice.
+
+Then investigate route-documented capabilities that the pinned wrapper does not yet expose:
+
+1. image/file input;
+2. function/custom tools;
+3. additional_tools;
+4. web search where allowed.
+
+Finally, run narrow capability probes for controls still marked UNKNOWN, especially reasoning, verbosity, and structured-output controls.
+
+## Completion criterion
+
+Before elaborate lifecycle behavior, every desired control should be classified as:
+
+- exposed and user-controllable;
+- supported but awaiting implementation;
+- explicitly unsupported;
+- empirically rejected;
+- or unknown with a named probe required.
+
+Behavioral design should build on that known substrate rather than rediscovering inference constraints mid-project.
