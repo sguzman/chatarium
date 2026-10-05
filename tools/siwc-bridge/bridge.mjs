@@ -206,6 +206,120 @@ const chatgpt = local.createChatGPT({
   credentialEncryption,
 });
 
+const RESPONSES_URL = "https://api.openai.com/v1/responses";
+const RESPONSE_PROBE_PATCH_FIELDS = new Set([
+  "input",
+  "reasoning",
+  "text",
+  "tools",
+]);
+
+function bridgeError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.retryable = false;
+  return error;
+}
+
+function validateResponseProbePatch(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw bridgeError(
+      "invalid_probe_patch",
+      "Capability probe request_patch must be a JSON object.",
+    );
+  }
+  const patch = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (!RESPONSE_PROBE_PATCH_FIELDS.has(key)) {
+      throw bridgeError(
+        "invalid_probe_patch",
+        `Capability probe cannot patch Responses field ${key}.`,
+      );
+    }
+    patch[key] = nested;
+  }
+  const encoded = JSON.stringify(patch);
+  if (encoded.length > 4 * 1024 * 1024) {
+    throw bridgeError(
+      "invalid_probe_patch",
+      "Capability probe request_patch is too large.",
+    );
+  }
+  return patch;
+}
+
+async function runWithResponseProbePatch(patch, operation) {
+  const originalFetch = globalThis.fetch;
+  let patched = false;
+  const probeFetch = async (input, init = {}) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input?.url;
+    const method = String(
+      init?.method ?? (input instanceof Request ? input.method : "GET"),
+    ).toUpperCase();
+    if (url !== RESPONSES_URL || method !== "POST") {
+      return originalFetch(input, init);
+    }
+    if (patched) {
+      throw bridgeError(
+        "probe_request_count",
+        "Capability probe attempted more than one Responses request.",
+      );
+    }
+    if (typeof init?.body !== "string") {
+      throw bridgeError(
+        "probe_request_shape",
+        "Capability probe expected a JSON Responses request body.",
+      );
+    }
+    let body;
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      throw bridgeError(
+        "probe_request_shape",
+        "Capability probe could not parse the Responses request body.",
+      );
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw bridgeError(
+        "probe_request_shape",
+        "Capability probe received an unexpected Responses request body.",
+      );
+    }
+    patched = true;
+    return originalFetch(input, {
+      ...init,
+      body: JSON.stringify({
+        ...body,
+        ...patch,
+        model: body.model,
+        store: false,
+        stream: true,
+      }),
+    });
+  };
+
+  globalThis.fetch = probeFetch;
+  try {
+    const result = await operation();
+    if (!patched) {
+      throw bridgeError(
+        "probe_not_applied",
+        "Capability probe did not observe the expected Responses request.",
+      );
+    }
+    return result;
+  } finally {
+    if (globalThis.fetch === probeFetch) globalThis.fetch = originalFetch;
+  }
+}
+
+
 chatgpt.subscribe((session) => {
   emit({ type: "session", session });
 });
@@ -272,6 +386,13 @@ async function handle(command) {
         ) {
           throw new Error("stream_response requires input");
         }
+        if (responseProbeInFlight) {
+          throw bridgeError(
+            "probe_busy",
+            "Normal inference cannot start while a capability probe is active.",
+          );
+        }
+        activeResponseOperations += 1;
         const controller = new AbortController();
         if (requestId) responseControllers.set(requestId, controller);
         try {
@@ -296,6 +417,60 @@ async function handle(command) {
             result,
           });
         } finally {
+          activeResponseOperations -= 1;
+          if (requestId && responseControllers.get(requestId) === controller) {
+            responseControllers.delete(requestId);
+          }
+        }
+        break;
+      }
+      case "probe_response": {
+        if (typeof command.model !== "string" || !command.model.trim()) {
+          throw new Error("probe_response requires model");
+        }
+        if (
+          typeof command.input !== "string" &&
+          !Array.isArray(command.input)
+        ) {
+          throw new Error("probe_response requires input");
+        }
+        const patch = validateResponseProbePatch(command.request_patch ?? {});
+        if (responseProbeInFlight || activeResponseOperations > 0) {
+          throw bridgeError(
+            "probe_busy",
+            "Capability probes require an idle Responses bridge.",
+          );
+        }
+        responseProbeInFlight = true;
+        activeResponseOperations += 1;
+        const controller = new AbortController();
+        if (requestId) responseControllers.set(requestId, controller);
+        try {
+          const result = await runWithResponseProbePatch(patch, () =>
+            chatgpt.streamResponse({
+              model: command.model,
+              input: command.input,
+              ...(typeof command.instructions === "string"
+                ? { instructions: command.instructions }
+                : {}),
+              signal: controller.signal,
+              onDelta(delta) {
+                emit({
+                  type: "delta",
+                  request_id: requestId,
+                  delta,
+                });
+              },
+            }),
+          );
+          emit({
+            type: "result",
+            request_id: requestId,
+            result,
+          });
+        } finally {
+          activeResponseOperations -= 1;
+          responseProbeInFlight = false;
           if (requestId && responseControllers.get(requestId) === controller) {
             responseControllers.delete(requestId);
           }
@@ -334,6 +509,8 @@ const input = createInterface({
 
 const inFlight = new Set();
 const responseControllers = new Map();
+let responseProbeInFlight = false;
+let activeResponseOperations = 0;
 
 input.on("line", (line) => {
   let command;

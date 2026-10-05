@@ -18,6 +18,7 @@ Relevant pinned files:
 Relevant Chatarium files:
 
 - `tools/siwc-bridge/bridge.mjs`
+- `tools/siwc-bridge/capability-probe.mjs`
 - `apps/desktop/src/siwc_bridge.rs`
 - `apps/desktop/src/main.rs`
 
@@ -45,6 +46,7 @@ Legend:
 - DEVKIT-READY: supported by the pinned DevKit but not fully carried through Chatarium.
 - ROUTE-DOCUMENTED: OpenAI documents the capability for this plan-usage route, but the pinned wrapper used by Chatarium does not expose it.
 - UNSUPPORTED: explicitly unsupported for this route.
+- PROBE-READY: not established for this route, but a credential-safe authenticated developer probe is implemented and ready to run.
 - UNKNOWN: not established by the pinned SDK or the current route documentation reviewed here.
 
 | Capability | Status | Notes |
@@ -60,11 +62,11 @@ Legend:
 | Streamed text deltas | AVAILABLE NOW | End-to-end. |
 | Completed-response signal | AVAILABLE NOW | Required for success. |
 | Stop/cancel active inference | AVAILABLE NOW | Desktop Stop generation targets the active request through a bridge-owned AbortController. |
-| Image input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. |
-| File input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. |
-| Function/custom tools | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. |
-| additional_tools input items | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. |
-| Web search | ROUTE-DOCUMENTED | Subject to model/account/workspace policy; not exposed by current pinned wrapper. |
+| Image input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. Developer probe: `image_input`. |
+| File input | ROUTE-DOCUMENTED | Documented when selected model accepts it; current pinned wrapper is text-only. Developer probe: `file_input`. |
+| Function/custom tools | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. Developer probe uses a namespaced function tool. |
+| additional_tools input items | ROUTE-DOCUMENTED | Documented for the route; not exposed by current pinned wrapper. Developer probe: `additional_tools`. |
+| Web search | ROUTE-DOCUMENTED | Subject to model/account/workspace policy; not exposed by current pinned wrapper. Developer probe: `web_search`. |
 | Audio/video input | UNSUPPORTED | Explicitly unsupported. |
 | Image-generation tool | UNSUPPORTED | Explicitly unsupported. |
 | File-search tool | UNSUPPORTED | Explicitly unsupported. |
@@ -91,9 +93,9 @@ Legend:
 | moderation | UNSUPPORTED | Explicitly unsupported. |
 | multi_agent | UNSUPPORTED | Explicitly unsupported. |
 | Explicit system-role message item | UNSUPPORTED | Use instructions or developer messages instead. |
-| Reasoning controls | UNKNOWN | Not established by the pinned wrapper or current route docs reviewed here. |
-| Text verbosity control | UNKNOWN | Not established by the pinned wrapper or current route docs reviewed here. |
-| Structured-output controls | UNKNOWN | Not established by the pinned wrapper or current route docs reviewed here. |
+| Reasoning controls | PROBE-READY | General Responses supports `reasoning.effort`; SIWC route acceptance is not yet established. Developer probe: `reasoning`. |
+| Text verbosity control | PROBE-READY | General Responses supports `text.verbosity`; SIWC route acceptance is not yet established. Developer probe: `verbosity`. |
+| Structured-output controls | PROBE-READY | General Responses supports `text.format`; SIWC route acceptance is not yet established. Developer probe: `structured_output`. |
 
 ## Exact pinned inference interface
 
@@ -114,6 +116,38 @@ Its text message type exposes:
 with string content.
 
 The wrapper fixes server storage off and streaming on.
+
+## Developer route probe harness
+
+The pinned DevKit and current upstream DevKit still validate only text
+user/assistant/developer messages. Chatarium does not widen or fork that public
+wrapper merely to discover route behavior.
+
+`tools/siwc-bridge/capability-probe.mjs` now drives a developer-only
+`probe_response` command inside the trusted Node sidecar. The sidecar keeps
+OAuth acquisition/refresh entirely inside the official DevKit, temporarily
+patches only the outgoing `/v1/responses` JSON body, preserves the fixed
+`model`, `store: false`, and `stream: true` fields, then restores the
+original fetch immediately.
+
+The patch allowlist is deliberately narrow: `input`, `reasoning`, `text`,
+and `tools`. Normal inference cannot overlap a probe.
+
+Named probes now exist for:
+
+- baseline text admission;
+- image input using an inline data URL;
+- file input using an inline tiny text file;
+- namespaced function tools;
+- `additional_tools` input items;
+- web search declaration;
+- `reasoning.effort`;
+- `text.verbosity`;
+- structured output through `text.format`.
+
+A successful probe establishes support only for the selected account/model at
+the time of the run. A rejected probe remains evidence, not a reason to invent
+product support.
 
 ## Current Chatarium implementation
 
@@ -162,14 +196,19 @@ One local conversation must not acquire another conversation's state implicitly.
 
 The first known-control exposure set is complete: instructions, developer context, stop/cancel, per-conversation model persistence, conversation isolation, and request inspection are now user-controllable.
 
-Next investigate route-documented capabilities that the pinned wrapper does not yet expose:
+The route-documented and previously unknown capability probes are now executable without widening the product API.
+
+Next run the authenticated developer harness against an account-visible model and record each result as accepted, route-unsupported, rejected, or model/account constrained:
 
 1. image/file input;
-2. function/custom tools;
+2. namespaced function/custom tools;
 3. additional_tools;
-4. web search where allowed.
+4. web search;
+5. reasoning;
+6. verbosity;
+7. structured output.
 
-Finally, run narrow capability probes for controls still marked UNKNOWN, especially reasoning, verbosity, and structured-output controls.
+After those empirical results are recorded, decide which supported capabilities deserve first-class product exposure and freeze the Local Inference Contract before lifecycle work.
 
 ## Completion criterion
 
