@@ -18,6 +18,9 @@ pub enum BridgeCommand {
         input: Value,
         instructions: Option<String>,
     },
+    CancelResponse {
+        target_request_id: String,
+    },
     Disconnect,
     Shutdown,
 }
@@ -369,6 +372,11 @@ fn command_json(command: BridgeCommand) -> Value {
             "input": input,
             "instructions": instructions
         }),
+        BridgeCommand::CancelResponse { target_request_id } => json!({
+            "type": "cancel_response",
+            "request_id": format!("cancel:{target_request_id}"),
+            "target_request_id": target_request_id
+        }),
         BridgeCommand::Disconnect => json!({
             "type": "disconnect",
             "request_id": "disconnect"
@@ -523,6 +531,20 @@ mod tests {
                 "model": "gpt-example",
                 "input": [{"role":"user","content":"hi"}],
                 "instructions": "Be concise."
+            })
+        );
+    }
+
+    #[test]
+    fn cancel_response_command_targets_active_request() {
+        assert_eq!(
+            command_json(BridgeCommand::CancelResponse {
+                target_request_id: "turn-1".to_owned(),
+            }),
+            serde_json::json!({
+                "type": "cancel_response",
+                "request_id": "cancel:turn-1",
+                "target_request_id": "turn-1"
             })
         );
     }
