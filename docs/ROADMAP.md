@@ -174,11 +174,55 @@ The full failure chain and permanent gates are documented in `docs/postmortems/2
 
 A product-shaped native desktop shell remains available as a local test surface while P3 completes. It exercises durable composition, typed local authored-message identity, restart recovery, and durable transcript rendering without claiming remote history completeness.
 
+## P3V — self-sustaining native transport viability gate
+
+Before Chatarium spends substantial additional engineering effort making browser-per-request synchronization more elaborate, resolve the core product viability question.
+
+Goal: determine, from empirical first-party evidence, whether ordinary ChatGPT conversation traffic can be performed directly by the native Chatarium process after any genuinely necessary login/session bootstrap.
+
+Evidence order:
+
+1. existing HAR and Flight Recorder traces;
+2. existing durable private mirror snapshots;
+3. passive capture of ordinary first-party traffic;
+4. diffing multiple real specimens;
+5. minimal controlled experiments for a named unresolved question.
+
+The current browser bridge/CDP stack is an observation and ingestion instrument, not the presumed final transport.
+
+Required read-side map:
+
+- conversation listing/pagination;
+- exact conversation retrieval;
+- branch/current-node semantics;
+- account/session context.
+
+Required write-side map:
+
+- create conversation;
+- continue existing conversation;
+- outbound user-message envelope;
+- conversation/message/parent identity;
+- stream protocol and completion semantics;
+- stop/regenerate/edit/branch behavior where necessary.
+
+Hard acceptance test: after any required authentication/session bootstrap, terminate Chromium and prove that Chatarium's native process can list, retrieve, create, continue, send, stream, and durably synchronize ordinary ChatGPT conversations without a browser process, extension, CDP session, Playwright session, or page-context request participating in those ordinary operations.
+
+Allowed outcomes:
+
+- **VIABLE** — native ordinary reads/writes work directly;
+- **VIABLE WITH AUTH BOOTSTRAP** — browser needed only for occasional identity/session establishment;
+- **NOT VIABLE** — ordinary traffic is materially browser-bound and cannot be reproduced safely/reliably.
+
+The third outcome is a project viability failure. Do not redefine success downward to a hidden Chromium transport.
+
+See [SELF_SUSTAINING_TRANSPORT.md](SELF_SUSTAINING_TRANSPORT.md).
+
 ## P3.5 — local mirror browser surface
 
 Once a conversation has been durably mirrored, rereading it should not require another ChatGPT conversation read.
 
-Build an extension-owned **Local Mirror** surface inside `chatgpt.com` backed entirely by Chatarium's localhost API and append-only mirror store.
+This browser-hosted Local Mirror surface is optional compatibility/convenience work, not the definition of the final desktop transport. Build an extension-owned **Local Mirror** surface inside `chatgpt.com` backed entirely by Chatarium's localhost API and append-only mirror store only when it does not displace the P3V native-transport viability investigation.
 
 Deliverables:
 
@@ -221,7 +265,7 @@ Deliverables:
 - avoid duplicate sends after ambiguous disconnects;
 - preserve raw observed events needed for debugging.
 
-Exit criterion: ordinary text conversation is usable without the official site UI for the validated protocol revision.
+Exit criterion: ordinary text conversation is usable through the native Chatarium process for the validated protocol revision, with no browser process/extension/CDP/page-context transport participating in the ordinary send/stream operation after any allowed authentication bootstrap.
 
 ## P5 — native desktop workstation
 
