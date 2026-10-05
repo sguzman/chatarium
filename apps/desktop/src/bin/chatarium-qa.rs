@@ -10,10 +10,16 @@ mod account_bridge;
 mod diagnostics;
 
 use account_bridge::{
-    AccountBridgeRuntime, FreshTabHistoryDiscoveryObservation,
+    AccountBridgeRuntime, BrowserBridgeError, FreshTabHistoryDiscoveryObservation,
     HistoryDiscoveryObservation, HistorySurfaceCandidate,
 };
 use chatarium_store::remote_mirror_bootstrap::promote_discovered_live_mirror_body;
+use chatarium_store::remote_mirror_queue::{
+    RemoteMirrorQueueStatus, derive_remote_mirror_queue,
+    record_remote_mirror_queue_capture_started, record_remote_mirror_queue_completed,
+    record_remote_mirror_queue_failed, record_remote_mirror_queue_item_queued,
+    record_remote_mirror_queue_rate_limited,
+};
 use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_transcript::project_remote_active_transcript;
 use chatarium_store::{EventStore, JsonlEventStore};
@@ -34,6 +40,14 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("mirror-replay") {
         run_mirror_replay();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("mirror-status") {
+        run_mirror_status();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("mirror-batch") {
+        run_mirror_batch();
         return;
     }
     let started = Instant::now();
@@ -560,6 +574,398 @@ fn run_mirror_replay() {
         "local_reopen_replay": true,
         "elapsed_ms": started.elapsed().as_millis(),
     }));
+}
+
+fn run_mirror_status() {
+    let started = Instant::now();
+    let cache_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "catalog_read_failed",
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let store = match JsonlEventStore::open(default_journal_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "journal_open_failed",
+                "error": error.to_string(),
+            }));
+            return;
+        }
+    };
+    let summary = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "queue_replay_failed",
+                "error": error,
+            }));
+            return;
+        }
+    };
+    print_queue_status("success", &summary, None, started.elapsed().as_millis());
+}
+
+fn run_mirror_batch() {
+    let started = Instant::now();
+    let max_items = std::env::args()
+        .skip(2)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|window| window[0] == "--max")
+        .and_then(|window| window[1].parse::<usize>().ok())
+        .unwrap_or(3);
+    if max_items == 0 || max_items > 3 {
+        print_json(json!({
+            "terminal_state": "invalid_batch_limit",
+            "max_allowed": 3,
+            "requested": max_items,
+        }));
+        return;
+    }
+
+    let cache_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "catalog_read_failed",
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let journal_path = default_journal_path();
+    let mut store = match JsonlEventStore::open(&journal_path) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "journal_open_failed",
+                "error": error.to_string(),
+            }));
+            return;
+        }
+    };
+    let before = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "queue_replay_failed",
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let selected = before.eligible_items(max_items);
+    if selected.is_empty() {
+        print_queue_status("nothing_pending", &before, Some(max_items), started.elapsed().as_millis());
+        return;
+    }
+
+    let runtime = match AccountBridgeRuntime::start() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "bridge_start_failed",
+                "error": error.to_string(),
+            }));
+            return;
+        }
+    };
+    let mut provider = runtime.provider();
+    let mut attempted = Vec::new();
+    let mut succeeded_full = Vec::new();
+    let mut succeeded_partial = Vec::new();
+    let mut rate_limited = Vec::new();
+    let mut failed = Vec::new();
+    let mut terminal_state = "success";
+    let mut stopped_on_rate_limit = false;
+
+    for item in selected {
+        attempted.push(item.catalog_index);
+        if let Err(error) = record_remote_mirror_queue_item_queued(
+            &mut store,
+            &item.remote_conversation_id,
+            item.catalog_index,
+        ) {
+            terminal_state = "queue_persistence_failed";
+            failed.push(item.catalog_index);
+            break;
+        }
+        if let Err(error) = record_remote_mirror_queue_capture_started(
+            &mut store,
+            &item.remote_conversation_id,
+        ) {
+            terminal_state = "queue_persistence_failed";
+            failed.push(item.catalog_index);
+            let _ = error;
+            break;
+        }
+
+        let authentication = match provider.probe_authentication() {
+            Ok(authentication) => authentication,
+            Err(error) => {
+                let _ = record_remote_mirror_queue_failed(
+                    &mut store,
+                    &item.remote_conversation_id,
+                    "transient",
+                );
+                failed.push(item.catalog_index);
+                terminal_state = "authentication_failed";
+                let _ = error;
+                break;
+            }
+        };
+        if !matches!(
+            authentication.evidence,
+            chatarium_core::authenticated_session::SessionAuthenticationEvidence::Authenticated
+        ) {
+            let _ = record_remote_mirror_queue_failed(
+                &mut store,
+                &item.remote_conversation_id,
+                "transient",
+            );
+            failed.push(item.catalog_index);
+            terminal_state = "unauthenticated";
+            break;
+        }
+
+        let fetched = match provider.fetch_authenticated_conversation(&item.remote_conversation_id) {
+            Ok(fetched) => fetched,
+            Err(BrowserBridgeError::RateLimited(_)) => {
+                let _ = record_remote_mirror_queue_rate_limited(
+                    &mut store,
+                    &item.remote_conversation_id,
+                );
+                rate_limited.push(item.catalog_index);
+                terminal_state = "rate_limited_batch_stopped";
+                stopped_on_rate_limit = true;
+                break;
+            }
+            Err(error) => {
+                let _ = record_remote_mirror_queue_failed(
+                    &mut store,
+                    &item.remote_conversation_id,
+                    if matches!(error, BrowserBridgeError::Protocol(_) | BrowserBridgeError::UnsupportedRevision(_)) {
+                        "structural"
+                    } else {
+                        "transient"
+                    },
+                );
+                failed.push(item.catalog_index);
+                terminal_state = "capture_failed";
+                continue;
+            }
+        };
+
+        let promotion = match promote_discovered_live_mirror_body(
+            &mut store,
+            &item.remote_conversation_id,
+            &fetched.body,
+        ) {
+            Ok(promotion) => promotion,
+            Err(error) => {
+                let _ = record_remote_mirror_queue_failed(
+                    &mut store,
+                    &item.remote_conversation_id,
+                    "structural",
+                );
+                failed.push(item.catalog_index);
+                terminal_state = "promotion_failed";
+                let _ = error;
+                break;
+            }
+        };
+        let records = match replay_remote_conversation_snapshot_audit(store.events()) {
+            Ok(records) => records,
+            Err(error) => {
+                let _ = record_remote_mirror_queue_failed(
+                    &mut store,
+                    &item.remote_conversation_id,
+                    "structural",
+                );
+                failed.push(item.catalog_index);
+                terminal_state = "snapshot_replay_failed";
+                let _ = error;
+                break;
+            }
+        };
+        let Some(record) = records
+            .iter()
+            .find(|record| record.imported_sequence == promotion.snapshot.sequence)
+        else {
+            let _ = record_remote_mirror_queue_failed(
+                &mut store,
+                &item.remote_conversation_id,
+                "structural",
+            );
+            failed.push(item.catalog_index);
+            terminal_state = "snapshot_missing_after_promotion";
+            break;
+        };
+        let projection = match project_remote_active_transcript(&record.envelope) {
+            Ok(projection) => projection,
+            Err(error) => {
+                let _ = record_remote_mirror_queue_failed(
+                    &mut store,
+                    &item.remote_conversation_id,
+                    "structural",
+                );
+                failed.push(item.catalog_index);
+                terminal_state = "projection_failed";
+                let _ = error;
+                break;
+            }
+        };
+        let mirror_state = if projection.truncated_before {
+            succeeded_partial.push(item.catalog_index);
+            "partial"
+        } else {
+            succeeded_full.push(item.catalog_index);
+            "fully_mirrored"
+        };
+        if record_remote_mirror_queue_completed(
+            &mut store,
+            &item.remote_conversation_id,
+            mirror_state,
+        )
+        .is_err()
+        {
+            terminal_state = "queue_persistence_failed";
+            break;
+        }
+    }
+    drop(provider);
+    drop(runtime);
+    drop(store);
+
+    let reopened = match JsonlEventStore::open(&journal_path) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "local_reopen_failed",
+                "attempted": attempted,
+                "error": error.to_string(),
+            }));
+            return;
+        }
+    };
+    let after = match derive_queue_summary(&catalog, reopened.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "queue_replay_failed_after_run",
+                "attempted": attempted,
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let batch = json!({
+        "attempted": attempted,
+        "succeeded_full": succeeded_full,
+        "succeeded_partial": succeeded_partial,
+        "rate_limited": rate_limited,
+        "failed": failed,
+        "stopped_on_rate_limit": stopped_on_rate_limit,
+    });
+    let mut output = queue_status_value(
+        terminal_state,
+        &after,
+        Some(max_items),
+        started.elapsed().as_millis(),
+    )
+    .as_object()
+    .cloned()
+    .expect("queue status is an object");
+    output.insert("batch".to_owned(), batch);
+    print_json(Value::Object(output));
+}
+
+fn derive_queue_summary(
+    catalog: &[ConversationListItem],
+    events: &[chatarium_store::EventEnvelope],
+) -> Result<chatarium_store::remote_mirror_queue::RemoteMirrorQueueSummary, String> {
+    let identities = catalog
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (index, item.id.clone()))
+        .collect::<Vec<_>>();
+    derive_remote_mirror_queue(&identities, events)
+}
+
+fn print_queue_status(
+    terminal_state: &str,
+    summary: &chatarium_store::remote_mirror_queue::RemoteMirrorQueueSummary,
+    live_batch_max: Option<usize>,
+    elapsed_ms: u128,
+) {
+    print_json(queue_status_value(
+        terminal_state,
+        summary,
+        live_batch_max,
+        elapsed_ms,
+    ));
+}
+
+fn queue_status_value(
+    terminal_state: &str,
+    summary: &chatarium_store::remote_mirror_queue::RemoteMirrorQueueSummary,
+    live_batch_max: Option<usize>,
+    elapsed_ms: u128,
+) -> Value {
+    let item_states = summary
+        .items
+        .iter()
+        .map(|item| {
+            json!({
+                "catalog_index": item.catalog_index,
+                "status": queue_status_name(item.status),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "terminal_state": terminal_state,
+        "catalog_count": summary.items.len(),
+        "already_mirrored_count": summary.full_count() + summary.partial_count(),
+        "full_count": summary.full_count(),
+        "partial_count": summary.partial_count(),
+        "pending_count": summary.pending_count(),
+        "queued_count": summary.count(RemoteMirrorQueueStatus::Queued),
+        "capturing_count": summary.count(RemoteMirrorQueueStatus::Capturing),
+        "rate_limited_count": summary.count(RemoteMirrorQueueStatus::RateLimited),
+        "transient_failure_count": summary.count(RemoteMirrorQueueStatus::TransientFailure),
+        "structural_failure_count": summary.count(RemoteMirrorQueueStatus::StructuralFailure),
+        "remaining_count": summary.pending_count(),
+        "live_batch_max": live_batch_max,
+        "item_states": item_states,
+        "elapsed_ms": elapsed_ms,
+    })
+}
+
+fn queue_status_name(status: RemoteMirrorQueueStatus) -> &'static str {
+    match status {
+        RemoteMirrorQueueStatus::Discovered => "discovered",
+        RemoteMirrorQueueStatus::Queued => "queued",
+        RemoteMirrorQueueStatus::Capturing => "capturing",
+        RemoteMirrorQueueStatus::MirroredFully => "mirrored_fully",
+        RemoteMirrorQueueStatus::MirroredPartial => "mirrored_partial",
+        RemoteMirrorQueueStatus::RateLimited => "rate_limited",
+        RemoteMirrorQueueStatus::TransientFailure => "transient_failure",
+        RemoteMirrorQueueStatus::StructuralFailure => "structural_failure",
+    }
 }
 
 fn item_update_sort_key(item: &ConversationListItem) -> String {

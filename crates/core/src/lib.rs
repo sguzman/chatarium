@@ -277,6 +277,11 @@ impl TurnEvidence {
             | EventKind::RemoteReadObservationRecorded
             | EventKind::RemoteMirrorSelectionChanged
             | EventKind::RemoteConversationSnapshotImported
+            | EventKind::RemoteMirrorQueueItemQueued
+            | EventKind::RemoteMirrorQueueCaptureStarted
+            | EventKind::RemoteMirrorQueueCompleted
+            | EventKind::RemoteMirrorQueueRateLimited
+            | EventKind::RemoteMirrorQueueFailed
             | EventKind::ChatContainerCreated
             | EventKind::ChatSessionLifecycleTransitionRecorded
             | EventKind::ChatSessionSuccessorBound => {}
@@ -375,6 +380,16 @@ pub enum EventKind {
     RemoteMirrorSelectionChanged,
     /// One validated remote conversation snapshot was imported into durable local mirror state.
     RemoteConversationSnapshotImported,
+    /// One discovered remote conversation entered the durable mirror queue.
+    RemoteMirrorQueueItemQueued,
+    /// One durable mirror queue item began its exact capture attempt.
+    RemoteMirrorQueueCaptureStarted,
+    /// One durable mirror queue item completed as full or partial.
+    RemoteMirrorQueueCompleted,
+    /// One durable mirror queue item was stopped by an HTTP 429 response.
+    RemoteMirrorQueueRateLimited,
+    /// One durable mirror queue item failed without a successful mirror.
+    RemoteMirrorQueueFailed,
     /// One logical chat container was created around an already-registered root session.
     ChatContainerCreated,
     /// One chat-container session advanced toward saturation.
@@ -428,6 +443,11 @@ impl EventKind {
             Self::RemoteReadObservationRecorded => "remote_read_observation_recorded",
             Self::RemoteMirrorSelectionChanged => "remote_mirror_selection_changed",
             Self::RemoteConversationSnapshotImported => "remote_conversation_snapshot_imported",
+            Self::RemoteMirrorQueueItemQueued => "remote_mirror_queue_item_queued",
+            Self::RemoteMirrorQueueCaptureStarted => "remote_mirror_queue_capture_started",
+            Self::RemoteMirrorQueueCompleted => "remote_mirror_queue_completed",
+            Self::RemoteMirrorQueueRateLimited => "remote_mirror_queue_rate_limited",
+            Self::RemoteMirrorQueueFailed => "remote_mirror_queue_failed",
             Self::ChatContainerCreated => "chat_container_created",
             Self::ChatSessionLifecycleTransitionRecorded => {
                 "chat_session_lifecycle_transition_recorded"
@@ -482,6 +502,13 @@ impl EventKind {
             "remote_conversation_snapshot_imported" => {
                 Some(Self::RemoteConversationSnapshotImported)
             }
+            "remote_mirror_queue_item_queued" => Some(Self::RemoteMirrorQueueItemQueued),
+            "remote_mirror_queue_capture_started" => {
+                Some(Self::RemoteMirrorQueueCaptureStarted)
+            }
+            "remote_mirror_queue_completed" => Some(Self::RemoteMirrorQueueCompleted),
+            "remote_mirror_queue_rate_limited" => Some(Self::RemoteMirrorQueueRateLimited),
+            "remote_mirror_queue_failed" => Some(Self::RemoteMirrorQueueFailed),
             "chat_container_created" => Some(Self::ChatContainerCreated),
             "chat_session_lifecycle_transition_recorded" => {
                 Some(Self::ChatSessionLifecycleTransitionRecorded)

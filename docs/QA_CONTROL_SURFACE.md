@@ -183,11 +183,14 @@ The live-history acceptance scope was:
 7. prove temporary tabs and debugger sessions are cleaned up;
 8. collect sanitized evidence and targeted regression results without personal Edge access.
 
-## Next Codex goal
+## Current catalog-mirroring goal
 
-The next goal is exact single-conversation mirroring. It must continue using the authenticated
-dedicated QA profile and production bridge/Rust path, without reverting to the retired
-Edge-profile or userscript transport.
+Catalog mirroring uses the authenticated dedicated QA profile and production bridge/Rust path,
+without reverting to the retired Edge-profile or userscript transport. The durable scheduler is
+serial and rate-aware: it selects at most three items per live acceptance batch, excludes already
+full or partial mirrors, persists transient/rate-limited outcomes, and stops the current batch on
+terminal HTTP 429 or authentication loss. Queue status is structural only and does not imply
+account-wide coverage.
 
 Codex owns dependency installation, browser/profile/launcher creation, extension loading, control-plane proof, repository changes, testing, commit, and push.
 

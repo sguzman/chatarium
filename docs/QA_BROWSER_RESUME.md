@@ -56,3 +56,24 @@ Journal reopen/replay was then repeated without remote HTTP and reproduced one p
 visible message with `truncated_before=true`, accurately recording a partial mirror rather than
 claiming a complete transcript. The regression test uses synthetic IDs and redacted structure
 only.
+
+## Resumable catalog mirroring acceptance (2026-10-05)
+
+The mirror scheduler now derives its state from append-only queue lifecycle events plus the
+existing durable snapshot audit. It distinguishes discovered, queued, capturing, fully mirrored,
+partially mirrored, rate-limited, transient-failure, and structural-failure states. Successful
+full and partial snapshots are excluded from later work selection; a transient failure remains
+eligible for a later explicit bounded run; a rate-limited item is not selected automatically.
+The queue reports catalog indexes and structural counts only.
+
+Local queue tests cover empty/all-pending derivation, successful full/partial state, restart
+replay, idempotent derivation, transient failure resumption, rate-limit exclusion, and
+structural-failure isolation. `mirror-status` performs an offline journal/catalog reconstruction
+and does not start browser automation.
+
+One serial live acceptance run was capped at three items. It selected catalog indexes 0, 1, and
+2; index 0 was promoted and replayed as a partial mirror, while indexes 1 and 2 recorded
+transient authentication failures. No HTTP 429 occurred and no retry was launched. The journal
+was reopened before reporting, the existing partial mirror remained partial, and the resulting
+state was 85 observed, 2 partial, 83 pending, with no full or rate-limited items. This is an
+observed catalog, not an account-wide completeness claim.

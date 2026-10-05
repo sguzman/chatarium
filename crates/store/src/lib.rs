@@ -18,6 +18,7 @@ pub mod projection;
 pub mod remote_identity_audit;
 pub mod remote_mirror_bootstrap;
 pub mod remote_mirror_execution;
+pub mod remote_mirror_queue;
 pub mod remote_mirror_readiness;
 pub mod remote_mirror_runtime;
 pub mod remote_mirror_selection_audit;
