@@ -1,6 +1,6 @@
 //! Pure local transcript-reader behavior over already-projected visible text.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -261,7 +261,9 @@ mod tests {
 
     #[test]
     fn parses_reader_blocks_and_preserves_paragraph_lines() {
-        let blocks = parse_markdown("# Heading\n\nfirst line\nsecond line\n\n- one\n- two\n\n1. first\n2. second\n\n> quote\n\n`inline`\n\n```rust\nlet x = 1;\n```");
+        let blocks = parse_markdown(
+            "# Heading\n\nfirst line\nsecond line\n\n- one\n- two\n\n1. first\n2. second\n\n> quote\n\n`inline`\n\n```rust\nlet x = 1;\n```",
+        );
         assert!(matches!(blocks[0], MarkdownBlock::Heading { level: 1, .. }));
         assert_eq!(
             blocks[1],
