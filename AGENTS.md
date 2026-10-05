@@ -35,6 +35,9 @@ Chatarium is a reliability project first and a UI project second.
 - Cross-session/tool automation must remain visible, durable, attributable, and user-contestable; the user is above any master/controller session.
 - Prefer explicit machine-readable completion/blocked/input-needed states over prompt-text heuristics that could produce unbounded mutual continuation loops.
 - The existing XML-oriented MCP/tool envelope from the user's Braizen/ChatGPT-shim work is the preferred compatibility starting point when that schema is recovered. Until then, do not invent a replacement schema and attribute it to the user.
+- `docs/SELF_SUSTAINING_TRANSPORT.md` is a hard viability contract. Ordinary ChatGPT conversation list/read/create/continue/send/stream operations must ultimately work from the native Chatarium process. Browser use is acceptable for investigation and occasional auth/consent bootstrap, not as a permanent per-request transport.
+- Do not hide/background Chromium and call the result self-contained. If ordinary reads/writes require a browser process, extension, CDP, Playwright, or page-context fetch on every operation, the product requirement is not met.
+- The absence of a documented/public API is not a blocker or excuse to stop first-party protocol investigation. Prefer existing HAR/Flight Recorder evidence, local raw mirror specimens, and passive capture before generating new traffic.
 
 ## Architecture
 
@@ -62,13 +65,13 @@ Chatarium is a reliability project first and a UI project second.
 
 ## Scope boundaries
 
-- For new conversations, Chatarium targets the user's eligible ChatGPT plan through OpenAI's official Sign in with ChatGPT + Responses route; a separate OpenAI API-key subscription is not the architectural premise. Undocumented chatgpt.com web-client protocol work is now optional compatibility/import research rather than the primary chat transport.
+- Chatarium's target is the user's ordinary ChatGPT conversation universe with preserved remote identity, not merely a parallel local-only Responses thread. Official Sign in with ChatGPT + Responses may remain an auxiliary/local-only inference path, but it does not define product success if it cannot list, read, create, continue, and write ordinary ChatGPT conversations. Empirical first-party protocol work is therefore a primary viability track, not optional compatibility/import research.
 - Do not bypass authentication, access controls, rate limits, anti-abuse systems, or other service protections.
 - Do not add mechanisms whose purpose is credential theft, session hijacking, or access to another user's account.
 
 ## Development environment
 
-- Rust-first, Windows-first initially. The official Sign in with ChatGPT DevKit is an intentional trusted Node sidecar exception for OAuth/model discovery/Responses streaming rather than a reason to migrate the desktop out of Rust.
+- Rust-first, Windows-first initially. A trusted Sign in with ChatGPT DevKit sidecar may remain for auxiliary OAuth/model discovery/Responses use, but it does not replace or weaken the native first-party conversation-transport viability requirement.
 - Salvador's Node package manager is **pnpm**. Prefer pnpm in local setup/bootstrap paths and user-facing commands. Do not default to npm in handoffs. If an upstream artifact requires npm-specific lockfile semantics, invoke that compatibility path through pnpm rather than requiring Salvador to install or operate npm.
 - Prefer normal Cargo dependencies. For project tooling on Windows, document Scoop commands rather than silently installing tools.
 - Do not download or execute opaque external payloads as part of build/bootstrap scripts.
