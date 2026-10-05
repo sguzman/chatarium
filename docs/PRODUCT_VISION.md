@@ -6,6 +6,8 @@ Its long-term product is a **user-controlled desktop interaction surface for Cha
 
 This document records product intent. It does **not** claim that every capability below is implemented today.
 
+**Current scheduling note:** remote ChatGPT website mirroring/browser-transport work is paused while the project explores local-first Chatarium conversations and higher-level behavior. See [LOCAL_FIRST_EXPLORATION.md](LOCAL_FIRST_EXPLORATION.md). This pause does not weaken the long-term native transport viability contract.
+
 ## Product identity
 
 The closest conceptual ancestor is the Braizen-style browser idea: a general programmable browser/control surface that gradually cohered around ChatGPT as the primary application.
