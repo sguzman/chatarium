@@ -9,6 +9,9 @@ use chatarium_core::{
     LocalTurnId, RemoteEvidence, TurnEvidence,
 };
 use chatarium_protocol::conversation_list::ConversationListItem;
+use chatarium_store::archive_maintenance::{
+    check_archive, create_backup, restore_backup, verify_backup,
+};
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
@@ -19,13 +22,13 @@ use chatarium_store::historical_transcript::{
 use chatarium_store::remote_mirror_bootstrap::{
     promote_discovered_live_mirror_body, promote_historical_live_mirror_body,
 };
-use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_queue::{
     RemoteMirrorQueueStatus, derive_remote_mirror_queue,
     record_remote_mirror_queue_capture_started, record_remote_mirror_queue_completed,
     record_remote_mirror_queue_failed, record_remote_mirror_queue_item_queued,
     record_remote_mirror_queue_rate_limited,
 };
+use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
@@ -353,6 +356,9 @@ struct ChatariumApp {
     reader_last_position_write: Instant,
     reader_search_query: String,
     reader_search_hit: Option<usize>,
+    archive_backup_path: String,
+    archive_maintenance_status: String,
+    archive_restore_confirmation_pending: bool,
     selected_remote_catalog_id: Option<String>,
     remote_conversation_total: Option<u64>,
     history_discovery_started: bool,
@@ -491,7 +497,8 @@ impl ChatariumApp {
                 let local_archive_search_index =
                     build_local_archive_search_index(&remote_catalog_view, &events);
                 let reader_state_path = local_reader_state_path(&journal_path);
-                let reader_positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
+                let reader_positions =
+                    offline_reader::ReaderPositionStore::load(&reader_state_path);
                 let worker_data_dir = data_dir.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
@@ -536,6 +543,9 @@ impl ChatariumApp {
                         reader_last_position_write: Instant::now(),
                         reader_search_query: String::new(),
                         reader_search_hit: None,
+                        archive_backup_path: String::new(),
+                        archive_maintenance_status: "archive maintenance idle".to_owned(),
+                        archive_restore_confirmation_pending: false,
                         selected_remote_catalog_id: None,
                         remote_conversation_total: None,
                         history_discovery_started: false,
@@ -609,12 +619,9 @@ impl ChatariumApp {
         let remote_conversation_catalog =
             load_remote_history_cache(&remote_history_cache_path(&journal_path))
                 .unwrap_or_default();
-        let remote_catalog_view = build_remote_catalog_view(
-            &remote_conversation_catalog,
-            &events,
-            &live_mirror_catalog,
-        )
-        .unwrap_or_default();
+        let remote_catalog_view =
+            build_remote_catalog_view(&remote_conversation_catalog, &events, &live_mirror_catalog)
+                .unwrap_or_default();
         let local_archive_search_index =
             build_local_archive_search_index(&remote_catalog_view, &events);
         let reader_state_path = local_reader_state_path(&journal_path);
@@ -659,6 +666,9 @@ impl ChatariumApp {
             reader_last_position_write: Instant::now(),
             reader_search_query: String::new(),
             reader_search_hit: None,
+            archive_backup_path: String::new(),
+            archive_maintenance_status: "archive maintenance idle".to_owned(),
+            archive_restore_confirmation_pending: false,
             selected_remote_catalog_id: None,
             remote_conversation_total: None,
             history_discovery_started: false,
@@ -795,7 +805,8 @@ impl ChatariumApp {
         };
         if sender.send(command).is_err() {
             self.mirror_controller_state = MirrorControllerState::Failed;
-            self.mirror_controller_detail = Some("mirror controller stopped unexpectedly".to_owned());
+            self.mirror_controller_detail =
+                Some("mirror controller stopped unexpectedly".to_owned());
         }
     }
 
@@ -3183,6 +3194,56 @@ impl eframe::App for ChatariumApp {
                                     .size(10.0)
                                     .color(egui::Color32::from_rgb(126, 130, 139)),
                             );
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("LOCAL ARCHIVE").size(10.0).strong());
+                            ui.horizontal(|ui| {
+                                if ui.button("CHECK ARCHIVE").clicked() {
+                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+                                    self.archive_maintenance_status = match check_archive(data_dir) {
+                                        Ok(report) => format!("archive valid · {} events · {} catalog items", report.journal_event_count, report.catalog_count),
+                                        Err(error) => format!("archive check failed · {error}"),
+                                    };
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("backup path");
+                                ui.text_edit_singleline(&mut self.archive_backup_path);
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("CREATE BACKUP").clicked() {
+                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+                                    self.archive_maintenance_status = match create_backup(data_dir, self.archive_backup_path.trim()) {
+                                        Ok(_) => "backup created and verified".to_owned(),
+                                        Err(error) => format!("backup failed · {error}"),
+                                    };
+                                }
+                                if ui.button("VERIFY BACKUP").clicked() {
+                                    self.archive_maintenance_status = match verify_backup(self.archive_backup_path.trim()) {
+                                        Ok(_) => "backup verified".to_owned(),
+                                        Err(error) => format!("backup verification failed · {error}"),
+                                    };
+                                }
+                            });
+                            if ui.button("RESTORE BACKUP").clicked() && !self.archive_backup_path.trim().is_empty() {
+                                self.archive_restore_confirmation_pending = true;
+                            }
+                            if self.archive_restore_confirmation_pending {
+                                ui.colored_label(egui::Color32::YELLOW, "Restore replaces active local archive; a safety copy is retained.");
+                                ui.horizontal(|ui| {
+                                    if ui.button("CONFIRM RESTORE").clicked() {
+                                        let target = self.journal_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                        self.archive_maintenance_status = match restore_backup(self.archive_backup_path.trim(), target) {
+                                            Ok(_) => "backup restored after isolated verification".to_owned(),
+                                            Err(error) => format!("restore failed; active archive preserved · {error}"),
+                                        };
+                                        self.archive_restore_confirmation_pending = false;
+                                    }
+                                    if ui.button("CANCEL RESTORE").clicked() {
+                                        self.archive_restore_confirmation_pending = false;
+                                    }
+                                });
+                            }
+                            ui.label(egui::RichText::new(&self.archive_maintenance_status).size(10.0).color(egui::Color32::from_rgb(126, 130, 139)));
                             ui.add_space(6.0);
                             ui.label(
                                 egui::RichText::new(format!(
@@ -3238,13 +3299,12 @@ impl eframe::App for ChatariumApp {
             ctx.memory_mut(|memory| memory.surrender_focus(archive_search_id));
         }
         if let Some(result) = archive_result_clicked {
-            self.reader_search_query = if result.kind
-                == local_archive_search::ArchiveMatchKind::LocalTranscript
-            {
-                self.archive_search_query.clone()
-            } else {
-                String::new()
-            };
+            self.reader_search_query =
+                if result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript {
+                    self.archive_search_query.clone()
+                } else {
+                    String::new()
+                };
             open_reader_from_transcript_search =
                 result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript;
             if let Some(entry) = self
@@ -3595,18 +3655,12 @@ impl eframe::App for ChatariumApp {
             }
         });
         if next_reader_hit {
-            self.reader_search_hit = offline_reader::next_hit(
-                self.reader_search_hit,
-                reader_hit_targets.len(),
-                false,
-            );
+            self.reader_search_hit =
+                offline_reader::next_hit(self.reader_search_hit, reader_hit_targets.len(), false);
         }
         if previous_reader_hit {
-            self.reader_search_hit = offline_reader::next_hit(
-                self.reader_search_hit,
-                reader_hit_targets.len(),
-                true,
-            );
+            self.reader_search_hit =
+                offline_reader::next_hit(self.reader_search_hit, reader_hit_targets.len(), true);
         }
         let active_reader_message = self
             .reader_search_hit
@@ -3904,7 +3958,10 @@ fn render_markdown_block(
         offline_reader::MarkdownBlock::BlockQuote(lines) => {
             egui::Frame::default()
                 .fill(egui::Color32::from_rgb(36, 39, 47))
-                .stroke(egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(118, 151, 190)))
+                .stroke(egui::Stroke::new(
+                    2.0_f32,
+                    egui::Color32::from_rgb(118, 151, 190),
+                ))
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     for line in lines {
@@ -4483,10 +4540,7 @@ fn persistence_worker(
                     catalog_index,
                 )
                 .and_then(|_| {
-                    record_remote_mirror_queue_capture_started(
-                        &mut store,
-                        &remote_conversation_id,
-                    )
+                    record_remote_mirror_queue_capture_started(&mut store, &remote_conversation_id)
                 })
                 .map(|_| ())
                 .map_err(|error| error.to_string());
@@ -4568,10 +4622,9 @@ fn persistence_worker(
                         &remote_conversation_id,
                         "transient",
                     ),
-                    MirrorFailureClass::RateLimited => record_remote_mirror_queue_rate_limited(
-                        &mut store,
-                        &remote_conversation_id,
-                    ),
+                    MirrorFailureClass::RateLimited => {
+                        record_remote_mirror_queue_rate_limited(&mut store, &remote_conversation_id)
+                    }
                     MirrorFailureClass::Structural => record_remote_mirror_queue_failed(
                         &mut store,
                         &remote_conversation_id,
@@ -4691,7 +4744,9 @@ fn mirror_controller_worker(
             detail: Some("capturing one item serially".to_owned()),
         });
 
-        if let Err(error) = controller_prepare_item(&notices, &item.remote_conversation_id, item.catalog_index) {
+        if let Err(error) =
+            controller_prepare_item(&notices, &item.remote_conversation_id, item.catalog_index)
+        {
             running = false;
             let _ = notices.send(MirrorControllerNotice::State {
                 state: MirrorControllerState::Failed,
@@ -4707,7 +4762,8 @@ fn mirror_controller_worker(
                 let class = mirror_failure_class(&error);
                 let _ = controller_record_failure(&notices, &item.remote_conversation_id, class);
                 running = false;
-                let state = if matches!(error, account_bridge::BrowserBridgeError::Unauthenticated) {
+                let state = if matches!(error, account_bridge::BrowserBridgeError::Unauthenticated)
+                {
                     MirrorControllerState::AuthenticationRequired
                 } else if class == MirrorFailureClass::RateLimited {
                     MirrorControllerState::RateLimited
@@ -4746,28 +4802,29 @@ fn mirror_controller_worker(
         }
 
         match provider.fetch_authenticated_conversation(&item.remote_conversation_id) {
-            Ok(fetched) => match controller_capture_item(
-                &notices,
-                &item.remote_conversation_id,
-                fetched.body,
-            ) {
-                Ok(persisted) => {
-                    diagnostics::info(
-                        "mirror",
-                        format!(
-                            "production controller completed catalog item {} state={} snapshot=#{}",
-                            item.catalog_index, persisted.mirror_state, persisted.snapshot_sequence
-                        ),
-                    );
+            Ok(fetched) => {
+                match controller_capture_item(&notices, &item.remote_conversation_id, fetched.body)
+                {
+                    Ok(persisted) => {
+                        diagnostics::info(
+                            "mirror",
+                            format!(
+                                "production controller completed catalog item {} state={} snapshot=#{}",
+                                item.catalog_index,
+                                persisted.mirror_state,
+                                persisted.snapshot_sequence
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(MirrorControllerNotice::State {
+                            state: MirrorControllerState::Failed,
+                            current_catalog_index: Some(item.catalog_index),
+                            detail: Some(format!("local promotion failed: {error}")),
+                        });
+                    }
                 }
-                Err(error) => {
-                    let _ = notices.send(MirrorControllerNotice::State {
-                        state: MirrorControllerState::Failed,
-                        current_catalog_index: Some(item.catalog_index),
-                        detail: Some(format!("local promotion failed: {error}")),
-                    });
-                }
-            },
+            }
             Err(error) => {
                 let class = mirror_failure_class(&error);
                 let _ = controller_record_failure(&notices, &item.remote_conversation_id, class);
@@ -4804,7 +4861,9 @@ fn controller_prepare_item(
             reply,
         })
         .map_err(|_| "desktop persistence channel closed".to_owned())?;
-    result.recv().map_err(|_| "desktop persistence worker stopped".to_owned())?
+    result
+        .recv()
+        .map_err(|_| "desktop persistence worker stopped".to_owned())?
 }
 
 fn controller_capture_item(
@@ -4820,7 +4879,9 @@ fn controller_capture_item(
             reply,
         })
         .map_err(|_| "desktop persistence channel closed".to_owned())?;
-    result.recv().map_err(|_| "desktop persistence worker stopped".to_owned())?
+    result
+        .recv()
+        .map_err(|_| "desktop persistence worker stopped".to_owned())?
 }
 
 fn controller_record_failure(
@@ -4836,7 +4897,9 @@ fn controller_record_failure(
             reply,
         })
         .map_err(|_| "desktop persistence channel closed".to_owned())?;
-    result.recv().map_err(|_| "desktop persistence worker stopped".to_owned())?
+    result
+        .recv()
+        .map_err(|_| "desktop persistence worker stopped".to_owned())?
 }
 
 fn controller_reply_channel<T>() -> (Sender<Result<T, String>>, Receiver<Result<T, String>>) {
@@ -5796,19 +5859,17 @@ fn run_production_mirror_acceptance() {
     let _ = persist_tx.send(PersistCommand::Shutdown);
     let _ = persist_worker.join();
 
-    let after = JsonlEventStore::open(&journal_path)
+    let after = JsonlEventStore::open(&journal_path).ok().and_then(|store| {
+        derive_remote_mirror_queue(
+            &before
+                .items
+                .iter()
+                .map(|item| (item.catalog_index, item.remote_conversation_id.clone()))
+                .collect::<Vec<_>>(),
+            store.events(),
+        )
         .ok()
-        .and_then(|store| {
-            derive_remote_mirror_queue(
-                &before
-                    .items
-                    .iter()
-                    .map(|item| (item.catalog_index, item.remote_conversation_id.clone()))
-                    .collect::<Vec<_>>(),
-                store.events(),
-            )
-            .ok()
-        });
+    });
     let after = after.unwrap_or_else(|| before.clone());
     println!(
         "{}",

@@ -17,6 +17,10 @@ use account_bridge::{
     AccountBridgeRuntime, BrowserBridgeError, FreshTabHistoryDiscoveryObservation,
     HistoryDiscoveryObservation, HistorySurfaceCandidate,
 };
+use chatarium_protocol::conversation_list::ConversationListItem;
+use chatarium_store::archive_maintenance::{
+    check_archive, create_backup, restore_backup, verify_backup,
+};
 use chatarium_store::remote_mirror_bootstrap::promote_discovered_live_mirror_body;
 use chatarium_store::remote_mirror_queue::{
     RemoteMirrorQueueStatus, derive_remote_mirror_queue,
@@ -27,7 +31,6 @@ use chatarium_store::remote_mirror_queue::{
 use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_transcript::project_remote_active_transcript;
 use chatarium_store::{EventStore, JsonlEventStore};
-use chatarium_protocol::conversation_list::ConversationListItem;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -71,6 +74,13 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("local-reader-status") {
         run_local_reader_status();
+        return;
+    }
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("archive-check" | "archive-backup" | "archive-verify" | "archive-restore")
+    ) {
+        run_archive_maintenance();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("mirror-batch") {
@@ -434,29 +444,26 @@ fn run_mirror_one() {
         "invalid_json": fetched.invalid_json,
     });
 
-    let promotion = match promote_discovered_live_mirror_body(
-        &mut store,
-        &selected.id,
-        &fetched.body,
-    ) {
-        Ok(result) => result,
-        Err(error) => {
-            print_json(json!({
-                "terminal_state": "durable_promotion_failed",
-                "catalog_size": catalog.len(),
-                "selected_catalog_index": selected_index,
-                "already_mirrored_before": already_mirrored_before,
-                "authentication": "authenticated",
-                "auth_proof": auth_proof_json(&authentication.proof),
-                "capture": capture,
-                "json_valid": false,
-                "exact_remote_id_validated": false,
-                "error": error.to_string(),
-                "elapsed_ms": started.elapsed().as_millis(),
-            }));
-            return;
-        }
-    };
+    let promotion =
+        match promote_discovered_live_mirror_body(&mut store, &selected.id, &fetched.body) {
+            Ok(result) => result,
+            Err(error) => {
+                print_json(json!({
+                    "terminal_state": "durable_promotion_failed",
+                    "catalog_size": catalog.len(),
+                    "selected_catalog_index": selected_index,
+                    "already_mirrored_before": already_mirrored_before,
+                    "authentication": "authenticated",
+                    "auth_proof": auth_proof_json(&authentication.proof),
+                    "capture": capture,
+                    "json_valid": false,
+                    "exact_remote_id_validated": false,
+                    "error": error.to_string(),
+                    "elapsed_ms": started.elapsed().as_millis(),
+                }));
+                return;
+            }
+        };
     let events_after = store.events().len();
     let snapshot_appended = promotion.snapshot.appended;
     let local_conversation_id = promotion.local_conversation_id;
@@ -514,11 +521,7 @@ fn run_mirror_one() {
         .map(|record| project_remote_active_transcript(&record.envelope))
         .transpose();
     let (projected_messages, truncated_before, replay_passed) = match projection {
-        Ok(Some(projection)) => (
-            projection.messages.len(),
-            projection.truncated_before,
-            true,
-        ),
+        Ok(Some(projection)) => (projection.messages.len(), projection.truncated_before, true),
         _ => (0, false, false),
     };
     let mirror_state = if !replay_passed {
@@ -701,15 +704,10 @@ fn run_local_mirror_status() {
             return;
         }
     };
-    let mut output = queue_status_value(
-        "success",
-        &summary,
-        None,
-        started.elapsed().as_millis(),
-    )
-    .as_object()
-    .cloned()
-    .expect("queue status is an object");
+    let mut output = queue_status_value("success", &summary, None, started.elapsed().as_millis())
+        .as_object()
+        .cloned()
+        .expect("queue status is an object");
     output.insert("local_read_only".to_owned(), json!(true));
     output.insert("remote_http_used".to_owned(), json!(false));
     output.insert("browser_started".to_owned(), json!(false));
@@ -760,7 +758,9 @@ fn run_local_transcript() {
     let store = match JsonlEventStore::open(&journal_path) {
         Ok(store) => store,
         Err(error) => {
-            print_json(json!({"terminal_state": "journal_open_failed", "error": error.to_string()}));
+            print_json(
+                json!({"terminal_state": "journal_open_failed", "error": error.to_string()}),
+            );
             return;
         }
     };
@@ -771,8 +771,14 @@ fn run_local_transcript() {
             return;
         }
     };
-    let Some(item) = summary.items.iter().find(|item| item.catalog_index == catalog_index) else {
-        print_json(json!({"terminal_state": "catalog_item_missing", "selected_catalog_index": catalog_index, "remote_http_used": false}));
+    let Some(item) = summary
+        .items
+        .iter()
+        .find(|item| item.catalog_index == catalog_index)
+    else {
+        print_json(
+            json!({"terminal_state": "catalog_item_missing", "selected_catalog_index": catalog_index, "remote_http_used": false}),
+        );
         return;
     };
     let state = queue_status_name(item.status);
@@ -803,7 +809,9 @@ fn run_local_transcript() {
         .rev()
         .find(|record| record.remote_conversation_id.as_str() == selected.id)
     else {
-        print_json(json!({"terminal_state": "local_conversation_missing", "selected_catalog_index": catalog_index, "remote_http_used": false}));
+        print_json(
+            json!({"terminal_state": "local_conversation_missing", "selected_catalog_index": catalog_index, "remote_http_used": false}),
+        );
         return;
     };
     let projection = match project_remote_active_transcript(&record.envelope) {
@@ -816,7 +824,9 @@ fn run_local_transcript() {
     let reopened = match JsonlEventStore::open(&journal_path) {
         Ok(store) => store,
         Err(error) => {
-            print_json(json!({"terminal_state": "local_reopen_failed", "error": error.to_string()}));
+            print_json(
+                json!({"terminal_state": "local_reopen_failed", "error": error.to_string()}),
+            );
             return;
         }
     };
@@ -925,7 +935,9 @@ fn run_local_search() {
     let store = match JsonlEventStore::open(default_journal_path()) {
         Ok(store) => store,
         Err(error) => {
-            print_json(json!({"terminal_state": "journal_open_failed", "error": error.to_string()}));
+            print_json(
+                json!({"terminal_state": "journal_open_failed", "error": error.to_string()}),
+            );
             return;
         }
     };
@@ -1053,7 +1065,9 @@ fn run_local_reader_status() {
     let store = match JsonlEventStore::open(&journal_path) {
         Ok(store) => store,
         Err(error) => {
-            print_json(json!({"terminal_state": "journal_open_failed", "error": error.to_string()}));
+            print_json(
+                json!({"terminal_state": "journal_open_failed", "error": error.to_string()}),
+            );
             return;
         }
     };
@@ -1072,7 +1086,9 @@ fn run_local_reader_status() {
         .and_then(|window| window[1].parse::<usize>().ok())
         .unwrap_or(0);
     let Some(selected) = catalog.get(selected_index) else {
-        print_json(json!({"terminal_state": "catalog_item_missing", "selected_catalog_index": selected_index}));
+        print_json(
+            json!({"terminal_state": "catalog_item_missing", "selected_catalog_index": selected_index}),
+        );
         return;
     };
     let Some(queue_item) = summary
@@ -1080,7 +1096,9 @@ fn run_local_reader_status() {
         .iter()
         .find(|item| item.catalog_index == selected_index)
     else {
-        print_json(json!({"terminal_state": "queue_item_missing", "selected_catalog_index": selected_index}));
+        print_json(
+            json!({"terminal_state": "queue_item_missing", "selected_catalog_index": selected_index}),
+        );
         return;
     };
     let records = match replay_remote_conversation_snapshot_audit(store.events()) {
@@ -1140,7 +1158,8 @@ fn run_local_reader_status() {
         .join("local-reader-state.json");
     let positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
     let scroll_state_restored = record.local_conversation_id.to_string();
-    let scroll_state_restored = positions.position(&format!("mirror:{scroll_state_restored}")) > 0.0;
+    let scroll_state_restored =
+        positions.position(&format!("mirror:{scroll_state_restored}")) > 0.0;
     print_json(json!({
         "terminal_state": "success",
         "selected_catalog_index": selected_index,
@@ -1213,7 +1232,12 @@ fn run_mirror_batch() {
     };
     let selected = before.eligible_items(max_items);
     if selected.is_empty() {
-        print_queue_status("nothing_pending", &before, Some(max_items), started.elapsed().as_millis());
+        print_queue_status(
+            "nothing_pending",
+            &before,
+            Some(max_items),
+            started.elapsed().as_millis(),
+        );
         return;
     }
 
@@ -1247,10 +1271,9 @@ fn run_mirror_batch() {
             failed.push(item.catalog_index);
             break;
         }
-        if let Err(error) = record_remote_mirror_queue_capture_started(
-            &mut store,
-            &item.remote_conversation_id,
-        ) {
+        if let Err(error) =
+            record_remote_mirror_queue_capture_started(&mut store, &item.remote_conversation_id)
+        {
             terminal_state = "queue_persistence_failed";
             failed.push(item.catalog_index);
             let _ = error;
@@ -1285,7 +1308,8 @@ fn run_mirror_batch() {
             break;
         }
 
-        let fetched = match provider.fetch_authenticated_conversation(&item.remote_conversation_id) {
+        let fetched = match provider.fetch_authenticated_conversation(&item.remote_conversation_id)
+        {
             Ok(fetched) => fetched,
             Err(BrowserBridgeError::RateLimited(_)) => {
                 let _ = record_remote_mirror_queue_rate_limited(
@@ -1301,7 +1325,11 @@ fn run_mirror_batch() {
                 let _ = record_remote_mirror_queue_failed(
                     &mut store,
                     &item.remote_conversation_id,
-                    if matches!(error, BrowserBridgeError::Protocol(_) | BrowserBridgeError::UnsupportedRevision(_)) {
+                    if matches!(
+                        error,
+                        BrowserBridgeError::Protocol(_)
+                            | BrowserBridgeError::UnsupportedRevision(_)
+                    ) {
                         "structural"
                     } else {
                         "transient"
@@ -1594,7 +1622,9 @@ fn merge_catalog(
         .collect::<BTreeMap<_, _>>();
     for candidate in candidates {
         for item in &candidate.items {
-            catalog.entry(item.id.clone()).or_insert_with(|| item.clone());
+            catalog
+                .entry(item.id.clone())
+                .or_insert_with(|| item.clone());
         }
     }
     catalog.into_values().collect()
@@ -1633,7 +1663,10 @@ fn load_cache(path: &Path) -> Result<Vec<ConversationListItem>, String> {
         };
         catalog.entry(id.clone()).or_insert(ConversationListItem {
             id,
-            title: object.get("title").and_then(Value::as_str).map(str::to_owned),
+            title: object
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             create_time: optional("create_time"),
             update_time: optional("update_time"),
         });
@@ -1679,5 +1712,57 @@ fn default_journal_path() -> PathBuf {
 }
 
 fn print_json(value: Value) {
-    println!("{}", serde_json::to_string_pretty(&value).expect("JSON encoding cannot fail"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).expect("JSON encoding cannot fail")
+    );
+}
+
+fn archive_data_dir() -> PathBuf {
+    default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
+fn archive_report_json(
+    report: &chatarium_store::archive_maintenance::ArchiveIntegrityReport,
+) -> Value {
+    json!({
+        "healthy": report.healthy,
+        "warnings": report.warnings,
+        "errors": report.errors,
+        "journal_event_count": report.journal_event_count,
+        "highest_sequence": report.highest_sequence,
+        "catalog_count": report.catalog_count,
+        "snapshot_count": report.snapshot_count,
+        "queue_full_count": report.queue_full_count,
+        "queue_partial_count": report.queue_partial_count,
+        "queue_pending_count": report.queue_pending_count,
+    })
+}
+
+fn run_archive_maintenance() {
+    let mut args = std::env::args().skip(1);
+    let command = args.next().unwrap_or_default();
+    let result = match command.as_str() {
+        "archive-check" => check_archive(archive_data_dir()).map(|report| json!({"command": command, "report": archive_report_json(&report)})),
+        "archive-backup" => {
+            let output = args.next().filter(|arg| arg == "--output").and_then(|_| args.next());
+            match output { Some(path) => create_backup(archive_data_dir(), path).map(|verification| json!({"command": command, "valid": verification.valid, "manifest_files": verification.manifest_files, "report": archive_report_json(&verification.archive)})), None => Err(chatarium_store::archive_maintenance::ArchiveMaintenanceError::from(std::io::Error::new(std::io::ErrorKind::InvalidInput, "usage: archive-backup --output PATH"))) }
+        }
+        "archive-verify" => match args.next() { Some(path) => verify_backup(path).map(|verification| json!({"command": command, "valid": verification.valid, "manifest_files": verification.manifest_files, "report": archive_report_json(&verification.archive)})), None => Err(chatarium_store::archive_maintenance::ArchiveMaintenanceError::from(std::io::Error::new(std::io::ErrorKind::InvalidInput, "usage: archive-verify PATH"))) },
+        "archive-restore" => {
+            let backup = args.next(); let target = args.next().filter(|arg| arg == "--data-dir").and_then(|_| args.next());
+            match (backup, target) { (Some(backup), Some(target)) => restore_backup(backup, target).map(|verification| json!({"command": command, "valid": verification.valid, "restored": true, "report": archive_report_json(&verification.archive)})), _ => Err(chatarium_store::archive_maintenance::ArchiveMaintenanceError::from(std::io::Error::new(std::io::ErrorKind::InvalidInput, "usage: archive-restore BACKUP --data-dir PATH"))) }
+        }
+        _ => unreachable!(),
+    };
+    match result {
+        Ok(value) => print_json(value),
+        Err(error) => {
+            print_json(json!({"command": command, "valid": false, "error": error.to_string()}));
+            std::process::exit(1);
+        }
+    }
 }

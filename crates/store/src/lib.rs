@@ -3,6 +3,7 @@
 //! The authoritative persistent substrate is an append-only JSON-lines journal. SQLite is a
 //! disposable, rebuildable projection and never becomes authoritative over the event history.
 
+pub mod archive_maintenance;
 pub mod authored;
 pub mod chat_container_audit;
 pub mod continuation_audit;
@@ -55,6 +56,60 @@ pub struct EventEnvelope {
     pub kind: EventKind,
     /// Exact textual or JSON payload when applicable.
     pub payload: String,
+}
+
+/// Read-only inspection of a JSONL journal. Unlike [`JsonlEventStore::open`], this never
+/// truncates an unterminated tail; callers can therefore use it for diagnostics and backup
+/// validation without changing the active archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalInspection {
+    pub events: Vec<EventEnvelope>,
+    pub byte_len: u64,
+    pub complete_byte_len: u64,
+    pub unterminated_tail_bytes: u64,
+}
+
+/// Parse and structurally validate a journal without modifying it.
+pub fn inspect_jsonl_journal(path: impl AsRef<Path>) -> io::Result<JournalInspection> {
+    let bytes = fs::read(path)?;
+    let complete_len = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    let text = std::str::from_utf8(&bytes[..complete_len]).map_err(invalid_data)?;
+    let mut events = Vec::new();
+    for (line_index, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let event = decode_event(line)
+            .map_err(|error| invalid_data(format!("journal line {}: {error}", line_index + 1)))?;
+        let expected = next_sequence(&events)?;
+        if event.sequence != expected {
+            return Err(invalid_data(format!(
+                "journal line {} has sequence {}, expected {expected}",
+                line_index + 1,
+                event.sequence
+            )));
+        }
+        if event
+            .scope
+            .as_deref()
+            .is_some_and(|scope| scope.is_empty() || scope.chars().any(char::is_control))
+        {
+            return Err(invalid_data(format!(
+                "journal line {} has an invalid scope",
+                line_index + 1
+            )));
+        }
+        events.push(event);
+    }
+    Ok(JournalInspection {
+        events,
+        byte_len: bytes.len() as u64,
+        complete_byte_len: complete_len as u64,
+        unterminated_tail_bytes: (bytes.len() - complete_len) as u64,
+    })
 }
 
 /// Append/read contract required by the application core.
