@@ -46,6 +46,14 @@ It should own the local experience around:
 
 The official ChatGPT service remains the remote inference/product backend. Chatarium supplies the local reliability, orchestration, observability, and extensibility layer.
 
+### Native transport is a viability requirement
+
+"Native desktop interaction surface" has a strict meaning here. Chatarium must ultimately perform ordinary conversation listing, retrieval, creation, continuation, sending, and response streaming from its own native process. Chromium may be an investigation tool or an occasional login/MFA/CAPTCHA/session-bootstrap tool; it is not an acceptable permanent per-request transport.
+
+A hidden/background Chromium helper does not satisfy this requirement. The exact acceptance test and evidence hierarchy live in [Self-sustaining ChatGPT transport contract](SELF_SUSTAINING_TRANSPORT.md).
+
+The public/documented API surface is not the boundary of the investigation. Existing HARs, Flight Recorder captures, durable private mirror snapshots, passive first-party network observation, and narrowly controlled experiments are valid sources for reconstructing the actual consumer protocol.
+
 ## 2. MCP and tool integration surface
 
 Chatarium should provide a first-class surface for integrating MCP tools and comparable local/external capabilities.
@@ -309,8 +317,9 @@ The current roadmap remains valid and is prerequisite work:
 
 - P1 gives Chatarium empirical knowledge of ChatGPT's mutable protocol.
 - P2 gives it durable local authority and crash recovery.
-- P3 gives it read-only remote synchronization.
-- P4 gives it direct reliable text turns.
+- P3 gives it empirical read-side remote synchronization and protocol evidence.
+- The native-transport viability gate determines whether ordinary ChatGPT reads/writes can move out of Chromium into the native process.
+- P4 gives it direct reliable text turns only when those turns satisfy the native-transport contract rather than browser-per-request automation.
 - P5 turns that reliable substrate into the native desktop workstation.
 
 The capabilities in this document become increasingly relevant once the direct text/session path is trustworthy.
@@ -347,6 +356,7 @@ Likewise, Chatarium should not be artificially narrowed to "just send text to Ch
 Chatarium succeeds as a product when the user can:
 
 - use it as the preferred desktop surface for ChatGPT;
+- close Chromium after any necessary authentication bootstrap and still list/read/create/continue ordinary ChatGPT conversations, send messages, and stream responses from Chatarium's native process;
 - retain durable local authority over authored/observed conversation state;
 - attach MCP/tools through a familiar versioned envelope;
 - run several ChatGPT sessions concurrently;
