@@ -18,6 +18,8 @@ const lines = createInterface({
 
 let ready = false;
 let requestedSession = false;
+let requestedProbeGuard = false;
+let sessionStatus;
 const result = await new Promise((resolvePromise, rejectPromise) => {
   const timeout = setTimeout(() => {
     lines.close();
@@ -88,12 +90,57 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
       typeof value?.result?.session?.status === "string" &&
       typeof value?.result?.session?.sharing === "boolean"
     ) {
+      sessionStatus = value.result.session.status;
+      if (!requestedProbeGuard) {
+        requestedProbeGuard = true;
+        child.stdin.write(
+          JSON.stringify({
+            type: "probe_response",
+            request_id: "smoke-probe-guard",
+            model: "smoke-model",
+            input: "probe",
+            request_patch: { temperature: 0 },
+          }) + "\n",
+        );
+      }
+      return;
+    }
+
+    if (
+      ready &&
+      value?.type === "error" &&
+      value?.request_id === "smoke-probe-guard"
+    ) {
+      if (value?.error?.code !== "invalid_probe_patch") {
+        clearTimeout(timeout);
+        lines.close();
+        rejectPromise(
+          new Error(
+            `Capability probe guard returned unexpected error code ${value?.error?.code ?? "missing"}.`,
+          ),
+        );
+        return;
+      }
       clearTimeout(timeout);
       lines.close();
       resolvePromise({
         protocol: 1,
-        sessionStatus: value.result.session.status,
+        sessionStatus,
+        probeGuard: "invalid_probe_patch",
       });
+      return;
+    }
+
+    if (
+      ready &&
+      value?.type === "result" &&
+      value?.request_id === "smoke-probe-guard"
+    ) {
+      clearTimeout(timeout);
+      lines.close();
+      rejectPromise(
+        new Error("Capability probe guard accepted a forbidden request field."),
+      );
     }
   });
 });
@@ -108,5 +155,5 @@ await new Promise((resolvePromise) => {
 });
 
 console.log(
-  `Chatarium SIWC bridge ready: protocol ${result.protocol}; session ${result.sessionStatus}`,
+  `Chatarium SIWC bridge ready: protocol ${result.protocol}; session ${result.sessionStatus}; probe guard ${result.probeGuard}`,
 );
