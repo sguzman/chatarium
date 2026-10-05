@@ -470,16 +470,35 @@ impl ChatariumApp {
                     "startup",
                     format!("journal replay complete: {} events", events.len()),
                 );
-                let draft = projected_working_draft(&events);
-                let (local_conversation_id, mut startup_status) =
-                    match projected_local_conversation_id(&events) {
-                        Ok(Some(id)) => (id, "journal ready".to_owned()),
-                        Ok(None) => (LocalConversationId::new(), "journal ready".to_owned()),
-                        Err(error) => (
-                            LocalConversationId::new(),
-                            format!("journal ready; local identity replay warning: {error}"),
-                        ),
-                    };
+                let local_conversation_catalog_path =
+                    local_conversation_catalog_path(&journal_path);
+                let (
+                    local_conversation_catalog,
+                    local_conversation_id,
+                    mut startup_status,
+                ) = match load_local_conversation_workspace(
+                    &local_conversation_catalog_path,
+                    &events,
+                ) {
+                    Ok((catalog, id)) => (catalog, id, "journal ready".to_owned()),
+                    Err(error) => {
+                        let fallback = projected_local_conversation_id(&events)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        let mut catalog =
+                            local_conversations::LocalConversationCatalog::default();
+                        catalog.create(fallback, unix_now_ms());
+                        (
+                            catalog,
+                            fallback,
+                            format!(
+                                "journal ready; local conversation catalog warning: {error}"
+                            ),
+                        )
+                    }
+                };
+                let draft = projected_working_draft(&events, local_conversation_id);
                 match recovery {
                     Ok(0) => {}
                     Ok(count) => {
@@ -584,6 +603,14 @@ impl ChatariumApp {
                         commit_in_flight: None,
                         evidence: TurnEvidence::default(),
                         local_conversation_id,
+                        local_conversation_catalog_path,
+                        local_conversation_rename: local_conversation_display_title(
+                            &local_conversation_catalog,
+                            local_conversation_id,
+                            &events,
+                        ),
+                        local_conversation_catalog,
+                        show_archived_local_conversations: false,
                         events: events.clone(),
                         historical_catalog,
                         selected_historical_conversation: None,
@@ -701,10 +728,20 @@ impl ChatariumApp {
             build_local_archive_search_index(&remote_catalog_view, &events);
         let reader_state_path = local_reader_state_path(&journal_path);
         let reader_positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
-        let local_conversation_id = projected_local_conversation_id(&events)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let local_conversation_catalog_path = local_conversation_catalog_path(&journal_path);
+        let (local_conversation_catalog, local_conversation_id) =
+            load_local_conversation_workspace(&local_conversation_catalog_path, &events)
+                .unwrap_or_else(|_| {
+                    let fallback = projected_local_conversation_id(&events)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let mut catalog =
+                        local_conversations::LocalConversationCatalog::default();
+                    catalog.create(fallback, unix_now_ms());
+                    (catalog, fallback)
+                });
+        let draft = projected_working_draft(&events, local_conversation_id);
         let inference_settings_path = local_inference_settings_path(&journal_path);
         let inference_settings =
             local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
@@ -720,6 +757,14 @@ impl ChatariumApp {
             commit_in_flight: None,
             evidence: TurnEvidence::default(),
             local_conversation_id,
+            local_conversation_catalog_path,
+            local_conversation_rename: local_conversation_display_title(
+                &local_conversation_catalog,
+                local_conversation_id,
+                &events,
+            ),
+            local_conversation_catalog,
+            show_archived_local_conversations: false,
             historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
             events: events.clone(),
             selected_historical_conversation: None,
