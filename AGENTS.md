@@ -46,6 +46,7 @@ Chatarium is a reliability project first and a UI project second.
 - Do not restart remote/browser work unless the principal explicitly unpauses that track.
 - Active work should prefer local-first Chatarium conversations, durable per-conversation state, model/control exploration, orchestration, MCP/tools, local context/memory, and master/worker behavior.
 - Local conversations are isolated by default. Cross-conversation context must be explicit, visible, durable, attributable, and policy-controlled.
+- `docs/LOCAL_INFERENCE_CAPABILITY_SURFACE.md` is the active capability ledger. Before higher-level behavioral work, classify controls as available now, bridge/DevKit-ready, route-documented, explicitly unsupported, or unknown.
 - `docs/LOCAL_INFERENCE_CAPABILITY_SURFACE.md` is the active capability ledger. Before higher-level behavioral work, distinguish controls that are available now, bridge/DevKit-ready, route-documented, explicitly unsupported, or still unknown. Do not infer Sign in with ChatGPT support from the general Responses API.
 
 ## Architecture
