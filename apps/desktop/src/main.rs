@@ -480,32 +480,29 @@ impl ChatariumApp {
                 );
                 let local_conversation_catalog_path =
                     local_conversation_catalog_path(&journal_path);
-                let (
-                    local_conversation_catalog,
-                    local_conversation_id,
-                    mut startup_status,
-                ) = match load_local_conversation_workspace(
-                    &local_conversation_catalog_path,
-                    &events,
-                ) {
-                    Ok((catalog, id)) => (catalog, id, "journal ready".to_owned()),
-                    Err(error) => {
-                        let fallback = projected_local_conversation_id(&events)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default();
-                        let mut catalog =
-                            local_conversations::LocalConversationCatalog::default();
-                        catalog.create(fallback, unix_now_ms());
-                        (
-                            catalog,
-                            fallback,
-                            format!(
-                                "journal ready; local conversation catalog warning: {error}"
-                            ),
-                        )
-                    }
-                };
+                let (local_conversation_catalog, local_conversation_id, mut startup_status) =
+                    match load_local_conversation_workspace(
+                        &local_conversation_catalog_path,
+                        &events,
+                    ) {
+                        Ok((catalog, id)) => (catalog, id, "journal ready".to_owned()),
+                        Err(error) => {
+                            let fallback = projected_local_conversation_id(&events)
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
+                            let mut catalog =
+                                local_conversations::LocalConversationCatalog::default();
+                            catalog.create(fallback, unix_now_ms());
+                            (
+                                catalog,
+                                fallback,
+                                format!(
+                                    "journal ready; local conversation catalog warning: {error}"
+                                ),
+                            )
+                        }
+                    };
                 let draft = projected_working_draft(&events, local_conversation_id);
                 match recovery {
                     Ok(0) => {}
@@ -743,8 +740,7 @@ impl ChatariumApp {
                         .ok()
                         .flatten()
                         .unwrap_or_default();
-                    let mut catalog =
-                        local_conversations::LocalConversationCatalog::default();
+                    let mut catalog = local_conversations::LocalConversationCatalog::default();
                     catalog.create(fallback, unix_now_ms());
                     (catalog, fallback)
                 });
@@ -753,8 +749,7 @@ impl ChatariumApp {
         let inference_settings =
             local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
                 .unwrap_or_default();
-        let active_inference_settings =
-            inference_settings.for_conversation(local_conversation_id);
+        let active_inference_settings = inference_settings.for_conversation(local_conversation_id);
 
         Self {
             draft,
@@ -870,9 +865,7 @@ impl ChatariumApp {
         self.saved_revision = 0;
         self.evidence = TurnEvidence::default();
 
-        let settings = self
-            .inference_settings
-            .for_conversation(conversation_id);
+        let settings = self.inference_settings.for_conversation(conversation_id);
         self.selected_model = settings.model;
         self.conversation_instructions = settings.instructions;
         self.conversation_developer_context = settings.developer_context;
@@ -910,11 +903,10 @@ impl ChatariumApp {
             return;
         };
         if was_archived {
-            if let Err(error) = self.local_conversation_catalog.set_archived(
-                conversation_id,
-                false,
-                unix_now_ms(),
-            ) {
+            if let Err(error) =
+                self.local_conversation_catalog
+                    .set_archived(conversation_id, false, unix_now_ms())
+            {
                 self.status = format!("failed to restore local conversation: {error}");
                 return;
             }
@@ -950,14 +942,11 @@ impl ChatariumApp {
 
     fn rename_current_local_conversation(&mut self) {
         let title = self.local_conversation_rename.clone();
-        if let Err(error) = self
-            .local_conversation_catalog
-            .rename(
-                self.local_conversation_id,
-                Some(title),
-                unix_now_ms(),
-            )
-        {
+        if let Err(error) = self.local_conversation_catalog.rename(
+            self.local_conversation_id,
+            Some(title),
+            unix_now_ms(),
+        ) {
             self.status = format!("failed to rename local conversation: {error}");
         } else if self.persist_local_conversation_catalog() {
             self.local_conversation_rename = local_conversation_display_title(
@@ -971,16 +960,15 @@ impl ChatariumApp {
 
     fn archive_current_local_conversation(&mut self) {
         if self.local_conversation_busy() {
-            self.status =
-                "finish or stop the active local turn before archiving this conversation".to_owned();
+            self.status = "finish or stop the active local turn before archiving this conversation"
+                .to_owned();
             return;
         }
         let archived = self.local_conversation_id;
-        if let Err(error) = self.local_conversation_catalog.set_archived(
-            archived,
-            true,
-            unix_now_ms(),
-        ) {
+        if let Err(error) =
+            self.local_conversation_catalog
+                .set_archived(archived, true, unix_now_ms())
+        {
             self.status = format!("failed to archive local conversation: {error}");
             return;
         }
@@ -2902,7 +2890,8 @@ impl ChatariumApp {
 
     fn start_capability_probes(&mut self) {
         if !self.remote_connected() {
-            self.capability_probe.status = "capability probes require a connected ChatGPT plan".to_owned();
+            self.capability_probe.status =
+                "capability probes require a connected ChatGPT plan".to_owned();
             return;
         }
         if self.pending_remote_turn.is_some() || self.active_remote_turn.is_some() {
@@ -5034,7 +5023,9 @@ fn persistence_worker(
     while let Ok(command) = commands.recv() {
         match command {
             PersistCommand::SaveInferenceSettings { store: settings } => {
-                if let Err(error) = settings.save_atomic(&data_dir.join("local-inference-settings.json")) {
+                if let Err(error) =
+                    settings.save_atomic(&data_dir.join("local-inference-settings.json"))
+                {
                     let _ = notices.send(PersistNotice::Failed {
                         operation: "inference settings save",
                         revision: None,
@@ -5045,7 +5036,8 @@ fn persistence_worker(
                 }
             }
             PersistCommand::SaveLocalConversationCatalog { catalog } => {
-                if let Err(error) = catalog.save_atomic(&data_dir.join("local-conversations.json")) {
+                if let Err(error) = catalog.save_atomic(&data_dir.join("local-conversations.json"))
+                {
                     let _ = notices.send(PersistNotice::Failed {
                         operation: "local conversation catalog save",
                         revision: None,
@@ -6152,7 +6144,12 @@ fn remote_turn_payload(
 
 fn responses_input(messages: &[DisplayMessage], developer_context: &str) -> Value {
     let mut input = Vec::with_capacity(
-        messages.len() + if developer_context.trim().is_empty() { 0 } else { 1 },
+        messages.len()
+            + if developer_context.trim().is_empty() {
+                0
+            } else {
+                1
+            },
     );
     if !developer_context.trim().is_empty() {
         input.push(serde_json::json!({
@@ -6346,25 +6343,26 @@ fn local_conversation_display_title(
         .and_then(|entry| entry.title.clone())
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| {
-            derived_conversation_title(&projected_local_display_messages(
-                events,
-                conversation_id,
-            ))
+            derived_conversation_title(&projected_local_display_messages(events, conversation_id))
         })
 }
 
 fn load_local_conversation_workspace(
     path: &Path,
     events: &[EventEnvelope],
-) -> Result<(local_conversations::LocalConversationCatalog, LocalConversationId), String> {
+) -> Result<
+    (
+        local_conversations::LocalConversationCatalog,
+        LocalConversationId,
+    ),
+    String,
+> {
     let mut catalog = local_conversations::LocalConversationCatalog::load(path)?;
     let now_ms = unix_now_ms();
     let mut changed = false;
     for conversation_id in discovered_local_conversation_ids(events)? {
-        let title = derived_conversation_title(&projected_local_display_messages(
-            events,
-            conversation_id,
-        ));
+        let title =
+            derived_conversation_title(&projected_local_display_messages(events, conversation_id));
         changed |= catalog.ensure(conversation_id, Some(title), now_ms);
     }
 
@@ -7549,10 +7547,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            projected_working_draft(store.events(), conversation_id),
-            ""
-        );
+        assert_eq!(projected_working_draft(store.events(), conversation_id), "");
     }
 
     #[test]
@@ -7575,7 +7570,10 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(projected_working_draft(store.events(), first), "first draft");
+        assert_eq!(
+            projected_working_draft(store.events(), first),
+            "first draft"
+        );
         assert_eq!(
             projected_working_draft(store.events(), second),
             "second draft"
