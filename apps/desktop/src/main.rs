@@ -18,6 +18,9 @@ use chatarium_store::remote_mirror_bootstrap::{
     promote_discovered_live_mirror_body, promote_historical_live_mirror_body,
 };
 use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
+use chatarium_store::remote_mirror_queue::{
+    RemoteMirrorQueueStatus, derive_remote_mirror_queue,
+};
 use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
@@ -221,6 +224,13 @@ struct LiveMirrorCatalogEntry {
 }
 
 #[derive(Debug, Clone)]
+struct RemoteCatalogViewEntry {
+    item: ConversationListItem,
+    status: RemoteMirrorQueueStatus,
+    local_conversation_id: Option<LocalConversationId>,
+}
+
+#[derive(Debug, Clone)]
 struct PendingHistoryFetchProof {
     local_conversation_id: Option<LocalConversationId>,
     remote_conversation_id: String,
@@ -251,6 +261,8 @@ struct ChatariumApp {
     mirror_status: String,
     live_mirror_truncated_before: bool,
     remote_conversation_catalog: Vec<ConversationListItem>,
+    remote_catalog_view: Vec<RemoteCatalogViewEntry>,
+    selected_remote_catalog_id: Option<String>,
     remote_conversation_total: Option<u64>,
     history_discovery_started: bool,
     history_list_pending: bool,
@@ -349,6 +361,18 @@ impl ChatariumApp {
                             Vec::new()
                         }
                     };
+                let remote_catalog_view = match build_remote_catalog_view(
+                    &remote_conversation_catalog,
+                    &events,
+                    &live_mirror_catalog,
+                ) {
+                    Ok(view) => view,
+                    Err(error) => {
+                        startup_status =
+                            format!("{startup_status}; local mirror view warning: {error}");
+                        Vec::new()
+                    }
+                };
                 diagnostics::info(
                     "startup",
                     format!(
@@ -398,6 +422,8 @@ impl ChatariumApp {
                         mirror_status: "idle · no mirror in progress".to_owned(),
                         live_mirror_truncated_before: false,
                         remote_conversation_catalog,
+                        remote_catalog_view,
+                        selected_remote_catalog_id: None,
                         remote_conversation_total: None,
                         history_discovery_started: false,
                         history_list_pending: false,
@@ -464,6 +490,12 @@ impl ChatariumApp {
         let remote_conversation_catalog =
             load_remote_history_cache(&remote_history_cache_path(&journal_path))
                 .unwrap_or_default();
+        let remote_catalog_view = build_remote_catalog_view(
+            &remote_conversation_catalog,
+            &events,
+            &live_mirror_catalog,
+        )
+        .unwrap_or_default();
 
         Self {
             draft,
@@ -491,6 +523,8 @@ impl ChatariumApp {
             mirror_status: "idle · no mirror in progress".to_owned(),
             live_mirror_truncated_before: false,
             remote_conversation_catalog,
+            remote_catalog_view,
+            selected_remote_catalog_id: None,
             remote_conversation_total: None,
             history_discovery_started: false,
             history_list_pending: false,
@@ -524,12 +558,14 @@ impl ChatariumApp {
 
     fn select_local_conversation(&mut self) {
         self.selected_historical_conversation = None;
+        self.selected_remote_catalog_id = None;
         self.historical_load_pending = None;
         self.live_mirror_truncated_before = false;
         self.status = "local conversation selected".to_owned();
     }
 
     fn select_historical_conversation(&mut self, local_conversation_id: LocalConversationId) {
+        self.selected_remote_catalog_id = None;
         if self.selected_historical_conversation == Some(local_conversation_id)
             && self.loaded_historical_conversation == Some(local_conversation_id)
         {
@@ -864,6 +900,12 @@ impl ChatariumApp {
                     .map(|entry| entry.local_conversation_id)
                     .collect();
                 self.live_mirror_catalog = catalog;
+                self.remote_catalog_view = build_remote_catalog_view(
+                    &self.remote_conversation_catalog,
+                    &self.events,
+                    &self.live_mirror_catalog,
+                )
+                .unwrap_or_default();
             }
             Err(error) => {
                 self.status = format!("live mirror replay warning: {error}");
@@ -1053,6 +1095,12 @@ impl ChatariumApp {
                         &observation.candidates,
                     );
                     self.remote_conversation_catalog = catalog;
+                    self.remote_catalog_view = build_remote_catalog_view(
+                        &self.remote_conversation_catalog,
+                        &self.events,
+                        &self.live_mirror_catalog,
+                    )
+                    .unwrap_or_default();
 
                     let best_surface = best_surface
                         .map(|(path, count)| format!("{path} ({count})"))
@@ -1140,6 +1188,12 @@ impl ChatariumApp {
                         &fallback.candidates,
                     );
                     self.remote_conversation_catalog = catalog;
+                    self.remote_catalog_view = build_remote_catalog_view(
+                        &self.remote_conversation_catalog,
+                        &self.events,
+                        &self.live_mirror_catalog,
+                    )
+                    .unwrap_or_default();
 
                     let best_surface = best_surface
                         .map(|(path, count)| format!("{path} ({count})"))
@@ -1703,6 +1757,7 @@ impl ChatariumApp {
                     {
                         self.remote_discovery_pending = None;
                     }
+                    self.selected_remote_catalog_id = None;
                     self.selected_historical_conversation = Some(local_conversation_id);
                     self.loaded_historical_conversation = Some(local_conversation_id);
                     self.historical_load_pending = None;
@@ -2181,14 +2236,12 @@ impl eframe::App for ChatariumApp {
         self.process_notices();
         self.process_live_mirror_fetch_notices();
         self.process_remote_notices();
-        if !self.history_discovery_started {
-            self.start_history_discovery(ctx);
-        }
-
         let local_display_messages =
             projected_local_display_messages(&self.events, self.local_conversation_id);
         let local_conversation_title = derived_conversation_title(&local_display_messages);
-        let historical_mode = self.selected_historical_conversation.is_some();
+        let remote_catalog_selected = self.selected_remote_catalog_id.is_some();
+        let historical_mode =
+            self.selected_historical_conversation.is_some() || remote_catalog_selected;
         let selected_historical_id = self.selected_historical_conversation;
         let selected_live_mirror = selected_historical_id
             .is_some_and(|selected| self.live_mirrored_conversations.contains(&selected));
@@ -2202,9 +2255,15 @@ impl eframe::App for ChatariumApp {
                 .iter()
                 .find(|entry| entry.local_conversation_id == selected)
         });
+        let selected_remote_entry = self.selected_remote_catalog_id.as_deref().and_then(|id| {
+            self.remote_catalog_view
+                .iter()
+                .find(|entry| entry.item.id == id)
+        });
         let conversation_title = selected_live_entry
             .map(|entry| entry.title.clone())
             .or_else(|| selected_historical_entry.and_then(|entry| entry.title.clone()))
+            .or_else(|| selected_remote_entry.and_then(|entry| entry.item.title.clone()))
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| {
                 if historical_mode {
@@ -2216,7 +2275,8 @@ impl eframe::App for ChatariumApp {
         let mut select_local_requested = false;
         let mut select_historical_requested = None;
         let mut sync_live_requested = None;
-        let mut open_remote_requested = None;
+        let mut select_remote_requested = None;
+        let mut mirror_remote_requested = None;
         let mut refresh_history_requested = false;
 
         egui::SidePanel::left("sidebar")
@@ -2303,23 +2363,16 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(112, 176, 137)),
                             );
                             ui.add_space(6.0);
-                            for entry in &self.remote_conversation_catalog {
-                                let live_local = self
-                                    .live_mirror_catalog
-                                    .iter()
-                                    .find(|live| live.remote_conversation_id == entry.id)
-                                    .map(|live| live.local_conversation_id);
-                                let imported_local = self
-                                    .historical_catalog
-                                    .iter()
-                                    .find(|historical| {
-                                        historical.remote_conversation_id == entry.id
+                            for entry in &self.remote_catalog_view {
+                                let selected = entry
+                                    .local_conversation_id
+                                    .is_some_and(|local| {
+                                        self.selected_historical_conversation == Some(local)
                                     })
-                                    .map(|historical| historical.local_conversation_id);
-                                let local = live_local.or(imported_local);
-                                let selected = local.is_some()
-                                    && self.selected_historical_conversation == local;
+                                    || self.selected_remote_catalog_id.as_deref()
+                                        == Some(entry.item.id.as_str());
                                 let title = entry
+                                    .item
                                     .title
                                     .as_deref()
                                     .filter(|title| !title.trim().is_empty())
@@ -2332,42 +2385,30 @@ impl eframe::App for ChatariumApp {
                                     )
                                     .clicked()
                                 {
-                                    if let Some(local) = local {
+                                    if let Some(local) = entry.local_conversation_id {
                                         select_historical_requested = Some(local);
                                     } else {
-                                        open_remote_requested = Some(entry.id.clone());
+                                        select_remote_requested = Some(entry.item.id.clone());
                                     }
                                 }
-                                let partial = live_local.is_some_and(|local_id| {
-                                    self.live_mirror_catalog
-                                        .iter()
-                                        .find(|live| live.local_conversation_id == local_id)
-                                        .is_some_and(|live| live.truncated_before)
-                                });
-                                let mirror_pending = self.remote_discovery_pending.as_deref()
-                                    == Some(entry.id.as_str());
-                                let mirror_failed =
-                                    self.remote_mirror_failures.contains_key(&entry.id);
-                                let rate_limited = self
-                                    .remote_mirror_retry_after
-                                    .get(&entry.id)
-                                    .is_some_and(|until| *until > Instant::now());
-                                let remote_state = remote_history_entry_state_label(
-                                    live_local.is_some(),
-                                    partial,
-                                    imported_local.is_some(),
-                                    mirror_pending,
-                                    rate_limited,
-                                    mirror_failed,
-                                );
-                                let remote_state_color = if live_local.is_some() {
-                                    egui::Color32::from_rgb(112, 176, 137)
-                                } else if mirror_pending || rate_limited {
-                                    egui::Color32::from_rgb(225, 194, 108)
-                                } else if mirror_failed {
-                                    egui::Color32::from_rgb(214, 128, 128)
-                                } else {
-                                    egui::Color32::from_rgb(112, 116, 126)
+                                let remote_state = remote_catalog_state_label(entry.status);
+                                let remote_state_color = match entry.status {
+                                    RemoteMirrorQueueStatus::MirroredFully
+                                    | RemoteMirrorQueueStatus::MirroredPartial => {
+                                        egui::Color32::from_rgb(112, 176, 137)
+                                    }
+                                    RemoteMirrorQueueStatus::RateLimited
+                                    | RemoteMirrorQueueStatus::Queued
+                                    | RemoteMirrorQueueStatus::Capturing => {
+                                        egui::Color32::from_rgb(225, 194, 108)
+                                    }
+                                    RemoteMirrorQueueStatus::TransientFailure
+                                    | RemoteMirrorQueueStatus::StructuralFailure => {
+                                        egui::Color32::from_rgb(214, 128, 128)
+                                    }
+                                    RemoteMirrorQueueStatus::Discovered => {
+                                        egui::Color32::from_rgb(112, 116, 126)
+                                    }
                                 };
                                 ui.label(
                                     egui::RichText::new(remote_state)
@@ -2375,6 +2416,18 @@ impl eframe::App for ChatariumApp {
                                         .color(remote_state_color),
                                 );
                                 ui.add_space(4.0);
+                            }
+                            if let Some(remote_id) = self.selected_remote_catalog_id.as_ref() {
+                                if ui.button("Mirror from ChatGPT").clicked() {
+                                    mirror_remote_requested = Some(remote_id.clone());
+                                }
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Remote capture is a separate action; selecting a row stays local.",
+                                    )
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
                             }
                         }
 
@@ -2656,8 +2709,15 @@ impl eframe::App for ChatariumApp {
             self.select_local_conversation();
         } else if let Some(local_conversation_id) = select_historical_requested {
             self.select_historical_conversation(local_conversation_id);
-        } else if let Some(remote_conversation_id) = open_remote_requested {
-            self.open_discovered_remote_conversation(remote_conversation_id, ctx);
+        } else if let Some(remote_conversation_id) = select_remote_requested {
+            self.selected_historical_conversation = None;
+            self.selected_remote_catalog_id = Some(remote_conversation_id);
+            self.historical_messages.clear();
+            self.historical_load_pending = None;
+            self.status = "remote conversation selected; local mirror unavailable".to_owned();
+        }
+        if let Some(remote_conversation_id) = mirror_remote_requested.as_ref() {
+            self.open_discovered_remote_conversation(remote_conversation_id.clone(), ctx);
         }
         if refresh_history_requested {
             self.start_history_discovery(ctx);
@@ -2681,8 +2741,10 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(238, 239, 244)),
                         );
                         ui.label(
-                            egui::RichText::new(if selected_live_mirror {
-                                "Validated live ChatGPT mirror · read-only"
+                            egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                "Remote catalog item · not mirrored locally"
+                            } else if selected_live_mirror {
+                                "Local durable mirror · read-only"
                             } else if historical_mode {
                                 "Historical account-export snapshot · read-only"
                             } else if self.remote_connected() {
@@ -2711,8 +2773,14 @@ impl eframe::App for ChatariumApp {
                             .inner_margin(egui::Margin::symmetric(10, 5))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new(if selected_live_mirror {
-                                        "LIVE MIRROR"
+                                    egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                        "REMOTE · NOT MIRRORED"
+                                    } else if selected_live_mirror {
+                                        if self.live_mirror_truncated_before {
+                                            "MIRRORED LOCALLY · PARTIAL"
+                                        } else {
+                                            "MIRRORED LOCALLY"
+                                        }
                                     } else if historical_mode {
                                         "IMPORTED SNAPSHOT"
                                     } else if connected {
@@ -2723,7 +2791,9 @@ impl eframe::App for ChatariumApp {
                                     .size(10.0)
                                     .strong()
                                     .color(
-                                        if selected_live_mirror {
+                                        if remote_catalog_selected && !selected_live_mirror {
+                                            egui::Color32::from_rgb(225, 194, 108)
+                                        } else if selected_live_mirror {
                                             egui::Color32::from_rgb(126, 210, 156)
                                         } else if historical_mode {
                                             egui::Color32::from_rgb(179, 184, 196)
@@ -2758,7 +2828,9 @@ impl eframe::App for ChatariumApp {
                         .inner_margin(egui::Margin::same(14))
                         .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new(if selected_live_mirror {
+                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                    "Remote conversation is not mirrored locally"
+                                } else if selected_live_mirror {
                                     "Live mirror is read-only for now"
                                 } else {
                                     "Historical snapshot is read-only"
@@ -2767,7 +2839,9 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(221, 223, 229)),
                             );
                             ui.label(
-                                egui::RichText::new(if selected_live_mirror {
+                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                    "Selecting a catalog row is local-only. Use the explicit mirror action to capture this conversation through ChatGPT."
+                                } else if selected_live_mirror {
                                     "Chatarium can refresh this real ChatGPT thread through your browser session. Same-thread write-back remains evidence-gated, so the composer stays disabled."
                                 } else {
                                     "Sync can upgrade this imported lineage to a validated live mirror without creating a parallel conversation. Same-thread write-back remains a separate interoperability problem."
@@ -2778,12 +2852,15 @@ impl eframe::App for ChatariumApp {
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
                                 let pending = self.live_mirror_pending == selected_historical_id;
-                                let can_sync = selected_historical_id.is_some()
+                                let can_sync = (selected_historical_id.is_some()
+                                    || remote_catalog_selected)
                                     && self.persist_tx.is_some()
                                     && self.account_bridge_provider.is_some()
                                     && self.live_mirror_pending.is_none();
                                 let label = if pending {
                                     "Syncing…"
+                                } else if remote_catalog_selected && !selected_live_mirror {
+                                    "Mirror from ChatGPT"
                                 } else if selected_live_mirror {
                                     "Refresh from ChatGPT"
                                 } else {
@@ -2797,7 +2874,12 @@ impl eframe::App for ChatariumApp {
                                     )
                                     .clicked()
                                 {
-                                    sync_live_requested = selected_historical_id;
+                                    if remote_catalog_selected && !selected_live_mirror {
+                                        mirror_remote_requested =
+                                            self.selected_remote_catalog_id.clone();
+                                    } else {
+                                        sync_live_requested = selected_historical_id;
+                                    }
                                 }
                                 if pending {
                                     ui.spinner();
@@ -2925,7 +3007,9 @@ impl eframe::App for ChatariumApp {
                                     ui.add_space(8.0);
                                     ui.label(
                                         egui::RichText::new(
-                                            if selected_live_mirror {
+                                            if remote_catalog_selected && !selected_live_mirror {
+                                                "Remote conversation is not mirrored locally"
+                                            } else if selected_live_mirror {
                                                 "Loading validated live mirror snapshot…"
                                             } else {
                                                 "Loading and verifying historical snapshot…"
@@ -2936,7 +3020,9 @@ impl eframe::App for ChatariumApp {
                                     );
                                 } else {
                                     ui.label(
-                                        egui::RichText::new(if selected_live_mirror {
+                                        egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                            "REMOTE · NOT MIRRORED"
+                                        } else if selected_live_mirror {
                                             "No visible messages in the current live mirror page"
                                         } else if historical_mode {
                                             "No visible messages on the exported active branch"
@@ -2949,7 +3035,9 @@ impl eframe::App for ChatariumApp {
                                     );
                                     ui.add_space(8.0);
                                     ui.label(
-                                        egui::RichText::new(if selected_live_mirror {
+                                        egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                            "This catalog item has no local snapshot. Selecting it did not contact ChatGPT. Use the explicit mirror action to create a local mirror."
+                                        } else if selected_live_mirror {
                                             "The live response is durable; Chatarium did not expose system, tool, or reasoning content or guess across missing pagination."
                                         } else if historical_mode {
                                             "The raw snapshot is preserved; Chatarium did not guess across missing or non-visible content."
@@ -2966,6 +3054,11 @@ impl eframe::App for ChatariumApp {
                         } else {
                             ui.add_space(8.0);
                             if selected_live_mirror && self.live_mirror_truncated_before {
+                                ui.label(
+                                    egui::RichText::new("MIRRORED LOCALLY · PARTIAL")
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(225, 194, 108)),
+                                );
                                 ui.label(
                                     egui::RichText::new(
                                         "Older messages exist before this fetched page; Chatarium is not guessing across the pagination boundary.",
@@ -3585,6 +3678,49 @@ fn latest_live_mirror_catalog(
 
     catalog.sort_by(|left, right| right.snapshot_sequence.cmp(&left.snapshot_sequence));
     Ok(catalog)
+}
+
+fn build_remote_catalog_view(
+    catalog: &[ConversationListItem],
+    events: &[EventEnvelope],
+    live_mirrors: &[LiveMirrorCatalogEntry],
+) -> Result<Vec<RemoteCatalogViewEntry>, String> {
+    let identities = catalog
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (index, item.id.clone()))
+        .collect::<Vec<_>>();
+    let queue = derive_remote_mirror_queue(&identities, events)?;
+
+    Ok(queue
+        .items
+        .into_iter()
+        .filter_map(|queue_item| {
+            let item = catalog.get(queue_item.catalog_index)?.clone();
+            let mirror = live_mirrors
+                .iter()
+                .find(|mirror| mirror.remote_conversation_id == item.id);
+            Some(RemoteCatalogViewEntry {
+                item,
+                status: queue_item.status,
+                local_conversation_id: mirror.map(|mirror| mirror.local_conversation_id),
+            })
+        })
+        .collect())
+}
+
+fn remote_catalog_state_label(status: RemoteMirrorQueueStatus) -> &'static str {
+    match status {
+        RemoteMirrorQueueStatus::MirroredFully => "MIRRORED LOCALLY",
+        RemoteMirrorQueueStatus::MirroredPartial => "MIRRORED LOCALLY · PARTIAL",
+        RemoteMirrorQueueStatus::RateLimited => "RATE LIMITED",
+        RemoteMirrorQueueStatus::TransientFailure => "TRANSIENT FAILURE",
+        RemoteMirrorQueueStatus::StructuralFailure => "STRUCTURAL FAILURE",
+        RemoteMirrorQueueStatus::Queued | RemoteMirrorQueueStatus::Capturing => {
+            "REMOTE · MIRRORING"
+        }
+        RemoteMirrorQueueStatus::Discovered => "REMOTE · NOT MIRRORED",
+    }
 }
 
 fn latest_live_transcript(
@@ -4280,6 +4416,34 @@ mod tests {
         assert_eq!(
             remote_history_entry_state_label(true, true, false, false, false, false),
             "remote · mirrored locally · partial"
+        );
+    }
+
+    #[test]
+    fn local_remote_catalog_states_are_explicit_and_non_account_wide() {
+        assert_eq!(
+            remote_catalog_state_label(RemoteMirrorQueueStatus::Discovered),
+            "REMOTE · NOT MIRRORED"
+        );
+        assert_eq!(
+            remote_catalog_state_label(RemoteMirrorQueueStatus::MirroredFully),
+            "MIRRORED LOCALLY"
+        );
+        assert_eq!(
+            remote_catalog_state_label(RemoteMirrorQueueStatus::MirroredPartial),
+            "MIRRORED LOCALLY · PARTIAL"
+        );
+        assert_eq!(
+            remote_catalog_state_label(RemoteMirrorQueueStatus::TransientFailure),
+            "TRANSIENT FAILURE"
+        );
+        assert_eq!(
+            remote_catalog_state_label(RemoteMirrorQueueStatus::RateLimited),
+            "RATE LIMITED"
+        );
+        assert_eq!(
+            remote_catalog_state_label(RemoteMirrorQueueStatus::StructuralFailure),
+            "STRUCTURAL FAILURE"
         );
     }
 

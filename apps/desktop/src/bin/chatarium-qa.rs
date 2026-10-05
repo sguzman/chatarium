@@ -46,6 +46,14 @@ fn main() {
         run_mirror_status();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("local-mirror-status") {
+        run_local_mirror_status();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("local-transcript") {
+        run_local_transcript();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("mirror-batch") {
         run_mirror_batch();
         return;
@@ -615,6 +623,200 @@ fn run_mirror_status() {
     print_queue_status("success", &summary, None, started.elapsed().as_millis());
 }
 
+fn run_local_mirror_status() {
+    let started = Instant::now();
+    let cache_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "catalog_read_failed",
+                "remote_http_used": false,
+                "browser_started": false,
+                "auth_probe_used": false,
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let store = match JsonlEventStore::open(default_journal_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "journal_open_failed",
+                "remote_http_used": false,
+                "browser_started": false,
+                "auth_probe_used": false,
+                "error": error.to_string(),
+            }));
+            return;
+        }
+    };
+    let summary = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "queue_replay_failed",
+                "remote_http_used": false,
+                "browser_started": false,
+                "auth_probe_used": false,
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let mut output = queue_status_value(
+        "success",
+        &summary,
+        None,
+        started.elapsed().as_millis(),
+    )
+    .as_object()
+    .cloned()
+    .expect("queue status is an object");
+    output.insert("local_read_only".to_owned(), json!(true));
+    output.insert("remote_http_used".to_owned(), json!(false));
+    output.insert("browser_started".to_owned(), json!(false));
+    output.insert("auth_probe_used".to_owned(), json!(false));
+    print_json(Value::Object(output));
+}
+
+fn run_local_transcript() {
+    let started = Instant::now();
+    let requested_index = std::env::args()
+        .skip(2)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|window| window[0] == "--catalog-index")
+        .and_then(|window| window[1].parse::<usize>().ok());
+    let Some(catalog_index) = requested_index else {
+        print_json(json!({
+            "terminal_state": "catalog_index_required",
+            "remote_http_used": false,
+            "browser_started": false,
+            "auth_probe_used": false,
+        }));
+        return;
+    };
+    let cache_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({"terminal_state": "catalog_read_failed", "error": error}));
+            return;
+        }
+    };
+    let Some(selected) = catalog.get(catalog_index) else {
+        print_json(json!({
+            "terminal_state": "catalog_index_out_of_range",
+            "catalog_count": catalog.len(),
+            "selected_catalog_index": catalog_index,
+            "remote_http_used": false,
+            "browser_started": false,
+            "auth_probe_used": false,
+        }));
+        return;
+    };
+    let journal_path = default_journal_path();
+    let store = match JsonlEventStore::open(&journal_path) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({"terminal_state": "journal_open_failed", "error": error.to_string()}));
+            return;
+        }
+    };
+    let summary = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({"terminal_state": "queue_replay_failed", "error": error}));
+            return;
+        }
+    };
+    let Some(item) = summary.items.iter().find(|item| item.catalog_index == catalog_index) else {
+        print_json(json!({"terminal_state": "catalog_item_missing", "selected_catalog_index": catalog_index, "remote_http_used": false}));
+        return;
+    };
+    let state = queue_status_name(item.status);
+    if !matches!(
+        item.status,
+        RemoteMirrorQueueStatus::MirroredFully | RemoteMirrorQueueStatus::MirroredPartial
+    ) {
+        print_json(json!({
+            "terminal_state": "not_mirrored",
+            "selected_catalog_index": catalog_index,
+            "mirror_state": state,
+            "local_conversation_present": false,
+            "remote_http_used": false,
+            "browser_started": false,
+            "auth_probe_used": false,
+        }));
+        return;
+    }
+    let records = match replay_remote_conversation_snapshot_audit(store.events()) {
+        Ok(records) => records,
+        Err(error) => {
+            print_json(json!({"terminal_state": "snapshot_replay_failed", "error": error}));
+            return;
+        }
+    };
+    let Some(record) = records
+        .iter()
+        .rev()
+        .find(|record| record.remote_conversation_id.as_str() == selected.id)
+    else {
+        print_json(json!({"terminal_state": "local_conversation_missing", "selected_catalog_index": catalog_index, "remote_http_used": false}));
+        return;
+    };
+    let projection = match project_remote_active_transcript(&record.envelope) {
+        Ok(projection) => projection,
+        Err(error) => {
+            print_json(json!({"terminal_state": "projection_failed", "error": error}));
+            return;
+        }
+    };
+    let reopened = match JsonlEventStore::open(&journal_path) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({"terminal_state": "local_reopen_failed", "error": error.to_string()}));
+            return;
+        }
+    };
+    let replay_passed = replay_remote_conversation_snapshot_audit(reopened.events())
+        .ok()
+        .map(|records| {
+            records
+                .iter()
+                .rev()
+                .find(|candidate| {
+                    candidate.imported_sequence == record.imported_sequence
+                        && candidate.remote_conversation_id.as_str() == selected.id
+                })
+                .and_then(|candidate| project_remote_active_transcript(&candidate.envelope).ok())
+                .is_some_and(|replayed| replayed.messages.len() == projection.messages.len())
+        })
+        .unwrap_or(false);
+    print_json(json!({
+        "terminal_state": if replay_passed { "success" } else { "local_replay_failed" },
+        "selected_catalog_index": catalog_index,
+        "mirror_state": state,
+        "local_conversation_present": true,
+        "snapshot_sequence": record.imported_sequence,
+        "projected_messages": projection.messages.len(),
+        "truncated_before": projection.truncated_before,
+        "replay_passed": replay_passed,
+        "remote_http_used": false,
+        "browser_started": false,
+        "auth_probe_used": false,
+        "elapsed_ms": started.elapsed().as_millis(),
+    }));
+}
+
 fn run_mirror_batch() {
     let started = Instant::now();
     let max_items = std::env::args()
@@ -695,7 +897,7 @@ fn run_mirror_batch() {
 
     for item in selected {
         attempted.push(item.catalog_index);
-        if let Err(error) = record_remote_mirror_queue_item_queued(
+        if let Err(_error) = record_remote_mirror_queue_item_queued(
             &mut store,
             &item.remote_conversation_id,
             item.catalog_index,
