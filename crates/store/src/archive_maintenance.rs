@@ -28,6 +28,7 @@ const MANIFEST_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveIntegrityReport {
+    pub status: &'static str,
     pub healthy: bool,
     pub warnings: usize,
     pub errors: usize,
@@ -161,9 +162,11 @@ pub fn check_archive(
     {
         return Err(err("durable snapshot is absent from the cached catalog"));
     }
+    let warnings = usize::from(tail > 0);
     Ok(ArchiveIntegrityReport {
-        healthy: true,
-        warnings: usize::from(tail > 0),
+        status: if warnings == 0 { "HEALTHY" } else { "WARNING" },
+        healthy: warnings == 0,
+        warnings,
         errors: 0,
         journal_event_count: events.len(),
         highest_sequence: events.last().map_or(0, |event| event.sequence),
@@ -180,6 +183,21 @@ fn sha256(path: &Path) -> Result<(u64, String), ArchiveMaintenanceError> {
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     Ok((bytes.len() as u64, format!("{:x}", hasher.finalize())))
+}
+
+fn copy_consistent(
+    source: &Path,
+    destination: &Path,
+) -> Result<(u64, String), ArchiveMaintenanceError> {
+    let before = sha256(source)?;
+    fs::copy(source, destination)?;
+    let after = sha256(source)?;
+    let copied = sha256(destination)?;
+    if before != after || after != copied {
+        let _ = fs::remove_file(destination);
+        return Err(err("archive source changed during backup"));
+    }
+    Ok(after)
 }
 
 fn safe_relative(name: &str) -> Result<&Path, ArchiveMaintenanceError> {
@@ -214,8 +232,7 @@ pub fn create_backup(
     for name in [JOURNAL_FILE, CACHE_FILE] {
         let source = data_dir.join(name);
         if source.exists() {
-            fs::copy(&source, temporary.join(name))?;
-            let (size, hash) = sha256(&source)?;
+            let (size, hash) = copy_consistent(&source, &temporary.join(name))?;
             files.push(json!({"path": name, "size_bytes": size, "sha256": hash}));
         }
     }
@@ -224,7 +241,20 @@ pub fn create_backup(
         let (size, hash) = sha256(&temporary.join(JOURNAL_FILE))?;
         files.push(json!({"path": JOURNAL_FILE, "size_bytes": size, "sha256": hash}));
     }
-    let manifest = json!({"schema": MANIFEST_SCHEMA, "version": MANIFEST_VERSION, "files": files, "archive": {"journal_event_count": archive.journal_event_count, "highest_sequence": archive.highest_sequence, "catalog_count": archive.catalog_count, "snapshot_count": archive.snapshot_count}});
+    let manifest = json!({
+        "schema": MANIFEST_SCHEMA,
+        "version": MANIFEST_VERSION,
+        "created_at_unix_ms": unix_ms(),
+        "data_schema_versions": {"journal": 2, "history_cache": 1},
+        "files": files,
+        "archive": {
+            "journal_event_count": archive.journal_event_count,
+            "highest_sequence": archive.highest_sequence,
+            "catalog_count": archive.catalog_count,
+            "snapshot_count": archive.snapshot_count,
+            "mirror_count": archive.queue_full_count + archive.queue_partial_count
+        }
+    });
     fs::write(
         temporary.join(MANIFEST_FILE),
         serde_json::to_vec_pretty(&manifest).map_err(|e| err(e.to_string()))?,
@@ -245,16 +275,31 @@ pub fn verify_backup(
     {
         return Err(err("unsupported backup manifest"));
     }
+    if manifest
+        .get("created_at_unix_ms")
+        .and_then(Value::as_u64)
+        .is_none()
+        || manifest
+            .get("data_schema_versions")
+            .and_then(Value::as_object)
+            .is_none()
+    {
+        return Err(err("backup manifest metadata missing"));
+    }
     let files = manifest
         .get("files")
         .and_then(Value::as_array)
         .ok_or_else(|| err("manifest files missing"))?;
+    let mut names = BTreeSet::new();
     for file in files {
         let name = file
             .get("path")
             .and_then(Value::as_str)
             .ok_or_else(|| err("manifest path missing"))?;
         let relative = safe_relative(name)?;
+        if !names.insert(name) {
+            return Err(err("backup manifest contains duplicate file"));
+        }
         let path = backup.join(relative);
         let (size, hash) = sha256(&path)?;
         if file.get("size_bytes").and_then(Value::as_u64) != Some(size)
@@ -264,6 +309,23 @@ pub fn verify_backup(
         }
     }
     let archive = check_archive(backup)?;
+    if !names.contains(JOURNAL_FILE) {
+        return Err(err("backup manifest omits journal"));
+    }
+    let declared = manifest
+        .get("archive")
+        .ok_or_else(|| err("backup archive metadata missing"))?;
+    if declared.get("journal_event_count").and_then(Value::as_u64)
+        != Some(archive.journal_event_count as u64)
+        || declared.get("highest_sequence").and_then(Value::as_u64)
+            != Some(archive.highest_sequence)
+        || declared.get("catalog_count").and_then(Value::as_u64)
+            != Some(archive.catalog_count as u64)
+        || declared.get("snapshot_count").and_then(Value::as_u64)
+            != Some(archive.snapshot_count as u64)
+    {
+        return Err(err("backup manifest archive metadata mismatch"));
+    }
     Ok(BackupVerification {
         valid: true,
         manifest_files: files.len(),
@@ -310,8 +372,9 @@ fn unix_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EventStore, JsonlEventStore};
+    use crate::{EventStore, JsonlEventStore, inspect_jsonl_journal};
     use chatarium_core::EventKind;
+    use std::io::Write;
 
     fn temp(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("chatarium-archive-{label}-{}", std::process::id()))
@@ -345,6 +408,110 @@ mod tests {
         let backup = root.join("backup");
         create_backup(&root, &backup).unwrap();
         fs::write(backup.join(JOURNAL_FILE), b"bad\n").unwrap();
+        assert!(verify_backup(&backup).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_only_inspection_reports_torn_tail_without_repairing() {
+        let root = temp("torn");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let journal = root.join(JOURNAL_FILE);
+        let mut store = JsonlEventStore::open(&journal).unwrap();
+        store
+            .append(EventKind::DraftChanged, "local".into())
+            .unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&journal)
+            .unwrap()
+            .write_all(b"torn")
+            .unwrap();
+        let before = fs::metadata(&journal).unwrap().len();
+        let inspection = inspect_jsonl_journal(&journal).unwrap();
+        assert_eq!(inspection.events.len(), 1);
+        assert!(inspection.unterminated_tail_bytes > 0);
+        assert_eq!(fs::metadata(&journal).unwrap().len(), before);
+        assert_eq!(check_archive(&root).unwrap().status, "WARNING");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_gap_and_unknown_records_fail_closed() {
+        for (label, body) in [
+            ("malformed", b"not-json\n".as_slice()),
+            (
+                "gap",
+                br#"{"v":2,"sequence":2,"at_unix_ms":1,"kind":"draft_changed","payload":"x"}
+"#
+                .as_slice(),
+            ),
+            (
+                "unknown",
+                br#"{"v":2,"sequence":1,"at_unix_ms":1,"kind":"future_event","payload":"x"}
+"#
+                .as_slice(),
+            ),
+        ] {
+            let root = temp(label);
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join(JOURNAL_FILE), body).unwrap();
+            assert!(check_archive(&root).is_err());
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn restore_validates_in_isolation_and_preserves_target_on_failure() {
+        let root = temp("restore");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        let mut source_store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        source_store
+            .append(EventKind::DraftChanged, "source".into())
+            .unwrap();
+        let mut target_store = JsonlEventStore::open(target.join(JOURNAL_FILE)).unwrap();
+        target_store
+            .append(EventKind::DraftChanged, "target".into())
+            .unwrap();
+        let source_report = check_archive(&source).unwrap();
+        create_backup(&source, &backup).unwrap();
+        let mut corrupt = fs::read(backup.join(JOURNAL_FILE)).unwrap();
+        corrupt.push(b'!');
+        fs::write(backup.join(JOURNAL_FILE), corrupt).unwrap();
+        assert!(restore_backup(&backup, &target).is_err());
+        assert_eq!(check_archive(&target).unwrap().journal_event_count, 1);
+        create_backup(&source, root.join("good-backup")).unwrap();
+        let restored = restore_backup(root.join("good-backup"), &target).unwrap();
+        assert_eq!(restored.archive, source_report);
+        assert_eq!(check_archive(&target).unwrap(), source_report);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_manifest_and_missing_file_are_rejected() {
+        let root = temp("manifest");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut store = JsonlEventStore::open(root.join(JOURNAL_FILE)).unwrap();
+        store
+            .append(EventKind::DraftChanged, "local".into())
+            .unwrap();
+        let backup = root.join("backup");
+        create_backup(&root, &backup).unwrap();
+        let manifest = backup.join(MANIFEST_FILE);
+        let original = fs::read(&manifest).unwrap();
+        fs::write(&manifest, b"{}\n").unwrap();
+        assert!(verify_backup(&backup).is_err());
+        fs::write(&manifest, original).unwrap();
+        fs::write(backup.join(JOURNAL_FILE), b"").unwrap();
         assert!(verify_backup(&backup).is_err());
         let _ = fs::remove_dir_all(root);
     }

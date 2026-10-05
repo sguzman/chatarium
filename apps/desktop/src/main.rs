@@ -3200,7 +3200,7 @@ impl eframe::App for ChatariumApp {
                                 if ui.button("CHECK ARCHIVE").clicked() {
                                     let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
                                     self.archive_maintenance_status = match check_archive(data_dir) {
-                                        Ok(report) => format!("archive valid · {} events · {} catalog items", report.journal_event_count, report.catalog_count),
+                                        Ok(report) => format!("{} · {} events · {} catalog items", report.status, report.journal_event_count, report.catalog_count),
                                         Err(error) => format!("archive check failed · {error}"),
                                     };
                                 }

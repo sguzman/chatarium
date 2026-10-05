@@ -1729,6 +1729,7 @@ fn archive_report_json(
     report: &chatarium_store::archive_maintenance::ArchiveIntegrityReport,
 ) -> Value {
     json!({
+        "status": report.status,
         "healthy": report.healthy,
         "warnings": report.warnings,
         "errors": report.errors,
