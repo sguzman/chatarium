@@ -282,6 +282,7 @@ impl TurnEvidence {
             | EventKind::RemoteMirrorQueueCompleted
             | EventKind::RemoteMirrorQueueRateLimited
             | EventKind::RemoteMirrorQueueFailed
+            | EventKind::RemoteHealthObserved
             | EventKind::ChatContainerCreated
             | EventKind::ChatSessionLifecycleTransitionRecorded
             | EventKind::ChatSessionSuccessorBound => {}
@@ -390,6 +391,8 @@ pub enum EventKind {
     RemoteMirrorQueueRateLimited,
     /// One durable mirror queue item failed without a successful mirror.
     RemoteMirrorQueueFailed,
+    /// One structural remote-health observation changed controller gating state.
+    RemoteHealthObserved,
     /// One logical chat container was created around an already-registered root session.
     ChatContainerCreated,
     /// One chat-container session advanced toward saturation.
@@ -448,6 +451,7 @@ impl EventKind {
             Self::RemoteMirrorQueueCompleted => "remote_mirror_queue_completed",
             Self::RemoteMirrorQueueRateLimited => "remote_mirror_queue_rate_limited",
             Self::RemoteMirrorQueueFailed => "remote_mirror_queue_failed",
+            Self::RemoteHealthObserved => "remote_health_observed",
             Self::ChatContainerCreated => "chat_container_created",
             Self::ChatSessionLifecycleTransitionRecorded => {
                 "chat_session_lifecycle_transition_recorded"
@@ -509,6 +513,7 @@ impl EventKind {
             "remote_mirror_queue_completed" => Some(Self::RemoteMirrorQueueCompleted),
             "remote_mirror_queue_rate_limited" => Some(Self::RemoteMirrorQueueRateLimited),
             "remote_mirror_queue_failed" => Some(Self::RemoteMirrorQueueFailed),
+            "remote_health_observed" => Some(Self::RemoteHealthObserved),
             "chat_container_created" => Some(Self::ChatContainerCreated),
             "chat_session_lifecycle_transition_recorded" => {
                 Some(Self::ChatSessionLifecycleTransitionRecorded)

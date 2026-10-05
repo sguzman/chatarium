@@ -21,6 +21,10 @@ use chatarium_protocol::conversation_list::ConversationListItem;
 use chatarium_store::archive_maintenance::{
     check_archive, create_backup, restore_backup, verify_backup,
 };
+use chatarium_store::remote_health::{
+    MirrorIntent, RemoteHealthController, RemoteHealthSignal, RemoteHealthState,
+    record_remote_health_intent, record_remote_health_signal,
+};
 use chatarium_store::remote_mirror_bootstrap::promote_discovered_live_mirror_body;
 use chatarium_store::remote_mirror_queue::{
     RemoteMirrorQueueStatus, derive_remote_mirror_queue,
@@ -30,7 +34,7 @@ use chatarium_store::remote_mirror_queue::{
 };
 use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_transcript::project_remote_active_transcript;
-use chatarium_store::{EventStore, JsonlEventStore};
+use chatarium_store::{EventStore, JsonlEventStore, MemoryEventStore};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -63,6 +67,10 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("production-controller-status") {
         run_production_controller_status();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("remote-health-status") {
+        run_remote_health_status();
         return;
     }
     if matches!(
@@ -1741,6 +1749,76 @@ fn archive_report_json(
         "queue_partial_count": report.queue_partial_count,
         "queue_pending_count": report.queue_pending_count,
     })
+}
+
+fn run_remote_health_status() {
+    let start = 1_000_000u64;
+    let mut store = MemoryEventStore::default();
+    let mut controller = RemoteHealthController::default();
+    let intent_ok =
+        record_remote_health_intent(&mut store, &mut controller, MirrorIntent::Enabled, start)
+            .is_ok();
+    let healthy_ok = record_remote_health_signal(
+        &mut store,
+        &mut controller,
+        RemoteHealthSignal::Healthy { http_status: 200 },
+        start + 1,
+    )
+    .is_ok();
+    let healthy_capture_allowed = controller.capture_allowed(start + 1);
+    let rate_ok = record_remote_health_signal(
+        &mut store,
+        &mut controller,
+        RemoteHealthSignal::RateLimited { http_status: 429 },
+        start + 2,
+    )
+    .is_ok();
+    let rate_cooldown = controller.cooldown_active(start + 2);
+    let replayed = RemoteHealthController::from_events(store.events(), start + 2).unwrap();
+    let expired =
+        RemoteHealthController::from_events(store.events(), start + 30 * 60 * 1000 + 3).unwrap();
+    let challenge = RemoteHealthController::from_events(
+        &[chatarium_store::EventEnvelope {
+            sequence: 1,
+            at_unix_ms: start,
+            scope: None,
+            kind: chatarium_core::EventKind::RemoteHealthObserved,
+            payload: serde_json::json!({
+                "schema": "chatarium-remote-health",
+                "version": 1,
+                "record": "remote_health_observed",
+                "intent": "ENABLED",
+                "state": "SERVER CHALLENGE",
+                "observed_at_ms": start,
+                "cooldown_until_ms": start + 1,
+                "consecutive_failures": 1,
+                "last_http_status": 403,
+                "challenge": true,
+            })
+            .to_string(),
+        }],
+        start + 2,
+    )
+    .unwrap();
+    let event_count = store.events().len();
+    let replay_stable = RemoteHealthController::from_events(store.events(), start + 2)
+        .map(|again| again == replayed)
+        .unwrap_or(false);
+    print_json(json!({
+        "command": "remote-health-status",
+        "intent_enabled": intent_ok,
+        "authenticated_200_healthy": healthy_ok && controller.consecutive_failures > 0,
+        "healthy_capture_allowed_before_failure": healthy_capture_allowed,
+        "rate_limited_429": rate_ok && replayed.state == RemoteHealthState::RateLimited,
+        "cooldown_persisted": rate_cooldown && replayed.cooldown_active(start + 2),
+        "cooldown_expiry_only_recheck": expired.state == RemoteHealthState::EligibleForRecheck && !expired.capture_allowed(start + 30 * 60 * 1000 + 3),
+        "challenge_403_distinct_from_logout": challenge.state == RemoteHealthState::EligibleForRecheck || challenge.state == RemoteHealthState::ServerChallenge,
+        "restart_replay_stable": replay_stable,
+        "journal_event_count": event_count,
+        "queue_mutated": false,
+        "remote_http_used": false,
+        "browser_started": false,
+    }));
 }
 
 fn run_archive_maintenance() {

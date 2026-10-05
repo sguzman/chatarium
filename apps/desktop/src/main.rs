@@ -19,6 +19,10 @@ use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
 };
+use chatarium_store::remote_health::{
+    MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
+    record_remote_health_signal,
+};
 use chatarium_store::remote_mirror_bootstrap::{
     promote_discovered_live_mirror_body, promote_historical_live_mirror_body,
 };
@@ -41,6 +45,13 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
 
 enum PersistCommand {
     SaveDraft {
@@ -85,6 +96,16 @@ enum PersistCommand {
         remote_conversation_id: String,
         failure_class: MirrorFailureClass,
         reply: Sender<Result<(), String>>,
+    },
+    RecordRemoteHealthSignal {
+        signal: RemoteHealthSignal,
+        now_ms: u64,
+        reply: Sender<Result<RemoteHealthController, String>>,
+    },
+    RecordRemoteHealthIntent {
+        intent: MirrorIntent,
+        now_ms: u64,
+        reply: Sender<Result<RemoteHealthController, String>>,
     },
     Shutdown,
 }
@@ -151,6 +172,10 @@ enum PersistNotice {
     MirrorQueueUpdated {
         appended_events: Vec<EventEnvelope>,
     },
+    RemoteHealthUpdated {
+        event: EventEnvelope,
+        controller: RemoteHealthController,
+    },
     Failed {
         operation: &'static str,
         revision: Option<u64>,
@@ -188,6 +213,7 @@ enum MirrorControllerCommand {
     Start,
     Pause,
     Resume,
+    RecheckHealth,
     Shutdown,
 }
 
@@ -211,6 +237,16 @@ enum MirrorControllerNotice {
         remote_conversation_id: String,
         failure_class: MirrorFailureClass,
         reply: Sender<Result<(), String>>,
+    },
+    HealthSignal {
+        signal: RemoteHealthSignal,
+        now_ms: u64,
+        reply: Sender<Result<RemoteHealthController, String>>,
+    },
+    HealthIntent {
+        intent: MirrorIntent,
+        now_ms: u64,
+        reply: Sender<Result<RemoteHealthController, String>>,
     },
 }
 
@@ -379,6 +415,7 @@ struct ChatariumApp {
     mirror_controller_notice_rx: Option<Receiver<MirrorControllerNotice>>,
     mirror_controller_worker: Option<JoinHandle<()>>,
     mirror_controller_state: MirrorControllerState,
+    remote_health: RemoteHealthController,
     mirror_controller_current_item: Option<usize>,
     mirror_controller_detail: Option<String>,
     remote: siwc_bridge::BridgeRuntime,
@@ -515,7 +552,7 @@ impl ChatariumApp {
                         commit_in_flight: None,
                         evidence: TurnEvidence::default(),
                         local_conversation_id,
-                        events,
+                        events: events.clone(),
                         historical_catalog,
                         selected_historical_conversation: None,
                         loaded_historical_conversation: None,
@@ -566,6 +603,8 @@ impl ChatariumApp {
                         mirror_controller_notice_rx: None,
                         mirror_controller_worker: None,
                         mirror_controller_state: MirrorControllerState::Stopped,
+                        remote_health: RemoteHealthController::from_events(&events, unix_now_ms())
+                            .unwrap_or_default(),
                         mirror_controller_current_item: None,
                         mirror_controller_detail: None,
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
@@ -639,7 +678,7 @@ impl ChatariumApp {
                 .flatten()
                 .unwrap_or_default(),
             historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
-            events,
+            events: events.clone(),
             selected_historical_conversation: None,
             loaded_historical_conversation: None,
             historical_messages: Vec::new(),
@@ -689,6 +728,8 @@ impl ChatariumApp {
             mirror_controller_notice_rx: None,
             mirror_controller_worker: None,
             mirror_controller_state: MirrorControllerState::Stopped,
+            remote_health: RemoteHealthController::from_events(&events, unix_now_ms())
+                .unwrap_or_default(),
             mirror_controller_current_item: None,
             mirror_controller_detail: None,
             remote: siwc_bridge::BridgeRuntime::start(repaint),
@@ -762,15 +803,14 @@ impl ChatariumApp {
         }
     }
 
-    fn start_mirror_controller(&mut self) {
+    fn ensure_mirror_controller(&mut self) -> bool {
         if self.mirror_controller_worker.is_some() {
-            self.send_mirror_controller_command(MirrorControllerCommand::Start);
-            return;
+            return true;
         }
         let Some(provider) = self.account_bridge_provider.clone() else {
             self.mirror_controller_state = MirrorControllerState::Failed;
             self.mirror_controller_detail = Some("browser bridge unavailable".to_owned());
-            return;
+            return false;
         };
         let catalog = self.remote_conversation_catalog.clone();
         let events = self.events.clone();
@@ -786,14 +826,27 @@ impl ChatariumApp {
                 self.mirror_controller_tx = Some(command_tx);
                 self.mirror_controller_notice_rx = Some(notice_rx);
                 self.mirror_controller_worker = Some(worker);
-                self.send_mirror_controller_command(MirrorControllerCommand::Start);
+                true
             }
             Err(error) => {
                 self.mirror_controller_state = MirrorControllerState::Failed;
                 self.mirror_controller_detail = Some(format!(
                     "failed to start production mirror controller: {error}"
                 ));
+                false
             }
+        }
+    }
+
+    fn start_mirror_controller(&mut self) {
+        if self.ensure_mirror_controller() {
+            self.send_mirror_controller_command(MirrorControllerCommand::Start);
+        }
+    }
+
+    fn recheck_remote_health(&mut self) {
+        if self.ensure_mirror_controller() {
+            self.send_mirror_controller_command(MirrorControllerCommand::RecheckHealth);
         }
     }
 
@@ -893,6 +946,36 @@ impl ChatariumApp {
                         self.mirror_controller_detail =
                             Some("persistence worker stopped".to_owned());
                     }
+                }
+                MirrorControllerNotice::HealthSignal {
+                    signal,
+                    now_ms,
+                    reply,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        let _ = reply.send(Err("persistence worker unavailable".to_owned()));
+                        continue;
+                    };
+                    let _ = sender.send(PersistCommand::RecordRemoteHealthSignal {
+                        signal,
+                        now_ms,
+                        reply,
+                    });
+                }
+                MirrorControllerNotice::HealthIntent {
+                    intent,
+                    now_ms,
+                    reply,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        let _ = reply.send(Err("persistence worker unavailable".to_owned()));
+                        continue;
+                    };
+                    let _ = sender.send(PersistCommand::RecordRemoteHealthIntent {
+                        intent,
+                        now_ms,
+                        reply,
+                    });
                 }
             }
         }
@@ -2130,6 +2213,15 @@ impl ChatariumApp {
                     self.refresh_live_mirror_catalog();
                     self.status = "production mirror queue state durably updated".to_owned();
                 }
+                PersistNotice::RemoteHealthUpdated { event, controller } => {
+                    self.events.push(event);
+                    self.remote_health = controller;
+                    self.status = format!(
+                        "remote health: {} · mirror intent: {}",
+                        self.remote_health.state.as_str(),
+                        self.remote_health.intent.as_str()
+                    );
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2583,6 +2675,7 @@ impl eframe::App for ChatariumApp {
         let mut select_remote_requested = None;
         let mut mirror_remote_requested = None;
         let mut mirror_start_requested = false;
+        let mut mirror_recheck_requested = false;
         let mut mirror_pause_requested = false;
         let mut mirror_resume_requested = false;
         let mut refresh_history_requested = false;
@@ -2987,6 +3080,26 @@ impl eframe::App for ChatariumApp {
                             ),
                             true,
                         );
+                        status_row(
+                            ui,
+                            "Mirror intent",
+                            self.remote_health.intent.as_str(),
+                            self.remote_health.intent == MirrorIntent::Enabled,
+                        );
+                        status_row(
+                            ui,
+                            "Remote health",
+                            self.remote_health.state.as_str(),
+                            self.remote_health.state
+                                == chatarium_store::remote_health::RemoteHealthState::Healthy,
+                        );
+                        if let Some(until) = self.remote_health.cooldown_until_ms {
+                            ui.label(
+                                egui::RichText::new(format!("cooldown until unix-ms {until}"))
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(186, 189, 197)),
+                            );
+                        }
                         ui.label(
                             egui::RichText::new(format!(
                                 "production controller · {}{}",
@@ -3035,6 +3148,9 @@ impl eframe::App for ChatariumApp {
                                 .clicked()
                             {
                                 mirror_resume_requested = true;
+                            }
+                            if ui.button("RECHECK REMOTE HEALTH").clicked() {
+                                mirror_recheck_requested = true;
                             }
                         });
                         status_row(
@@ -3341,6 +3457,8 @@ impl eframe::App for ChatariumApp {
         }
         if mirror_start_requested {
             self.start_mirror_controller();
+        } else if mirror_recheck_requested {
+            self.recheck_remote_health();
         } else if mirror_pause_requested {
             self.send_mirror_controller_command(MirrorControllerCommand::Pause);
         } else if mirror_resume_requested {
@@ -4640,11 +4758,156 @@ fn persistence_worker(
                 }
                 let _ = reply.send(result);
             }
+            PersistCommand::RecordRemoteHealthSignal {
+                signal,
+                now_ms,
+                reply,
+            } => {
+                let mut controller =
+                    match RemoteHealthController::from_events(store.events(), now_ms) {
+                        Ok(controller) => controller,
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            continue;
+                        }
+                    };
+                let before = store.events().len();
+                let result =
+                    record_remote_health_signal(&mut store, &mut controller, signal, now_ms)
+                        .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    if let Some(event) = store.events()[before..].last().cloned() {
+                        let _ = notices.send(PersistNotice::RemoteHealthUpdated {
+                            event,
+                            controller: controller.clone(),
+                        });
+                    }
+                }
+                let _ = reply.send(result.map(|_| controller));
+            }
+            PersistCommand::RecordRemoteHealthIntent {
+                intent,
+                now_ms,
+                reply,
+            } => {
+                let mut controller =
+                    match RemoteHealthController::from_events(store.events(), now_ms) {
+                        Ok(controller) => controller,
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            continue;
+                        }
+                    };
+                let before = store.events().len();
+                let result =
+                    record_remote_health_intent(&mut store, &mut controller, intent, now_ms)
+                        .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    if let Some(event) = store.events()[before..].last().cloned() {
+                        let _ = notices.send(PersistNotice::RemoteHealthUpdated {
+                            event,
+                            controller: controller.clone(),
+                        });
+                    }
+                }
+                let _ = reply.send(result.map(|_| controller));
+            }
             PersistCommand::Shutdown => {
                 diagnostics::info("persist", "shutdown requested");
                 break;
             }
         }
+    }
+}
+
+fn controller_record_health_signal(
+    notices: &Sender<MirrorControllerNotice>,
+    signal: RemoteHealthSignal,
+    health: &mut RemoteHealthController,
+) -> Result<(), String> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    notices
+        .send(MirrorControllerNotice::HealthSignal {
+            signal,
+            now_ms: unix_now_ms(),
+            reply: reply_tx,
+        })
+        .map_err(|error| error.to_string())?;
+    *health = reply_rx.recv().map_err(|error| error.to_string())??;
+    Ok(())
+}
+
+fn controller_record_health_intent(
+    notices: &Sender<MirrorControllerNotice>,
+    intent: MirrorIntent,
+    health: &mut RemoteHealthController,
+) -> Result<(), String> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    notices
+        .send(MirrorControllerNotice::HealthIntent {
+            intent,
+            now_ms: unix_now_ms(),
+            reply: reply_tx,
+        })
+        .map_err(|error| error.to_string())?;
+    *health = reply_rx.recv().map_err(|error| error.to_string())??;
+    Ok(())
+}
+
+fn controller_check_remote_health(
+    provider: &mut account_bridge::BrowserBridgeProvider,
+    notices: &Sender<MirrorControllerNotice>,
+    health: &mut RemoteHealthController,
+) -> Result<bool, String> {
+    let signal = match provider.probe_authentication() {
+        Ok(observation) if observation.security_challenge => RemoteHealthSignal::ServerChallenge {
+            http_status: observation.http_status,
+        },
+        Ok(observation)
+            if matches!(
+                observation.evidence,
+                chatarium_core::authenticated_session::SessionAuthenticationEvidence::Authenticated
+            ) =>
+        {
+            RemoteHealthSignal::Healthy {
+                http_status: observation.http_status,
+            }
+        }
+        Ok(_) => RemoteHealthSignal::AuthenticationRequired,
+        Err(error) => remote_health_signal_from_error(&error),
+    };
+    controller_record_health_signal(notices, signal, health)?;
+    Ok(health.state == chatarium_store::remote_health::RemoteHealthState::Healthy)
+}
+
+fn remote_health_signal_from_error(
+    error: &account_bridge::BrowserBridgeError,
+) -> RemoteHealthSignal {
+    match error {
+        account_bridge::BrowserBridgeError::RateLimited(_) => {
+            RemoteHealthSignal::RateLimited { http_status: 429 }
+        }
+        account_bridge::BrowserBridgeError::HttpStatus(status) if *status == 429 => {
+            RemoteHealthSignal::RateLimited {
+                http_status: *status,
+            }
+        }
+        account_bridge::BrowserBridgeError::HttpStatus(status) if *status == 403 => {
+            RemoteHealthSignal::ServerChallenge {
+                http_status: *status,
+            }
+        }
+        account_bridge::BrowserBridgeError::HttpStatus(status) if *status >= 500 => {
+            RemoteHealthSignal::BackendUnavailable {
+                http_status: *status,
+            }
+        }
+        account_bridge::BrowserBridgeError::Unauthenticated => {
+            RemoteHealthSignal::AuthenticationRequired
+        }
+        account_bridge::BrowserBridgeError::Timeout
+        | account_bridge::BrowserBridgeError::Unavailable(_) => RemoteHealthSignal::NetworkUnstable,
+        _ => RemoteHealthSignal::Unknown,
     }
 }
 
@@ -4676,6 +4939,8 @@ fn mirror_controller_worker(
     let mut next_item = 0usize;
     let mut running = false;
     let mut paused = false;
+    let mut health =
+        RemoteHealthController::from_events(&events, unix_now_ms()).unwrap_or_default();
     let _ = notices.send(MirrorControllerNotice::State {
         state: MirrorControllerState::Stopped,
         current_catalog_index: None,
@@ -4686,6 +4951,41 @@ fn mirror_controller_worker(
         if !running {
             match commands.recv() {
                 Ok(MirrorControllerCommand::Start | MirrorControllerCommand::Resume) => {
+                    if let Err(error) = controller_record_health_intent(
+                        &notices,
+                        MirrorIntent::Enabled,
+                        &mut health,
+                    ) {
+                        let _ = notices.send(MirrorControllerNotice::State {
+                            state: MirrorControllerState::Failed,
+                            current_catalog_index: None,
+                            detail: Some(format!("remote health intent was not durable: {error}")),
+                        });
+                        continue;
+                    }
+                    let now_ms = unix_now_ms();
+                    if health.cooldown_active(now_ms) {
+                        let _ = notices.send(MirrorControllerNotice::State {
+                            state: MirrorControllerState::RateLimited,
+                            current_catalog_index: None,
+                            detail: Some("remote health cooldown active; explicit recheck is required after expiry".to_owned()),
+                        });
+                        continue;
+                    }
+                    if !health.capture_allowed(now_ms) {
+                        match controller_check_remote_health(&mut provider, &notices, &mut health) {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(error) => {
+                                let _ = notices.send(MirrorControllerNotice::State {
+                                    state: MirrorControllerState::Failed,
+                                    current_catalog_index: None,
+                                    detail: Some(format!("remote health check failed: {error}")),
+                                });
+                                continue;
+                            }
+                        }
+                    }
                     running = true;
                     paused = false;
                     let _ = notices.send(MirrorControllerNotice::State {
@@ -4696,11 +4996,35 @@ fn mirror_controller_worker(
                 }
                 Ok(MirrorControllerCommand::Pause) => {
                     paused = true;
+                    let _ = controller_record_health_intent(
+                        &notices,
+                        MirrorIntent::ManuallyPaused,
+                        &mut health,
+                    );
                     let _ = notices.send(MirrorControllerNotice::State {
                         state: MirrorControllerState::Paused,
                         current_catalog_index: None,
                         detail: Some("paused before next item".to_owned()),
                     });
+                }
+                Ok(MirrorControllerCommand::RecheckHealth) => {
+                    if health.cooldown_active(unix_now_ms()) {
+                        let _ = notices.send(MirrorControllerNotice::State {
+                            state: MirrorControllerState::RateLimited,
+                            current_catalog_index: None,
+                            detail: Some(
+                                "remote health cooldown active; no request sent".to_owned(),
+                            ),
+                        });
+                    } else if let Err(error) =
+                        controller_check_remote_health(&mut provider, &notices, &mut health)
+                    {
+                        let _ = notices.send(MirrorControllerNotice::State {
+                            state: MirrorControllerState::Failed,
+                            current_catalog_index: None,
+                            detail: Some(format!("remote health recheck failed: {error}")),
+                        });
+                    }
                 }
                 Ok(MirrorControllerCommand::Shutdown) | Err(_) => return,
             }
@@ -4711,6 +5035,11 @@ fn mirror_controller_worker(
             match command {
                 MirrorControllerCommand::Pause => {
                     paused = true;
+                    let _ = controller_record_health_intent(
+                        &notices,
+                        MirrorIntent::ManuallyPaused,
+                        &mut health,
+                    );
                     let _ = notices.send(MirrorControllerNotice::State {
                         state: MirrorControllerState::Paused,
                         current_catalog_index: None,
@@ -4720,6 +5049,7 @@ fn mirror_controller_worker(
                 MirrorControllerCommand::Start | MirrorControllerCommand::Resume => {
                     paused = false;
                 }
+                MirrorControllerCommand::RecheckHealth => {}
                 MirrorControllerCommand::Shutdown => return,
             }
         }
@@ -4756,51 +5086,6 @@ fn mirror_controller_worker(
             continue;
         }
 
-        let authentication = match provider.probe_authentication() {
-            Ok(observation) => observation,
-            Err(error) => {
-                let class = mirror_failure_class(&error);
-                let _ = controller_record_failure(&notices, &item.remote_conversation_id, class);
-                running = false;
-                let state = if matches!(error, account_bridge::BrowserBridgeError::Unauthenticated)
-                {
-                    MirrorControllerState::AuthenticationRequired
-                } else if class == MirrorFailureClass::RateLimited {
-                    MirrorControllerState::RateLimited
-                } else {
-                    MirrorControllerState::Failed
-                };
-                let _ = notices.send(MirrorControllerNotice::State {
-                    state,
-                    current_catalog_index: Some(item.catalog_index),
-                    detail: Some("authentication/capture preflight stopped the worker".to_owned()),
-                });
-                continue;
-            }
-        };
-        if !matches!(
-            authentication.evidence,
-            chatarium_core::authenticated_session::SessionAuthenticationEvidence::Authenticated
-        ) {
-            let _ = controller_record_failure(
-                &notices,
-                &item.remote_conversation_id,
-                MirrorFailureClass::Transient,
-            );
-            running = false;
-            let detail = if authentication.security_challenge {
-                "server security challenge; worker stopped without treating the UI shell as authenticated"
-            } else {
-                "authentication required; queue state preserved"
-            };
-            let _ = notices.send(MirrorControllerNotice::State {
-                state: MirrorControllerState::AuthenticationRequired,
-                current_catalog_index: Some(item.catalog_index),
-                detail: Some(detail.to_owned()),
-            });
-            continue;
-        }
-
         match provider.fetch_authenticated_conversation(&item.remote_conversation_id) {
             Ok(fetched) => {
                 match controller_capture_item(&notices, &item.remote_conversation_id, fetched.body)
@@ -4826,6 +5111,11 @@ fn mirror_controller_worker(
                 }
             }
             Err(error) => {
+                let _ = controller_record_health_signal(
+                    &notices,
+                    remote_health_signal_from_error(&error),
+                    &mut health,
+                );
                 let class = mirror_failure_class(&error);
                 let _ = controller_record_failure(&notices, &item.remote_conversation_id, class);
                 if class == MirrorFailureClass::RateLimited {
@@ -5835,6 +6125,36 @@ fn run_production_mirror_acceptance() {
                         }
                     }
                 }
+                MirrorControllerNotice::HealthSignal {
+                    signal,
+                    now_ms,
+                    reply,
+                } => {
+                    if let Err(error) = persist_tx.send(PersistCommand::RecordRemoteHealthSignal {
+                        signal,
+                        now_ms,
+                        reply,
+                    }) {
+                        if let PersistCommand::RecordRemoteHealthSignal { reply, .. } = error.0 {
+                            let _ = reply.send(Err("persistence worker stopped".to_owned()));
+                        }
+                    }
+                }
+                MirrorControllerNotice::HealthIntent {
+                    intent,
+                    now_ms,
+                    reply,
+                } => {
+                    if let Err(error) = persist_tx.send(PersistCommand::RecordRemoteHealthIntent {
+                        intent,
+                        now_ms,
+                        reply,
+                    }) {
+                        if let PersistCommand::RecordRemoteHealthIntent { reply, .. } = error.0 {
+                            let _ = reply.send(Err("persistence worker stopped".to_owned()));
+                        }
+                    }
+                }
             }
         }
         let _ = persist_notice_rx.try_iter().count();
@@ -5951,6 +6271,7 @@ mod tests {
                 "discovered_live_promotion_failed"
             }
             PersistNotice::MirrorQueueUpdated { .. } => "mirror_queue_updated",
+            PersistNotice::RemoteHealthUpdated { .. } => "remote_health_updated",
             PersistNotice::Failed { .. } => "failed",
         }
     }
