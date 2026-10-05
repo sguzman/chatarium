@@ -21,15 +21,35 @@ Selecting an unmirrored row only selects its cached catalog identity. Remote cap
 separate action (`Mirror from ChatGPT`) and is never triggered by local selection. The observed
 catalog count is not an account-completeness claim.
 
+The local archive search is rebuilt from the durable observed catalog and the visible transcript
+projection of durable mirrors. `ALL LOCAL DATA` searches cached titles for every observed catalog
+entry and visible text for locally mirrored entries; `TITLES` searches titles only; and
+`MIRRORED TRANSCRIPT TEXT` searches only projected user/assistant transcript text from complete or
+partial local mirrors. Hidden, internal, tool, and reasoning content is never indexed. An
+unmirrored conversation can match by title but cannot match by transcript text.
+
+Search results identify `TITLE` versus `LOCAL TRANSCRIPT`, and transcript results show a compact
+local snippet only in the desktop UI. Mirror-state filters compose with search across `ALL`,
+`MIRRORED`, `MIRRORED · PARTIAL`, `NOT MIRRORED`, `TRANSIENT FAILURE`, `RATE LIMITED`, and
+`STRUCTURAL FAILURE`. `Ctrl+K`, Up/Down, Enter, and Escape provide keyboard navigation. Selecting
+a local result opens the existing offline read path; selecting an unmirrored title only selects
+the catalog row and never fetches it.
+
+The search index is a rebuildable projection, not a new source of truth. Search performs no
+authentication probe, browser startup, remote HTTP, or queue mutation, and it does not imply
+account-wide completeness.
+
 The machine-controlled local QA paths are:
 
 ```text
 chatarium-qa local-mirror-status
 chatarium-qa local-transcript --catalog-index N
+chatarium-qa local-search-status
+chatarium-qa local-search --query synthetic-safe-query
 ```
 
-Their output is structural only: no titles, message text, or raw response bodies are emitted.
-Both paths use the durable journal and cached catalog only.
+Their output is structural only: no titles, message text, snippets, remote identities, or raw
+response bodies are emitted. All paths use the durable journal and cached catalog only.
 
 The desktop is the production owner of remote scheduling. It exposes explicit `START MIRRORING`,
 `PAUSE`, and `RESUME` controls and runs one capture at a time. Queue lifecycle events and snapshot

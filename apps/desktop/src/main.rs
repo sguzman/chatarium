@@ -1,5 +1,6 @@
 mod account_bridge;
 mod diagnostics;
+mod local_archive_search;
 mod siwc_bridge;
 
 use chatarium_core::{
@@ -300,6 +301,7 @@ struct LiveMirrorCatalogEntry {
 
 #[derive(Debug, Clone)]
 struct RemoteCatalogViewEntry {
+    catalog_index: usize,
     item: ConversationListItem,
     status: RemoteMirrorQueueStatus,
     local_conversation_id: Option<LocalConversationId>,
@@ -337,6 +339,11 @@ struct ChatariumApp {
     live_mirror_truncated_before: bool,
     remote_conversation_catalog: Vec<ConversationListItem>,
     remote_catalog_view: Vec<RemoteCatalogViewEntry>,
+    local_archive_search_index: local_archive_search::LocalArchiveSearchIndex,
+    archive_search_query: String,
+    archive_search_mode: local_archive_search::ArchiveSearchMode,
+    archive_state_filter: local_archive_search::ArchiveStateFilter,
+    archive_search_selection: Option<usize>,
     selected_remote_catalog_id: Option<String>,
     remote_conversation_total: Option<u64>,
     history_discovery_started: bool,
@@ -472,6 +479,8 @@ impl ChatariumApp {
                 let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
+                let local_archive_search_index =
+                    build_local_archive_search_index(&remote_catalog_view, &events);
                 let worker_data_dir = data_dir.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
@@ -504,6 +513,11 @@ impl ChatariumApp {
                         live_mirror_truncated_before: false,
                         remote_conversation_catalog,
                         remote_catalog_view,
+                        local_archive_search_index,
+                        archive_search_query: String::new(),
+                        archive_search_mode: local_archive_search::ArchiveSearchMode::AllLocalData,
+                        archive_state_filter: local_archive_search::ArchiveStateFilter::All,
+                        archive_search_selection: None,
                         selected_remote_catalog_id: None,
                         remote_conversation_total: None,
                         history_discovery_started: false,
@@ -583,6 +597,8 @@ impl ChatariumApp {
             &live_mirror_catalog,
         )
         .unwrap_or_default();
+        let local_archive_search_index =
+            build_local_archive_search_index(&remote_catalog_view, &events);
 
         Self {
             draft,
@@ -611,6 +627,11 @@ impl ChatariumApp {
             live_mirror_truncated_before: false,
             remote_conversation_catalog,
             remote_catalog_view,
+            local_archive_search_index,
+            archive_search_query: String::new(),
+            archive_search_mode: local_archive_search::ArchiveSearchMode::AllLocalData,
+            archive_state_filter: local_archive_search::ArchiveStateFilter::All,
+            archive_search_selection: None,
             selected_remote_catalog_id: None,
             remote_conversation_total: None,
             history_discovery_started: false,
@@ -1134,6 +1155,8 @@ impl ChatariumApp {
                     &self.live_mirror_catalog,
                 )
                 .unwrap_or_default();
+                self.local_archive_search_index =
+                    build_local_archive_search_index(&self.remote_catalog_view, &self.events);
             }
             Err(error) => {
                 self.status = format!("live mirror replay warning: {error}");
@@ -2515,6 +2538,25 @@ impl eframe::App for ChatariumApp {
         let mut mirror_pause_requested = false;
         let mut mirror_resume_requested = false;
         let mut refresh_history_requested = false;
+        let archive_results = self.local_archive_search_index.search(
+            &self.archive_search_query,
+            self.archive_search_mode,
+            self.archive_state_filter,
+        );
+        if self
+            .archive_search_selection
+            .is_some_and(|selection| selection >= archive_results.len())
+        {
+            self.archive_search_selection = None;
+        }
+        let archive_search_id = egui::Id::new("local-archive-search");
+        let mut archive_search_has_focus = false;
+        let mut archive_result_clicked = None;
+        let mut focus_archive_search = false;
+        let mut clear_archive_search_focus = false;
+        if ctx.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::K)) {
+            focus_archive_search = true;
+        }
 
         egui::SidePanel::left("sidebar")
             .default_width(320.0)
@@ -2544,6 +2586,115 @@ impl eframe::App for ChatariumApp {
                                 .size(12.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
+
+                        ui.add_space(18.0);
+                        ui.label(
+                            egui::RichText::new("LOCAL ARCHIVE SEARCH")
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 176, 137)),
+                        );
+                        ui.add_space(5.0);
+                        let search_response = ui.add(
+                            egui::TextEdit::singleline(&mut self.archive_search_query)
+                                .id(archive_search_id)
+                                .hint_text("Search local archive…")
+                                .desired_width(sidebar_control_width),
+                        );
+                        archive_search_has_focus = search_response.has_focus();
+                        if search_response.changed() {
+                            self.archive_search_selection = None;
+                        }
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("archive-search-mode")
+                                .selected_text(self.archive_search_mode.label())
+                                .show_ui(ui, |ui| {
+                                    for mode in [
+                                        local_archive_search::ArchiveSearchMode::AllLocalData,
+                                        local_archive_search::ArchiveSearchMode::Titles,
+                                        local_archive_search::ArchiveSearchMode::MirroredTranscriptText,
+                                    ] {
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.archive_search_mode,
+                                                mode,
+                                                mode.label(),
+                                            )
+                                            .changed()
+                                        {
+                                            self.archive_search_selection = None;
+                                        }
+                                    }
+                                });
+                            egui::ComboBox::from_id_salt("archive-state-filter")
+                                .selected_text(self.archive_state_filter.label())
+                                .show_ui(ui, |ui| {
+                                    for filter in [
+                                        local_archive_search::ArchiveStateFilter::All,
+                                        local_archive_search::ArchiveStateFilter::Mirrored,
+                                        local_archive_search::ArchiveStateFilter::Partial,
+                                        local_archive_search::ArchiveStateFilter::NotMirrored,
+                                        local_archive_search::ArchiveStateFilter::TransientFailure,
+                                        local_archive_search::ArchiveStateFilter::RateLimited,
+                                        local_archive_search::ArchiveStateFilter::StructuralFailure,
+                                    ] {
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.archive_state_filter,
+                                                filter,
+                                                filter.label(),
+                                            )
+                                            .changed()
+                                        {
+                                            self.archive_search_selection = None;
+                                        }
+                                    }
+                                });
+                        });
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} local result{} · Ctrl+K focus · Esc clear",
+                                archive_results.len(),
+                                if archive_results.len() == 1 { "" } else { "s" }
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        for (result_index, result) in archive_results.iter().enumerate() {
+                            let document = &self.local_archive_search_index.documents()[result.document_index];
+                            let selected = self.archive_search_selection == Some(result_index);
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    egui::RichText::new(document.title.as_str()).size(12.0),
+                                )
+                                .clicked()
+                            {
+                                self.archive_search_selection = Some(result_index);
+                                archive_result_clicked = Some(result.clone());
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(result.kind.label())
+                                        .size(9.0)
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(112, 176, 137)),
+                                );
+                                ui.label(
+                                    egui::RichText::new(document.state.label())
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
+                            });
+                            if let Some(snippet) = result.snippet.as_deref() {
+                                ui.label(
+                                    egui::RichText::new(snippet)
+                                        .size(10.0)
+                                        .italics()
+                                        .color(egui::Color32::from_rgb(170, 174, 184)),
+                                );
+                            }
+                        }
 
                         ui.add_space(26.0);
                         ui.label(
@@ -3008,6 +3159,59 @@ impl eframe::App for ChatariumApp {
                     });
             });
 
+        if focus_archive_search {
+            ctx.memory_mut(|memory| memory.request_focus(archive_search_id));
+        }
+        if archive_search_has_focus {
+            ctx.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    self.archive_search_selection = local_archive_search::move_selection(
+                        self.archive_search_selection,
+                        archive_results.len(),
+                        1,
+                    );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    self.archive_search_selection = local_archive_search::move_selection(
+                        self.archive_search_selection,
+                        archive_results.len(),
+                        -1,
+                    );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    self.archive_search_query.clear();
+                    self.archive_search_selection = None;
+                    clear_archive_search_focus = true;
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                    if let Some(selection) = self.archive_search_selection {
+                        archive_result_clicked = local_archive_search::activate_selection(
+                            &archive_results,
+                            Some(selection),
+                        );
+                    } else {
+                        archive_result_clicked =
+                            local_archive_search::activate_selection(&archive_results, None);
+                    }
+                }
+            });
+        }
+        if clear_archive_search_focus {
+            ctx.memory_mut(|memory| memory.surrender_focus(archive_search_id));
+        }
+        if let Some(result) = archive_result_clicked {
+            if let Some(entry) = self
+                .remote_catalog_view
+                .iter()
+                .find(|entry| entry.catalog_index == result.catalog_index)
+            {
+                if let Some(local_conversation_id) = entry.local_conversation_id {
+                    select_historical_requested = Some(local_conversation_id);
+                } else {
+                    select_remote_requested = Some(entry.item.id.clone());
+                }
+            }
+        }
         if select_local_requested {
             self.select_local_conversation();
         } else if let Some(local_conversation_id) = select_historical_requested {
@@ -4391,12 +4595,69 @@ fn build_remote_catalog_view(
                 .iter()
                 .find(|mirror| mirror.remote_conversation_id == item.id);
             Some(RemoteCatalogViewEntry {
+                catalog_index: queue_item.catalog_index,
                 item,
                 status: queue_item.status,
                 local_conversation_id: mirror.map(|mirror| mirror.local_conversation_id),
             })
         })
         .collect())
+}
+
+fn build_local_archive_search_index(
+    catalog_view: &[RemoteCatalogViewEntry],
+    events: &[EventEnvelope],
+) -> local_archive_search::LocalArchiveSearchIndex {
+    let documents = catalog_view
+        .iter()
+        .map(|entry| {
+            let state = match entry.status {
+                RemoteMirrorQueueStatus::MirroredFully => {
+                    local_archive_search::ArchiveMirrorState::Mirrored
+                }
+                RemoteMirrorQueueStatus::MirroredPartial => {
+                    local_archive_search::ArchiveMirrorState::Partial
+                }
+                RemoteMirrorQueueStatus::RateLimited => {
+                    local_archive_search::ArchiveMirrorState::RateLimited
+                }
+                RemoteMirrorQueueStatus::TransientFailure => {
+                    local_archive_search::ArchiveMirrorState::TransientFailure
+                }
+                RemoteMirrorQueueStatus::StructuralFailure => {
+                    local_archive_search::ArchiveMirrorState::StructuralFailure
+                }
+                RemoteMirrorQueueStatus::Discovered
+                | RemoteMirrorQueueStatus::Queued
+                | RemoteMirrorQueueStatus::Capturing => {
+                    local_archive_search::ArchiveMirrorState::NotMirrored
+                }
+            };
+            let visible_messages = entry
+                .local_conversation_id
+                .and_then(|local_id| latest_live_transcript(events, local_id, None).ok())
+                .map(|(_, projection)| {
+                    projection
+                        .messages
+                        .into_iter()
+                        .map(|message| message.text)
+                        .collect()
+                })
+                .unwrap_or_default();
+            local_archive_search::ArchiveSearchDocument {
+                catalog_index: entry.catalog_index,
+                title: entry
+                    .item
+                    .title
+                    .clone()
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "Untitled ChatGPT conversation".to_owned()),
+                state,
+                visible_messages,
+            }
+        })
+        .collect();
+    local_archive_search::LocalArchiveSearchIndex::new(documents)
 }
 
 fn remote_catalog_state_label(status: RemoteMirrorQueueStatus) -> &'static str {
@@ -5485,6 +5746,7 @@ mod tests {
     fn queue_counts_preserve_pending_and_terminal_state_boundaries() {
         let entries = vec![
             RemoteCatalogViewEntry {
+                catalog_index: 0,
                 item: ConversationListItem {
                     id: "one".to_owned(),
                     title: None,
@@ -5495,6 +5757,7 @@ mod tests {
                 local_conversation_id: None,
             },
             RemoteCatalogViewEntry {
+                catalog_index: 1,
                 item: ConversationListItem {
                     id: "two".to_owned(),
                     title: None,
@@ -5505,6 +5768,7 @@ mod tests {
                 local_conversation_id: Some(LocalConversationId::new()),
             },
             RemoteCatalogViewEntry {
+                catalog_index: 2,
                 item: ConversationListItem {
                     id: "three".to_owned(),
                     title: None,

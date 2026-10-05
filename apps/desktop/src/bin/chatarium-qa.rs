@@ -8,6 +8,8 @@
 mod account_bridge;
 #[path = "../diagnostics.rs"]
 mod diagnostics;
+#[path = "../local_archive_search.rs"]
+mod local_archive_search;
 
 use account_bridge::{
     AccountBridgeRuntime, BrowserBridgeError, FreshTabHistoryDiscoveryObservation,
@@ -56,6 +58,13 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("production-controller-status") {
         run_production_controller_status();
+        return;
+    }
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("local-search-status" | "local-search")
+    ) {
+        run_local_search();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("mirror-batch") {
@@ -890,6 +899,133 @@ fn run_production_controller_status() {
         "remote_http_used": false,
         "browser_started": false,
         "auth_probe_used": false,
+        "elapsed_ms": started.elapsed().as_millis(),
+    }));
+}
+
+fn run_local_search() {
+    let started = Instant::now();
+    let cache_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({"terminal_state": "catalog_read_failed", "error": error}));
+            return;
+        }
+    };
+    let store = match JsonlEventStore::open(default_journal_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({"terminal_state": "journal_open_failed", "error": error.to_string()}));
+            return;
+        }
+    };
+    let summary = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({"terminal_state": "queue_replay_failed", "error": error}));
+            return;
+        }
+    };
+    let records = match replay_remote_conversation_snapshot_audit(store.events()) {
+        Ok(records) => records,
+        Err(error) => {
+            print_json(json!({"terminal_state": "snapshot_replay_failed", "error": error}));
+            return;
+        }
+    };
+    let documents = catalog
+        .iter()
+        .enumerate()
+        .map(|(catalog_index, item)| {
+            let queue_item = summary
+                .items
+                .iter()
+                .find(|queue_item| queue_item.catalog_index == catalog_index)
+                .expect("queue summary preserves every catalog entry");
+            let state = match queue_item.status {
+                RemoteMirrorQueueStatus::MirroredFully => {
+                    local_archive_search::ArchiveMirrorState::Mirrored
+                }
+                RemoteMirrorQueueStatus::MirroredPartial => {
+                    local_archive_search::ArchiveMirrorState::Partial
+                }
+                RemoteMirrorQueueStatus::RateLimited => {
+                    local_archive_search::ArchiveMirrorState::RateLimited
+                }
+                RemoteMirrorQueueStatus::TransientFailure => {
+                    local_archive_search::ArchiveMirrorState::TransientFailure
+                }
+                RemoteMirrorQueueStatus::StructuralFailure => {
+                    local_archive_search::ArchiveMirrorState::StructuralFailure
+                }
+                RemoteMirrorQueueStatus::Discovered
+                | RemoteMirrorQueueStatus::Queued
+                | RemoteMirrorQueueStatus::Capturing => {
+                    local_archive_search::ArchiveMirrorState::NotMirrored
+                }
+            };
+            let visible_messages = records
+                .iter()
+                .rev()
+                .find(|record| record.remote_conversation_id.as_str() == item.id)
+                .and_then(|record| project_remote_active_transcript(&record.envelope).ok())
+                .map(|projection| {
+                    projection
+                        .messages
+                        .into_iter()
+                        .map(|message| message.text)
+                        .collect()
+                })
+                .unwrap_or_default();
+            local_archive_search::ArchiveSearchDocument {
+                catalog_index,
+                title: item
+                    .title
+                    .clone()
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "Untitled ChatGPT conversation".to_owned()),
+                state,
+                visible_messages,
+            }
+        })
+        .collect();
+    let index = local_archive_search::LocalArchiveSearchIndex::new(documents);
+    let query = std::env::args()
+        .skip(2)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|window| window[0] == "--query")
+        .map(|window| window[1].clone())
+        .unwrap_or_default();
+    let results = index.search(
+        &query,
+        local_archive_search::ArchiveSearchMode::AllLocalData,
+        local_archive_search::ArchiveStateFilter::All,
+    );
+    let title_match_count = results
+        .iter()
+        .filter(|result| result.kind == local_archive_search::ArchiveMatchKind::Title)
+        .count();
+    let transcript_match_count = results
+        .iter()
+        .filter(|result| result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript)
+        .count();
+    print_json(json!({
+        "terminal_state": "success",
+        "catalog_entries_indexed": index.catalog_entries(),
+        "local_mirrors_indexed": index.mirrored_transcripts(),
+        "visible_messages_indexed": index.visible_messages(),
+        "result_count": results.len(),
+        "title_match_count": title_match_count,
+        "transcript_match_count": transcript_match_count,
+        "selected_catalog_indexes": results.iter().map(|result| result.catalog_index).collect::<Vec<_>>(),
+        "remote_http_used": false,
+        "auth_probe_used": false,
+        "browser_started": false,
         "elapsed_ms": started.elapsed().as_millis(),
     }));
 }
