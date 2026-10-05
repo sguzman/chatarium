@@ -60,6 +60,12 @@ chatarium/
 └── docs/                      # Architecture, reliability, capture and QA policy
 ```
 
+## Current active direction
+
+Remote ChatGPT website mirroring/browser-transport work is **formally paused**. The active exploration is local-first Chatarium conversations using ChatGPT plan-backed Responses inference plus Chatarium-owned durable state, with emphasis on conversation isolation, model/control surfaces, orchestration, tools, memory/context, and master/worker behavior.
+
+See [`docs/LOCAL_FIRST_EXPLORATION.md`](docs/LOCAL_FIRST_EXPLORATION.md). The long-term native transport viability contract remains in force but is not the current work track.
+
 ## Status
 
 Chatarium has completed **P1 protocol observatory** and **P2 durable application core** work and is entering **P3 read-only remote integration**.
