@@ -3770,6 +3770,13 @@ impl eframe::App for ChatariumApp {
                                     .size(10.0)
                                     .strong(),
                             );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Uses your existing local ChatGPT sign-in. Credentials stay inside the SIWC bridge; probes send small real plan-usage requests.",
+                                )
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(126, 130, 139)),
+                            );
                             let probe_running = self.capability_probe.running();
                             let can_probe = self.remote_connected()
                                 && self.selected_model.is_some()
