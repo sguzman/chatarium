@@ -896,9 +896,23 @@ impl ChatariumApp {
                 "finish or stop the active local turn before switching conversations".to_owned();
             return;
         }
-        if self.local_conversation_catalog.entry(conversation_id).is_none() {
+        let was_archived = self
+            .local_conversation_catalog
+            .entry(conversation_id)
+            .map(|entry| entry.archived);
+        let Some(was_archived) = was_archived else {
             self.status = "local conversation is absent from workspace catalog".to_owned();
             return;
+        };
+        if was_archived {
+            if let Err(error) = self.local_conversation_catalog.set_archived(
+                conversation_id,
+                false,
+                unix_now_ms(),
+            ) {
+                self.status = format!("failed to restore local conversation: {error}");
+                return;
+            }
         }
         if let Err(error) = self
             .local_conversation_catalog
