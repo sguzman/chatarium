@@ -3777,8 +3777,10 @@ impl eframe::App for ChatariumApp {
                 }
             }
         }
-        if select_local_requested {
-            self.select_local_conversation();
+        if create_local_requested {
+            self.create_local_conversation();
+        } else if let Some(local_conversation_id) = select_local_requested {
+            self.activate_local_conversation(local_conversation_id);
         } else if let Some(local_conversation_id) = select_historical_requested {
             self.select_historical_conversation(local_conversation_id);
         } else if let Some(remote_conversation_id) = select_remote_requested {
@@ -3787,6 +3789,12 @@ impl eframe::App for ChatariumApp {
             self.historical_messages.clear();
             self.historical_load_pending = None;
             self.status = "remote conversation selected; local mirror unavailable".to_owned();
+        }
+        if rename_local_requested {
+            self.rename_current_local_conversation();
+        }
+        if archive_local_requested {
+            self.archive_current_local_conversation();
         }
         if open_reader_from_transcript_search {
             self.reader_search_hit = Some(0);
