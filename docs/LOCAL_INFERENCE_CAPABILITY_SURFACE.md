@@ -47,7 +47,7 @@ Legend:
 - DEVKIT-READY: supported by the pinned DevKit but not fully carried through Chatarium.
 - ROUTE-DOCUMENTED: OpenAI documents the capability for this plan-usage route, but the pinned wrapper used by Chatarium does not expose it.
 - UNSUPPORTED: explicitly unsupported for this route.
-- PROBE-READY: not established for this route, but a credential-safe authenticated developer probe is implemented and ready to run.
+- PROBE-READY: not established for this route, but a credential-safe authenticated probe is available from desktop Diagnostics and the developer CLI.
 - UNKNOWN: not established by the pinned SDK or the current route documentation reviewed here.
 
 | Capability | Status | Notes |
@@ -118,21 +118,26 @@ with string content.
 
 The wrapper fixes server storage off and streaming on.
 
-## Developer route probe harness
+## Authenticated route probe harness
 
 The pinned DevKit and current upstream DevKit still validate only text
 user/assistant/developer messages. Chatarium does not widen or fork that public
 wrapper merely to discover route behavior.
 
-`tools/siwc-bridge/capability-probe.mjs` now drives a developer-only
-`probe_response` command inside the trusted Node sidecar. The sidecar keeps
-OAuth acquisition/refresh entirely inside the official DevKit, temporarily
-patches only the outgoing `/v1/responses` JSON body, preserves the fixed
-`model`, `store: false`, and `stream: true` fields, then restores the
-original fetch immediately.
+The desktop Diagnostics runner and `tools/siwc-bridge/capability-probe.mjs`
+drive the same guarded `probe_response` command inside the trusted Node
+sidecar. The sidecar keeps OAuth acquisition/refresh entirely inside the
+official DevKit, temporarily patches only the outgoing `/v1/responses` JSON
+body, preserves the fixed `model`, `store: false`, and `stream: true`
+fields, then restores the original fetch immediately.
+
+`apps/desktop/src/capability_probes.rs` owns the fixed in-app matrix,
+classification state, sequential dispatch, and sanitized local result ledger.
+Probe output is diagnostic state only and is never inserted into conversation
+context.
 
 The patch allowlist is deliberately narrow: `input`, `reasoning`, `text`,
-and `tools`. Normal inference cannot overlap a probe.
+and `tools`. Probes cannot overlap normal inference.
 
 Named probes now exist for:
 
