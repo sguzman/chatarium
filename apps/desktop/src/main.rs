@@ -852,6 +852,151 @@ impl ChatariumApp {
         self.status = "local conversation selected".to_owned();
     }
 
+    fn local_conversation_busy(&self) -> bool {
+        self.commit_in_flight.is_some()
+            || self.pending_remote_turn.is_some()
+            || self.active_remote_turn.is_some()
+    }
+
+    fn apply_local_conversation(&mut self, conversation_id: LocalConversationId) {
+        self.local_conversation_id = conversation_id;
+        self.draft = projected_working_draft(&self.events, conversation_id);
+        self.draft_revision = 0;
+        self.saved_revision = 0;
+        self.evidence = TurnEvidence::default();
+
+        let settings = self
+            .inference_settings
+            .for_conversation(conversation_id);
+        self.selected_model = settings.model;
+        self.conversation_instructions = settings.instructions;
+        self.conversation_developer_context = settings.developer_context;
+        if !self.remote_models.is_empty()
+            && !self.selected_model.as_ref().is_some_and(|selected| {
+                self.remote_models
+                    .iter()
+                    .any(|model| &model.slug == selected)
+            })
+        {
+            self.selected_model = self.remote_models.first().map(|model| model.slug.clone());
+            self.persist_current_inference_settings();
+        }
+
+        self.local_conversation_rename = local_conversation_display_title(
+            &self.local_conversation_catalog,
+            conversation_id,
+            &self.events,
+        );
+        self.select_local_conversation();
+    }
+
+    fn activate_local_conversation(&mut self, conversation_id: LocalConversationId) {
+        if self.local_conversation_busy() {
+            self.status =
+                "finish or stop the active local turn before switching conversations".to_owned();
+            return;
+        }
+        if self.local_conversation_catalog.entry(conversation_id).is_none() {
+            self.status = "local conversation is absent from workspace catalog".to_owned();
+            return;
+        }
+        if let Err(error) = self
+            .local_conversation_catalog
+            .set_active(conversation_id, unix_now_ms())
+            .and_then(|_| {
+                self.local_conversation_catalog
+                    .save_atomic(&self.local_conversation_catalog_path)
+            })
+        {
+            self.status = format!("failed to select local conversation: {error}");
+            return;
+        }
+        self.apply_local_conversation(conversation_id);
+    }
+
+    fn create_local_conversation(&mut self) {
+        if self.local_conversation_busy() {
+            self.status =
+                "finish or stop the active local turn before creating a conversation".to_owned();
+            return;
+        }
+        let conversation_id = LocalConversationId::new();
+        self.local_conversation_catalog
+            .create(conversation_id, unix_now_ms());
+        if let Err(error) = self
+            .local_conversation_catalog
+            .save_atomic(&self.local_conversation_catalog_path)
+        {
+            self.status = format!("failed to create local conversation: {error}");
+            return;
+        }
+        self.apply_local_conversation(conversation_id);
+        self.status = "new isolated local conversation created".to_owned();
+    }
+
+    fn rename_current_local_conversation(&mut self) {
+        let title = self.local_conversation_rename.clone();
+        if let Err(error) = self
+            .local_conversation_catalog
+            .rename(
+                self.local_conversation_id,
+                Some(title),
+                unix_now_ms(),
+            )
+            .and_then(|_| {
+                self.local_conversation_catalog
+                    .save_atomic(&self.local_conversation_catalog_path)
+            })
+        {
+            self.status = format!("failed to rename local conversation: {error}");
+        } else {
+            self.local_conversation_rename = local_conversation_display_title(
+                &self.local_conversation_catalog,
+                self.local_conversation_id,
+                &self.events,
+            );
+            self.status = "local conversation title saved".to_owned();
+        }
+    }
+
+    fn archive_current_local_conversation(&mut self) {
+        if self.local_conversation_busy() {
+            self.status =
+                "finish or stop the active local turn before archiving this conversation".to_owned();
+            return;
+        }
+        let archived = self.local_conversation_id;
+        if let Err(error) = self.local_conversation_catalog.set_archived(
+            archived,
+            true,
+            unix_now_ms(),
+        ) {
+            self.status = format!("failed to archive local conversation: {error}");
+            return;
+        }
+        let next = self
+            .local_conversation_catalog
+            .first_unarchived()
+            .unwrap_or_else(|| {
+                let id = LocalConversationId::new();
+                self.local_conversation_catalog.create(id, unix_now_ms());
+                id
+            });
+        if let Err(error) = self
+            .local_conversation_catalog
+            .set_active(next, unix_now_ms())
+            .and_then(|_| {
+                self.local_conversation_catalog
+                    .save_atomic(&self.local_conversation_catalog_path)
+            })
+        {
+            self.status = format!("failed to archive local conversation: {error}");
+            return;
+        }
+        self.apply_local_conversation(next);
+        self.status = "local conversation archived".to_owned();
+    }
+
     fn select_historical_conversation(&mut self, local_conversation_id: LocalConversationId) {
         self.selected_remote_catalog_id = None;
         if self.selected_historical_conversation == Some(local_conversation_id)
