@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const CACHE_FILE: &str = "remote-history-cache.json";
 const INFERENCE_SETTINGS_FILE: &str = "local-inference-settings.json";
+const LOCAL_CONVERSATION_CATALOG_FILE: &str = "local-conversations.json";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_SCHEMA: &str = "chatarium-local-archive-backup";
@@ -232,7 +233,12 @@ pub fn create_backup(
     }
     fs::create_dir_all(&temporary)?;
     let mut files = Vec::new();
-    for name in [JOURNAL_FILE, CACHE_FILE, INFERENCE_SETTINGS_FILE] {
+    for name in [
+        JOURNAL_FILE,
+        CACHE_FILE,
+        INFERENCE_SETTINGS_FILE,
+        LOCAL_CONVERSATION_CATALOG_FILE,
+    ] {
         let source = data_dir.join(name);
         if source.exists() {
             let (size, hash) = copy_consistent(&source, &temporary.join(name))?;
@@ -248,7 +254,12 @@ pub fn create_backup(
         "schema": MANIFEST_SCHEMA,
         "version": MANIFEST_VERSION,
         "created_at_unix_ms": unix_ms(),
-        "data_schema_versions": {"journal": 2, "history_cache": 1, "local_inference_settings": 1},
+        "data_schema_versions": {
+            "journal": 2,
+            "history_cache": 1,
+            "local_inference_settings": 1,
+            "local_conversation_catalog": 1
+        },
         "files": files,
         "archive": {
             "journal_event_count": archive.journal_event_count,
@@ -351,7 +362,12 @@ pub fn restore_backup(
         return Err(err("restore staging path already exists"));
     }
     fs::create_dir_all(&staging)?;
-    for name in [JOURNAL_FILE, CACHE_FILE, INFERENCE_SETTINGS_FILE] {
+    for name in [
+        JOURNAL_FILE,
+        CACHE_FILE,
+        INFERENCE_SETTINGS_FILE,
+        LOCAL_CONVERSATION_CATALOG_FILE,
+    ] {
         let source = backup.join(name);
         if source.exists() {
             fs::copy(source, staging.join(name))?;
@@ -420,6 +436,31 @@ mod tests {
         assert_eq!(
             fs::read(source.join(INFERENCE_SETTINGS_FILE)).unwrap(),
             fs::read(target.join(INFERENCE_SETTINGS_FILE)).unwrap()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backup_and_restore_preserve_local_conversation_catalog() {
+        let root = temp("local-conversation-catalog");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        let _store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        fs::write(
+            source.join(LOCAL_CONVERSATION_CATALOG_FILE),
+            br#"{"schema":"chatarium-local-conversation-catalog","version":1,"active_conversation_id":null,"conversations":[]}"#,
+        )
+        .unwrap();
+
+        let created = create_backup(&source, &backup).unwrap();
+        assert_eq!(created.manifest_files, 2);
+        restore_backup(&backup, &target).unwrap();
+        assert_eq!(
+            fs::read(source.join(LOCAL_CONVERSATION_CATALOG_FILE)).unwrap(),
+            fs::read(target.join(LOCAL_CONVERSATION_CATALOG_FILE)).unwrap()
         );
         let _ = fs::remove_dir_all(root);
     }
