@@ -2356,7 +2356,6 @@ impl ChatariumApp {
                     if self.remote_session.status == "connected" && self.remote_session.sharing {
                         if account_changed {
                             self.remote_models.clear();
-                            self.selected_model = None;
                             self.model_list_pending = false;
                         }
 
@@ -2390,7 +2389,6 @@ impl ChatariumApp {
                     } else {
                         self.model_list_pending = false;
                         self.remote_models.clear();
-                        self.selected_model = None;
                         self.remote_status = "not connected".to_owned();
                     }
                 }
@@ -2402,6 +2400,7 @@ impl ChatariumApp {
                         .is_some_and(|selected| models.iter().any(|model| &model.slug == selected));
                     if !keep_selected {
                         self.selected_model = models.first().map(|model| model.slug.clone());
+                        self.persist_current_inference_settings();
                     }
                     self.remote_models = models;
                     self.remote_status = if self.remote_models.is_empty() {
@@ -2673,6 +2672,24 @@ impl ChatariumApp {
             .clone()
             .or_else(|| self.remote_session.profile_label.clone())
             .unwrap_or_else(|| "ChatGPT account".to_owned())
+    }
+
+    fn persist_current_inference_settings(&mut self) {
+        let settings = local_inference_settings::ConversationInferenceSettings {
+            model: self.selected_model.clone(),
+            instructions: self.conversation_instructions.clone(),
+            developer_context: self.conversation_developer_context.clone(),
+        };
+        if let Err(error) = self
+            .inference_settings
+            .set(self.local_conversation_id, settings)
+            .and_then(|_| {
+                self.inference_settings
+                    .save_atomic(&self.inference_settings_path)
+            })
+        {
+            self.status = format!("failed to persist inference controls: {error}");
+        }
     }
 
     fn reader_conversation_key(&self) -> String {
@@ -5537,7 +5554,9 @@ fn remote_turn_payload(
 }
 
 fn responses_input(messages: &[DisplayMessage], developer_context: &str) -> Value {
-    let mut input = Vec::with_capacity(messages.len() + usize::from(!developer_context.trim().is_empty()));
+    let mut input = Vec::with_capacity(
+        messages.len() + if developer_context.trim().is_empty() { 0 } else { 1 },
+    );
     if !developer_context.trim().is_empty() {
         input.push(serde_json::json!({
             "role": "developer",
