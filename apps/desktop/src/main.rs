@@ -3879,6 +3879,29 @@ impl eframe::App for ChatariumApp {
                             self.commit_current_message();
                         }
 
+                        if let Some(target_request_id) = self
+                            .active_remote_turn
+                            .as_ref()
+                            .map(|active| active.request_id.clone())
+                        {
+                            if ui.button("Stop generation").clicked() {
+                                match self.remote.send(
+                                    siwc_bridge::BridgeCommand::CancelResponse {
+                                        target_request_id,
+                                    },
+                                ) {
+                                    Ok(()) => {
+                                        self.status =
+                                            "cancelling active ChatGPT response…".to_owned();
+                                    }
+                                    Err(error) => {
+                                        self.status =
+                                            format!("failed to cancel active response: {error}");
+                                    }
+                                }
+                            }
+                        }
+
                         if self.commit_in_flight.is_some() {
                             ui.spinner();
                         }
