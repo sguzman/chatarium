@@ -32,8 +32,12 @@ impl InferenceSettingsStore {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let bytes = fs::read(path)
-            .map_err(|error| format!("failed to read inference settings {}: {error}", path.display()))?;
+        let bytes = fs::read(path).map_err(|error| {
+            format!(
+                "failed to read inference settings {}: {error}",
+                path.display()
+            )
+        })?;
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|error| format!("invalid inference settings JSON: {error}"))?;
         if value.get("schema").and_then(Value::as_str) != Some(SCHEMA)
