@@ -507,9 +507,7 @@ impl EventKind {
                 Some(Self::RemoteConversationSnapshotImported)
             }
             "remote_mirror_queue_item_queued" => Some(Self::RemoteMirrorQueueItemQueued),
-            "remote_mirror_queue_capture_started" => {
-                Some(Self::RemoteMirrorQueueCaptureStarted)
-            }
+            "remote_mirror_queue_capture_started" => Some(Self::RemoteMirrorQueueCaptureStarted),
             "remote_mirror_queue_completed" => Some(Self::RemoteMirrorQueueCompleted),
             "remote_mirror_queue_rate_limited" => Some(Self::RemoteMirrorQueueRateLimited),
             "remote_mirror_queue_failed" => Some(Self::RemoteMirrorQueueFailed),
