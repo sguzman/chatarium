@@ -2,6 +2,8 @@
 
 This document is a hard product and architecture contract for Chatarium.
 
+**Scheduling status:** the investigation required by this contract is currently **paused** by principal decision while Chatarium explores local-first conversations and behavior. See [LOCAL_FIRST_EXPLORATION.md](LOCAL_FIRST_EXPLORATION.md). The pause changes priority, not the end-state requirement.
+
 It exists to prevent a specific form of architectural drift: replacing the intended native ChatGPT desktop client with an increasingly elaborate browser-puppeteering system and then calling the result "self-contained."
 
 That is not the target.
