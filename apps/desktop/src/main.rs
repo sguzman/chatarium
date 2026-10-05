@@ -676,7 +676,7 @@ impl ChatariumApp {
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
-                        capability_probe: capability_probes::ProbeRun::default(),
+                        capability_probe: load_capability_probe_state(&journal_path),
                         model_list_pending: false,
                         selected_model: active_inference_settings.model,
                         remote_status: "starting sign-in runtime…".to_owned(),
@@ -827,7 +827,7 @@ impl ChatariumApp {
             remote: siwc_bridge::BridgeRuntime::start(repaint),
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
-            capability_probe: capability_probes::ProbeRun::default(),
+            capability_probe: load_capability_probe_state(&journal_path),
             model_list_pending: false,
             selected_model: active_inference_settings.model,
             remote_status: "starting sign-in runtime…".to_owned(),
@@ -2942,9 +2942,13 @@ impl ChatariumApp {
         }
         let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
         let path = data_dir.join("siwc-capability-probes.json");
+        let generated_unix_ms = unix_now_ms();
         self.capability_probe.status =
-            match capability_probes::save_report(&path, &self.capability_probe, unix_now_ms()) {
-                Ok(()) => format!("capability probes complete · saved {}", path.display()),
+            match capability_probes::save_report(&path, &self.capability_probe, generated_unix_ms) {
+                Ok(()) => {
+                    self.capability_probe.generated_unix_ms = Some(generated_unix_ms);
+                    format!("capability probes complete · saved {}", path.display())
+                }
                 Err(error) => format!("capability probes complete · {error}"),
             };
     }
@@ -3792,11 +3796,35 @@ impl eframe::App for ChatariumApp {
                                         .color(egui::Color32::from_rgb(126, 130, 139)),
                                 );
                             }
+                            if let Some(report_model) = self.capability_probe.model.as_deref() {
+                                let age = self
+                                    .capability_probe
+                                    .generated_unix_ms
+                                    .map(probe_report_age)
+                                    .unwrap_or_else(|| "time unknown".to_owned());
+                                let model_note = if self.selected_model.as_deref()
+                                    == Some(report_model)
+                                {
+                                    ""
+                                } else {
+                                    " · SELECTED MODEL DIFFERS"
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "saved report · {report_model} · {age}{model_note}"
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
                             for result in &self.capability_probe.results {
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "{} · {}",
-                                        result.name, result.status
+                                        "{} · {}{}",
+                                        result.name,
+                                        result.status,
+                                        probe_result_detail(result)
                                     ))
                                     .monospace()
                                     .size(10.0)
@@ -6090,6 +6118,45 @@ fn latest_live_transcript(
 
     let projection = project_remote_active_transcript(&record.envelope)?;
     Ok((record.imported_sequence, projection))
+}
+
+fn load_capability_probe_state(journal_path: &Path) -> capability_probes::ProbeRun {
+    let data_dir = journal_path.parent().unwrap_or_else(|| Path::new("."));
+    let path = data_dir.join("siwc-capability-probes.json");
+    match capability_probes::load_report(&path) {
+        Ok(Some(run)) => run,
+        Ok(None) => capability_probes::ProbeRun::default(),
+        Err(error) => capability_probes::ProbeRun {
+            status: format!("saved capability probe report ignored · {error}"),
+            ..capability_probes::ProbeRun::default()
+        },
+    }
+}
+
+fn probe_report_age(generated_unix_ms: u64) -> String {
+    let elapsed = unix_now_ms().saturating_sub(generated_unix_ms);
+    let seconds = elapsed / 1_000;
+    if seconds < 60 {
+        return format!("{seconds}s ago");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes}m ago");
+    }
+    let hours = minutes / 60;
+    if hours < 48 {
+        return format!("{hours}h ago");
+    }
+    format!("{}d ago", hours / 24)
+}
+
+fn probe_result_detail(result: &capability_probes::ProbeResult) -> String {
+    match (&result.code, result.status_code) {
+        (Some(code), Some(status)) => format!(" · {code} · HTTP {status}"),
+        (Some(code), None) => format!(" · {code}"),
+        (None, Some(status)) => format!(" · HTTP {status}"),
+        (None, None) => String::new(),
+    }
 }
 
 fn should_request_models(
