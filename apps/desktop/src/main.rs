@@ -2944,14 +2944,17 @@ impl ChatariumApp {
         let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
         let path = data_dir.join("siwc-capability-probes.json");
         let generated_unix_ms = unix_now_ms();
-        self.capability_probe.status =
-            match capability_probes::save_report(&path, &self.capability_probe, generated_unix_ms) {
-                Ok(()) => {
-                    self.capability_probe.generated_unix_ms = Some(generated_unix_ms);
-                    format!("capability probes complete · saved {}", path.display())
-                }
-                Err(error) => format!("capability probes complete · {error}"),
-            };
+        self.capability_probe.status = match capability_probes::save_report(
+            &path,
+            &self.capability_probe,
+            generated_unix_ms,
+        ) {
+            Ok(()) => {
+                self.capability_probe.generated_unix_ms = Some(generated_unix_ms);
+                format!("capability probes complete · saved {}", path.display())
+            }
+            Err(error) => format!("capability probes complete · {error}"),
+        };
     }
 
     fn remote_connected(&self) -> bool {
