@@ -39,6 +39,25 @@ The search index is a rebuildable projection, not a new source of truth. Search 
 authentication probe, browser startup, remote HTTP, or queue mutation, and it does not imply
 account-wide completeness.
 
+Locally mirrored transcripts open in an offline reader sourced only from the existing visible
+user/assistant projector. Messages are clearly grouped by role with durable sequence/provenance
+metadata, readable spacing, preserved paragraph line breaks, and optional durable timestamps.
+The reader recognizes headings, paragraphs, unordered and ordered lists, block quotes, inline
+code, and fenced code blocks. Code is monospaced, whitespace-preserving, horizontally scrollable,
+and has a local copy action; copying any message or code block uses only the desktop clipboard.
+
+When a transcript result opens a mirror, matching visible text is highlighted and Previous/Next
+controls plus `Ctrl+P`/`Ctrl+N` navigate the hits. `PageUp`, `PageDown`, `Home`, and `End` provide
+local reading navigation. Per-conversation scroll offsets are stored in disposable
+`local-reader-state.json` UI metadata, separate from the authoritative journal, and restored on
+reopen when available. Opening, scrolling, searching, highlighting, copying, and restoring a
+reader position never probes auth, starts Chromium, invokes the bridge, issues HTTP, or mutates the
+remote queue.
+
+Partial mirrors retain a persistent `MIRRORED LOCALLY · PARTIAL` banner and explain that unavailable
+earlier or structurally omitted content is not present locally. Hidden, internal, tool, and
+reasoning content remains excluded before rendering and indexing.
+
 The machine-controlled local QA paths are:
 
 ```text
@@ -46,10 +65,13 @@ chatarium-qa local-mirror-status
 chatarium-qa local-transcript --catalog-index N
 chatarium-qa local-search-status
 chatarium-qa local-search --query synthetic-safe-query
+chatarium-qa local-reader-status --catalog-index N --query synthetic-safe-query
 ```
 
 Their output is structural only: no titles, message text, snippets, remote identities, or raw
-response bodies are emitted. All paths use the durable journal and cached catalog only.
+response bodies are emitted. The reader status path reports only selected index, projected message
+count, Markdown/code block counts, search-hit count, partial state, scroll restoration, and
+local-read-only transport flags. All paths use the durable journal and cached catalog only.
 
 The desktop is the production owner of remote scheduling. It exposes explicit `START MIRRORING`,
 `PAUSE`, and `RESUME` controls and runs one capture at a time. Queue lifecycle events and snapshot

@@ -1,6 +1,7 @@
 mod account_bridge;
 mod diagnostics;
 mod local_archive_search;
+mod offline_reader;
 mod siwc_bridge;
 
 use chatarium_core::{
@@ -271,6 +272,7 @@ struct DisplayMessage {
     role: DisplayRole,
     text: String,
     sequence: u64,
+    timestamp: Option<f64>,
     provenance_label: Option<String>,
 }
 
@@ -344,6 +346,13 @@ struct ChatariumApp {
     archive_search_mode: local_archive_search::ArchiveSearchMode,
     archive_state_filter: local_archive_search::ArchiveStateFilter,
     archive_search_selection: Option<usize>,
+    reader_state_path: PathBuf,
+    reader_positions: offline_reader::ReaderPositionStore,
+    reader_restore_pending: bool,
+    reader_last_saved_offset: f32,
+    reader_last_position_write: Instant,
+    reader_search_query: String,
+    reader_search_hit: Option<usize>,
     selected_remote_catalog_id: Option<String>,
     remote_conversation_total: Option<u64>,
     history_discovery_started: bool,
@@ -481,6 +490,8 @@ impl ChatariumApp {
                 let (notice_tx, notice_rx) = mpsc::channel();
                 let local_archive_search_index =
                     build_local_archive_search_index(&remote_catalog_view, &events);
+                let reader_state_path = local_reader_state_path(&journal_path);
+                let reader_positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
                 let worker_data_dir = data_dir.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
@@ -518,6 +529,13 @@ impl ChatariumApp {
                         archive_search_mode: local_archive_search::ArchiveSearchMode::AllLocalData,
                         archive_state_filter: local_archive_search::ArchiveStateFilter::All,
                         archive_search_selection: None,
+                        reader_state_path,
+                        reader_positions,
+                        reader_restore_pending: true,
+                        reader_last_saved_offset: 0.0,
+                        reader_last_position_write: Instant::now(),
+                        reader_search_query: String::new(),
+                        reader_search_hit: None,
                         selected_remote_catalog_id: None,
                         remote_conversation_total: None,
                         history_discovery_started: false,
@@ -599,6 +617,8 @@ impl ChatariumApp {
         .unwrap_or_default();
         let local_archive_search_index =
             build_local_archive_search_index(&remote_catalog_view, &events);
+        let reader_state_path = local_reader_state_path(&journal_path);
+        let reader_positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
 
         Self {
             draft,
@@ -632,6 +652,13 @@ impl ChatariumApp {
             archive_search_mode: local_archive_search::ArchiveSearchMode::AllLocalData,
             archive_state_filter: local_archive_search::ArchiveStateFilter::All,
             archive_search_selection: None,
+            reader_state_path,
+            reader_positions,
+            reader_restore_pending: true,
+            reader_last_saved_offset: 0.0,
+            reader_last_position_write: Instant::now(),
+            reader_search_query: String::new(),
+            reader_search_hit: None,
             selected_remote_catalog_id: None,
             remote_conversation_total: None,
             history_discovery_started: false,
@@ -675,6 +702,8 @@ impl ChatariumApp {
         self.selected_remote_catalog_id = None;
         self.historical_load_pending = None;
         self.live_mirror_truncated_before = false;
+        self.reader_restore_pending = true;
+        self.reader_search_hit = None;
         self.status = "local conversation selected".to_owned();
     }
 
@@ -690,6 +719,8 @@ impl ChatariumApp {
         self.loaded_historical_conversation = None;
         self.historical_messages.clear();
         self.historical_load_pending = Some(local_conversation_id);
+        self.reader_restore_pending = true;
+        self.reader_search_hit = None;
 
         let Some(sender) = &self.persist_tx else {
             self.historical_load_pending = None;
@@ -2485,6 +2516,12 @@ impl ChatariumApp {
             .or_else(|| self.remote_session.profile_label.clone())
             .unwrap_or_else(|| "ChatGPT account".to_owned())
     }
+
+    fn reader_conversation_key(&self) -> String {
+        self.selected_historical_conversation
+            .map(|conversation| format!("mirror:{conversation}"))
+            .unwrap_or_else(|| format!("local:{}", self.local_conversation_id))
+    }
 }
 
 impl eframe::App for ChatariumApp {
@@ -2552,6 +2589,7 @@ impl eframe::App for ChatariumApp {
         let archive_search_id = egui::Id::new("local-archive-search");
         let mut archive_search_has_focus = false;
         let mut archive_result_clicked = None;
+        let mut open_reader_from_transcript_search = false;
         let mut focus_archive_search = false;
         let mut clear_archive_search_focus = false;
         if ctx.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::K)) {
@@ -3200,6 +3238,15 @@ impl eframe::App for ChatariumApp {
             ctx.memory_mut(|memory| memory.surrender_focus(archive_search_id));
         }
         if let Some(result) = archive_result_clicked {
+            self.reader_search_query = if result.kind
+                == local_archive_search::ArchiveMatchKind::LocalTranscript
+            {
+                self.archive_search_query.clone()
+            } else {
+                String::new()
+            };
+            open_reader_from_transcript_search =
+                result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript;
             if let Some(entry) = self
                 .remote_catalog_view
                 .iter()
@@ -3222,6 +3269,9 @@ impl eframe::App for ChatariumApp {
             self.historical_messages.clear();
             self.historical_load_pending = None;
             self.status = "remote conversation selected; local mirror unavailable".to_owned();
+        }
+        if open_reader_from_transcript_search {
+            self.reader_search_hit = Some(0);
         }
         if let Some(remote_conversation_id) = mirror_remote_requested.as_ref() {
             self.open_discovered_remote_conversation(remote_conversation_id.clone(), ctx);
@@ -3499,6 +3549,72 @@ impl eframe::App for ChatariumApp {
             &local_display_messages
         };
 
+        let reader_key = self.reader_conversation_key();
+        let restore_reader_offset = if self.reader_restore_pending {
+            self.reader_restore_pending = false;
+            Some(self.reader_positions.position(&reader_key))
+        } else {
+            None
+        };
+        let reader_hit_targets = display_messages
+            .iter()
+            .enumerate()
+            .flat_map(|(message_index, message)| {
+                offline_reader::search_hits(&message.text, &self.reader_search_query)
+                    .into_iter()
+                    .map(move |(start, end)| (message_index, start, end))
+            })
+            .collect::<Vec<_>>();
+        if self
+            .reader_search_hit
+            .is_some_and(|hit| hit >= reader_hit_targets.len())
+        {
+            self.reader_search_hit = reader_hit_targets.is_empty().then_some(0);
+        }
+        let mut next_reader_hit = false;
+        let mut previous_reader_hit = false;
+        let transcript_scroll_id = egui::Id::new("transcript-reader-scroll");
+        ctx.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
+                next_reader_hit = true;
+            }
+            if input.consume_key(egui::Modifiers::CTRL, egui::Key::P) {
+                previous_reader_hit = true;
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::PageDown) {
+                adjust_reader_scroll(ctx, transcript_scroll_id, 480.0);
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::PageUp) {
+                adjust_reader_scroll(ctx, transcript_scroll_id, -480.0);
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
+                set_reader_scroll(ctx, transcript_scroll_id, 0.0);
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
+                set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+            }
+        });
+        if next_reader_hit {
+            self.reader_search_hit = offline_reader::next_hit(
+                self.reader_search_hit,
+                reader_hit_targets.len(),
+                false,
+            );
+        }
+        if previous_reader_hit {
+            self.reader_search_hit = offline_reader::next_hit(
+                self.reader_search_hit,
+                reader_hit_targets.len(),
+                true,
+            );
+        }
+        let active_reader_message = self
+            .reader_search_hit
+            .and_then(|hit| reader_hit_targets.get(hit))
+            .map(|(message_index, _, _)| *message_index);
+        let mut reader_hit_from_button = self.reader_search_hit;
+        let mut reader_output_offset = None;
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -3506,10 +3622,60 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
+                let mut reader_scroll = egui::ScrollArea::vertical()
+                    .id_salt(transcript_scroll_id)
                     .stick_to_bottom(true)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .auto_shrink([false, false]);
+                if let Some(offset) = restore_reader_offset {
+                    reader_scroll = reader_scroll.vertical_scroll_offset(offset);
+                }
+                let reader_output = reader_scroll.show(ui, |ui| {
+                        if !self.reader_search_query.trim().is_empty()
+                            && !reader_hit_targets.is_empty()
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} search hit{}",
+                                        reader_hit_targets.len(),
+                                        if reader_hit_targets.len() == 1 { "" } else { "s" }
+                                    ))
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(180, 184, 193)),
+                                );
+                                if ui.button("Previous").clicked() {
+                                    reader_hit_from_button = offline_reader::next_hit(
+                                        reader_hit_from_button,
+                                        reader_hit_targets.len(),
+                                        true,
+                                    );
+                                }
+                                if ui.button("Next").clicked() {
+                                    reader_hit_from_button = offline_reader::next_hit(
+                                        reader_hit_from_button,
+                                        reader_hit_targets.len(),
+                                        false,
+                                    );
+                                }
+                                ui.label(egui::RichText::new("Ctrl+P / Ctrl+N").weak());
+                            });
+                            ui.add_space(8.0);
+                        }
+                        if selected_live_mirror && self.live_mirror_truncated_before {
+                            ui.label(
+                                egui::RichText::new("MIRRORED LOCALLY · PARTIAL")
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(225, 194, 108)),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Older messages exist before this fetched page; unavailable or structurally omitted content is not present in the local reader.",
+                                )
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(190, 166, 112)),
+                            );
+                            ui.add_space(10.0);
+                        }
                         if display_messages.is_empty() {
                             ui.add_space(90.0);
                             ui.vertical_centered(|ui| {
@@ -3567,33 +3733,25 @@ impl eframe::App for ChatariumApp {
                             });
                         } else {
                             ui.add_space(8.0);
-                            if selected_live_mirror && self.live_mirror_truncated_before {
-                                ui.label(
-                                    egui::RichText::new("MIRRORED LOCALLY · PARTIAL")
-                                        .strong()
-                                        .color(egui::Color32::from_rgb(225, 194, 108)),
-                                );
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Older messages exist before this fetched page; Chatarium is not guessing across the pagination boundary.",
-                                    )
-                                    .size(11.0)
-                                    .color(egui::Color32::from_rgb(190, 166, 112)),
-                                );
-                                ui.add_space(10.0);
-                            }
-                            for message in display_messages {
+                            for (message_index, message) in display_messages.iter().enumerate() {
+                                let message_is_active_hit = active_reader_message == Some(message_index);
                                 match message.role {
                                     DisplayRole::User => {
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Min),
                                             |ui| {
-                                                transcript_bubble(
+                                                let response = transcript_bubble(
                                                     ui,
-                                                    &message,
+                                                    message,
                                                     egui::Color32::from_rgb(38, 42, 52),
                                                     "You",
+                                                    &self.reader_search_query,
+                                                    message_is_active_hit,
+                                                    ctx,
                                                 );
+                                                if message_is_active_hit {
+                                                    response.scroll_to_me(Some(egui::Align::Center));
+                                                }
                                             },
                                         );
                                     }
@@ -3601,12 +3759,18 @@ impl eframe::App for ChatariumApp {
                                         ui.with_layout(
                                             egui::Layout::left_to_right(egui::Align::Min),
                                             |ui| {
-                                                transcript_bubble(
+                                                let response = transcript_bubble(
                                                     ui,
-                                                    &message,
+                                                    message,
                                                     egui::Color32::from_rgb(29, 31, 36),
                                                     "Assistant",
+                                                    &self.reader_search_query,
+                                                    message_is_active_hit,
+                                                    ctx,
                                                 );
+                                                if message_is_active_hit {
+                                                    response.scroll_to_me(Some(egui::Align::Center));
+                                                }
                                             },
                                         );
                                     }
@@ -3615,7 +3779,20 @@ impl eframe::App for ChatariumApp {
                             }
                         }
                     });
+                reader_output_offset = Some(reader_output.state.offset.y);
             });
+
+        self.reader_search_hit = reader_hit_from_button;
+        if let Some(offset) = reader_output_offset {
+            if (offset - self.reader_last_saved_offset).abs() > 1.0
+                && self.reader_last_position_write.elapsed() > Duration::from_millis(250)
+            {
+                self.reader_positions.set_position(&reader_key, offset);
+                let _ = self.reader_positions.save(&self.reader_state_path);
+                self.reader_last_saved_offset = offset;
+                self.reader_last_position_write = Instant::now();
+            }
+        }
 
         if self.saved_revision < self.draft_revision
             || self.commit_in_flight.is_some()
@@ -3634,37 +3811,197 @@ fn transcript_bubble(
     message: &DisplayMessage,
     fill: egui::Color32,
     label: &str,
-) {
+    search_query: &str,
+    active_hit: bool,
+    ctx: &egui::Context,
+) -> egui::Response {
     egui::Frame::default()
         .fill(fill)
         .corner_radius(egui::CornerRadius::same(12))
         .inner_margin(egui::Margin::symmetric(14, 11))
         .show(ui, |ui| {
             ui.set_max_width(660.0);
-            ui.label(
-                egui::RichText::new(label)
-                    .size(10.0)
-                    .strong()
-                    .color(egui::Color32::from_rgb(133, 138, 149)),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(10.0)
+                        .strong()
+                        .color(if label == "You" {
+                            egui::Color32::from_rgb(147, 191, 238)
+                        } else {
+                            egui::Color32::from_rgb(163, 221, 178)
+                        }),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Copy").clicked() {
+                        ctx.copy_text(offline_reader::copy_payload(&message.text));
+                    }
+                });
+            });
             ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(message.text.as_str())
-                    .size(14.0)
-                    .color(egui::Color32::from_rgb(232, 234, 239)),
-            );
+            for block in offline_reader::parse_markdown(&message.text) {
+                render_markdown_block(ui, &block, search_query, active_hit, ctx);
+                ui.add_space(6.0);
+            }
             ui.add_space(5.0);
+            let metadata = message
+                .timestamp
+                .map(|timestamp| format!("{} · {} · {:.0}s", label, message.sequence, timestamp))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} · {}",
+                        label,
+                        message
+                            .provenance_label
+                            .clone()
+                            .unwrap_or_else(|| format!("event #{}", message.sequence))
+                    )
+                });
             ui.label(
-                egui::RichText::new(
-                    message
-                        .provenance_label
-                        .clone()
-                        .unwrap_or_else(|| format!("event #{}", message.sequence)),
-                )
-                .size(10.0)
-                .color(egui::Color32::from_rgb(116, 121, 133)),
+                egui::RichText::new(metadata)
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(116, 121, 133)),
             );
+        })
+        .response
+}
+
+fn render_markdown_block(
+    ui: &mut egui::Ui,
+    block: &offline_reader::MarkdownBlock,
+    search_query: &str,
+    active_hit: bool,
+    ctx: &egui::Context,
+) {
+    match block {
+        offline_reader::MarkdownBlock::Paragraph(text) => {
+            render_reader_lines(ui, text, search_query, false, active_hit);
+        }
+        offline_reader::MarkdownBlock::Heading { level, text } => {
+            render_reader_lines(ui, text, search_query, false, active_hit);
+            ui.label(
+                egui::RichText::new(format!("heading {level}"))
+                    .size(9.0)
+                    .color(egui::Color32::from_rgb(123, 128, 140)),
+            );
+        }
+        offline_reader::MarkdownBlock::UnorderedList(items) => {
+            for item in items {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("•").strong());
+                    render_reader_lines(ui, item, search_query, false, active_hit);
+                });
+            }
+        }
+        offline_reader::MarkdownBlock::OrderedList(items) => {
+            for (index, item) in items.iter().enumerate() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("{}.", index + 1)).strong());
+                    render_reader_lines(ui, item, search_query, false, active_hit);
+                });
+            }
+        }
+        offline_reader::MarkdownBlock::BlockQuote(lines) => {
+            egui::Frame::default()
+                .fill(egui::Color32::from_rgb(36, 39, 47))
+                .stroke(egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(118, 151, 190)))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    for line in lines {
+                        render_reader_lines(ui, line, search_query, false, active_hit);
+                    }
+                });
+        }
+        offline_reader::MarkdownBlock::CodeBlock { language, code } => {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(language.as_deref().unwrap_or("code"))
+                        .monospace()
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(169, 180, 201)),
+                );
+                if ui.small_button("Copy code").clicked() {
+                    ctx.copy_text(offline_reader::copy_payload(code));
+                }
+            });
+            egui::Frame::default()
+                .fill(egui::Color32::from_rgb(15, 17, 21))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    egui::ScrollArea::horizontal().show(ui, |ui| {
+                        render_reader_lines(ui, code, search_query, true, active_hit);
+                    });
+                });
+        }
+    }
+}
+
+fn render_reader_lines(
+    ui: &mut egui::Ui,
+    text: &str,
+    search_query: &str,
+    monospace: bool,
+    active_hit: bool,
+) {
+    for (line_index, line) in text.split('\n').enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            for (segment, inline_code) in offline_reader::inline_segments(line) {
+                let segments = offline_reader::search_hits(&segment, search_query);
+                if segments.is_empty() {
+                    let mut rich = egui::RichText::new(segment);
+                    if monospace || inline_code {
+                        rich = rich.monospace();
+                    }
+                    ui.label(rich.color(egui::Color32::from_rgb(232, 234, 239)));
+                    continue;
+                }
+                let mut cursor = 0;
+                for (start, end) in segments {
+                    if start > cursor {
+                        let mut rich = egui::RichText::new(segment[cursor..start].to_owned());
+                        if monospace || inline_code {
+                            rich = rich.monospace();
+                        }
+                        ui.label(rich.color(egui::Color32::from_rgb(232, 234, 239)));
+                    }
+                    let mut rich = egui::RichText::new(segment[start..end].to_owned())
+                        .background_color(if active_hit {
+                            egui::Color32::from_rgb(161, 120, 43)
+                        } else {
+                            egui::Color32::from_rgb(91, 78, 38)
+                        });
+                    if monospace || inline_code {
+                        rich = rich.monospace();
+                    }
+                    ui.label(rich.color(egui::Color32::from_rgb(255, 244, 190)));
+                    cursor = end;
+                }
+                if cursor < segment.len() {
+                    let mut rich = egui::RichText::new(segment[cursor..].to_owned());
+                    if monospace || inline_code {
+                        rich = rich.monospace();
+                    }
+                    ui.label(rich.color(egui::Color32::from_rgb(232, 234, 239)));
+                }
+            }
         });
+        if line_index + 1 < text.lines().count() {
+            ui.add_space(2.0);
+        }
+    }
+}
+
+fn adjust_reader_scroll(ctx: &egui::Context, id: egui::Id, delta: f32) {
+    let mut state = egui::scroll_area::State::load(ctx, id).unwrap_or_default();
+    state.offset.y = (state.offset.y + delta).max(0.0);
+    state.store(ctx, id);
+}
+
+fn set_reader_scroll(ctx: &egui::Context, id: egui::Id, offset: f32) {
+    let mut state = egui::scroll_area::State::load(ctx, id).unwrap_or_default();
+    state.offset.y = offset.max(0.0);
+    state.store(ctx, id);
 }
 
 fn should_run_fresh_tab_history_recovery(
@@ -4909,6 +5246,13 @@ fn remote_history_cache_path(journal_path: &Path) -> PathBuf {
         .join(REMOTE_HISTORY_CACHE_FILE)
 }
 
+fn local_reader_state_path(journal_path: &Path) -> PathBuf {
+    journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("local-reader-state.json")
+}
+
 fn merge_history_discovery_catalog(
     existing: Vec<ConversationListItem>,
     candidates: &[account_bridge::HistorySurfaceCandidate],
@@ -5121,6 +5465,7 @@ fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
             role,
             text,
             sequence: event.sequence,
+            timestamp: Some(event.at_unix_ms as f64 / 1000.0),
             provenance_label: None,
         });
     }
@@ -5141,6 +5486,7 @@ fn historical_display_messages(
             },
             text: message.text,
             sequence: imported_sequence,
+            timestamp: message.create_time,
             provenance_label: Some(format!(
                 "historical snapshot · import event #{imported_sequence}"
             )),
@@ -5161,6 +5507,7 @@ fn remote_display_messages(
             },
             text: message.text,
             sequence: snapshot_sequence,
+            timestamp: Some(message.create_time),
             provenance_label: Some(format!(
                 "live mirror · remote snapshot event #{snapshot_sequence}"
             )),
@@ -5974,12 +6321,14 @@ mod tests {
                 role: DisplayRole::Assistant,
                 text: "system-like preface".to_owned(),
                 sequence: 1,
+                timestamp: None,
                 provenance_label: None,
             },
             DisplayMessage {
                 role: DisplayRole::User,
                 text: "  a useful local title\nwith whitespace  ".to_owned(),
                 sequence: 2,
+                timestamp: None,
                 provenance_label: None,
             },
         ];
@@ -6228,18 +6577,21 @@ mod tests {
                 role: DisplayRole::User,
                 text: "one".to_owned(),
                 sequence: 1,
+                timestamp: None,
                 provenance_label: None,
             },
             DisplayMessage {
                 role: DisplayRole::Assistant,
                 text: "two".to_owned(),
                 sequence: 2,
+                timestamp: None,
                 provenance_label: None,
             },
             DisplayMessage {
                 role: DisplayRole::User,
                 text: "three".to_owned(),
                 sequence: 3,
+                timestamp: None,
                 provenance_label: None,
             },
         ];

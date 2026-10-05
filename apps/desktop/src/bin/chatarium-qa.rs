@@ -10,6 +10,8 @@ mod account_bridge;
 mod diagnostics;
 #[path = "../local_archive_search.rs"]
 mod local_archive_search;
+#[path = "../offline_reader.rs"]
+mod offline_reader;
 
 use account_bridge::{
     AccountBridgeRuntime, BrowserBridgeError, FreshTabHistoryDiscoveryObservation,
@@ -65,6 +67,10 @@ fn main() {
         Some("local-search-status" | "local-search")
     ) {
         run_local_search();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("local-reader-status") {
+        run_local_reader_status();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("mirror-batch") {
@@ -1023,6 +1029,128 @@ fn run_local_search() {
         "title_match_count": title_match_count,
         "transcript_match_count": transcript_match_count,
         "selected_catalog_indexes": results.iter().map(|result| result.catalog_index).collect::<Vec<_>>(),
+        "remote_http_used": false,
+        "auth_probe_used": false,
+        "browser_started": false,
+        "elapsed_ms": started.elapsed().as_millis(),
+    }));
+}
+
+fn run_local_reader_status() {
+    let started = Instant::now();
+    let catalog_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&catalog_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({"terminal_state": "catalog_read_failed", "error": error}));
+            return;
+        }
+    };
+    let journal_path = default_journal_path();
+    let store = match JsonlEventStore::open(&journal_path) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({"terminal_state": "journal_open_failed", "error": error.to_string()}));
+            return;
+        }
+    };
+    let summary = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({"terminal_state": "queue_replay_failed", "error": error}));
+            return;
+        }
+    };
+    let selected_index = std::env::args()
+        .skip(2)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|window| window[0] == "--catalog-index")
+        .and_then(|window| window[1].parse::<usize>().ok())
+        .unwrap_or(0);
+    let Some(selected) = catalog.get(selected_index) else {
+        print_json(json!({"terminal_state": "catalog_item_missing", "selected_catalog_index": selected_index}));
+        return;
+    };
+    let Some(queue_item) = summary
+        .items
+        .iter()
+        .find(|item| item.catalog_index == selected_index)
+    else {
+        print_json(json!({"terminal_state": "queue_item_missing", "selected_catalog_index": selected_index}));
+        return;
+    };
+    let records = match replay_remote_conversation_snapshot_audit(store.events()) {
+        Ok(records) => records,
+        Err(error) => {
+            print_json(json!({"terminal_state": "snapshot_replay_failed", "error": error}));
+            return;
+        }
+    };
+    let Some(record) = records
+        .iter()
+        .rev()
+        .find(|record| record.remote_conversation_id.as_str() == selected.id)
+    else {
+        print_json(json!({
+            "terminal_state": "not_mirrored",
+            "selected_catalog_index": selected_index,
+            "projected_messages": 0,
+            "markdown_blocks_detected": 0,
+            "code_blocks_detected": 0,
+            "search_hit_count": 0,
+            "partial": false,
+            "scroll_state_restored": false,
+            "remote_http_used": false,
+            "auth_probe_used": false,
+            "browser_started": false,
+        }));
+        return;
+    };
+    let projection = match project_remote_active_transcript(&record.envelope) {
+        Ok(projection) => projection,
+        Err(error) => {
+            print_json(json!({"terminal_state": "projection_failed", "error": error}));
+            return;
+        }
+    };
+    let texts = projection
+        .messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect::<Vec<_>>();
+    let (markdown_blocks, code_blocks) = offline_reader::markdown_counts(texts.clone());
+    let query = std::env::args()
+        .skip(2)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|window| window[0] == "--query")
+        .map(|window| window[1].clone())
+        .unwrap_or_default();
+    let search_hit_count = texts
+        .iter()
+        .map(|text| offline_reader::search_hits(text, &query).len())
+        .sum::<usize>();
+    let reader_state_path = journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("local-reader-state.json");
+    let positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
+    let scroll_state_restored = record.local_conversation_id.to_string();
+    let scroll_state_restored = positions.position(&format!("mirror:{scroll_state_restored}")) > 0.0;
+    print_json(json!({
+        "terminal_state": "success",
+        "selected_catalog_index": selected_index,
+        "projected_messages": projection.messages.len(),
+        "markdown_blocks_detected": markdown_blocks,
+        "code_blocks_detected": code_blocks,
+        "search_hit_count": search_hit_count,
+        "partial": projection.truncated_before || queue_item.status == RemoteMirrorQueueStatus::MirroredPartial,
+        "scroll_state_restored": scroll_state_restored,
+        "local_read_only": true,
         "remote_http_used": false,
         "auth_probe_used": false,
         "browser_started": false,
