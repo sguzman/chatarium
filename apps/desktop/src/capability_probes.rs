@@ -27,6 +27,7 @@ pub struct ProbeResult {
 #[derive(Debug, Default)]
 pub struct ProbeRun {
     pub model: Option<String>,
+    pub profile_id: Option<String>,
     pub generated_unix_ms: Option<u64>,
     pub queue: VecDeque<ProbeSpec>,
     pub active: Option<String>,
@@ -35,8 +36,9 @@ pub struct ProbeRun {
 }
 
 impl ProbeRun {
-    pub fn start(&mut self, model: String) {
+    pub fn start(&mut self, model: String, profile_id: Option<String>) {
         self.model = Some(model);
+        self.profile_id = profile_id;
         self.generated_unix_ms = None;
         self.queue = definitions();
         self.active = None;
@@ -187,6 +189,10 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
         .get("model")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let profile_id = value
+        .get("profile_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let generated_unix_ms = value.get("generated_unix_ms").and_then(Value::as_u64);
     let probes = value
         .get("probes")
@@ -233,6 +239,7 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
 
     Ok(Some(ProbeRun {
         model,
+        profile_id,
         generated_unix_ms,
         queue: VecDeque::new(),
         active: None,
@@ -247,6 +254,7 @@ pub fn save_report(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Resul
         "version": 1,
         "generated_unix_ms": generated_unix_ms,
         "model": run.model,
+        "profile_id": run.profile_id,
         "probes": run.results.iter().map(|result| json!({
             "name": result.name,
             "status": result.status,
@@ -411,7 +419,7 @@ mod tests {
     #[test]
     fn baseline_failure_marks_later_probes_not_run() {
         let mut run = ProbeRun::default();
-        run.start("gpt-example".to_owned());
+        run.start("gpt-example".to_owned(), Some("profile-1".to_owned()));
         let baseline = run.next().unwrap();
         run.mark_active(baseline.name);
         run.complete_failed(
@@ -439,6 +447,7 @@ mod tests {
         let _ = fs::remove_file(&root);
         let mut run = ProbeRun::default();
         run.model = Some("gpt-example".to_owned());
+        run.profile_id = Some("profile-1".to_owned());
         run.results.push(ProbeResult {
             name: "reasoning".to_owned(),
             status: "supported".to_owned(),
@@ -451,6 +460,7 @@ mod tests {
 
         let loaded = load_report(&root).unwrap().unwrap();
         assert_eq!(loaded.model.as_deref(), Some("gpt-example"));
+        assert_eq!(loaded.profile_id.as_deref(), Some("profile-1"));
         assert_eq!(loaded.generated_unix_ms, Some(1234));
         assert_eq!(loaded.results, run.results);
         let encoded = fs::read_to_string(&root).unwrap();
