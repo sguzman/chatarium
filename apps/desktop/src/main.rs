@@ -5815,6 +5815,87 @@ fn local_inference_settings_path(journal_path: &Path) -> PathBuf {
         .join("local-inference-settings.json")
 }
 
+fn local_conversation_catalog_path(journal_path: &Path) -> PathBuf {
+    journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("local-conversations.json")
+}
+
+fn local_conversation_scope(conversation_id: LocalConversationId) -> String {
+    format!("local-conversation:{conversation_id}")
+}
+
+fn discovered_local_conversation_ids(
+    events: &[EventEnvelope],
+) -> Result<Vec<LocalConversationId>, String> {
+    let mut seen = HashSet::new();
+    let mut ids = Vec::new();
+    for event in events {
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) = decode_user_message_commit(event)
+        else {
+            continue;
+        };
+        if seen.insert(message.conversation_id) {
+            ids.push(message.conversation_id);
+        }
+    }
+    Ok(ids)
+}
+
+fn local_conversation_display_title(
+    catalog: &local_conversations::LocalConversationCatalog,
+    conversation_id: LocalConversationId,
+    events: &[EventEnvelope],
+) -> String {
+    catalog
+        .entry(conversation_id)
+        .and_then(|entry| entry.title.clone())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| {
+            derived_conversation_title(&projected_local_display_messages(
+                events,
+                conversation_id,
+            ))
+        })
+}
+
+fn load_local_conversation_workspace(
+    path: &Path,
+    events: &[EventEnvelope],
+) -> Result<(local_conversations::LocalConversationCatalog, LocalConversationId), String> {
+    let mut catalog = local_conversations::LocalConversationCatalog::load(path)?;
+    let now_ms = unix_now_ms();
+    let mut changed = false;
+    for conversation_id in discovered_local_conversation_ids(events)? {
+        let title = derived_conversation_title(&projected_local_display_messages(
+            events,
+            conversation_id,
+        ));
+        changed |= catalog.ensure(conversation_id, Some(title), now_ms);
+    }
+
+    let active = catalog
+        .active()
+        .filter(|id| catalog.entry(*id).is_some_and(|entry| !entry.archived))
+        .or_else(|| catalog.first_unarchived())
+        .unwrap_or_else(|| {
+            let id = LocalConversationId::new();
+            catalog.create(id, now_ms);
+            changed = true;
+            id
+        });
+
+    if catalog.active() != Some(active) {
+        catalog.set_active(active, now_ms)?;
+        changed = true;
+    }
+    if changed || !path.exists() {
+        catalog.save_atomic(path)?;
+    }
+    Ok((catalog, active))
+}
+
 fn merge_history_discovery_catalog(
     existing: Vec<ConversationListItem>,
     candidates: &[account_bridge::HistorySurfaceCandidate],
