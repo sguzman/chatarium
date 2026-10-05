@@ -151,9 +151,11 @@ Named probes now exist for:
 - `text.verbosity`;
 - structured output through `text.format`.
 
-A successful probe establishes support only for the selected account/model at
-the time of the run. A rejected probe remains evidence, not a reason to invent
-product support.
+A successful probe establishes support only for the selected local SIWC profile
+and model at the time of the run. Chatarium binds the saved report to the
+DevKit's renderer-safe `profileId`, the model slug, and the run timestamp; it
+does not persist the account email in the probe report. A rejected probe remains
+evidence, not a reason to invent product support.
 
 ## Current Chatarium implementation
 
@@ -162,7 +164,11 @@ The first local-first control milestone is now implemented.
 The desktop supports:
 
 - a fixed in-app SIWC capability probe suite under Diagnostics;
+- explicit in-app disclosure that probes use the existing local sign-in, keep credentials inside the SIWC bridge, and consume small real plan-usage requests;
 - sanitized local probe-result persistence to `siwc-capability-probes.json`;
+- automatic reload of the last saved probe matrix across desktop restarts;
+- profile + model + timestamp scoping with visible stale-profile/stale-model warnings;
+- inclusion of the sanitized probe report in local archive backup/restore;
 - normal Send blocking while a capability probe is active, preserving the one-Responses-request probe invariant;
 - multiple isolated local conversations with durable active selection;
 - create, switch, rename, archive, and restore;
@@ -177,7 +183,7 @@ The desktop supports:
 
 The request inspector renders the request-shaping state Chatarium controls: selected model, optional instructions, developer context plus transcript input, and the fixed store=false / stream=true semantics.
 
-Repository-wide validation is green on both Windows and Linux for this milestone: bridge syntax/smoke, formatting, compilation, protocol corpus validation, and tests all pass at commit `236b9f4a9e66d8f7ab25c7334ab221869618f936`. The Windows archive-restore test was also hardened to release open journal handles before replacement.
+Repository-wide validation is green on both Windows and Linux through commit `3e3f9f32838f097829d2b5436146fb089f897aa5`: bridge syntax/smoke, formatting, compilation, protocol corpus validation, Linux desktop tests, and the full Windows workspace tests all pass. That validated head includes durable probe reload, profile/model scoping, backup/restore preservation, and the Windows archive-restore handle fix.
 
 ## Local behavioral levers Chatarium owns
 
