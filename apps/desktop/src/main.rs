@@ -20,6 +20,9 @@ use chatarium_store::remote_mirror_bootstrap::{
 use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use chatarium_store::remote_mirror_queue::{
     RemoteMirrorQueueStatus, derive_remote_mirror_queue,
+    record_remote_mirror_queue_capture_started, record_remote_mirror_queue_completed,
+    record_remote_mirror_queue_failed, record_remote_mirror_queue_item_queued,
+    record_remote_mirror_queue_rate_limited,
 };
 use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
@@ -62,6 +65,21 @@ enum PersistCommand {
     PromoteDiscoveredLiveMirror {
         expected_remote_conversation_id: String,
         body: Value,
+    },
+    MirrorQueuePrepare {
+        remote_conversation_id: String,
+        catalog_index: usize,
+        reply: Sender<Result<(), String>>,
+    },
+    MirrorQueueCapture {
+        remote_conversation_id: String,
+        body: Value,
+        reply: Sender<Result<MirrorPersisted, String>>,
+    },
+    MirrorQueueFailure {
+        remote_conversation_id: String,
+        failure_class: MirrorFailureClass,
+        reply: Sender<Result<(), String>>,
     },
     Shutdown,
 }
@@ -125,12 +143,69 @@ enum PersistNotice {
         remote_conversation_id: String,
         error: String,
     },
+    MirrorQueueUpdated {
+        appended_events: Vec<EventEnvelope>,
+    },
     Failed {
         operation: &'static str,
         revision: Option<u64>,
         request_id: Option<u64>,
         turn_id: Option<LocalTurnId>,
         error: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MirrorFailureClass {
+    Transient,
+    RateLimited,
+    Structural,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MirrorPersisted {
+    snapshot_sequence: u64,
+    mirror_state: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MirrorControllerState {
+    Stopped,
+    Running,
+    Paused,
+    RateLimited,
+    AuthenticationRequired,
+    Completed,
+    Failed,
+}
+
+enum MirrorControllerCommand {
+    Start,
+    Pause,
+    Resume,
+    Shutdown,
+}
+
+enum MirrorControllerNotice {
+    State {
+        state: MirrorControllerState,
+        current_catalog_index: Option<usize>,
+        detail: Option<String>,
+    },
+    Prepare {
+        remote_conversation_id: String,
+        catalog_index: usize,
+        reply: Sender<Result<(), String>>,
+    },
+    Capture {
+        remote_conversation_id: String,
+        body: Value,
+        reply: Sender<Result<MirrorPersisted, String>>,
+    },
+    Failure {
+        remote_conversation_id: String,
+        failure_class: MirrorFailureClass,
+        reply: Sender<Result<(), String>>,
     },
 }
 
@@ -278,6 +353,12 @@ struct ChatariumApp {
     account_bridge_status: String,
     live_mirror_fetch_tx: Sender<LiveMirrorFetchNotice>,
     live_mirror_fetch_rx: Receiver<LiveMirrorFetchNotice>,
+    mirror_controller_tx: Option<Sender<MirrorControllerCommand>>,
+    mirror_controller_notice_rx: Option<Receiver<MirrorControllerNotice>>,
+    mirror_controller_worker: Option<JoinHandle<()>>,
+    mirror_controller_state: MirrorControllerState,
+    mirror_controller_current_item: Option<usize>,
+    mirror_controller_detail: Option<String>,
     remote: siwc_bridge::BridgeRuntime,
     remote_session: siwc_bridge::SessionState,
     remote_models: Vec<siwc_bridge::Model>,
@@ -439,6 +520,12 @@ impl ChatariumApp {
                         account_bridge_status,
                         live_mirror_fetch_tx,
                         live_mirror_fetch_rx,
+                        mirror_controller_tx: None,
+                        mirror_controller_notice_rx: None,
+                        mirror_controller_worker: None,
+                        mirror_controller_state: MirrorControllerState::Stopped,
+                        mirror_controller_current_item: None,
+                        mirror_controller_detail: None,
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
@@ -540,6 +627,12 @@ impl ChatariumApp {
             account_bridge_status,
             live_mirror_fetch_tx,
             live_mirror_fetch_rx,
+            mirror_controller_tx: None,
+            mirror_controller_notice_rx: None,
+            mirror_controller_worker: None,
+            mirror_controller_state: MirrorControllerState::Stopped,
+            mirror_controller_current_item: None,
+            mirror_controller_detail: None,
             remote: siwc_bridge::BridgeRuntime::start(repaint),
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
@@ -604,6 +697,141 @@ impl ChatariumApp {
             self.status = "loading validated live mirror snapshot…".to_owned();
         } else {
             self.status = "loading verified historical snapshot…".to_owned();
+        }
+    }
+
+    fn start_mirror_controller(&mut self) {
+        if self.mirror_controller_worker.is_some() {
+            self.send_mirror_controller_command(MirrorControllerCommand::Start);
+            return;
+        }
+        let Some(provider) = self.account_bridge_provider.clone() else {
+            self.mirror_controller_state = MirrorControllerState::Failed;
+            self.mirror_controller_detail = Some("browser bridge unavailable".to_owned());
+            return;
+        };
+        let catalog = self.remote_conversation_catalog.clone();
+        let events = self.events.clone();
+        let (command_tx, command_rx) = mpsc::channel();
+        let (notice_tx, notice_rx) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("chatarium-mirror-controller".to_owned())
+            .spawn(move || {
+                mirror_controller_worker(provider, catalog, events, None, command_rx, notice_tx)
+            });
+        match worker {
+            Ok(worker) => {
+                self.mirror_controller_tx = Some(command_tx);
+                self.mirror_controller_notice_rx = Some(notice_rx);
+                self.mirror_controller_worker = Some(worker);
+                self.send_mirror_controller_command(MirrorControllerCommand::Start);
+            }
+            Err(error) => {
+                self.mirror_controller_state = MirrorControllerState::Failed;
+                self.mirror_controller_detail = Some(format!(
+                    "failed to start production mirror controller: {error}"
+                ));
+            }
+        }
+    }
+
+    fn send_mirror_controller_command(&mut self, command: MirrorControllerCommand) {
+        let Some(sender) = &self.mirror_controller_tx else {
+            self.mirror_controller_state = MirrorControllerState::Failed;
+            self.mirror_controller_detail = Some("mirror controller is not initialized".to_owned());
+            return;
+        };
+        if sender.send(command).is_err() {
+            self.mirror_controller_state = MirrorControllerState::Failed;
+            self.mirror_controller_detail = Some("mirror controller stopped unexpectedly".to_owned());
+        }
+    }
+
+    fn process_mirror_controller_notices(&mut self) {
+        let notices = self
+            .mirror_controller_notice_rx
+            .as_ref()
+            .map(|receiver| receiver.try_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        for notice in notices {
+            match notice {
+                MirrorControllerNotice::State {
+                    state,
+                    current_catalog_index,
+                    detail,
+                } => {
+                    self.mirror_controller_state = state;
+                    self.mirror_controller_current_item = current_catalog_index;
+                    self.mirror_controller_detail = detail;
+                }
+                MirrorControllerNotice::Prepare {
+                    remote_conversation_id,
+                    catalog_index,
+                    reply,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        let _ = reply.send(Err("persistence worker unavailable".to_owned()));
+                        continue;
+                    };
+                    if sender
+                        .send(PersistCommand::MirrorQueuePrepare {
+                            remote_conversation_id,
+                            catalog_index,
+                            reply,
+                        })
+                        .is_err()
+                    {
+                        self.mirror_controller_state = MirrorControllerState::Failed;
+                        self.mirror_controller_detail =
+                            Some("persistence worker stopped".to_owned());
+                    }
+                }
+                MirrorControllerNotice::Capture {
+                    remote_conversation_id,
+                    body,
+                    reply,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        let _ = reply.send(Err("persistence worker unavailable".to_owned()));
+                        continue;
+                    };
+                    if sender
+                        .send(PersistCommand::MirrorQueueCapture {
+                            remote_conversation_id,
+                            body,
+                            reply,
+                        })
+                        .is_err()
+                    {
+                        self.mirror_controller_state = MirrorControllerState::Failed;
+                        self.mirror_controller_detail =
+                            Some("persistence worker stopped".to_owned());
+                    }
+                }
+                MirrorControllerNotice::Failure {
+                    remote_conversation_id,
+                    failure_class,
+                    reply,
+                } => {
+                    let Some(sender) = &self.persist_tx else {
+                        let _ = reply.send(Err("persistence worker unavailable".to_owned()));
+                        continue;
+                    };
+                    if sender
+                        .send(PersistCommand::MirrorQueueFailure {
+                            remote_conversation_id,
+                            failure_class,
+                            reply,
+                        })
+                        .is_err()
+                    {
+                        self.mirror_controller_state = MirrorControllerState::Failed;
+                        self.mirror_controller_detail =
+                            Some("persistence worker stopped".to_owned());
+                    }
+                }
+            }
         }
     }
 
@@ -1832,6 +2060,11 @@ impl ChatariumApp {
                     self.mirror_status = format!("FAILED · durable mirror commit: {error}");
                     self.status = format!("remote mirror creation failed: {error}");
                 }
+                PersistNotice::MirrorQueueUpdated { appended_events } => {
+                    self.events.extend(appended_events);
+                    self.refresh_live_mirror_catalog();
+                    self.status = "production mirror queue state durably updated".to_owned();
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2234,6 +2467,7 @@ impl ChatariumApp {
 impl eframe::App for ChatariumApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
+        self.process_mirror_controller_notices();
         self.process_live_mirror_fetch_notices();
         self.process_remote_notices();
         let local_display_messages =
@@ -2277,6 +2511,9 @@ impl eframe::App for ChatariumApp {
         let mut sync_live_requested = None;
         let mut select_remote_requested = None;
         let mut mirror_remote_requested = None;
+        let mut mirror_start_requested = false;
+        let mut mirror_pause_requested = false;
+        let mut mirror_resume_requested = false;
         let mut refresh_history_requested = false;
 
         egui::SidePanel::left("sidebar")
@@ -2534,6 +2771,72 @@ impl eframe::App for ChatariumApp {
                             self.mirror_status.as_str(),
                             self.mirror_status.starts_with("MIRRORED"),
                         );
+                        let queue_counts = remote_catalog_queue_counts(&self.remote_catalog_view);
+                        status_row(
+                            ui,
+                            "Mirror queue",
+                            &format!(
+                                "observed={} · full={} · partial={} · pending={} · transient={} · rate-limited={} · structural={}",
+                                queue_counts.observed,
+                                queue_counts.full,
+                                queue_counts.partial,
+                                queue_counts.pending,
+                                queue_counts.transient,
+                                queue_counts.rate_limited,
+                                queue_counts.structural,
+                            ),
+                            true,
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "production controller · {}{}",
+                                mirror_controller_state_label(self.mirror_controller_state),
+                                self.mirror_controller_current_item
+                                    .map(|index| format!(" · current catalog item {index}"))
+                                    .unwrap_or_default(),
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(186, 189, 197)),
+                        );
+                        if let Some(detail) = &self.mirror_controller_detail {
+                            ui.label(
+                                egui::RichText::new(detail)
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                        }
+                        ui.horizontal(|ui| {
+                            let can_start = matches!(
+                                self.mirror_controller_state,
+                                MirrorControllerState::Stopped
+                                    | MirrorControllerState::Completed
+                                    | MirrorControllerState::Failed
+                                    | MirrorControllerState::RateLimited
+                                    | MirrorControllerState::AuthenticationRequired
+                            );
+                            let can_pause = self.mirror_controller_state
+                                == MirrorControllerState::Running;
+                            let can_resume = self.mirror_controller_state
+                                == MirrorControllerState::Paused;
+                            if ui
+                                .add_enabled(can_start, egui::Button::new("START MIRRORING"))
+                                .clicked()
+                            {
+                                mirror_start_requested = true;
+                            }
+                            if ui
+                                .add_enabled(can_pause, egui::Button::new("PAUSE"))
+                                .clicked()
+                            {
+                                mirror_pause_requested = true;
+                            }
+                            if ui
+                                .add_enabled(can_resume, egui::Button::new("RESUME"))
+                                .clicked()
+                            {
+                                mirror_resume_requested = true;
+                            }
+                        });
                         status_row(
                             ui,
                             "ChatGPT",
@@ -2721,6 +3024,13 @@ impl eframe::App for ChatariumApp {
         }
         if refresh_history_requested {
             self.start_history_discovery(ctx);
+        }
+        if mirror_start_requested {
+            self.start_mirror_controller();
+        } else if mirror_pause_requested {
+            self.send_mirror_controller_command(MirrorControllerCommand::Pause);
+        } else if mirror_resume_requested {
+            self.send_mirror_controller_command(MirrorControllerCommand::Resume);
         }
 
         egui::TopBottomPanel::top("conversation_header")
@@ -3315,6 +3625,12 @@ fn history_probe_failure_status(error: &account_bridge::BrowserBridgeError) -> S
 
 impl Drop for ChatariumApp {
     fn drop(&mut self) {
+        if let Some(sender) = self.mirror_controller_tx.take() {
+            let _ = sender.send(MirrorControllerCommand::Shutdown);
+        }
+        if let Some(worker) = self.mirror_controller_worker.take() {
+            let _ = worker.join();
+        }
         if let Some(sender) = self.persist_tx.take() {
             if let Some(active) = self.active_remote_turn.take() {
                 let payload = remote_turn_payload(
@@ -3615,11 +3931,385 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::MirrorQueuePrepare {
+                remote_conversation_id,
+                catalog_index,
+                reply,
+            } => {
+                let result = record_remote_mirror_queue_item_queued(
+                    &mut store,
+                    &remote_conversation_id,
+                    catalog_index,
+                )
+                .and_then(|_| {
+                    record_remote_mirror_queue_capture_started(
+                        &mut store,
+                        &remote_conversation_id,
+                    )
+                })
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    let before = store.events().len().saturating_sub(2);
+                    let _ = notices.send(PersistNotice::MirrorQueueUpdated {
+                        appended_events: store.events()[before..].to_vec(),
+                    });
+                }
+                let _ = reply.send(result);
+            }
+            PersistCommand::MirrorQueueCapture {
+                remote_conversation_id,
+                body,
+                reply,
+            } => {
+                let before = store.events().len();
+                let result = match promote_discovered_live_mirror_body(
+                    &mut store,
+                    &remote_conversation_id,
+                    &body,
+                ) {
+                    Ok(promotion) => match latest_live_transcript(
+                        store.events(),
+                        promotion.local_conversation_id,
+                        Some(promotion.snapshot.sequence),
+                    ) {
+                        Ok((_, projection)) => {
+                            let mirror_state = if projection.truncated_before {
+                                "partial"
+                            } else {
+                                "fully_mirrored"
+                            };
+                            match record_remote_mirror_queue_completed(
+                                &mut store,
+                                &remote_conversation_id,
+                                mirror_state,
+                            ) {
+                                Ok(_) => Ok(MirrorPersisted {
+                                    snapshot_sequence: promotion.snapshot.sequence,
+                                    mirror_state,
+                                }),
+                                Err(error) => Err(error.to_string()),
+                            }
+                        }
+                        Err(error) => {
+                            let _ = record_remote_mirror_queue_failed(
+                                &mut store,
+                                &remote_conversation_id,
+                                "structural",
+                            );
+                            Err(error)
+                        }
+                    },
+                    Err(error) => {
+                        let _ = record_remote_mirror_queue_failed(
+                            &mut store,
+                            &remote_conversation_id,
+                            "structural",
+                        );
+                        Err(error.to_string())
+                    }
+                };
+                let appended_events = store.events()[before..].to_vec();
+                if !appended_events.is_empty() {
+                    let _ = notices.send(PersistNotice::MirrorQueueUpdated { appended_events });
+                }
+                let _ = reply.send(result);
+            }
+            PersistCommand::MirrorQueueFailure {
+                remote_conversation_id,
+                failure_class,
+                reply,
+            } => {
+                let before = store.events().len();
+                let result = match failure_class {
+                    MirrorFailureClass::Transient => record_remote_mirror_queue_failed(
+                        &mut store,
+                        &remote_conversation_id,
+                        "transient",
+                    ),
+                    MirrorFailureClass::RateLimited => record_remote_mirror_queue_rate_limited(
+                        &mut store,
+                        &remote_conversation_id,
+                    ),
+                    MirrorFailureClass::Structural => record_remote_mirror_queue_failed(
+                        &mut store,
+                        &remote_conversation_id,
+                        "structural",
+                    ),
+                }
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    let _ = notices.send(PersistNotice::MirrorQueueUpdated {
+                        appended_events: store.events()[before..].to_vec(),
+                    });
+                }
+                let _ = reply.send(result);
+            }
             PersistCommand::Shutdown => {
                 diagnostics::info("persist", "shutdown requested");
                 break;
             }
         }
+    }
+}
+
+fn mirror_controller_worker(
+    mut provider: account_bridge::BrowserBridgeProvider,
+    catalog: Vec<ConversationListItem>,
+    events: Vec<EventEnvelope>,
+    max_items: Option<usize>,
+    commands: Receiver<MirrorControllerCommand>,
+    notices: Sender<MirrorControllerNotice>,
+) {
+    let identities = catalog
+        .iter()
+        .enumerate()
+        .map(|(index, item)| (index, item.id.clone()))
+        .collect::<Vec<_>>();
+    let selected = match derive_remote_mirror_queue(&identities, &events) {
+        Ok(summary) => summary.eligible_items(max_items.unwrap_or(usize::MAX)),
+        Err(error) => {
+            let _ = notices.send(MirrorControllerNotice::State {
+                state: MirrorControllerState::Failed,
+                current_catalog_index: None,
+                detail: Some(format!("queue replay failed: {error}")),
+            });
+            return;
+        }
+    };
+
+    let mut next_item = 0usize;
+    let mut running = false;
+    let mut paused = false;
+    let _ = notices.send(MirrorControllerNotice::State {
+        state: MirrorControllerState::Stopped,
+        current_catalog_index: None,
+        detail: None,
+    });
+
+    loop {
+        if !running {
+            match commands.recv() {
+                Ok(MirrorControllerCommand::Start | MirrorControllerCommand::Resume) => {
+                    running = true;
+                    paused = false;
+                    let _ = notices.send(MirrorControllerNotice::State {
+                        state: MirrorControllerState::Running,
+                        current_catalog_index: None,
+                        detail: Some("serial production mirror worker running".to_owned()),
+                    });
+                }
+                Ok(MirrorControllerCommand::Pause) => {
+                    paused = true;
+                    let _ = notices.send(MirrorControllerNotice::State {
+                        state: MirrorControllerState::Paused,
+                        current_catalog_index: None,
+                        detail: Some("paused before next item".to_owned()),
+                    });
+                }
+                Ok(MirrorControllerCommand::Shutdown) | Err(_) => return,
+            }
+            continue;
+        }
+
+        while let Ok(command) = commands.try_recv() {
+            match command {
+                MirrorControllerCommand::Pause => {
+                    paused = true;
+                    let _ = notices.send(MirrorControllerNotice::State {
+                        state: MirrorControllerState::Paused,
+                        current_catalog_index: None,
+                        detail: Some("paused before next item".to_owned()),
+                    });
+                }
+                MirrorControllerCommand::Start | MirrorControllerCommand::Resume => {
+                    paused = false;
+                }
+                MirrorControllerCommand::Shutdown => return,
+            }
+        }
+        if paused {
+            running = false;
+            continue;
+        }
+
+        let Some(item) = selected.get(next_item).cloned() else {
+            running = false;
+            let _ = notices.send(MirrorControllerNotice::State {
+                state: MirrorControllerState::Completed,
+                current_catalog_index: None,
+                detail: Some("no eligible mirror items remain".to_owned()),
+            });
+            continue;
+        };
+        next_item += 1;
+        let _ = notices.send(MirrorControllerNotice::State {
+            state: MirrorControllerState::Running,
+            current_catalog_index: Some(item.catalog_index),
+            detail: Some("capturing one item serially".to_owned()),
+        });
+
+        if let Err(error) = controller_prepare_item(&notices, &item.remote_conversation_id, item.catalog_index) {
+            running = false;
+            let _ = notices.send(MirrorControllerNotice::State {
+                state: MirrorControllerState::Failed,
+                current_catalog_index: Some(item.catalog_index),
+                detail: Some(format!("queue preparation failed: {error}")),
+            });
+            continue;
+        }
+
+        let authentication = match provider.probe_authentication() {
+            Ok(observation) => observation,
+            Err(error) => {
+                let class = mirror_failure_class(&error);
+                let _ = controller_record_failure(&notices, &item.remote_conversation_id, class);
+                running = false;
+                let state = if matches!(error, account_bridge::BrowserBridgeError::Unauthenticated) {
+                    MirrorControllerState::AuthenticationRequired
+                } else if class == MirrorFailureClass::RateLimited {
+                    MirrorControllerState::RateLimited
+                } else {
+                    MirrorControllerState::Failed
+                };
+                let _ = notices.send(MirrorControllerNotice::State {
+                    state,
+                    current_catalog_index: Some(item.catalog_index),
+                    detail: Some("authentication/capture preflight stopped the worker".to_owned()),
+                });
+                continue;
+            }
+        };
+        if !matches!(
+            authentication.evidence,
+            chatarium_core::authenticated_session::SessionAuthenticationEvidence::Authenticated
+        ) {
+            let _ = controller_record_failure(
+                &notices,
+                &item.remote_conversation_id,
+                MirrorFailureClass::Transient,
+            );
+            running = false;
+            let detail = if authentication.security_challenge {
+                "server security challenge; worker stopped without treating the UI shell as authenticated"
+            } else {
+                "authentication required; queue state preserved"
+            };
+            let _ = notices.send(MirrorControllerNotice::State {
+                state: MirrorControllerState::AuthenticationRequired,
+                current_catalog_index: Some(item.catalog_index),
+                detail: Some(detail.to_owned()),
+            });
+            continue;
+        }
+
+        match provider.fetch_authenticated_conversation(&item.remote_conversation_id) {
+            Ok(fetched) => match controller_capture_item(
+                &notices,
+                &item.remote_conversation_id,
+                fetched.body,
+            ) {
+                Ok(persisted) => {
+                    diagnostics::info(
+                        "mirror",
+                        format!(
+                            "production controller completed catalog item {} state={} snapshot=#{}",
+                            item.catalog_index, persisted.mirror_state, persisted.snapshot_sequence
+                        ),
+                    );
+                }
+                Err(error) => {
+                    let _ = notices.send(MirrorControllerNotice::State {
+                        state: MirrorControllerState::Failed,
+                        current_catalog_index: Some(item.catalog_index),
+                        detail: Some(format!("local promotion failed: {error}")),
+                    });
+                }
+            },
+            Err(error) => {
+                let class = mirror_failure_class(&error);
+                let _ = controller_record_failure(&notices, &item.remote_conversation_id, class);
+                if class == MirrorFailureClass::RateLimited {
+                    running = false;
+                    let _ = notices.send(MirrorControllerNotice::State {
+                        state: MirrorControllerState::RateLimited,
+                        current_catalog_index: Some(item.catalog_index),
+                        detail: Some("HTTP 429; worker stopped without retry loop".to_owned()),
+                    });
+                } else if matches!(error, account_bridge::BrowserBridgeError::Unauthenticated) {
+                    running = false;
+                    let _ = notices.send(MirrorControllerNotice::State {
+                        state: MirrorControllerState::AuthenticationRequired,
+                        current_catalog_index: Some(item.catalog_index),
+                        detail: Some("authentication required; worker stopped".to_owned()),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn controller_prepare_item(
+    notices: &Sender<MirrorControllerNotice>,
+    remote_conversation_id: &str,
+    catalog_index: usize,
+) -> Result<(), String> {
+    let (reply, result) = controller_reply_channel();
+    notices
+        .send(MirrorControllerNotice::Prepare {
+            remote_conversation_id: remote_conversation_id.to_owned(),
+            catalog_index,
+            reply,
+        })
+        .map_err(|_| "desktop persistence channel closed".to_owned())?;
+    result.recv().map_err(|_| "desktop persistence worker stopped".to_owned())?
+}
+
+fn controller_capture_item(
+    notices: &Sender<MirrorControllerNotice>,
+    remote_conversation_id: &str,
+    body: Value,
+) -> Result<MirrorPersisted, String> {
+    let (reply, result) = controller_reply_channel();
+    notices
+        .send(MirrorControllerNotice::Capture {
+            remote_conversation_id: remote_conversation_id.to_owned(),
+            body,
+            reply,
+        })
+        .map_err(|_| "desktop persistence channel closed".to_owned())?;
+    result.recv().map_err(|_| "desktop persistence worker stopped".to_owned())?
+}
+
+fn controller_record_failure(
+    notices: &Sender<MirrorControllerNotice>,
+    remote_conversation_id: &str,
+    failure_class: MirrorFailureClass,
+) -> Result<(), String> {
+    let (reply, result) = controller_reply_channel();
+    notices
+        .send(MirrorControllerNotice::Failure {
+            remote_conversation_id: remote_conversation_id.to_owned(),
+            failure_class,
+            reply,
+        })
+        .map_err(|_| "desktop persistence channel closed".to_owned())?;
+    result.recv().map_err(|_| "desktop persistence worker stopped".to_owned())?
+}
+
+fn controller_reply_channel<T>() -> (Sender<Result<T, String>>, Receiver<Result<T, String>>) {
+    mpsc::channel()
+}
+
+fn mirror_failure_class(error: &account_bridge::BrowserBridgeError) -> MirrorFailureClass {
+    match error {
+        account_bridge::BrowserBridgeError::RateLimited(_) => MirrorFailureClass::RateLimited,
+        account_bridge::BrowserBridgeError::Protocol(_)
+        | account_bridge::BrowserBridgeError::UnsupportedRevision(_) => {
+            MirrorFailureClass::Structural
+        }
+        _ => MirrorFailureClass::Transient,
     }
 }
 
@@ -3720,6 +4410,49 @@ fn remote_catalog_state_label(status: RemoteMirrorQueueStatus) -> &'static str {
             "REMOTE · MIRRORING"
         }
         RemoteMirrorQueueStatus::Discovered => "REMOTE · NOT MIRRORED",
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct RemoteQueueCounts {
+    observed: usize,
+    full: usize,
+    partial: usize,
+    pending: usize,
+    transient: usize,
+    rate_limited: usize,
+    structural: usize,
+}
+
+fn remote_catalog_queue_counts(entries: &[RemoteCatalogViewEntry]) -> RemoteQueueCounts {
+    let mut counts = RemoteQueueCounts {
+        observed: entries.len(),
+        ..RemoteQueueCounts::default()
+    };
+    for entry in entries {
+        match entry.status {
+            RemoteMirrorQueueStatus::MirroredFully => counts.full += 1,
+            RemoteMirrorQueueStatus::MirroredPartial => counts.partial += 1,
+            RemoteMirrorQueueStatus::TransientFailure => counts.transient += 1,
+            RemoteMirrorQueueStatus::RateLimited => counts.rate_limited += 1,
+            RemoteMirrorQueueStatus::StructuralFailure => counts.structural += 1,
+            RemoteMirrorQueueStatus::Discovered
+            | RemoteMirrorQueueStatus::Queued
+            | RemoteMirrorQueueStatus::Capturing => counts.pending += 1,
+        }
+    }
+    counts
+}
+
+fn mirror_controller_state_label(state: MirrorControllerState) -> &'static str {
+    match state {
+        MirrorControllerState::Stopped => "STOPPED",
+        MirrorControllerState::Running => "RUNNING · CONCURRENCY=1",
+        MirrorControllerState::Paused => "PAUSED",
+        MirrorControllerState::RateLimited => "PAUSED · RATE LIMITED",
+        MirrorControllerState::AuthenticationRequired => "PAUSED · AUTHENTICATION REQUIRED",
+        MirrorControllerState::Completed => "COMPLETED",
+        MirrorControllerState::Failed => "STOPPED · FAILURE",
     }
 }
 
@@ -4249,8 +4982,264 @@ fn configure_ui(ctx: &egui::Context) {
     });
 }
 
+fn run_production_mirror_acceptance() {
+    const MAX_ITEMS: usize = 3;
+    let started = Instant::now();
+    let journal_path = default_journal_path();
+    let cache_path = remote_history_cache_path(&journal_path);
+    let catalog = match load_remote_history_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "terminal_state": "catalog_read_failed",
+                    "error": error,
+                    "remote_http_used": false,
+                })
+            );
+            return;
+        }
+    };
+    let store = match JsonlEventStore::open(&journal_path) {
+        Ok(store) => store,
+        Err(error) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "terminal_state": "journal_open_failed",
+                    "error": error.to_string(),
+                    "remote_http_used": false,
+                })
+            );
+            return;
+        }
+    };
+    let initial_events = store.events().to_vec();
+    let before = match derive_remote_mirror_queue(
+        &catalog
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (index, item.id.clone()))
+            .collect::<Vec<_>>(),
+        &initial_events,
+    ) {
+        Ok(summary) => summary,
+        Err(error) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "terminal_state": "queue_replay_failed",
+                    "error": error,
+                    "remote_http_used": false,
+                })
+            );
+            return;
+        }
+    };
+    let runtime = match account_bridge::AccountBridgeRuntime::start() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "terminal_state": "bridge_start_failed",
+                    "error": error.to_string(),
+                    "remote_http_used": false,
+                })
+            );
+            return;
+        }
+    };
+    let provider = runtime.provider();
+    let (persist_tx, persist_rx) = mpsc::channel();
+    let (persist_notice_tx, persist_notice_rx) = mpsc::channel();
+    let data_dir = journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let persist_worker = thread::Builder::new()
+        .name("chatarium-acceptance-persistence".to_owned())
+        .spawn(move || persistence_worker(store, data_dir, persist_rx, persist_notice_tx));
+    let Ok(persist_worker) = persist_worker else {
+        println!(
+            "{}",
+            serde_json::json!({
+                "terminal_state": "persistence_start_failed",
+                "remote_http_used": false,
+            })
+        );
+        return;
+    };
+    let (controller_tx, controller_rx) = mpsc::channel();
+    let (controller_notice_tx, controller_notice_rx) = mpsc::channel();
+    let controller_worker = thread::Builder::new()
+        .name("chatarium-acceptance-controller".to_owned())
+        .spawn(move || {
+            mirror_controller_worker(
+                provider,
+                catalog,
+                initial_events,
+                Some(MAX_ITEMS),
+                controller_rx,
+                controller_notice_tx,
+            )
+        });
+    let Ok(controller_worker) = controller_worker else {
+        let _ = persist_tx.send(PersistCommand::Shutdown);
+        let _ = persist_worker.join();
+        println!(
+            "{}",
+            serde_json::json!({
+                "terminal_state": "controller_start_failed",
+                "remote_http_used": false,
+            })
+        );
+        return;
+    };
+    let _ = controller_tx.send(MirrorControllerCommand::Start);
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut attempted = BTreeMap::<usize, ()>::new();
+    let mut terminal_state = MirrorControllerState::Running;
+    while Instant::now() < deadline {
+        let mut progressed = false;
+        for notice in controller_notice_rx.try_iter() {
+            progressed = true;
+            match notice {
+                MirrorControllerNotice::State {
+                    state,
+                    current_catalog_index,
+                    ..
+                } => {
+                    if let Some(index) = current_catalog_index {
+                        attempted.insert(index, ());
+                    }
+                    terminal_state = state;
+                }
+                MirrorControllerNotice::Prepare {
+                    remote_conversation_id,
+                    catalog_index,
+                    reply,
+                } => {
+                    let command = PersistCommand::MirrorQueuePrepare {
+                        remote_conversation_id,
+                        catalog_index,
+                        reply,
+                    };
+                    if let Err(error) = persist_tx.send(command) {
+                        if let PersistCommand::MirrorQueuePrepare { reply, .. } = error.0 {
+                            let _ = reply.send(Err("persistence worker stopped".to_owned()));
+                        }
+                    }
+                }
+                MirrorControllerNotice::Capture {
+                    remote_conversation_id,
+                    body,
+                    reply,
+                } => {
+                    let command = PersistCommand::MirrorQueueCapture {
+                        remote_conversation_id,
+                        body,
+                        reply,
+                    };
+                    if let Err(error) = persist_tx.send(command) {
+                        if let PersistCommand::MirrorQueueCapture { reply, .. } = error.0 {
+                            let _ = reply.send(Err("persistence worker stopped".to_owned()));
+                        }
+                    }
+                }
+                MirrorControllerNotice::Failure {
+                    remote_conversation_id,
+                    failure_class,
+                    reply,
+                } => {
+                    let command = PersistCommand::MirrorQueueFailure {
+                        remote_conversation_id,
+                        failure_class,
+                        reply,
+                    };
+                    if let Err(error) = persist_tx.send(command) {
+                        if let PersistCommand::MirrorQueueFailure { reply, .. } = error.0 {
+                            let _ = reply.send(Err("persistence worker stopped".to_owned()));
+                        }
+                    }
+                }
+            }
+        }
+        let _ = persist_notice_rx.try_iter().count();
+        if matches!(
+            terminal_state,
+            MirrorControllerState::Completed
+                | MirrorControllerState::RateLimited
+                | MirrorControllerState::AuthenticationRequired
+                | MirrorControllerState::Failed
+        ) {
+            break;
+        }
+        if !progressed {
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    if Instant::now() >= deadline {
+        terminal_state = MirrorControllerState::Failed;
+    }
+    let _ = controller_tx.send(MirrorControllerCommand::Shutdown);
+    let _ = controller_worker.join();
+    let _ = persist_tx.send(PersistCommand::Shutdown);
+    let _ = persist_worker.join();
+
+    let after = JsonlEventStore::open(&journal_path)
+        .ok()
+        .and_then(|store| {
+            derive_remote_mirror_queue(
+                &before
+                    .items
+                    .iter()
+                    .map(|item| (item.catalog_index, item.remote_conversation_id.clone()))
+                    .collect::<Vec<_>>(),
+                store.events(),
+            )
+            .ok()
+        });
+    let after = after.unwrap_or_else(|| before.clone());
+    println!(
+        "{}",
+        serde_json::json!({
+            "terminal_state": mirror_controller_state_label(terminal_state),
+            "controller": "production-desktop",
+            "max_items": MAX_ITEMS,
+            "attempted": attempted.keys().copied().collect::<Vec<_>>(),
+            "before": {
+                "catalog_count": before.items.len(),
+                "full_count": before.full_count(),
+                "partial_count": before.partial_count(),
+                "pending_count": before.pending_count(),
+            },
+            "after": {
+                "full_count": after.full_count(),
+                "partial_count": after.partial_count(),
+                "pending_count": after.pending_count(),
+                "transient_failure_count": after.count(RemoteMirrorQueueStatus::TransientFailure),
+                "rate_limited_count": after.count(RemoteMirrorQueueStatus::RateLimited),
+                "structural_failure_count": after.count(RemoteMirrorQueueStatus::StructuralFailure),
+            },
+            "serial_concurrency": 1,
+            "remote_http_used": !attempted.is_empty(),
+            "browser_started": !attempted.is_empty(),
+            "auth_probe_used": !attempted.is_empty(),
+            "temporary_tab_cleanup": "production_finally_cleanup",
+            "debugger_cleanup": "production_finally_cleanup",
+            "elapsed_ms": started.elapsed().as_millis(),
+        })
+    );
+}
+
 fn main() -> eframe::Result<()> {
     diagnostics::init();
+    if std::env::args().nth(1).as_deref() == Some("--production-mirror-acceptance") {
+        run_production_mirror_acceptance();
+        return Ok(());
+    }
     diagnostics::info("app", "starting Chatarium desktop");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -4292,6 +5281,7 @@ mod tests {
             PersistNotice::DiscoveredLiveMirrorPromotionFailed { .. } => {
                 "discovered_live_promotion_failed"
             }
+            PersistNotice::MirrorQueueUpdated { .. } => "mirror_queue_updated",
             PersistNotice::Failed { .. } => "failed",
         }
     }
@@ -4445,6 +5435,91 @@ mod tests {
             remote_catalog_state_label(RemoteMirrorQueueStatus::StructuralFailure),
             "STRUCTURAL FAILURE"
         );
+    }
+
+    #[test]
+    fn production_controller_failure_policy_stops_only_terminal_conditions() {
+        assert_eq!(
+            mirror_failure_class(&account_bridge::BrowserBridgeError::RateLimited(
+                "cooldown".to_owned()
+            )),
+            MirrorFailureClass::RateLimited
+        );
+        assert_eq!(
+            mirror_failure_class(&account_bridge::BrowserBridgeError::Protocol(
+                "shape".to_owned()
+            )),
+            MirrorFailureClass::Structural
+        );
+        assert_eq!(
+            mirror_failure_class(&account_bridge::BrowserBridgeError::Timeout),
+            MirrorFailureClass::Transient
+        );
+        assert_eq!(
+            mirror_controller_state_label(MirrorControllerState::RateLimited),
+            "PAUSED · RATE LIMITED"
+        );
+        assert_eq!(
+            mirror_controller_state_label(MirrorControllerState::AuthenticationRequired),
+            "PAUSED · AUTHENTICATION REQUIRED"
+        );
+        assert_eq!(
+            mirror_controller_state_label(MirrorControllerState::Stopped),
+            "STOPPED"
+        );
+        assert_eq!(
+            mirror_controller_state_label(MirrorControllerState::Running),
+            "RUNNING · CONCURRENCY=1"
+        );
+        assert_eq!(
+            mirror_controller_state_label(MirrorControllerState::Paused),
+            "PAUSED"
+        );
+        assert_eq!(
+            mirror_controller_state_label(MirrorControllerState::Completed),
+            "COMPLETED"
+        );
+    }
+
+    #[test]
+    fn queue_counts_preserve_pending_and_terminal_state_boundaries() {
+        let entries = vec![
+            RemoteCatalogViewEntry {
+                item: ConversationListItem {
+                    id: "one".to_owned(),
+                    title: None,
+                    create_time: None,
+                    update_time: None,
+                },
+                status: RemoteMirrorQueueStatus::Discovered,
+                local_conversation_id: None,
+            },
+            RemoteCatalogViewEntry {
+                item: ConversationListItem {
+                    id: "two".to_owned(),
+                    title: None,
+                    create_time: None,
+                    update_time: None,
+                },
+                status: RemoteMirrorQueueStatus::MirroredPartial,
+                local_conversation_id: Some(LocalConversationId::new()),
+            },
+            RemoteCatalogViewEntry {
+                item: ConversationListItem {
+                    id: "three".to_owned(),
+                    title: None,
+                    create_time: None,
+                    update_time: None,
+                },
+                status: RemoteMirrorQueueStatus::RateLimited,
+                local_conversation_id: None,
+            },
+        ];
+        let counts = remote_catalog_queue_counts(&entries);
+        assert_eq!(counts.observed, 3);
+        assert_eq!(counts.pending, 1);
+        assert_eq!(counts.partial, 1);
+        assert_eq!(counts.rate_limited, 1);
     }
 
     #[test]

@@ -148,12 +148,14 @@ async function pageGet(resource, requestHeaders, maxResponseBytes, timeoutMs) {
       signal: controller.signal,
     });
     const contentType = response.headers.get('content-type') ?? '';
+    const securityChallenge = response.headers.get('cf-mitigated') === 'challenge';
     const declaredLength = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
       return {
         ok: false,
         http_status: response.status,
         content_type: contentType,
+        security_challenge: securityChallenge,
         error: 'remote_response_too_large',
       };
     }
@@ -164,6 +166,7 @@ async function pageGet(resource, requestHeaders, maxResponseBytes, timeoutMs) {
         ok: false,
         http_status: response.status,
         content_type: contentType,
+        security_challenge: securityChallenge,
         error: 'remote_response_too_large',
       };
     }
@@ -178,6 +181,7 @@ async function pageGet(resource, requestHeaders, maxResponseBytes, timeoutMs) {
           ok: false,
           http_status: response.status,
           content_type: contentType,
+          security_challenge: securityChallenge,
           error: 'remote_invalid_json',
         };
       }
@@ -187,6 +191,7 @@ async function pageGet(resource, requestHeaders, maxResponseBytes, timeoutMs) {
       ok: response.status === 200,
       http_status: response.status,
       content_type: contentType,
+      security_challenge: securityChallenge,
       body,
       error: response.status === 200 ? null : 'remote_http_status',
     };
@@ -373,10 +378,13 @@ async function probeAuthentication(command) {
   result.account_context = accountId !== null;
   result.http_status = pageResult.http_status;
   result.content_type = pageResult.content_type;
+  result.security_challenge = pageResult.security_challenge === true;
   const status = Number.isInteger(pageResult.http_status) ? pageResult.http_status : null;
   result.authentication = status === 200
     ? 'authenticated'
-    : (status === 401 || status === 403)
+    : (status === 403 && result.security_challenge)
+      ? 'unknown'
+      : (status === 401 || status === 403)
       ? 'unauthenticated'
       : 'unknown';
 

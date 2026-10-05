@@ -382,6 +382,40 @@ mod tests {
     }
 
     #[test]
+    fn queued_and_capturing_items_are_reconstructed_as_resumable_after_restart() {
+        let mut store = MemoryEventStore::default();
+        record_remote_mirror_queue_item_queued(&mut store, "remote-a", 0).unwrap();
+        record_remote_mirror_queue_capture_started(&mut store, "remote-b").unwrap();
+
+        let summary = derive_remote_mirror_queue(&catalog(), store.events()).unwrap();
+
+        assert_eq!(summary.items[0].status, RemoteMirrorQueueStatus::Queued);
+        assert_eq!(summary.items[1].status, RemoteMirrorQueueStatus::Capturing);
+        assert_eq!(summary.pending_count(), 3);
+        assert_eq!(
+            summary
+                .eligible_items(3)
+                .into_iter()
+                .map(|item| item.remote_conversation_id)
+                .collect::<Vec<_>>(),
+            vec!["remote-a", "remote-b", "remote-c"]
+        );
+    }
+
+    #[test]
+    fn already_mirrored_items_are_skipped_while_later_work_remains_eligible() {
+        let mut store = MemoryEventStore::default();
+        record_remote_mirror_queue_completed(&mut store, "remote-a", "fully_mirrored").unwrap();
+        record_remote_mirror_queue_completed(&mut store, "remote-b", "partial").unwrap();
+
+        let summary = derive_remote_mirror_queue(&catalog(), store.events()).unwrap();
+        let selected = summary.eligible_items(3);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].remote_conversation_id, "remote-c");
+    }
+
+    #[test]
     fn invalid_structural_failure_does_not_hide_later_items() {
         let mut store = MemoryEventStore::default();
         record_remote_mirror_queue_failed(&mut store, "remote-a", "structural").unwrap();

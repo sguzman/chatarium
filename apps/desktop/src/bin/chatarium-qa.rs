@@ -54,6 +54,10 @@ fn main() {
         run_local_transcript();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("production-controller-status") {
+        run_production_controller_status();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("mirror-batch") {
         run_mirror_batch();
         return;
@@ -100,10 +104,24 @@ fn main() {
     // CDP discovery pass, not from this page-world probe.
     let authenticated = http_authenticated;
     if !authenticated {
+        let security_challenge = authentication.security_challenge;
+        let authentication_label = match authentication.evidence {
+            chatarium_core::authenticated_session::SessionAuthenticationEvidence::Authenticated =>
+                "authenticated",
+            chatarium_core::authenticated_session::SessionAuthenticationEvidence::Unauthenticated =>
+                "unauthenticated",
+            chatarium_core::authenticated_session::SessionAuthenticationEvidence::Unknown =>
+                "unknown",
+        };
         print_json(json!({
-            "terminal_state": "unauthenticated",
-            "authentication": "unauthenticated",
+            "terminal_state": if security_challenge {
+                "authentication_unknown_security_challenge"
+            } else {
+                "unauthenticated"
+            },
+            "authentication": authentication_label,
             "authentication_http_status": authentication.http_status,
+            "security_challenge": security_challenge,
             "auth_proof": auth_proof_json(&authentication.proof),
             "durable_catalog_before": durable_before.len(),
             "elapsed_ms": started.elapsed().as_millis(),
@@ -810,6 +828,65 @@ fn run_local_transcript() {
         "projected_messages": projection.messages.len(),
         "truncated_before": projection.truncated_before,
         "replay_passed": replay_passed,
+        "remote_http_used": false,
+        "browser_started": false,
+        "auth_probe_used": false,
+        "elapsed_ms": started.elapsed().as_millis(),
+    }));
+}
+
+fn run_production_controller_status() {
+    let started = Instant::now();
+    let cache_path = default_journal_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("remote-history-cache.json");
+    let catalog = match load_cache(&cache_path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "catalog_read_failed",
+                "controller": "production-desktop",
+                "error": error,
+            }));
+            return;
+        }
+    };
+    let store = match JsonlEventStore::open(default_journal_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "journal_open_failed",
+                "controller": "production-desktop",
+                "error": error.to_string(),
+            }));
+            return;
+        }
+    };
+    let summary = match derive_queue_summary(&catalog, store.events()) {
+        Ok(summary) => summary,
+        Err(error) => {
+            print_json(json!({
+                "terminal_state": "queue_replay_failed",
+                "controller": "production-desktop",
+                "error": error,
+            }));
+            return;
+        }
+    };
+    print_json(json!({
+        "terminal_state": "success",
+        "controller": "production-desktop",
+        "controller_state": "STOPPED · explicit start required",
+        "serial_concurrency": 1,
+        "queue_reconstructed": true,
+        "catalog_count": summary.items.len(),
+        "full_count": summary.full_count(),
+        "partial_count": summary.partial_count(),
+        "pending_count": summary.pending_count(),
+        "transient_failure_count": summary.count(RemoteMirrorQueueStatus::TransientFailure),
+        "rate_limited_count": summary.count(RemoteMirrorQueueStatus::RateLimited),
+        "structural_failure_count": summary.count(RemoteMirrorQueueStatus::StructuralFailure),
         "remote_http_used": false,
         "browser_started": false,
         "auth_probe_used": false,

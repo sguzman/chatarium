@@ -214,6 +214,7 @@ pub struct AuthenticationObservation {
     pub evidence: SessionAuthenticationEvidence,
     pub proof: BrowserProof,
     pub http_status: u16,
+    pub security_challenge: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -657,6 +658,10 @@ impl BrowserBridgeProvider {
             return Err(remote_result_error(&result));
         }
         let http_status = required_http_status(&result, "authentication")?;
+        let security_challenge = result
+            .get("security_challenge")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let evidence = match result.get("authentication").and_then(Value::as_str) {
             Some("authenticated") => SessionAuthenticationEvidence::Authenticated,
             Some("unauthenticated") => SessionAuthenticationEvidence::Unauthenticated,
@@ -672,6 +677,7 @@ impl BrowserBridgeProvider {
             evidence,
             proof,
             http_status,
+            security_challenge,
         })
     }
 
@@ -1806,6 +1812,33 @@ mod tests {
         assert_eq!(observation.proof.first_party_http_status, None);
         assert_eq!(observation.proof.context_header_count, 0);
         assert_eq!(observation.proof.request_profile, AUTH_REQUEST_PROFILE);
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn auth_probe_distinguishes_server_challenge_from_logout() {
+        let runtime = AccountBridgeRuntime::start_on("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = runtime.address();
+        let browser = browser_exchange(
+            address,
+            |command| {
+                assert_eq!(command["kind"], json!("probe_auth"));
+                assert_eq!(command["request_profile"], json!(AUTH_REQUEST_PROFILE));
+            },
+            |command| {
+                let mut result = extension_auth_result(command);
+                result["authentication"] = json!("unknown");
+                result["http_status"] = json!(403);
+                result["security_challenge"] = json!(true);
+                result
+            },
+        );
+
+        let mut provider = runtime.provider();
+        let observation = provider.probe_authentication().unwrap();
+        assert_eq!(observation.evidence, SessionAuthenticationEvidence::Unknown);
+        assert_eq!(observation.http_status, 403);
+        assert!(observation.security_challenge);
         browser.join().unwrap();
     }
 
