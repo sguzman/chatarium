@@ -314,6 +314,7 @@ mod tests {
     use crate::routing_audit::record_route_proposed;
     use crate::session_audit::{
         record_local_session_registered, record_session_endpoint_bound, record_worker_session_bound,
+        record_worker_session_successor_bound,
     };
     use crate::supervision_audit::{
         record_controller_session_designated, record_controller_worker_bound,
@@ -328,12 +329,15 @@ mod tests {
         WorkerPhase,
     };
     use chatarium_core::routing::{RouteEndpointId, RoutePolicy, RouteRequest};
-    use chatarium_core::session::{SessionEndpointBinding, WorkerSessionBinding};
+    use chatarium_core::session::{
+        SessionEndpointBinding, WorkerSessionBinding, WorkerSessionSuccessorBinding,
+    };
     use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
 
     const CONTROLLER_SESSION: SessionId = SessionId::new(1);
     const OTHER_CONTROLLER_SESSION: SessionId = SessionId::new(2);
     const WORKER_SESSION: SessionId = SessionId::new(10);
+    const WORKER_SUCCESSOR_SESSION: SessionId = SessionId::new(11);
     const WORKER: WorkerId = WorkerId::new(100);
     const LEASE: ContinuationLeaseId = ContinuationLeaseId::new(900);
     const GOAL: WorkerGoalId = WorkerGoalId::new(1000);
@@ -341,6 +345,7 @@ mod tests {
     const CONTROLLER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(11);
     const OTHER_CONTROLLER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(12);
     const WORKER_ENDPOINT: RouteEndpointId = RouteEndpointId::new(21);
+    const WORKER_SUCCESSOR_ENDPOINT: RouteEndpointId = RouteEndpointId::new(22);
 
     fn control(id: u64) -> WorkerControl {
         let mut lifecycle = WorkerLifecycle::default();
@@ -462,6 +467,76 @@ mod tests {
         assert_eq!(records[0].bound_phase, WorkerPhase::Working);
         assert_eq!(records[0].controller_session_id, Some(CONTROLLER_SESSION));
         assert_eq!(records[0].worker_session_id, Some(WORKER_SESSION));
+    }
+
+    #[test]
+    fn controller_routes_resolve_worker_session_at_route_binding_sequence() {
+        let mut store = MemoryEventStore::default();
+        register_controller(&mut store, CONTROLLER_SESSION, Some(CONTROLLER_ENDPOINT));
+        register_worker(&mut store, Some(WORKER_ENDPOINT));
+        supervise(&mut store, CONTROLLER_SESSION);
+        record_working_lifecycle(&mut store);
+
+        let first = control(1);
+        record_worker_control_admitted(&mut store, &first).unwrap();
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(
+                first.id(),
+                ControlIssuer::ControllerSession(CONTROLLER_SESSION),
+            ),
+        )
+        .unwrap();
+        propose_and_bind(
+            &mut store,
+            &first,
+            route(1, CONTROLLER_ENDPOINT, WORKER_ENDPOINT),
+        );
+
+        register_session(
+            &mut store,
+            WORKER_SUCCESSOR_SESSION,
+            Some(WORKER_SUCCESSOR_ENDPOINT),
+        );
+        record_worker_session_successor_bound(
+            &mut store,
+            WorkerSessionSuccessorBinding::new(
+                WORKER,
+                WORKER_SESSION,
+                WORKER_SUCCESSOR_SESSION,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        record_controller_worker_bound(
+            &mut store,
+            ControllerWorkerBinding::new(CONTROLLER_SESSION, WORKER_SUCCESSOR_SESSION).unwrap(),
+        )
+        .unwrap();
+
+        let second = control(2);
+        record_worker_control_admitted(&mut store, &second).unwrap();
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(
+                second.id(),
+                ControlIssuer::ControllerSession(CONTROLLER_SESSION),
+            ),
+        )
+        .unwrap();
+        propose_and_bind(
+            &mut store,
+            &second,
+            route(2, CONTROLLER_ENDPOINT, WORKER_SUCCESSOR_ENDPOINT),
+        );
+
+        let records = replay_validated_orchestration_routes(store.events()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].worker_session_id, Some(WORKER_SESSION));
+        assert_eq!(
+            records[1].worker_session_id,
+            Some(WORKER_SUCCESSOR_SESSION)
+        );
     }
 
     #[test]
