@@ -95,8 +95,7 @@ pub fn save_contract(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Res
 
     let encoded = serde_json::to_vec_pretty(&payload)
         .map_err(|error| format!("could not encode local inference contract: {error}"))?;
-    fs::write(path, encoded)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
+    fs::write(path, encoded).map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
 #[cfg(test)]
