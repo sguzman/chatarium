@@ -212,6 +212,8 @@ pub fn save_contract(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Res
             "code": result.code,
             "status_code": result.status_code,
             "param": result.param,
+            "upstream_request_id": result.upstream_request_id,
+            "response_shape": result.response_shape,
             "text_received": result.text_received,
             "reason": result.reason,
         })).collect::<Vec<Value>>(),
@@ -234,6 +236,8 @@ mod tests {
             code: None,
             status_code: None,
             param: None,
+            upstream_request_id: None,
+            response_shape: None,
             text_received: None,
             reason: None,
         }
@@ -294,6 +298,8 @@ mod tests {
         reasoning.code = Some("invalid_request_error".to_owned());
         reasoning.status_code = Some(400);
         reasoning.param = Some("reasoning".to_owned());
+        reasoning.upstream_request_id = Some("req_reasoning_123".to_owned());
+        reasoning.response_shape = Some("{error:{code:string,param:string}}".to_owned());
         reasoning.reason = Some("rejected".to_owned());
 
         save_contract(&path, &run, 5678).unwrap();
@@ -313,6 +319,11 @@ mod tests {
             .unwrap();
         assert_eq!(reasoning["param"], "reasoning");
         assert_eq!(reasoning["status_code"], 400);
+        assert_eq!(reasoning["upstream_request_id"], "req_reasoning_123");
+        assert_eq!(
+            reasoning["response_shape"],
+            "{error:{code:string,param:string}}"
+        );
         let _ = fs::remove_file(path);
     }
 

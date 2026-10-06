@@ -21,6 +21,8 @@ pub struct ProbeResult {
     pub code: Option<String>,
     pub status_code: Option<u16>,
     pub param: Option<String>,
+    pub upstream_request_id: Option<String>,
+    pub response_shape: Option<String>,
     pub text_received: Option<bool>,
     pub reason: Option<String>,
 }
@@ -69,6 +71,8 @@ impl ProbeRun {
             code: None,
             status_code: None,
             param: None,
+            upstream_request_id: None,
+            response_shape: None,
             text_received: Some(text_received),
             reason: None,
         });
@@ -82,6 +86,8 @@ impl ProbeRun {
             code: Some(error.code.clone()),
             status_code: error.status,
             param: error.param.clone(),
+            upstream_request_id: error.upstream_request_id.clone(),
+            response_shape: error.response_shape.clone(),
             text_received: None,
             reason: Some(error.message.clone()),
         });
@@ -98,6 +104,8 @@ impl ProbeRun {
             code: Some("bridge_dispatch_failed".to_owned()),
             status_code: None,
             param: None,
+            upstream_request_id: None,
+            response_shape: None,
             text_received: None,
             reason: Some(error),
         });
@@ -114,6 +122,8 @@ impl ProbeRun {
                 code: Some("runtime_unavailable".to_owned()),
                 status_code: None,
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
                 text_received: None,
                 reason: Some(reason.to_owned()),
             });
@@ -239,6 +249,14 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
                 .get("param")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
+            upstream_request_id: probe
+                .get("upstream_request_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            response_shape: probe
+                .get("response_shape")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             text_received: probe.get("text_received").and_then(Value::as_bool),
             reason: probe
                 .get("reason")
@@ -271,6 +289,8 @@ pub fn save_report(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Resul
             "code": result.code,
             "status_code": result.status_code,
             "param": result.param,
+            "upstream_request_id": result.upstream_request_id,
+            "response_shape": result.response_shape,
             "text_received": result.text_received,
             "reason": result.reason,
         })).collect::<Vec<_>>(),
@@ -441,11 +461,21 @@ mod tests {
                 retryable: false,
                 status: Some(400),
                 param: Some("tools".to_owned()),
+                upstream_request_id: Some("req_tools_123".to_owned()),
+                response_shape: Some("{error:{code:string,param:string}}".to_owned()),
             },
         );
         assert!(!run.running());
         assert_eq!(run.results[0].status, "rejected");
         assert_eq!(run.results[0].param.as_deref(), Some("tools"));
+        assert_eq!(
+            run.results[0].upstream_request_id.as_deref(),
+            Some("req_tools_123")
+        );
+        assert_eq!(
+            run.results[0].response_shape.as_deref(),
+            Some("{error:{code:string,param:string}}")
+        );
         assert!(
             run.results[1..]
                 .iter()
@@ -467,6 +497,8 @@ mod tests {
             code: Some("invalid_request_error".to_owned()),
             status_code: Some(400),
             param: Some("reasoning".to_owned()),
+            upstream_request_id: Some("req_reasoning_123".to_owned()),
+            response_shape: Some("{error:{code:string,param:string}}".to_owned()),
             text_received: None,
             reason: Some("rejected".to_owned()),
         });
@@ -478,8 +510,18 @@ mod tests {
         assert_eq!(loaded.generated_unix_ms, Some(1234));
         assert_eq!(loaded.results, run.results);
         assert_eq!(loaded.results[0].param.as_deref(), Some("reasoning"));
+        assert_eq!(
+            loaded.results[0].upstream_request_id.as_deref(),
+            Some("req_reasoning_123")
+        );
+        assert_eq!(
+            loaded.results[0].response_shape.as_deref(),
+            Some("{error:{code:string,param:string}}")
+        );
         let encoded = fs::read_to_string(&root).unwrap();
         assert!(encoded.contains(r#""param": "reasoning""#));
+        assert!(encoded.contains(r#""upstream_request_id": "req_reasoning_123""#));
+        assert!(encoded.contains(r#""response_shape": "{error:{code:string,param:string}}""#));
         assert!(!encoded.contains("access_token"));
         assert!(!encoded.contains("refresh_token"));
         let _ = fs::remove_file(root);

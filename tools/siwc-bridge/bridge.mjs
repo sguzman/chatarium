@@ -59,6 +59,10 @@ function safeError(error) {
       ...(typeof error.requestId === "string"
         ? { request_id: error.requestId }
         : {}),
+      ...(typeof error.responseShape === "string" &&
+      error.responseShape.length <= 4096
+        ? { response_shape: error.responseShape }
+        : {}),
     };
   }
   return {

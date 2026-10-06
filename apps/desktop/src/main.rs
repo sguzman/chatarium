@@ -6292,6 +6292,12 @@ fn probe_result_detail(result: &capability_probes::ProbeResult) -> String {
     if let Some(param) = result.param.as_deref() {
         detail.push_str(&format!(" · param {param}"));
     }
+    if let Some(request_id) = result.upstream_request_id.as_deref() {
+        detail.push_str(&format!(" · request {request_id}"));
+    }
+    if let Some(response_shape) = result.response_shape.as_deref() {
+        detail.push_str(&format!(" · shape {response_shape}"));
+    }
     detail
 }
 
@@ -8091,6 +8097,8 @@ mod tests {
                 retryable: false,
                 status: Some(429),
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
             }
         ));
         assert!(remote_error_is_observed_failure(
@@ -8100,6 +8108,8 @@ mod tests {
                 retryable: false,
                 status: None,
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
             }
         ));
         assert!(remote_error_is_observed_failure(
@@ -8109,6 +8119,8 @@ mod tests {
                 retryable: true,
                 status: None,
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
             }
         ));
         assert!(remote_error_is_observed_failure(
@@ -8118,6 +8130,8 @@ mod tests {
                 retryable: false,
                 status: None,
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
             }
         ));
         assert!(!remote_error_is_observed_failure(
@@ -8127,6 +8141,8 @@ mod tests {
                 retryable: true,
                 status: None,
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
             }
         ));
     }

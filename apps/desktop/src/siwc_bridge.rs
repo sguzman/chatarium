@@ -67,6 +67,8 @@ pub struct BridgeError {
     pub retryable: bool,
     pub status: Option<u16>,
     pub param: Option<String>,
+    pub upstream_request_id: Option<String>,
+    pub response_shape: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -538,6 +540,14 @@ fn parse_error(value: &Value) -> Option<BridgeError> {
             .get("param")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        upstream_request_id: value
+            .get("request_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        response_shape: value
+            .get("response_shape")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     })
 }
 
@@ -645,7 +655,7 @@ mod tests {
     #[test]
     fn parses_safe_error_parameter_diagnostics() {
         let event = parse_bridge_event(
-            r#"{"type":"error","request_id":"probe:reasoning","error":{"code":"invalid_request_error","message":"rejected","retryable":false,"status":400,"param":"reasoning"}}"#,
+            r#"{"type":"error","request_id":"probe:reasoning","error":{"code":"invalid_request_error","message":"rejected","retryable":false,"status":400,"param":"reasoning","request_id":"req_probe_123","response_shape":"{error:{code:string,param:string}}"}}"#,
         )
         .unwrap();
 
@@ -659,6 +669,8 @@ mod tests {
                     retryable: false,
                     status: Some(400),
                     param: Some("reasoning".to_owned()),
+                    upstream_request_id: Some("req_probe_123".to_owned()),
+                    response_shape: Some("{error:{code:string,param:string}}".to_owned()),
                 },
             }
         );
