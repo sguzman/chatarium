@@ -3,6 +3,7 @@ mod capability_probes;
 mod diagnostics;
 mod local_archive_search;
 mod local_conversations;
+mod local_inference_contract;
 mod local_inference_settings;
 mod offline_reader;
 mod siwc_bridge;
@@ -2942,16 +2943,30 @@ impl ChatariumApp {
             return;
         }
         let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
-        let path = data_dir.join("siwc-capability-probes.json");
+        let report_path = data_dir.join("siwc-capability-probes.json");
+        let contract_path = data_dir.join("local-inference-contract.json");
         let generated_unix_ms = unix_now_ms();
         self.capability_probe.status = match capability_probes::save_report(
-            &path,
+            &report_path,
             &self.capability_probe,
             generated_unix_ms,
         ) {
             Ok(()) => {
                 self.capability_probe.generated_unix_ms = Some(generated_unix_ms);
-                format!("capability probes complete · saved {}", path.display())
+                match local_inference_contract::save_contract(
+                    &contract_path,
+                    &self.capability_probe,
+                    unix_now_ms(),
+                ) {
+                    Ok(()) => format!(
+                        "capability probes complete · saved {} · contract {}",
+                        report_path.display(),
+                        local_inference_contract::contract_state(&self.capability_probe)
+                    ),
+                    Err(error) => format!(
+                        "capability probes complete · report saved · contract error: {error}"
+                    ),
+                }
             }
             Err(error) => format!("capability probes complete · {error}"),
         };
