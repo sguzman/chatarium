@@ -3031,6 +3031,10 @@ impl ChatariumApp {
 }
 
 impl eframe::App for ChatariumApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        egui::Color32::from_rgb(23, 24, 29).to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
         self.process_mirror_controller_notices();
@@ -3121,6 +3125,11 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
+                // SidePanel reserves its configured width independently of the custom
+                // frame's content-driven minimum size. Force the inner frame to own the
+                // full reserved width so HiDPI/Wayland never exposes an unpainted gutter.
+                ui.set_min_width(ui.max_rect().width());
+
                 egui::ScrollArea::vertical()
                     .id_salt("sidebar-scroll")
                     .auto_shrink([false, false])
@@ -3583,7 +3592,7 @@ impl eframe::App for ChatariumApp {
                                     .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
                         }
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             let can_start = matches!(
                                 self.mirror_controller_state,
                                 MirrorControllerState::Stopped
@@ -4753,12 +4762,17 @@ fn transcript_bubble(
     active_hit: bool,
     ctx: &egui::Context,
 ) -> egui::Response {
+    // A wrapping child inside a horizontal layout can otherwise collapse to its
+    // minimum word width. Give the bubble a real wrapping width while keeping the
+    // whole frame inside the space available to the transcript.
+    let content_width = (ui.available_width() - 28.0).clamp(1.0, 660.0);
+
     egui::Frame::default()
         .fill(fill)
         .corner_radius(egui::CornerRadius::same(12))
         .inner_margin(egui::Margin::symmetric(14, 11))
         .show(ui, |ui| {
-            ui.set_max_width(660.0);
+            ui.set_width(content_width);
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(label)
@@ -7250,7 +7264,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
-            .with_min_inner_size([860.0, 560.0]),
+            .with_min_inner_size([860.0, 560.0])
+            .with_transparent(false),
         ..Default::default()
     };
     let result = eframe::run_native(
