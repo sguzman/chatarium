@@ -125,12 +125,13 @@ The repository already contains stronger downstream primitives:
 - durable orchestration-control admission/correlation/freshness;
 - logical chat-container rollover.
 
-The local conversation → chat-container → current-session bridge and the
-explicit current-session → route-endpoint addressability edge have now landed;
+The local conversation → chat-container → current-session bridge, explicit
+current-session → route-endpoint addressability, read-only local routing
+directory, and manual `SessionMessage` route approval/denial are now landed;
 see [LOCAL_ORCHESTRATION_IDENTITY.md](LOCAL_ORCHESTRATION_IDENTITY.md).
 
 In particular, do not assume that `LocalConversationId`, `SessionId`,
 `ChatContainerId`, `WorkerId`, and `RouteEndpointId` are interchangeable.
-The next safe substrate is a read-only local routing directory over those
-explicit edges. Controller/worker routing remains inactive until its remaining
-identity and policy edges are explicit.
+Manual route approval is policy state only: there is still no routed payload,
+dispatch, delivery, automatic controller action, or hidden context sharing.
+The next safe substrate is explicit durable payload identity/correlation.
