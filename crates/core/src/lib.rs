@@ -273,6 +273,7 @@ impl TurnEvidence {
             | EventKind::LocalSessionRegistered
             | EventKind::SessionEndpointBound
             | EventKind::WorkerSessionBound
+            | EventKind::WorkerSessionSuccessorBound
             | EventKind::ControllerSessionDesignated
             | EventKind::ControllerWorkerBound
             | EventKind::WorkerControlIssuerBound
@@ -378,6 +379,8 @@ pub enum EventKind {
     SessionEndpointBound,
     /// An orchestration worker was correlated to one local session.
     WorkerSessionBound,
+    /// A persistent worker identity moved from one session leaf to its explicit successor.
+    WorkerSessionSuccessorBound,
     /// A local session was explicitly designated as a controller/coordinator.
     ControllerSessionDesignated,
     /// A controller session was correlated to one worker session.
@@ -457,6 +460,7 @@ impl EventKind {
             Self::LocalSessionRegistered => "local_session_registered",
             Self::SessionEndpointBound => "session_endpoint_bound",
             Self::WorkerSessionBound => "worker_session_bound",
+            Self::WorkerSessionSuccessorBound => "worker_session_successor_bound",
             Self::ControllerSessionDesignated => "controller_session_designated",
             Self::ControllerWorkerBound => "controller_worker_bound",
             Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
@@ -524,6 +528,7 @@ impl EventKind {
             "local_session_registered" => Some(Self::LocalSessionRegistered),
             "session_endpoint_bound" => Some(Self::SessionEndpointBound),
             "worker_session_bound" => Some(Self::WorkerSessionBound),
+            "worker_session_successor_bound" => Some(Self::WorkerSessionSuccessorBound),
             "controller_session_designated" => Some(Self::ControllerSessionDesignated),
             "controller_worker_bound" => Some(Self::ControllerWorkerBound),
             "worker_control_issuer_bound" => Some(Self::WorkerControlIssuerBound),
