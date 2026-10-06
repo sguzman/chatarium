@@ -193,9 +193,14 @@ directory are now explicit and durable.
 Manual local `SessionMessage` route proposals now consume that directory and
 the existing `RouteGate` audit. Every proposal requires explicit approval;
 Allow/Deny decisions are durable and fail closed when route endpoints become
-stale. No route currently carries a payload or exposes dispatch authority.
+stale.
 
-The active next architectural boundary is durable routed-payload
-identity/correlation, then one-shot local delivery through the existing
-dispatch-permit semantics. Memory/controller-worker orchestration remains
+Routes now carry a separate immutable exact-text payload with point-in-time
+conversation provenance. Allow is blocked until that payload is durable. The
+payload does not dispatch itself and is not silently inserted into another
+conversation's context.
+
+The active next architectural boundary is one-shot local delivery through the
+existing dispatch-permit semantics, with an explicit routed-message provenance
+record at the destination. Memory/controller-worker orchestration remains
 later. Do not reopen browser/history work as part of this phase.
