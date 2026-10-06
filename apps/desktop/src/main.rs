@@ -15,8 +15,8 @@ use chatarium_core::orchestration::{
     WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
 use chatarium_core::routing::{
-    DecisionAuthority, RouteClass, RouteEndpointId, RouteGateState, RouteId, RoutePolicy,
-    RouteRequest,
+    DecisionAuthority, RouteClass, RouteEndpointId, RouteGateState, RouteId, RoutePayloadId,
+    RoutePolicy, RouteRequest,
 };
 use chatarium_core::session::{SessionEndpointBinding, SessionId};
 use chatarium_core::{
@@ -44,6 +44,9 @@ use chatarium_store::local_conversation_chat_container_audit::{
 use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
+};
+use chatarium_store::local_route_payload_audit::{
+    record_local_route_payload_attached, replay_local_route_payload_audit,
 };
 use chatarium_store::local_routing_directory::replay_local_routing_directory;
 use chatarium_store::remote_health::{
@@ -111,6 +114,11 @@ enum PersistCommand {
         route_id: RouteId,
         source_conversation_id: LocalConversationId,
         destination_conversation_id: LocalConversationId,
+    },
+    AttachLocalSessionRoutePayload {
+        payload_id: RoutePayloadId,
+        route_id: RouteId,
+        text: String,
     },
     DecideLocalSessionRoute {
         route_id: RouteId,
@@ -263,6 +271,10 @@ enum PersistNotice {
         event: EventEnvelope,
     },
     LocalRoutePolicyEventAppended {
+        event: EventEnvelope,
+    },
+    LocalRoutePayloadAttached {
+        route_id: RouteId,
         event: EventEnvelope,
     },
     LifecycleEventAppended {
@@ -503,6 +515,8 @@ struct ChatariumApp {
     topology_command_pending: bool,
     route_addressability_command_pending: bool,
     route_policy_command_pending: bool,
+    route_payload_command_pending: bool,
+    route_payload_drafts: BTreeMap<RouteId, String>,
     lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -751,6 +765,8 @@ impl ChatariumApp {
                         topology_command_pending: false,
                         route_addressability_command_pending: false,
                         route_policy_command_pending: false,
+                        route_payload_command_pending: false,
+                        route_payload_drafts: BTreeMap::new(),
                         lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -916,6 +932,8 @@ impl ChatariumApp {
             topology_command_pending: false,
             route_addressability_command_pending: false,
             route_policy_command_pending: false,
+            route_payload_command_pending: false,
+            route_payload_drafts: BTreeMap::new(),
             lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
@@ -2635,6 +2653,15 @@ impl ChatariumApp {
                     self.route_policy_command_pending = false;
                     self.status = format!("local route policy durably updated · {kind}");
                 }
+                PersistNotice::LocalRoutePayloadAttached { route_id, event } => {
+                    self.events.push(event);
+                    self.route_payload_command_pending = false;
+                    self.route_payload_drafts.remove(&route_id);
+                    self.status = format!(
+                        "local route {} payload durably attached",
+                        route_id.get()
+                    );
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -2654,7 +2681,9 @@ impl ChatariumApp {
                     if operation.starts_with("route addressability") {
                         self.route_addressability_command_pending = false;
                     }
-                    if operation.starts_with("local route ") {
+                    if operation.starts_with("local route payload") {
+                        self.route_payload_command_pending = false;
+                    } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
                     }
                     if operation.starts_with("lifecycle ") {
@@ -3348,6 +3377,49 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue local route proposal: {error}");
+            }
+        }
+    }
+
+    fn attach_local_session_route_payload(&mut self, route_id: RouteId) {
+        if self.route_payload_command_pending {
+            return;
+        }
+        let text = self
+            .route_payload_drafts
+            .get(&route_id)
+            .cloned()
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            self.status = "route payload text cannot be empty".to_owned();
+            return;
+        }
+        let payload_id = match next_available_route_payload_id(&self.events) {
+            Ok(payload_id) => payload_id,
+            Err(error) => {
+                self.status = format!("cannot allocate route payload identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot attach route payload: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::AttachLocalSessionRoutePayload {
+            payload_id,
+            route_id,
+            text,
+        }) {
+            Ok(()) => {
+                self.route_payload_command_pending = true;
+                self.status = format!(
+                    "attaching immutable payload {} to local route {}…",
+                    payload_id.get(),
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local route payload: {error}");
             }
         }
     }
@@ -7117,6 +7189,34 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::AttachLocalSessionRoutePayload {
+                payload_id,
+                route_id,
+                text,
+            } => {
+                match append_local_route_payload_checked(
+                    &mut store,
+                    payload_id,
+                    route_id,
+                    text,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalRoutePayloadAttached {
+                            route_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local route payload attachment",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::DecideLocalSessionRoute { route_id, decision } => {
                 match append_local_route_user_decision_checked(&mut store, route_id, decision) {
                     Ok(event) => {
@@ -9485,6 +9585,7 @@ mod tests {
             PersistNotice::LocalRoutePolicyEventAppended { .. } => {
                 "local_route_policy_event_appended"
             }
+            PersistNotice::LocalRoutePayloadAttached { .. } => "local_route_payload_attached",
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
