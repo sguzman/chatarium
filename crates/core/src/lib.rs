@@ -262,6 +262,7 @@ impl TurnEvidence {
             | EventKind::RouteUserDecisionRecorded
             | EventKind::RouteDispatched
             | EventKind::LocalRouteDelivered
+            | EventKind::LocalRouteContextDecisionRecorded
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
@@ -355,6 +356,8 @@ pub enum EventKind {
     RouteDispatched,
     /// A dispatched local session-message payload was durably delivered.
     LocalRouteDelivered,
+    /// An explicit include/exclude decision for delivered routed context was recorded.
+    LocalRouteContextDecisionRecorded,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
@@ -443,6 +446,9 @@ impl EventKind {
             Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
             Self::RouteDispatched => "route_dispatched",
             Self::LocalRouteDelivered => "local_route_delivered",
+            Self::LocalRouteContextDecisionRecorded => {
+                "local_route_context_decision_recorded"
+            }
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
@@ -505,6 +511,9 @@ impl EventKind {
             "route_user_decision_recorded" => Some(Self::RouteUserDecisionRecorded),
             "route_dispatched" => Some(Self::RouteDispatched),
             "local_route_delivered" => Some(Self::LocalRouteDelivered),
+            "local_route_context_decision_recorded" => {
+                Some(Self::LocalRouteContextDecisionRecorded)
+            }
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
