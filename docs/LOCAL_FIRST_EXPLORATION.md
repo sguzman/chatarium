@@ -187,10 +187,15 @@ container whose current local session is projected from the existing rollover
 audit.
 
 Current-session routing addressability
-(`SessionId → RouteEndpointId`) is now explicit and durable, but still grants
-no route or dispatch authority.
+(`SessionId → RouteEndpointId`) and the deterministic read-only local routing
+directory are now explicit and durable.
 
-The active next architectural boundary is a deterministic read-only local
-routing directory over addressable local conversations, then visible manual
-routing/policy and later memory/controller-worker orchestration. Do not reopen
-browser/history work as part of this phase.
+Manual local `SessionMessage` route proposals now consume that directory and
+the existing `RouteGate` audit. Every proposal requires explicit approval;
+Allow/Deny decisions are durable and fail closed when route endpoints become
+stale. No route currently carries a payload or exposes dispatch authority.
+
+The active next architectural boundary is durable routed-payload
+identity/correlation, then one-shot local delivery through the existing
+dispatch-permit semantics. Memory/controller-worker orchestration remains
+later. Do not reopen browser/history work as part of this phase.
