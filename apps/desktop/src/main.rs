@@ -7120,7 +7120,8 @@ fn persistence_worker(
             PersistCommand::DecideLocalSessionRoute { route_id, decision } => {
                 match append_local_route_user_decision_checked(&mut store, route_id, decision) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::LocalRoutePolicyEventAppended { event });
+                        let _ =
+                            notices.send(PersistNotice::LocalRoutePolicyEventAppended { event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
