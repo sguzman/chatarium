@@ -5848,7 +5848,7 @@ impl Drop for ChatariumApp {
 }
 
 fn append_local_worker_binding_checked(
-    store: &mut JsonlEventStore,
+    store: &mut impl EventStore,
     conversation_id: LocalConversationId,
     worker_id: WorkerId,
 ) -> Result<EventEnvelope, String> {
@@ -5902,7 +5902,7 @@ fn append_local_worker_binding_checked(
 }
 
 fn append_worker_goal_checked(
-    store: &mut JsonlEventStore,
+    store: &mut impl EventStore,
     worker_id: WorkerId,
     goal_id: WorkerGoalId,
 ) -> Result<EventEnvelope, String> {
@@ -5924,7 +5924,7 @@ fn append_worker_goal_checked(
 }
 
 fn append_worker_transition_checked(
-    store: &mut JsonlEventStore,
+    store: &mut impl EventStore,
     worker_id: WorkerId,
     goal_id: WorkerGoalId,
     action: WorkerAction,
@@ -8267,8 +8267,120 @@ mod tests {
             }
             PersistNotice::MirrorQueueUpdated { .. } => "mirror_queue_updated",
             PersistNotice::RemoteHealthUpdated { .. } => "remote_health_updated",
+            PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
+    }
+
+    #[test]
+    fn checked_local_worker_lifecycle_is_durable_and_rejects_illegal_transition() {
+        let conversation_id = LocalConversationId::new();
+        let worker_id = WorkerId::new(1);
+        let first_goal = WorkerGoalId::new(1);
+        let second_goal = WorkerGoalId::new(2);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        let binding =
+            append_local_worker_binding_checked(&mut store, conversation_id, worker_id).unwrap();
+        assert_eq!(binding.kind, EventKind::LocalConversationWorkerBound);
+        assert_eq!(
+            local_worker_binding(store.events(), conversation_id)
+                .unwrap()
+                .unwrap()
+                .worker_id,
+            worker_id
+        );
+
+        append_worker_goal_checked(&mut store, worker_id, first_goal).unwrap();
+        let ready = worker_record(store.events(), worker_id).unwrap().unwrap();
+        assert_eq!(ready.lifecycle.goal_id(), Some(first_goal));
+        assert_eq!(ready.lifecycle.phase(), WorkerPhase::Ready);
+
+        append_worker_transition_checked(
+            &mut store,
+            worker_id,
+            first_goal,
+            WorkerAction::StartOrResume,
+        )
+        .unwrap();
+        assert_eq!(
+            worker_record(store.events(), worker_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::Working
+        );
+
+        append_worker_transition_checked(
+            &mut store,
+            worker_id,
+            first_goal,
+            WorkerAction::RequestInput,
+        )
+        .unwrap();
+        assert_eq!(
+            worker_record(store.events(), worker_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::NeedsInput
+        );
+
+        let before_illegal = store.events().len();
+        assert!(
+            append_worker_transition_checked(
+                &mut store,
+                worker_id,
+                first_goal,
+                WorkerAction::Complete,
+            )
+            .unwrap_err()
+            .contains("cannot apply")
+        );
+        assert_eq!(store.events().len(), before_illegal);
+
+        append_worker_transition_checked(
+            &mut store,
+            worker_id,
+            first_goal,
+            WorkerAction::StartOrResume,
+        )
+        .unwrap();
+        append_worker_transition_checked(
+            &mut store,
+            worker_id,
+            first_goal,
+            WorkerAction::Complete,
+        )
+        .unwrap();
+        assert_eq!(
+            worker_record(store.events(), worker_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::Completed
+        );
+
+        append_worker_goal_checked(&mut store, worker_id, second_goal).unwrap();
+        let replacement = worker_record(store.events(), worker_id).unwrap().unwrap();
+        assert_eq!(replacement.lifecycle.goal_id(), Some(second_goal));
+        assert_eq!(replacement.lifecycle.phase(), WorkerPhase::Ready);
+    }
+
+    #[test]
+    fn checked_worker_lifecycle_requires_local_conversation_binding() {
+        let worker_id = WorkerId::new(7);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        assert!(
+            append_worker_goal_checked(&mut store, worker_id, WorkerGoalId::new(1))
+                .unwrap_err()
+                .contains("not bound to a local Chatarium conversation")
+        );
+        assert!(store.events().is_empty());
     }
 
     #[test]
