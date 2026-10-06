@@ -14,7 +14,8 @@ use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::orchestration::{
     WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
-use chatarium_core::session::SessionId;
+use chatarium_core::routing::RouteEndpointId;
+use chatarium_core::session::{SessionEndpointBinding, SessionId};
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
@@ -41,6 +42,7 @@ use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
 };
+use chatarium_store::routing_audit::replay_routing_audit;
 use chatarium_store::remote_health::{
     MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
     record_remote_health_signal,
@@ -59,7 +61,9 @@ use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
 };
-use chatarium_store::session_audit::{record_local_session_registered, replay_session_audit};
+use chatarium_store::session_audit::{
+    record_local_session_registered, record_session_endpoint_bound, replay_session_audit,
+};
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
 };
@@ -90,6 +94,11 @@ enum PersistCommand {
         conversation_id: LocalConversationId,
         container_id: ChatContainerId,
         root_session_id: SessionId,
+    },
+    BindCurrentSessionRouteEndpoint {
+        conversation_id: LocalConversationId,
+        session_id: SessionId,
+        endpoint_id: RouteEndpointId,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -233,6 +242,9 @@ enum PersistNotice {
     },
     OrchestrationTopologyInitialized {
         appended_events: Vec<EventEnvelope>,
+    },
+    RouteEndpointBound {
+        event: EventEnvelope,
     },
     LifecycleEventAppended {
         event: EventEnvelope,
@@ -470,6 +482,7 @@ struct ChatariumApp {
     behavior_profiles: behavior_profile::BehaviorProfileStore,
     conversation_behavior_profile: behavior_profile::BehaviorProfile,
     topology_command_pending: bool,
+    route_addressability_command_pending: bool,
     lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -716,6 +729,7 @@ impl ChatariumApp {
                         behavior_profiles,
                         conversation_behavior_profile: active_behavior_profile,
                         topology_command_pending: false,
+                        route_addressability_command_pending: false,
                         lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -879,6 +893,7 @@ impl ChatariumApp {
             behavior_profiles,
             conversation_behavior_profile: active_behavior_profile,
             topology_command_pending: false,
+            route_addressability_command_pending: false,
             lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
@@ -2587,6 +2602,11 @@ impl ChatariumApp {
                         "local orchestration topology durably initialized · {count} events"
                     );
                 }
+                PersistNotice::RouteEndpointBound { event } => {
+                    self.events.push(event);
+                    self.route_addressability_command_pending = false;
+                    self.status = "current session routing endpoint durably bound".to_owned();
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -2602,6 +2622,9 @@ impl ChatariumApp {
                 } => {
                     if operation.starts_with("orchestration topology") {
                         self.topology_command_pending = false;
+                    }
+                    if operation.starts_with("route addressability") {
+                        self.route_addressability_command_pending = false;
                     }
                     if operation.starts_with("lifecycle ") {
                         self.lifecycle_command_pending = false;
@@ -3226,6 +3249,41 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue local orchestration topology: {error}");
+            }
+        }
+    }
+
+    fn bind_current_session_route_endpoint(&mut self, session_id: SessionId) {
+        if self.route_addressability_command_pending {
+            return;
+        }
+        let endpoint_id = match next_available_route_endpoint_id(&self.events) {
+            Ok(endpoint_id) => endpoint_id,
+            Err(error) => {
+                self.status = format!("cannot allocate routing endpoint identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot bind routing endpoint: persistence unavailable".to_owned();
+            return;
+        };
+
+        match sender.send(PersistCommand::BindCurrentSessionRouteEndpoint {
+            conversation_id: self.local_conversation_id,
+            session_id,
+            endpoint_id,
+        }) {
+            Ok(()) => {
+                self.route_addressability_command_pending = true;
+                self.status = format!(
+                    "binding current session {} to routing endpoint {}…",
+                    session_id.get(),
+                    endpoint_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue routing endpoint binding: {error}");
             }
         }
     }
@@ -6302,6 +6360,31 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::BindCurrentSessionRouteEndpoint {
+                conversation_id,
+                session_id,
+                endpoint_id,
+            } => {
+                match append_current_session_route_endpoint_checked(
+                    &mut store,
+                    conversation_id,
+                    session_id,
+                    endpoint_id,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::RouteEndpointBound { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "route addressability binding",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -8577,6 +8660,7 @@ mod tests {
             PersistNotice::OrchestrationTopologyInitialized { .. } => {
                 "orchestration_topology_initialized"
             }
+            PersistNotice::RouteEndpointBound { .. } => "route_endpoint_bound",
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
