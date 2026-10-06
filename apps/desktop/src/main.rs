@@ -8348,13 +8348,8 @@ mod tests {
             WorkerAction::StartOrResume,
         )
         .unwrap();
-        append_worker_transition_checked(
-            &mut store,
-            worker_id,
-            first_goal,
-            WorkerAction::Complete,
-        )
-        .unwrap();
+        append_worker_transition_checked(&mut store, worker_id, first_goal, WorkerAction::Complete)
+            .unwrap();
         assert_eq!(
             worker_record(store.events(), worker_id)
                 .unwrap()
