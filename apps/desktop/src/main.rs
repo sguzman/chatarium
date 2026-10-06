@@ -7570,6 +7570,74 @@ fn append_local_route_dispatch_and_delivery_checked(
     Ok(store.events()[before..].to_vec())
 }
 
+fn append_local_route_context_decision_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    destination_conversation_id: LocalConversationId,
+    decision: LocalRouteContextDecision,
+) -> Result<EventEnvelope, String> {
+    let inbox_item = replay_local_routed_inbox_for_conversation(
+        store.events(),
+        destination_conversation_id,
+    )?
+    .into_iter()
+    .find(|item| item.route_id == route_id)
+    .ok_or_else(|| {
+        format!(
+            "local route {} is not a delivered routed inbox item for conversation {}",
+            route_id.get(),
+            destination_conversation_id,
+        )
+    })?;
+
+    if let Some(existing) = replay_local_route_context_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+    {
+        if existing.destination_conversation_id != destination_conversation_id
+            || existing.payload_id != inbox_item.payload_id
+        {
+            return Err(format!(
+                "local route {} context provenance conflicts with delivered inbox item",
+                route_id.get()
+            ));
+        }
+        if existing.decision == decision {
+            return Err(format!(
+                "local route {} already has routed context decision {}",
+                route_id.get(),
+                local_route_context_decision_label(decision),
+            ));
+        }
+    }
+
+    record_local_route_context_decision(
+        store,
+        route_id,
+        inbox_item.payload_id,
+        destination_conversation_id,
+        decision,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_local_route_context_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+        .ok_or_else(|| "routed context decision append did not replay".to_owned())?;
+    if replayed.payload_id != inbox_item.payload_id
+        || replayed.destination_conversation_id != destination_conversation_id
+        || replayed.decision != decision
+    {
+        return Err("routed context decision replay disagrees with appended decision".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "routed context decision append produced no durable event".to_owned())
+}
+
 fn append_local_worker_binding_checked(
     store: &mut impl EventStore,
     conversation_id: LocalConversationId,
@@ -9268,6 +9336,15 @@ fn session_endpoint_binding(
         .into_iter()
         .find(|record| record.session_id == session_id)
         .and_then(|record| record.endpoint_binding))
+}
+
+fn local_route_context_decision_label(
+    decision: LocalRouteContextDecision,
+) -> &'static str {
+    match decision {
+        LocalRouteContextDecision::Admit => "admit",
+        LocalRouteContextDecision::Exclude => "exclude",
+    }
 }
 
 fn route_user_decision_label(decision: RouteUserDecision) -> &'static str {
