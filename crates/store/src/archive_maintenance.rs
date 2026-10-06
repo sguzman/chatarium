@@ -5,6 +5,7 @@
 //! titles, message text, or raw response bodies.
 
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
+use crate::local_route_payload_audit::replay_local_route_payload_audit;
 use crate::local_routing_directory::replay_local_routing_directory;
 use crate::remote_health::RemoteHealthController;
 use crate::remote_identity_audit::replay_remote_identity_audit;
@@ -148,6 +149,7 @@ pub fn check_archive(
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
     replay_local_conversation_topologies(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
+    replay_local_route_payload_audit(&events).map_err(err)?;
     replay_remote_mirror_selection_audit(&events).map_err(err)?;
     replay_remote_read_audit(&events).map_err(err)?;
     RemoteHealthController::from_events(&events, unix_ms() as u64).map_err(err)?;
