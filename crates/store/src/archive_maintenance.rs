@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const CACHE_FILE: &str = "remote-history-cache.json";
 const INFERENCE_SETTINGS_FILE: &str = "local-inference-settings.json";
+const BEHAVIOR_PROFILES_FILE: &str = "behavior-profiles.json";
 const LOCAL_CONVERSATION_CATALOG_FILE: &str = "local-conversations.json";
 const CAPABILITY_PROBE_REPORT_FILE: &str = "siwc-capability-probes.json";
 const LOCAL_INFERENCE_CONTRACT_FILE: &str = "local-inference-contract.json";
@@ -239,6 +240,7 @@ pub fn create_backup(
         JOURNAL_FILE,
         CACHE_FILE,
         INFERENCE_SETTINGS_FILE,
+        BEHAVIOR_PROFILES_FILE,
         LOCAL_CONVERSATION_CATALOG_FILE,
         CAPABILITY_PROBE_REPORT_FILE,
         LOCAL_INFERENCE_CONTRACT_FILE,
@@ -262,6 +264,7 @@ pub fn create_backup(
             "journal": 2,
             "history_cache": 1,
             "local_inference_settings": 1,
+            "behavior_profiles": 1,
             "local_conversation_catalog": 1,
             "siwc_capability_probe": 1,
             "local_inference_contract": 1
@@ -372,6 +375,7 @@ pub fn restore_backup(
         JOURNAL_FILE,
         CACHE_FILE,
         INFERENCE_SETTINGS_FILE,
+        BEHAVIOR_PROFILES_FILE,
         LOCAL_CONVERSATION_CATALOG_FILE,
         CAPABILITY_PROBE_REPORT_FILE,
         LOCAL_INFERENCE_CONTRACT_FILE,
@@ -444,6 +448,31 @@ mod tests {
         assert_eq!(
             fs::read(source.join(INFERENCE_SETTINGS_FILE)).unwrap(),
             fs::read(target.join(INFERENCE_SETTINGS_FILE)).unwrap()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backup_and_restore_preserve_behavior_profiles() {
+        let root = temp("behavior-profiles");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        let _store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        fs::write(
+            source.join(BEHAVIOR_PROFILES_FILE),
+            br#"{"schema":"chatarium-behavior-profiles","version":1,"conversations":{}}"#,
+        )
+        .unwrap();
+
+        let created = create_backup(&source, &backup).unwrap();
+        assert_eq!(created.manifest_files, 2);
+        restore_backup(&backup, &target).unwrap();
+        assert_eq!(
+            fs::read(source.join(BEHAVIOR_PROFILES_FILE)).unwrap(),
+            fs::read(target.join(BEHAVIOR_PROFILES_FILE)).unwrap()
         );
         let _ = fs::remove_dir_all(root);
     }
