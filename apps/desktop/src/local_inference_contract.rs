@@ -16,9 +16,7 @@ pub struct LoadedContract {
 impl LoadedContract {
     #[must_use]
     pub fn ready_for(&self, profile_id: Option<&str>, model: &str) -> bool {
-        self.state == "ready"
-            && self.profile_id.as_deref() == profile_id
-            && self.model == model
+        self.state == "ready" && self.profile_id.as_deref() == profile_id && self.model == model
     }
 }
 
@@ -106,7 +104,12 @@ pub fn load_contract(path: &Path) -> Result<Option<LoadedContract>, String> {
     let evidence = value
         .get("evidence")
         .and_then(Value::as_object)
-        .ok_or_else(|| format!("local inference contract {} has no evidence", path.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "local inference contract {} has no evidence",
+                path.display()
+            )
+        })?;
     let model = evidence
         .get("model")
         .and_then(Value::as_str)
