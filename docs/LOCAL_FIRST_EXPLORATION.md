@@ -201,10 +201,19 @@ conversation provenance. Allow is blocked until that payload is durable.
 Approved routes can now consume one-shot dispatch authority and durably record
 delivery to the destination's current local session leaf. Delivered items
 project into a separate routed inbox with source/route/payload/session
-provenance. They do not become user-authored transcript messages and are not
-silently inserted into inference context.
+provenance. They never become user-authored transcript messages.
 
-The active next architectural boundary is explicit durable admission of a
-delivered routed inbox item into Context Composer, with a visible provenance and
-trust/role policy. Memory/controller-worker orchestration remains later. Do not
-reopen browser/history work as part of this phase.
+Routed context admission is now explicit and reversible. The destination user
+may Admit or Exclude each delivered item. Currently admitted items are
+snapshotted when Send is clicked and enter Context Composer as user-level peer
+content wrapped in visible Chatarium routing provenance. Delivery alone remains
+context-inert.
+
+The manual local routing stack is therefore vertically complete enough for
+behavioral experiments without hidden cross-conversation state.
+
+The active next architectural boundary is controller/worker orchestration:
+first freeze WorkerId semantics across session rollover, then expose explicit
+controller→worker supervision using the existing typed local orchestration
+machinery. Durable local memory remains a separate later source. Do not reopen
+browser/history work as part of this phase.
