@@ -258,6 +258,7 @@ impl TurnEvidence {
             | EventKind::ImportCompleted
             | EventKind::HistoricalConversationSnapshotImported
             | EventKind::RouteProposed
+            | EventKind::RoutePayloadAttached
             | EventKind::RouteUserDecisionRecorded
             | EventKind::RouteDispatched
             | EventKind::RouteResultObserved
@@ -345,6 +346,8 @@ pub enum EventKind {
     HistoricalConversationSnapshotImported,
     /// A supervisory route was durably proposed.
     RouteProposed,
+    /// One immutable local payload was correlated to a proposed route.
+    RoutePayloadAttached,
     /// An explicit user allow/deny decision for a supervisory route was recorded.
     RouteUserDecisionRecorded,
     /// A supervisory route consumed its one-shot dispatch authorization.
@@ -433,6 +436,7 @@ impl EventKind {
                 "historical_conversation_snapshot_imported"
             }
             Self::RouteProposed => "route_proposed",
+            Self::RoutePayloadAttached => "route_payload_attached",
             Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
             Self::RouteDispatched => "route_dispatched",
             Self::RouteResultObserved => "route_result_observed",
@@ -493,6 +497,7 @@ impl EventKind {
                 Some(Self::HistoricalConversationSnapshotImported)
             }
             "route_proposed" => Some(Self::RouteProposed),
+            "route_payload_attached" => Some(Self::RoutePayloadAttached),
             "route_user_decision_recorded" => Some(Self::RouteUserDecisionRecorded),
             "route_dispatched" => Some(Self::RouteDispatched),
             "route_result_observed" => Some(Self::RouteResultObserved),
