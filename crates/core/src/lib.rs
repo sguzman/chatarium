@@ -436,9 +436,7 @@ impl EventKind {
             Self::RouteDispatched => "route_dispatched",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
-            Self::LocalConversationChatContainerBound => {
-                "local_conversation_chat_container_bound"
-            }
+            Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
             Self::WorkerGoalAssigned => "worker_goal_assigned",
             Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
             Self::WorkerControlAdmitted => "worker_control_admitted",
