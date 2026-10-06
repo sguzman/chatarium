@@ -76,6 +76,8 @@ Chatarium is a reliability project first and a UI project second.
 - When a handoff command fails before the intended operation begins (for example, a missing local file before authentication), diagnose the earliest failed precondition first. Do not redirect the diagnosis toward later auth/network/runtime stages that were never reached.
 - Developer-only probes, smoke plumbing, and routine capability experiments are engineering-owned. If they can be exposed safely through a fixed in-app Diagnostics action, CLI/test hook, or CI harness, implement that surface rather than converting the principal into the test runner.
 
+- Whole-file remote edits are destructive operations. Before committing one, verify the transformed content still has a plausible size and required structural sentinels; after the commit, immediately read the file back and verify those invariants again. Never rely on a helper's apparent success as proof that the full file survived.
+
 ## Scope boundaries
 
 - Chatarium's target is the user's ordinary ChatGPT conversation universe with preserved remote identity, not merely a parallel local-only Responses thread. Official Sign in with ChatGPT + Responses may remain an auxiliary/local-only inference path, but it does not define product success if it cannot list, read, create, continue, and write ordinary ChatGPT conversations. Empirical first-party protocol work is therefore a primary viability track, not optional compatibility/import research.
