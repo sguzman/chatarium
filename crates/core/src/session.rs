@@ -91,9 +91,77 @@ impl WorkerSessionBinding {
     }
 }
 
+/// Explicit handoff of one persistent worker identity from a predecessor session
+/// leaf to a successor session leaf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerSessionSuccessorBinding {
+    worker_id: WorkerId,
+    predecessor_session_id: SessionId,
+    successor_session_id: SessionId,
+}
+
+impl WorkerSessionSuccessorBinding {
+    /// Construct one worker-session successor handoff.
+    pub fn new(
+        worker_id: WorkerId,
+        predecessor_session_id: SessionId,
+        successor_session_id: SessionId,
+    ) -> Result<Self, WorkerSessionSuccessorBindingError> {
+        if predecessor_session_id == successor_session_id {
+            return Err(WorkerSessionSuccessorBindingError::SameSession {
+                session_id: predecessor_session_id,
+            });
+        }
+        Ok(Self {
+            worker_id,
+            predecessor_session_id,
+            successor_session_id,
+        })
+    }
+
+    #[must_use]
+    pub const fn worker_id(self) -> WorkerId {
+        self.worker_id
+    }
+
+    #[must_use]
+    pub const fn predecessor_session_id(self) -> SessionId {
+        self.predecessor_session_id
+    }
+
+    #[must_use]
+    pub const fn successor_session_id(self) -> SessionId {
+        self.successor_session_id
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerSessionSuccessorBindingError {
+    SameSession { session_id: SessionId },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_session_successor_requires_distinct_leaves() {
+        let worker = WorkerId::new(11);
+        let predecessor = SessionId::new(7);
+        let successor = SessionId::new(8);
+        let binding =
+            WorkerSessionSuccessorBinding::new(worker, predecessor, successor).unwrap();
+
+        assert_eq!(binding.worker_id(), worker);
+        assert_eq!(binding.predecessor_session_id(), predecessor);
+        assert_eq!(binding.successor_session_id(), successor);
+        assert_eq!(
+            WorkerSessionSuccessorBinding::new(worker, predecessor, predecessor),
+            Err(WorkerSessionSuccessorBindingError::SameSession {
+                session_id: predecessor,
+            })
+        );
+    }
 
     #[test]
     fn bindings_preserve_distinct_identity_domains() {
