@@ -2149,12 +2149,10 @@ impl ChatariumApp {
 
                         if let Some(intent) = self.commit_remote_intents.remove(&request_id) {
                             let remote_request_id = message.turn_id.to_string();
-                            let transcript = context_transcript(
-                                &projected_local_display_messages(
-                                    &self.events,
-                                    self.local_conversation_id,
-                                ),
-                            );
+                            let transcript = context_transcript(&projected_local_display_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ));
                             let context_plan = context_composer::ContextPlan::compose(
                                 intent.instructions.as_deref().unwrap_or_default(),
                                 intent.developer_context.as_str(),
@@ -6393,9 +6391,7 @@ fn remote_turn_payload(
     .expect("remote turn observation is JSON-serializable")
 }
 
-fn context_transcript(
-    messages: &[DisplayMessage],
-) -> Vec<context_composer::TranscriptMessage> {
+fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::TranscriptMessage> {
     messages
         .iter()
         .map(|message| {
@@ -8065,11 +8061,8 @@ mod tests {
             },
         ];
 
-        let plan = context_composer::ContextPlan::compose(
-            "",
-            "behavior",
-            context_transcript(&messages),
-        );
+        let plan =
+            context_composer::ContextPlan::compose("", "behavior", context_transcript(&messages));
         assert_eq!(
             plan.input_json(),
             serde_json::json!([
