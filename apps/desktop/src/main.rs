@@ -45,6 +45,10 @@ use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
 };
+use chatarium_store::local_route_context_audit::{
+    LocalRouteContextDecision, record_local_route_context_decision,
+    replay_local_route_context_audit,
+};
 use chatarium_store::local_route_delivery_audit::{
     record_local_route_delivered, replay_local_route_delivery_audit,
 };
@@ -130,6 +134,11 @@ enum PersistCommand {
     },
     DispatchLocalSessionRoute {
         route_id: RouteId,
+    },
+    DecideLocalRouteContext {
+        route_id: RouteId,
+        destination_conversation_id: LocalConversationId,
+        decision: LocalRouteContextDecision,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -287,6 +296,10 @@ enum PersistNotice {
     LocalRouteDispatchUpdated {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    LocalRouteContextDecisionUpdated {
+        route_id: RouteId,
+        event: EventEnvelope,
     },
     LifecycleEventAppended {
         event: EventEnvelope,
@@ -529,6 +542,7 @@ struct ChatariumApp {
     route_payload_command_pending: bool,
     route_payload_drafts: BTreeMap<RouteId, String>,
     route_dispatch_command_pending: bool,
+    route_context_command_pending: bool,
     lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -780,6 +794,7 @@ impl ChatariumApp {
                         route_payload_command_pending: false,
                         route_payload_drafts: BTreeMap::new(),
                         route_dispatch_command_pending: false,
+                        route_context_command_pending: false,
                         lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -948,6 +963,7 @@ impl ChatariumApp {
             route_payload_command_pending: false,
             route_payload_drafts: BTreeMap::new(),
             route_dispatch_command_pending: false,
+            route_context_command_pending: false,
             lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
@@ -2688,6 +2704,14 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
+                PersistNotice::LocalRouteContextDecisionUpdated { route_id, event } => {
+                    self.events.push(event);
+                    self.route_context_command_pending = false;
+                    self.status = format!(
+                        "local route {} context eligibility durably updated",
+                        route_id.get()
+                    );
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -2711,6 +2735,8 @@ impl ChatariumApp {
                         self.route_payload_command_pending = false;
                     } else if operation.starts_with("local route dispatch") {
                         self.route_dispatch_command_pending = false;
+                    } else if operation.starts_with("local route context") {
+                        self.route_context_command_pending = false;
                     } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
                     }
@@ -3493,6 +3519,38 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue local route dispatch: {error}");
+            }
+        }
+    }
+
+    fn decide_local_route_context(
+        &mut self,
+        route_id: RouteId,
+        decision: LocalRouteContextDecision,
+    ) {
+        if self.route_context_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot update routed context eligibility: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideLocalRouteContext {
+            route_id,
+            destination_conversation_id: self.local_conversation_id,
+            decision,
+        }) {
+            Ok(()) => {
+                self.route_context_command_pending = true;
+                self.status = format!(
+                    "recording routed context {} decision for route {}…",
+                    local_route_context_decision_label(decision),
+                    route_id.get(),
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue routed context decision: {error}");
             }
         }
     }
@@ -7834,6 +7892,34 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::DecideLocalRouteContext {
+                route_id,
+                destination_conversation_id,
+                decision,
+            } => {
+                match append_local_route_context_decision_checked(
+                    &mut store,
+                    route_id,
+                    destination_conversation_id,
+                    decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalRouteContextDecisionUpdated {
+                            route_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local route context decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -10198,6 +10284,9 @@ mod tests {
             }
             PersistNotice::LocalRoutePayloadAttached { .. } => "local_route_payload_attached",
             PersistNotice::LocalRouteDispatchUpdated { .. } => "local_route_dispatch_updated",
+            PersistNotice::LocalRouteContextDecisionUpdated { .. } => {
+                "local_route_context_decision_updated"
+            }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
