@@ -174,6 +174,14 @@ empirically accepted values for low reasoning, low verbosity, and web search.
 Those settings are snapshotted at commit time and fail closed if the active
 profile/model contract no longer admits them.
 
-The active next architectural layer is Lifecycle State, followed by explicit
-routing/memory and controller/worker orchestration. Do not reopen
-browser/history work as part of this phase.
+The first local-first Lifecycle State slice is now landed and documented in
+[LIFECYCLE_STATE.md](LIFECYCLE_STATE.md). A local conversation can opt into the
+existing durable WorkerLifecycle state machine through an explicit one-to-one
+LocalConversationId→WorkerId journal binding. The desktop exposes manual,
+validated lifecycle transitions only; no automatic continuation, prose-based
+state inference, or hidden prompt injection is introduced.
+
+The active next architectural boundary is explicit local-conversation identity
+bridging into the existing session/routing plane, then visible routing/memory
+and controller/worker orchestration. Do not reopen browser/history work as part
+of this phase.
