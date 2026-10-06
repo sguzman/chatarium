@@ -7185,6 +7185,170 @@ fn append_local_route_user_decision_checked(
         .ok_or_else(|| "local route decision append produced no durable event".to_owned())
 }
 
+fn route_gate_before_dispatch(route: &RouteAuditRecord) -> Result<RouteGate, String> {
+    let mut gate = RouteGate::new(route.request, route.initial_policy);
+    if let Some(decision) = route.latest_user_decision {
+        match decision {
+            RouteUserDecision::Allow => gate.user_allow(),
+            RouteUserDecision::Deny => gate.user_deny(),
+        }
+        .map_err(|error| format!("cannot reconstruct route {} gate: {error:?}", route.request.id.get()))?;
+    }
+    if gate.state() != route.gate_state {
+        return Err(format!(
+            "route {} gate reconstruction disagrees with durable routing audit",
+            route.request.id.get()
+        ));
+    }
+    Ok(gate)
+}
+
+fn append_local_route_dispatch_and_delivery_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+) -> Result<Vec<EventEnvelope>, String> {
+    let deliveries = replay_local_route_delivery_audit(store.events())?;
+    if let Some(existing) = deliveries
+        .iter()
+        .find(|delivery| delivery.route_id == route_id)
+    {
+        return Err(format!(
+            "local route {} is already delivered at event #{}",
+            route_id.get(),
+            existing.delivered_sequence
+        ));
+    }
+
+    let payload = replay_local_route_payload_audit(store.events())?
+        .into_iter()
+        .find(|payload| payload.route_id == route_id)
+        .ok_or_else(|| {
+            format!(
+                "local route {} cannot dispatch before an immutable payload is attached",
+                route_id.get()
+            )
+        })?;
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| format!("local route {} does not exist", route_id.get()))?;
+
+    if route.request.class != RouteClass::SessionMessage {
+        return Err(format!(
+            "route {} is not a local session-message route",
+            route_id.get()
+        ));
+    }
+    if route.initial_policy != RoutePolicy::RequireApproval {
+        return Err(format!(
+            "route {} was not created under explicit-approval policy",
+            route_id.get()
+        ));
+    }
+
+    let directory = replay_local_routing_directory(store.events())?;
+    let source = directory
+        .iter()
+        .find(|entry| entry.endpoint_id == route.request.source)
+        .ok_or_else(|| {
+            format!(
+                "route {} source endpoint {} is no longer the current local leaf",
+                route_id.get(),
+                route.request.source.get()
+            )
+        })?;
+    let destination = directory
+        .iter()
+        .find(|entry| entry.endpoint_id == route.request.destination)
+        .ok_or_else(|| {
+            format!(
+                "route {} destination endpoint {} is no longer the current local leaf",
+                route_id.get(),
+                route.request.destination.get()
+            )
+        })?;
+    if source.conversation_id != payload.source_conversation_id
+        || destination.conversation_id != payload.destination_conversation_id
+    {
+        return Err(format!(
+            "route {} current endpoint ownership disagrees with immutable payload provenance",
+            route_id.get()
+        ));
+    }
+    if !source.current_session_phase.accepts_ordinary_turns()
+        || !destination.current_session_phase.accepts_ordinary_turns()
+    {
+        return Err(format!(
+            "route {} cannot deliver because one current session leaf no longer accepts ordinary turns",
+            route_id.get()
+        ));
+    }
+
+    let before = store.events().len();
+    let dispatch_sequence = match route.gate_state {
+        RouteGateState::Allowed { .. } => {
+            let mut gate = route_gate_before_dispatch(&route)?;
+            let permit = gate
+                .authorize_dispatch(route_id)
+                .map_err(|error| format!("route {} dispatch gate rejected: {error:?}", route_id.get()))?;
+            record_route_dispatched(store, permit).map_err(|error| error.to_string())?
+        }
+        RouteGateState::Dispatched { .. } => route.dispatch_sequence.ok_or_else(|| {
+            format!(
+                "route {} is marked dispatched without a durable dispatch sequence",
+                route_id.get()
+            )
+        })?,
+        RouteGateState::PendingApproval => {
+            return Err(format!(
+                "route {} is still awaiting explicit user approval",
+                route_id.get()
+            ));
+        }
+        RouteGateState::Denied { .. } => {
+            return Err(format!("route {} is denied and cannot dispatch", route_id.get()));
+        }
+    };
+
+    let dispatched = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|candidate| candidate.request.id == route_id)
+        .ok_or_else(|| "local route disappeared after dispatch append".to_owned())?;
+    if !dispatched.gate_state.is_dispatched()
+        || dispatched.dispatch_sequence != Some(dispatch_sequence)
+    {
+        return Err("local route dispatch replay disagrees with durable dispatch".to_owned());
+    }
+
+    record_local_route_delivered(
+        store,
+        route_id,
+        payload.payload_id,
+        payload.source_conversation_id,
+        payload.destination_conversation_id,
+        source.current_session_id,
+        destination.current_session_id,
+        dispatch_sequence,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let delivery = replay_local_route_delivery_audit(store.events())?
+        .into_iter()
+        .find(|delivery| delivery.route_id == route_id)
+        .ok_or_else(|| "local route delivery append did not replay".to_owned())?;
+    if delivery.payload_id != payload.payload_id
+        || delivery.source_conversation_id != payload.source_conversation_id
+        || delivery.destination_conversation_id != payload.destination_conversation_id
+        || delivery.source_session_id != source.current_session_id
+        || delivery.destination_session_id != destination.current_session_id
+        || delivery.dispatch_sequence != dispatch_sequence
+    {
+        return Err("local route delivery replay disagrees with appended delivery".to_owned());
+    }
+
+    Ok(store.events()[before..].to_vec())
+}
+
 fn append_local_worker_binding_checked(
     store: &mut impl EventStore,
     conversation_id: LocalConversationId,
