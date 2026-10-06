@@ -5915,8 +5915,7 @@ fn append_worker_goal_checked(
         .assign_goal(goal_id)
         .map_err(|error| error.to_string())?;
 
-    record_worker_goal_assigned(store, worker_id, goal_id)
-        .map_err(|error| error.to_string())?;
+    record_worker_goal_assigned(store, worker_id, goal_id).map_err(|error| error.to_string())?;
     store
         .events()
         .last()
@@ -5968,9 +5967,9 @@ fn apply_worker_action(
     action: WorkerAction,
 ) -> Result<(), String> {
     match action {
-        WorkerAction::AssignGoal => Err(
-            "AssignGoal must use the dedicated durable goal-assignment command".to_owned(),
-        ),
+        WorkerAction::AssignGoal => {
+            Err("AssignGoal must use the dedicated durable goal-assignment command".to_owned())
+        }
         WorkerAction::StartOrResume => lifecycle
             .start_or_resume(goal_id)
             .map_err(|error| error.to_string()),
@@ -6076,22 +6075,20 @@ fn persistence_worker(
                 worker_id,
                 goal_id,
                 action,
-            } => {
-                match append_worker_transition_checked(&mut store, worker_id, goal_id, action) {
-                    Ok(event) => {
-                        let _ = notices.send(PersistNotice::LifecycleEventAppended { event });
-                    }
-                    Err(error) => {
-                        let _ = notices.send(PersistNotice::Failed {
-                            operation: "lifecycle transition",
-                            revision: None,
-                            request_id: None,
-                            turn_id: None,
-                            error,
-                        });
-                    }
+            } => match append_worker_transition_checked(&mut store, worker_id, goal_id, action) {
+                Ok(event) => {
+                    let _ = notices.send(PersistNotice::LifecycleEventAppended { event });
                 }
-            }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "lifecycle transition",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            },
             PersistCommand::SaveLocalConversationCatalog { catalog } => {
                 if let Err(error) = catalog.save_atomic(&data_dir.join("local-conversations.json"))
                 {
