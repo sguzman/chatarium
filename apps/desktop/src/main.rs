@@ -5240,7 +5240,7 @@ impl eframe::App for ChatariumApp {
                                     );
                                     ui.label(
                                         egui::RichText::new(
-                                            "Session-message route proposals carry identity and policy only. No message payload is attached and no route can dispatch yet.",
+                                            "Session-message routes now carry a separately durable immutable text payload. Allow requires a payload; dispatch remains disabled.",
                                         )
                                         .size(9.0)
                                         .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -5264,6 +5264,22 @@ impl eframe::App for ChatariumApp {
                                                         == RouteClass::SessionMessage
                                                 })
                                                 .collect::<Vec<_>>();
+                                            let payloads =
+                                                match replay_local_route_payload_audit(&self.events) {
+                                                    Ok(payloads) => Some(payloads),
+                                                    Err(error) => {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "route payload projection blocked: {error}"
+                                                            ))
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            )),
+                                                        );
+                                                        None
+                                                    }
+                                                };
                                             if routes.is_empty() {
                                                 ui.label(
                                                     egui::RichText::new(
@@ -5343,6 +5359,16 @@ impl eframe::App for ChatariumApp {
                                                                             .get()
                                                                     )
                                                                 });
+                                                            let payload = payloads
+                                                                .as_ref()
+                                                                .and_then(|payloads| {
+                                                                    payloads.iter().find(
+                                                                        |payload| {
+                                                                            payload.route_id
+                                                                                == route.request.id
+                                                                        },
+                                                                    )
+                                                                });
 
                                                             ui.horizontal_wrapped(|ui| {
                                                                 ui.label(
@@ -5383,10 +5409,13 @@ impl eframe::App for ChatariumApp {
                                                                         .is_dispatched()
                                                                     && !self
                                                                         .route_policy_command_pending
+                                                                    && !self
+                                                                        .route_payload_command_pending
                                                                     && self.persist_tx.is_some();
                                                                 if ui
                                                                     .add_enabled(
                                                                         can_decide
+                                                                            && payload.is_some()
                                                                             && route
                                                                                 .latest_user_decision
                                                                                 != Some(
@@ -5423,10 +5452,73 @@ impl eframe::App for ChatariumApp {
                                                                     );
                                                                 }
                                                             });
+
+                                                            if let Some(payload) = payload {
+                                                                ui.collapsing(
+                                                                    format!(
+                                                                        "Payload {} · {} bytes · immutable",
+                                                                        payload.payload_id.get(),
+                                                                        payload.text.len(),
+                                                                    ),
+                                                                    |ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                payload.text.as_str(),
+                                                                            )
+                                                                            .size(10.0),
+                                                                        );
+                                                                    },
+                                                                );
+                                                            } else {
+                                                                let mut attach_clicked = false;
+                                                                ui.horizontal_wrapped(|ui| {
+                                                                    let draft = self
+                                                                        .route_payload_drafts
+                                                                        .entry(route.request.id)
+                                                                        .or_default();
+                                                                    ui.add(
+                                                                        egui::TextEdit::singleline(
+                                                                            draft,
+                                                                        )
+                                                                        .desired_width(260.0)
+                                                                        .hint_text(
+                                                                            "Exact routed message text",
+                                                                        ),
+                                                                    );
+                                                                    let can_attach = fresh
+                                                                        && !draft.trim().is_empty()
+                                                                        && !route
+                                                                            .gate_state
+                                                                            .is_dispatched()
+                                                                        && !self
+                                                                            .route_payload_command_pending
+                                                                        && !self
+                                                                            .route_policy_command_pending
+                                                                        && self.persist_tx.is_some();
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            can_attach,
+                                                                            egui::Button::new(
+                                                                                "Attach payload",
+                                                                            ),
+                                                                        )
+                                                                        .clicked()
+                                                                    {
+                                                                        attach_clicked = true;
+                                                                    }
+                                                                });
+                                                                if attach_clicked {
+                                                                    self.attach_local_session_route_payload(
+                                                                        route.request.id,
+                                                                    );
+                                                                }
+                                                            }
                                                         }
                                                     });
                                             }
-                                            if self.route_policy_command_pending {
+                                            if self.route_policy_command_pending
+                                                || self.route_payload_command_pending
+                                            {
                                                 ui.spinner();
                                             }
                                         }
