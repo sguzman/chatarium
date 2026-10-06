@@ -211,6 +211,7 @@ pub fn save_contract(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Res
             "status": result.status,
             "code": result.code,
             "status_code": result.status_code,
+            "param": result.param,
             "text_received": result.text_received,
             "reason": result.reason,
         })).collect::<Vec<Value>>(),
@@ -232,6 +233,7 @@ mod tests {
             status: status.to_owned(),
             code: None,
             status_code: None,
+            param: None,
             text_received: None,
             reason: None,
         }

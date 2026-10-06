@@ -55,6 +55,7 @@ function safeError(error) {
           : "The ChatGPT bridge operation failed.",
       retryable: Boolean(error.retryable),
       ...(Number.isInteger(error.status) ? { status: error.status } : {}),
+      ...(typeof error.param === "string" ? { param: error.param } : {}),
       ...(typeof error.requestId === "string"
         ? { request_id: error.requestId }
         : {}),

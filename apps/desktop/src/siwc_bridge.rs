@@ -66,6 +66,7 @@ pub struct BridgeError {
     pub message: String,
     pub retryable: bool,
     pub status: Option<u16>,
+    pub param: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -533,6 +534,10 @@ fn parse_error(value: &Value) -> Option<BridgeError> {
             .get("status")
             .and_then(Value::as_u64)
             .and_then(|status| u16::try_from(status).ok()),
+        param: value
+            .get("param")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     })
 }
 

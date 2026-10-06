@@ -6283,12 +6283,16 @@ fn probe_report_age(generated_unix_ms: u64) -> String {
 }
 
 fn probe_result_detail(result: &capability_probes::ProbeResult) -> String {
-    match (&result.code, result.status_code) {
+    let mut detail = match (&result.code, result.status_code) {
         (Some(code), Some(status)) => format!(" · {code} · HTTP {status}"),
         (Some(code), None) => format!(" · {code}"),
         (None, Some(status)) => format!(" · HTTP {status}"),
         (None, None) => String::new(),
+    };
+    if let Some(param) = result.param.as_deref() {
+        detail.push_str(&format!(" · param {param}"));
     }
+    detail
 }
 
 fn capability_probe_block_reason(
@@ -8086,6 +8090,7 @@ mod tests {
                 message: "rejected".to_owned(),
                 retryable: false,
                 status: Some(429),
+                param: None,
             }
         ));
         assert!(remote_error_is_observed_failure(
@@ -8094,6 +8099,7 @@ mod tests {
                 message: "bad model".to_owned(),
                 retryable: false,
                 status: None,
+                param: None,
             }
         ));
         assert!(remote_error_is_observed_failure(
@@ -8102,6 +8108,7 @@ mod tests {
                 message: "server reported incomplete".to_owned(),
                 retryable: true,
                 status: None,
+                param: None,
             }
         ));
         assert!(remote_error_is_observed_failure(
@@ -8110,6 +8117,7 @@ mod tests {
                 message: "sharing disabled before request".to_owned(),
                 retryable: false,
                 status: None,
+                param: None,
             }
         ));
         assert!(!remote_error_is_observed_failure(
@@ -8118,6 +8126,7 @@ mod tests {
                 message: "socket closed".to_owned(),
                 retryable: true,
                 status: None,
+                param: None,
             }
         ));
     }

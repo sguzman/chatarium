@@ -20,6 +20,7 @@ pub struct ProbeResult {
     pub status: String,
     pub code: Option<String>,
     pub status_code: Option<u16>,
+    pub param: Option<String>,
     pub text_received: Option<bool>,
     pub reason: Option<String>,
 }
@@ -67,6 +68,7 @@ impl ProbeRun {
             status: "supported".to_owned(),
             code: None,
             status_code: None,
+            param: None,
             text_received: Some(text_received),
             reason: None,
         });
@@ -79,6 +81,7 @@ impl ProbeRun {
             status: classify_error(error).to_owned(),
             code: Some(error.code.clone()),
             status_code: error.status,
+            param: error.param.clone(),
             text_received: None,
             reason: Some(error.message.clone()),
         });
@@ -94,6 +97,7 @@ impl ProbeRun {
             status: "error".to_owned(),
             code: Some("bridge_dispatch_failed".to_owned()),
             status_code: None,
+            param: None,
             text_received: None,
             reason: Some(error),
         });
@@ -109,6 +113,7 @@ impl ProbeRun {
                 status: "error".to_owned(),
                 code: Some("runtime_unavailable".to_owned()),
                 status_code: None,
+                param: None,
                 text_received: None,
                 reason: Some(reason.to_owned()),
             });
@@ -124,6 +129,7 @@ impl ProbeRun {
                 status: "not_run".to_owned(),
                 code: None,
                 status_code: None,
+                param: None,
                 text_received: None,
                 reason: Some(reason.to_owned()),
             });
@@ -229,6 +235,10 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
                 .get("status_code")
                 .and_then(Value::as_u64)
                 .and_then(|status| u16::try_from(status).ok()),
+            param: probe
+                .get("param")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             text_received: probe.get("text_received").and_then(Value::as_bool),
             reason: probe
                 .get("reason")
@@ -260,6 +270,7 @@ pub fn save_report(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Resul
             "status": result.status,
             "code": result.code,
             "status_code": result.status_code,
+            "param": result.param,
             "text_received": result.text_received,
             "reason": result.reason,
         })).collect::<Vec<_>>(),
@@ -429,10 +440,12 @@ mod tests {
                 message: "rejected".to_owned(),
                 retryable: false,
                 status: Some(400),
+                param: Some("tools".to_owned()),
             },
         );
         assert!(!run.running());
         assert_eq!(run.results[0].status, "rejected");
+        assert_eq!(run.results[0].param.as_deref(), Some("tools"));
         assert!(
             run.results[1..]
                 .iter()
@@ -453,6 +466,7 @@ mod tests {
             status: "supported".to_owned(),
             code: None,
             status_code: None,
+            param: None,
             text_received: Some(true),
             reason: None,
         });
