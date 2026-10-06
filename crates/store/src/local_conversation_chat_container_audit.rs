@@ -202,10 +202,7 @@ fn join_topology(
 
 /// Stable scope for one conversation -> chat-container identity edge.
 #[must_use]
-pub fn scope(
-    conversation_id: LocalConversationId,
-    container_id: ChatContainerId,
-) -> String {
+pub fn scope(conversation_id: LocalConversationId, container_id: ChatContainerId) -> String {
     format!(
         "local-conversation-chat-container:{conversation_id}:{}",
         container_id.get()
@@ -268,17 +265,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed local conversation topology payload is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed local conversation topology payload is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed local conversation topology payload is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed local conversation topology payload is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -317,7 +312,11 @@ mod tests {
         ))
     }
 
-    fn create_container(store: &mut impl EventStore, container: ChatContainerId, session: SessionId) {
+    fn create_container(
+        store: &mut impl EventStore,
+        container: ChatContainerId,
+        session: SessionId,
+    ) {
         record_local_session_registered(store, session).unwrap();
         record_chat_container_created(store, container, session).unwrap();
     }
