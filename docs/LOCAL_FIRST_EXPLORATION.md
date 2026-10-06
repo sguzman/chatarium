@@ -181,7 +181,12 @@ LocalConversationId→WorkerId journal binding. The desktop exposes manual,
 validated lifecycle transitions only; no automatic continuation, prose-based
 state inference, or hidden prompt injection is introduced.
 
-The active next architectural boundary is explicit local-conversation identity
-bridging into the existing session/routing plane, then visible routing/memory
-and controller/worker orchestration. Do not reopen browser/history work as part
-of this phase.
+The local-conversation identity bridge into the orchestration continuity
+plane is now landed: each opted-in conversation can durably own a logical chat
+container whose current local session is projected from the existing rollover
+audit.
+
+The active next architectural boundary is explicit current-session routing
+addressability (`SessionId → RouteEndpointId`), then visible routing/memory and
+controller/worker orchestration. Do not reopen browser/history work as part of
+this phase.
