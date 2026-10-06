@@ -6849,6 +6849,7 @@ fn append_local_session_route_proposal_checked(
     if source_conversation_id == destination_conversation_id {
         return Err("a local conversation cannot route a session message to itself".to_owned());
     }
+    replay_local_route_payload_audit(store.events())?;
     if replay_routing_audit(store.events())?
         .iter()
         .any(|route| route.request.id == route_id)
@@ -7033,6 +7034,7 @@ fn append_local_route_user_decision_checked(
     route_id: RouteId,
     decision: RouteUserDecision,
 ) -> Result<EventEnvelope, String> {
+    let payloads = replay_local_route_payload_audit(store.events())?;
     let route = replay_routing_audit(store.events())?
         .into_iter()
         .find(|route| route.request.id == route_id)
@@ -7064,9 +7066,7 @@ fn append_local_route_user_decision_checked(
         ));
     }
     if decision == RouteUserDecision::Allow
-        && !replay_local_route_payload_audit(store.events())?
-            .iter()
-            .any(|payload| payload.route_id == route_id)
+        && !payloads.iter().any(|payload| payload.route_id == route_id)
     {
         return Err(format!(
             "route {} cannot be allowed before an immutable payload is durably attached",
@@ -10014,6 +10014,35 @@ mod tests {
         assert_eq!(route.request.class, RouteClass::SessionMessage);
         assert_eq!(route.initial_policy, RoutePolicy::RequireApproval);
         assert_eq!(route.gate_state, RouteGateState::PendingApproval);
+
+        let before_payload = store.events().len();
+        assert!(
+            append_local_route_user_decision_checked(
+                &mut store,
+                RouteId::new(1),
+                RouteUserDecision::Allow,
+            )
+            .unwrap_err()
+            .contains("cannot be allowed before an immutable payload")
+        );
+        assert_eq!(store.events().len(), before_payload);
+
+        let payload_event = append_local_route_payload_checked(
+            &mut store,
+            RoutePayloadId::new(1),
+            RouteId::new(1),
+            " exact routed payload ".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(payload_event.kind, EventKind::RoutePayloadAttached);
+        let payloads = replay_local_route_payload_audit(store.events()).unwrap();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].payload_id, RoutePayloadId::new(1));
+        assert_eq!(payloads[0].text, " exact routed payload ");
+        assert_eq!(
+            next_available_route_payload_id(store.events()).unwrap(),
+            RoutePayloadId::new(2)
+        );
 
         let allowed = append_local_route_user_decision_checked(
             &mut store,
