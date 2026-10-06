@@ -4,6 +4,7 @@
 //! is validated structurally; neither backup manifests nor reports contain private identities,
 //! titles, message text, or raw response bodies.
 
+use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::remote_health::RemoteHealthController;
 use crate::remote_identity_audit::replay_remote_identity_audit;
 use crate::remote_mirror_queue::{RemoteMirrorQueueStatus, derive_remote_mirror_queue};
@@ -144,6 +145,7 @@ pub fn check_archive(
         .map(|(index, item)| (index, item.id.clone()))
         .collect::<Vec<_>>();
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
+    replay_local_conversation_topologies(&events).map_err(err)?;
     replay_remote_mirror_selection_audit(&events).map_err(err)?;
     replay_remote_read_audit(&events).map_err(err)?;
     RemoteHealthController::from_events(&events, unix_ms() as u64).map_err(err)?;
