@@ -5732,7 +5732,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Routed inbox", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Delivered routed messages are provenance-bearing local inbox items. Context eligibility is explicit and reversible; admitted items are still not serialized into inference until Context Composer support lands.",
+                                    "Delivered routed messages are provenance-bearing local inbox items. Context admission is explicit and reversible. Admitted items enter the next request at user trust level with a visible Chatarium provenance envelope; they never become user-authored transcript messages.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
