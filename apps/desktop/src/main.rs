@@ -2253,8 +2253,7 @@ impl ChatariumApp {
                 ) {
                     Ok(messages) => messages,
                     Err(error) => {
-                        self.status =
-                            format!("cannot snapshot admitted routed context: {error}");
+                        self.status = format!("cannot snapshot admitted routed context: {error}");
                         return;
                     }
                 };
@@ -2347,9 +2346,8 @@ impl ChatariumApp {
                                     self.local_conversation_id,
                                 ));
                             transcript.extend(intent.routed_context);
-                            transcript.sort_by_key(
-                                context_composer::TranscriptMessage::order_sequence,
-                            );
+                            transcript
+                                .sort_by_key(context_composer::TranscriptMessage::order_sequence);
                             let context_plan = context_composer::ContextPlan::compose(
                                 context_composer::ContextPolicy::dispatch(),
                                 intent.instructions.as_deref().unwrap_or_default(),
@@ -7697,19 +7695,17 @@ fn append_local_route_context_decision_checked(
     destination_conversation_id: LocalConversationId,
     decision: LocalRouteContextDecision,
 ) -> Result<EventEnvelope, String> {
-    let inbox_item = replay_local_routed_inbox_for_conversation(
-        store.events(),
-        destination_conversation_id,
-    )?
-    .into_iter()
-    .find(|item| item.route_id == route_id)
-    .ok_or_else(|| {
-        format!(
-            "local route {} is not a delivered routed inbox item for conversation {}",
-            route_id.get(),
-            destination_conversation_id,
-        )
-    })?;
+    let inbox_item =
+        replay_local_routed_inbox_for_conversation(store.events(), destination_conversation_id)?
+            .into_iter()
+            .find(|item| item.route_id == route_id)
+            .ok_or_else(|| {
+                format!(
+                    "local route {} is not a delivered routed inbox item for conversation {}",
+                    route_id.get(),
+                    destination_conversation_id,
+                )
+            })?;
 
     if let Some(existing) = replay_local_route_context_audit(store.events())?
         .into_iter()
@@ -9459,9 +9455,7 @@ fn session_endpoint_binding(
         .and_then(|record| record.endpoint_binding))
 }
 
-fn local_route_context_decision_label(
-    decision: LocalRouteContextDecision,
-) -> &'static str {
+fn local_route_context_decision_label(decision: LocalRouteContextDecision) -> &'static str {
     match decision {
         LocalRouteContextDecision::Admit => "admit",
         LocalRouteContextDecision::Exclude => "exclude",
@@ -10885,10 +10879,7 @@ mod tests {
             LocalRouteContextDecision::Admit,
         )
         .unwrap();
-        assert_eq!(
-            admit.kind,
-            EventKind::LocalRouteContextDecisionRecorded
-        );
+        assert_eq!(admit.kind, EventKind::LocalRouteContextDecisionRecorded);
 
         let routed = admitted_routed_context_messages(store.events(), destination).unwrap();
         assert_eq!(routed.len(), 1);
