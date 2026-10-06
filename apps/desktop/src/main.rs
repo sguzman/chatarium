@@ -2559,6 +2559,12 @@ impl ChatariumApp {
                         self.remote_health.intent.as_str()
                     );
                 }
+                PersistNotice::LifecycleEventAppended { event } => {
+                    let kind = event.kind.stable_name();
+                    self.events.push(event);
+                    self.lifecycle_command_pending = false;
+                    self.status = format!("worker lifecycle durably updated · {kind}");
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2566,6 +2572,9 @@ impl ChatariumApp {
                     turn_id,
                     error,
                 } => {
+                    if operation.starts_with("lifecycle ") {
+                        self.lifecycle_command_pending = false;
+                    }
                     if request_id.is_some() && request_id == self.commit_in_flight {
                         if let Some(request_id) = request_id {
                             self.commit_remote_intents.remove(&request_id);
