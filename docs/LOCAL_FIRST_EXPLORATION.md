@@ -186,7 +186,11 @@ plane is now landed: each opted-in conversation can durably own a logical chat
 container whose current local session is projected from the existing rollover
 audit.
 
-The active next architectural boundary is explicit current-session routing
-addressability (`SessionId → RouteEndpointId`), then visible routing/memory and
-controller/worker orchestration. Do not reopen browser/history work as part of
-this phase.
+Current-session routing addressability
+(`SessionId → RouteEndpointId`) is now explicit and durable, but still grants
+no route or dispatch authority.
+
+The active next architectural boundary is a deterministic read-only local
+routing directory over addressable local conversations, then visible manual
+routing/policy and later memory/controller-worker orchestration. Do not reopen
+browser/history work as part of this phase.
