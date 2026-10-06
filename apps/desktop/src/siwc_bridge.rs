@@ -17,6 +17,7 @@ pub enum BridgeCommand {
         model: String,
         input: Value,
         instructions: Option<String>,
+        request_patch: Value,
     },
     ProbeResponse {
         request_id: String,
@@ -376,12 +377,14 @@ fn command_json(command: BridgeCommand) -> Value {
             model,
             input,
             instructions,
+            request_patch,
         } => json!({
             "type": "stream_response",
             "request_id": request_id,
             "model": model,
             "input": input,
-            "instructions": instructions
+            "instructions": instructions,
+            "request_patch": request_patch
         }),
         BridgeCommand::ProbeResponse {
             request_id,
@@ -563,13 +566,21 @@ mod tests {
                 model: "gpt-example".to_owned(),
                 input: serde_json::json!([{"role":"user","content":"hi"}]),
                 instructions: Some("Be concise.".to_owned()),
+                request_patch: serde_json::json!({
+                    "reasoning": {"effort": "low"},
+                    "text": {"verbosity": "low"}
+                }),
             }),
             serde_json::json!({
                 "type": "stream_response",
                 "request_id": "turn-1",
                 "model": "gpt-example",
                 "input": [{"role":"user","content":"hi"}],
-                "instructions": "Be concise."
+                "instructions": "Be concise.",
+                "request_patch": {
+                    "reasoning": {"effort": "low"},
+                    "text": {"verbosity": "low"}
+                }
             })
         );
     }
