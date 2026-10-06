@@ -268,6 +268,55 @@ mod tests {
     }
 
     #[test]
+    fn derived_contract_preserves_rejected_parameter_evidence() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-local-inference-contract-param-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+
+        let mut run = ProbeRun {
+            model: Some("gpt-example".to_owned()),
+            profile_id: Some("profile-1".to_owned()),
+            generated_unix_ms: Some(1234),
+            ..ProbeRun::default()
+        };
+        run.results = EXPECTED_PROBES
+            .iter()
+            .map(|name| result(name, "supported"))
+            .collect();
+        let reasoning = run
+            .results
+            .iter_mut()
+            .find(|result| result.name == "reasoning")
+            .unwrap();
+        reasoning.status = "rejected".to_owned();
+        reasoning.code = Some("invalid_request_error".to_owned());
+        reasoning.status_code = Some(400);
+        reasoning.param = Some("reasoning".to_owned());
+        reasoning.reason = Some("rejected".to_owned());
+
+        save_contract(&path, &run, 5678).unwrap();
+        let loaded = load_contract(&path).unwrap().unwrap();
+        assert_eq!(loaded.state, "needs_review");
+        assert_eq!(
+            loaded.capabilities.get("reasoning").map(String::as_str),
+            Some("rejected")
+        );
+
+        let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let reasoning = value["empirical_capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == "reasoning")
+            .unwrap();
+        assert_eq!(reasoning["param"], "reasoning");
+        assert_eq!(reasoning["status_code"], 400);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn derived_contract_keeps_fixed_and_empirical_layers_separate() {
         let path = std::env::temp_dir().join(format!(
             "chatarium-local-inference-contract-{}",

@@ -463,12 +463,12 @@ mod tests {
         run.profile_id = Some("profile-1".to_owned());
         run.results.push(ProbeResult {
             name: "reasoning".to_owned(),
-            status: "supported".to_owned(),
-            code: None,
-            status_code: None,
-            param: None,
-            text_received: Some(true),
-            reason: None,
+            status: "rejected".to_owned(),
+            code: Some("invalid_request_error".to_owned()),
+            status_code: Some(400),
+            param: Some("reasoning".to_owned()),
+            text_received: None,
+            reason: Some("rejected".to_owned()),
         });
         save_report(&root, &run, 1234).unwrap();
 
@@ -477,7 +477,9 @@ mod tests {
         assert_eq!(loaded.profile_id.as_deref(), Some("profile-1"));
         assert_eq!(loaded.generated_unix_ms, Some(1234));
         assert_eq!(loaded.results, run.results);
+        assert_eq!(loaded.results[0].param.as_deref(), Some("reasoning"));
         let encoded = fs::read_to_string(&root).unwrap();
+        assert!(encoded.contains(r#""param": "reasoning""#));
         assert!(!encoded.contains("access_token"));
         assert!(!encoded.contains("refresh_token"));
         let _ = fs::remove_file(root);

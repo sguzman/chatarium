@@ -643,6 +643,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_safe_error_parameter_diagnostics() {
+        let event = parse_bridge_event(
+            r#"{"type":"error","request_id":"probe:reasoning","error":{"code":"invalid_request_error","message":"rejected","retryable":false,"status":400,"param":"reasoning"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            event,
+            BridgeEvent::Failed {
+                request_id: Some("probe:reasoning".to_owned()),
+                error: BridgeError {
+                    code: "invalid_request_error".to_owned(),
+                    message: "rejected".to_owned(),
+                    retryable: false,
+                    status: Some(400),
+                    param: Some("reasoning".to_owned()),
+                },
+            }
+        );
+    }
+
+    #[test]
     fn rejects_credential_bearing_output_even_if_sidecar_regresses() {
         let event = parse_bridge_event(
             r#"{"type":"session","session":{"status":"connected","sharing":true,"access_token":"secret"}}"#,
