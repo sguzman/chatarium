@@ -261,6 +261,7 @@ impl TurnEvidence {
             | EventKind::RoutePayloadAttached
             | EventKind::RouteUserDecisionRecorded
             | EventKind::RouteDispatched
+            | EventKind::LocalRouteDelivered
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
@@ -352,6 +353,8 @@ pub enum EventKind {
     RouteUserDecisionRecorded,
     /// A supervisory route consumed its one-shot dispatch authorization.
     RouteDispatched,
+    /// A dispatched local session-message payload was durably delivered.
+    LocalRouteDelivered,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
@@ -439,6 +442,7 @@ impl EventKind {
             Self::RoutePayloadAttached => "route_payload_attached",
             Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
             Self::RouteDispatched => "route_dispatched",
+            Self::LocalRouteDelivered => "local_route_delivered",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
@@ -500,6 +504,7 @@ impl EventKind {
             "route_payload_attached" => Some(Self::RoutePayloadAttached),
             "route_user_decision_recorded" => Some(Self::RouteUserDecisionRecorded),
             "route_dispatched" => Some(Self::RouteDispatched),
+            "local_route_delivered" => Some(Self::LocalRouteDelivered),
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
