@@ -9630,6 +9630,105 @@ mod tests {
     }
 
     #[test]
+    fn manual_local_route_policy_is_durable_and_requires_current_addressability() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let missing = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        append_local_orchestration_topology_checked(
+            &mut store,
+            source,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
+        append_current_session_route_endpoint_checked(
+            &mut store,
+            source,
+            SessionId::new(1),
+            RouteEndpointId::new(1),
+        )
+        .unwrap();
+
+        append_local_orchestration_topology_checked(
+            &mut store,
+            destination,
+            ChatContainerId::new(2),
+            SessionId::new(2),
+        )
+        .unwrap();
+        append_current_session_route_endpoint_checked(
+            &mut store,
+            destination,
+            SessionId::new(2),
+            RouteEndpointId::new(2),
+        )
+        .unwrap();
+
+        let proposed = append_local_session_route_proposal_checked(
+            &mut store,
+            RouteId::new(1),
+            source,
+            destination,
+        )
+        .unwrap();
+        assert_eq!(proposed.kind, EventKind::RouteProposed);
+
+        let route = replay_routing_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|route| route.request.id == RouteId::new(1))
+            .unwrap();
+        assert_eq!(route.request.source, RouteEndpointId::new(1));
+        assert_eq!(route.request.destination, RouteEndpointId::new(2));
+        assert_eq!(route.request.class, RouteClass::SessionMessage);
+        assert_eq!(route.initial_policy, RoutePolicy::RequireApproval);
+        assert_eq!(route.gate_state, RouteGateState::PendingApproval);
+
+        let allowed = append_local_route_user_decision_checked(
+            &mut store,
+            RouteId::new(1),
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        assert_eq!(allowed.kind, EventKind::RouteUserDecisionRecorded);
+        assert_eq!(
+            replay_routing_audit(store.events()).unwrap()[0].gate_state,
+            RouteGateState::Allowed {
+                by: DecisionAuthority::User,
+            }
+        );
+
+        append_local_route_user_decision_checked(
+            &mut store,
+            RouteId::new(1),
+            RouteUserDecision::Deny,
+        )
+        .unwrap();
+        assert_eq!(
+            replay_routing_audit(store.events()).unwrap()[0].gate_state,
+            RouteGateState::Denied {
+                by: DecisionAuthority::User,
+            }
+        );
+        assert_eq!(next_available_route_id(store.events()).unwrap(), RouteId::new(2));
+
+        let before_missing = store.events().len();
+        assert!(
+            append_local_session_route_proposal_checked(
+                &mut store,
+                RouteId::new(2),
+                source,
+                missing,
+            )
+            .unwrap_err()
+            .contains("not currently addressable")
+        );
+        assert_eq!(store.events().len(), before_missing);
+    }
+
+    #[test]
     fn checked_local_worker_lifecycle_is_durable_and_rejects_illegal_transition() {
         let conversation_id = LocalConversationId::new();
         let worker_id = WorkerId::new(1);
