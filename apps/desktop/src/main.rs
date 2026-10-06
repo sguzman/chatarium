@@ -4778,47 +4778,47 @@ fn transcript_bubble(
         .show(ui, |ui| {
             ui.set_width(content_width);
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.horizontal(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(label)
+                            .size(10.0)
+                            .strong()
+                            .color(if label == "You" {
+                                egui::Color32::from_rgb(147, 191, 238)
+                            } else {
+                                egui::Color32::from_rgb(163, 221, 178)
+                            }),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Copy").clicked() {
+                            ctx.copy_text(offline_reader::copy_payload(&message.text));
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                for block in offline_reader::parse_markdown(&message.text) {
+                    render_markdown_block(ui, &block, search_query, active_hit, ctx);
+                    ui.add_space(6.0);
+                }
+                ui.add_space(5.0);
+                let metadata = message
+                    .timestamp
+                    .map(|timestamp| format!("{} · {} · {:.0}s", label, message.sequence, timestamp))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{} · {}",
+                            label,
+                            message
+                                .provenance_label
+                                .clone()
+                                .unwrap_or_else(|| format!("event #{}", message.sequence))
+                        )
+                    });
                 ui.label(
-                    egui::RichText::new(label)
+                    egui::RichText::new(metadata)
                         .size(10.0)
-                        .strong()
-                        .color(if label == "You" {
-                            egui::Color32::from_rgb(147, 191, 238)
-                        } else {
-                            egui::Color32::from_rgb(163, 221, 178)
-                        }),
+                        .color(egui::Color32::from_rgb(116, 121, 133)),
                 );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Copy").clicked() {
-                        ctx.copy_text(offline_reader::copy_payload(&message.text));
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            for block in offline_reader::parse_markdown(&message.text) {
-                render_markdown_block(ui, &block, search_query, active_hit, ctx);
-                ui.add_space(6.0);
-            }
-            ui.add_space(5.0);
-            let metadata = message
-                .timestamp
-                .map(|timestamp| format!("{} · {} · {:.0}s", label, message.sequence, timestamp))
-                .unwrap_or_else(|| {
-                    format!(
-                        "{} · {}",
-                        label,
-                        message
-                            .provenance_label
-                            .clone()
-                            .unwrap_or_else(|| format!("event #{}", message.sequence))
-                    )
-                });
-            ui.label(
-                egui::RichText::new(metadata)
-                    .size(10.0)
-                    .color(egui::Color32::from_rgb(116, 121, 133)),
-            );
             });
         })
         .response
