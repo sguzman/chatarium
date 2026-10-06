@@ -201,6 +201,8 @@ The desktop supports:
 - inclusion of the sanitized probe report in local archive backup/restore;
 - deterministic derivation of `local-inference-contract.json` after probe completion and from saved evidence on startup;
 - typed contract loading with profile/model freshness gating;
+- an explicit Diagnostics contract-state line, including whether a ready contract is active for the current profile/model;
+- one-click clipboard export of the exact persisted sanitized probe evidence and exact persisted derived contract, avoiding filesystem hunting;
 - inclusion of the derived inference contract in local archive backup/restore;
 - normal Send blocking while a capability probe is active, preserving the one-Responses-request probe invariant;
 - multiple isolated local conversations with durable active selection;

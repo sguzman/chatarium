@@ -153,6 +153,12 @@ exist.
 Both the probe report and derived contract are included in Chatarium local
 archive backup/restore.
 
+Diagnostics also renders the derived contract state directly. Once persisted,
+the exact sanitized probe report and exact derived contract can be copied to the
+system clipboard with dedicated in-app actions. Reading or sharing evidence
+therefore does not require locating Chatarium's data directory or running a
+developer command.
+
 ## Freeze gate
 
 The local-first sequencing rule is now:
