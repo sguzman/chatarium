@@ -1,0 +1,152 @@
+# Local-First Orchestration Identity
+
+Status: **DESIGN FROZEN**, implementation boundary established 2026-10-06.
+
+Local-first Chatarium now has enough independent identity domains that accidental
+conflation would become expensive. This document freezes how those domains
+relate before live local routing/controller work begins.
+
+## Identity domains
+
+### `LocalConversationId`
+
+The existing user-facing durable local conversation/workspace identity.
+
+It owns today's local transcript, drafts, inference settings, Behavior Profile,
+and the optional local worker-lifecycle association.
+
+It is not a remote ChatGPT conversation identifier.
+
+### `ChatContainerId`
+
+The existing orchestration continuity identity for one logical chat lineage.
+
+A container outlives individual `SessionId` leaves and preserves explicit
+rollover provenance.
+
+When local-first orchestration is activated for a conversation, the intended
+relationship is one local conversation to one logical chat container.
+
+The types remain distinct even if the first implementation is one-to-one.
+
+### `SessionId`
+
+One replaceable local execution/session surface inside a chat container.
+
+For SIWC local-first inference this **does not claim a persistent server-side
+Responses conversation exists**. Chatarium still resends locally owned context
+with `store:false`.
+
+A root SessionId is therefore local execution/orchestration identity. Future
+rollover may retire it and install a successor without replacing the
+`LocalConversationId`.
+
+### `WorkerId`
+
+Machine-readable orchestration worker identity.
+
+Worker lifecycle and goal state are separate from conversation transcript and
+session lifecycle.
+
+The current local-first bridge may associate a worker with a local conversation,
+but that does not make WorkerId equal to LocalConversationId or SessionId.
+
+Exactly how worker identity follows a future session rollover must remain
+explicit; do not silently infer it from numeric or creation order.
+
+### `RouteEndpointId`
+
+Addressability in the routing plane.
+
+An endpoint is not itself a conversation, worker, or session. Existing session
+bindings are one way of correlating an endpoint to a session.
+
+Tool adapters may also be endpoints.
+
+## Required shape
+
+The local-first orchestration topology should preserve this conceptual layering:
+
+```text
+LocalConversationId
+        |
+        | explicit durable ownership/correlation
+        v
+ChatContainerId
+        |
+        | current leaf
+        v
+SessionId
+        |
+        | explicit routing correlation
+        v
+RouteEndpointId
+
+LocalConversationId
+        |
+        | explicit lifecycle association
+        v
+WorkerId
+```
+
+No edge in this diagram is permission authority by itself.
+
+## Why LocalConversationId is not SessionId
+
+A local conversation is intended to survive execution/session rollover.
+
+Equating it directly with one SessionId would make a future saturated session
+look like the conversation itself had ended, contradicting the existing
+chat-container model.
+
+## Why LocalConversationId is not ChatContainerId
+
+They currently have similar logical lifetimes, but they belong to different
+layers and use different identity representations.
+
+Keeping an explicit edge lets Chatarium:
+
+- preserve today's UUIDv7 local conversation identities;
+- reuse the already-tested chat-container lineage machinery;
+- migrate or evolve orchestration internals without rewriting transcript
+  identity;
+- detect missing/ambiguous topology instead of relying on implicit equality.
+
+## SIWC-specific rule
+
+The Sign in with ChatGPT Responses path does not create a durable remote
+conversation/session for Chatarium.
+
+Therefore a local SessionId used with SIWC must never be described as a remote
+ChatGPT session identity.
+
+It is a local orchestration/execution leaf only.
+
+## Worker rollover question
+
+The existing repository has both conversation-level lifecycle goals and
+WorkerId↔SessionId machinery from the broader orchestration design.
+
+The local-first worker bridge currently attaches WorkerId to the durable local
+conversation so worker lifecycle can be explored without fabricating a remote
+session.
+
+Before controller-issued routing is activated, Chatarium must explicitly decide
+and enforce whether a worker identity:
+
+- persists across a chat-container session successor; or
+- is replaced and handed off to a successor worker identity.
+
+Do not resolve this implicitly by adding a second contradictory binding.
+
+## Next implementation boundary
+
+The next substrate should make the
+`LocalConversationId → ChatContainerId → current SessionId` path durable and
+inspectable.
+
+Only after that topology exists should local controller/worker routing consume
+the existing SessionId / RouteEndpointId / RouteGate machinery.
+
+No hidden cross-conversation transcript sharing is authorized by topology
+alone. Routed or shared context remains a separate explicit policy/source.
