@@ -2657,10 +2657,8 @@ impl ChatariumApp {
                     self.events.push(event);
                     self.route_payload_command_pending = false;
                     self.route_payload_drafts.remove(&route_id);
-                    self.status = format!(
-                        "local route {} payload durably attached",
-                        route_id.get()
-                    );
+                    self.status =
+                        format!("local route {} payload durably attached", route_id.get());
                 }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
@@ -7407,30 +7405,21 @@ fn persistence_worker(
                 payload_id,
                 route_id,
                 text,
-            } => {
-                match append_local_route_payload_checked(
-                    &mut store,
-                    payload_id,
-                    route_id,
-                    text,
-                ) {
-                    Ok(event) => {
-                        let _ = notices.send(PersistNotice::LocalRoutePayloadAttached {
-                            route_id,
-                            event,
-                        });
-                    }
-                    Err(error) => {
-                        let _ = notices.send(PersistNotice::Failed {
-                            operation: "local route payload attachment",
-                            revision: None,
-                            request_id: None,
-                            turn_id: None,
-                            error,
-                        });
-                    }
+            } => match append_local_route_payload_checked(&mut store, payload_id, route_id, text) {
+                Ok(event) => {
+                    let _ =
+                        notices.send(PersistNotice::LocalRoutePayloadAttached { route_id, event });
                 }
-            }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "local route payload attachment",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            },
             PersistCommand::DecideLocalSessionRoute { route_id, decision } => {
                 match append_local_route_user_decision_checked(&mut store, route_id, decision) {
                     Ok(event) => {
@@ -8746,9 +8735,7 @@ fn next_available_local_orchestration_ids(
     ))
 }
 
-fn next_available_route_payload_id(
-    events: &[EventEnvelope],
-) -> Result<RoutePayloadId, String> {
+fn next_available_route_payload_id(events: &[EventEnvelope]) -> Result<RoutePayloadId, String> {
     let next = replay_local_route_payload_audit(events)?
         .into_iter()
         .map(|payload| payload.payload_id.get())
