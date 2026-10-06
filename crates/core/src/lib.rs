@@ -262,6 +262,7 @@ impl TurnEvidence {
             | EventKind::RouteDispatched
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
+            | EventKind::LocalConversationChatContainerBound
             | EventKind::WorkerGoalAssigned
             | EventKind::WorkerLifecycleTransitionRecorded
             | EventKind::WorkerControlAdmitted
