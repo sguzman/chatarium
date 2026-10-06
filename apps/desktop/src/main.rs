@@ -3854,6 +3854,74 @@ impl eframe::App for ChatariumApp {
                                     .color(egui::Color32::from_rgb(126, 130, 139)),
                                 );
                             }
+                            if !self.capability_probe.results.is_empty() {
+                                let contract_state =
+                                    local_inference_contract::contract_state(&self.capability_probe);
+                                let contract_active = contract_state == "ready"
+                                    && self.capability_probe.profile_id.as_deref()
+                                        == self.remote_session.profile_id.as_deref()
+                                    && self.capability_probe.model.as_deref()
+                                        == self.selected_model.as_deref();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "local inference contract · {contract_state}{}",
+                                        if contract_active {
+                                            " · ACTIVE FOR CURRENT PROFILE/MODEL"
+                                        } else {
+                                            ""
+                                        }
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .strong(),
+                                );
+
+                                let data_dir =
+                                    self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+                                let report_path = data_dir.join("siwc-capability-probes.json");
+                                let contract_path = data_dir.join("local-inference-contract.json");
+                                let can_copy_artifacts =
+                                    !probe_running && self.capability_probe.generated_unix_ms.is_some();
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .add_enabled(
+                                            can_copy_artifacts,
+                                            egui::Button::new("COPY SANITIZED EVIDENCE"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.capability_probe.status =
+                                            match std::fs::read_to_string(&report_path) {
+                                                Ok(text) => {
+                                                    ui.ctx().copy_text(text);
+                                                    "copied sanitized capability evidence"
+                                                        .to_owned()
+                                                }
+                                                Err(error) => format!(
+                                                    "could not copy sanitized evidence · {error}"
+                                                ),
+                                            };
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            can_copy_artifacts,
+                                            egui::Button::new("COPY INFERENCE CONTRACT"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.capability_probe.status =
+                                            match std::fs::read_to_string(&contract_path) {
+                                                Ok(text) => {
+                                                    ui.ctx().copy_text(text);
+                                                    "copied local inference contract".to_owned()
+                                                }
+                                                Err(error) => format!(
+                                                    "could not copy inference contract · {error}"
+                                                ),
+                                            };
+                                    }
+                                });
+                            }
                             for result in &self.capability_probe.results {
                                 ui.label(
                                     egui::RichText::new(format!(
