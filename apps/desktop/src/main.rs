@@ -4779,16 +4779,13 @@ fn transcript_bubble(
             ui.set_width(content_width);
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(label)
-                            .size(10.0)
-                            .strong()
-                            .color(if label == "You" {
-                                egui::Color32::from_rgb(147, 191, 238)
-                            } else {
-                                egui::Color32::from_rgb(163, 221, 178)
-                            }),
-                    );
+                    ui.label(egui::RichText::new(label).size(10.0).strong().color(
+                        if label == "You" {
+                            egui::Color32::from_rgb(147, 191, 238)
+                        } else {
+                            egui::Color32::from_rgb(163, 221, 178)
+                        },
+                    ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("Copy").clicked() {
                             ctx.copy_text(offline_reader::copy_payload(&message.text));
@@ -4803,7 +4800,9 @@ fn transcript_bubble(
                 ui.add_space(5.0);
                 let metadata = message
                     .timestamp
-                    .map(|timestamp| format!("{} · {} · {:.0}s", label, message.sequence, timestamp))
+                    .map(|timestamp| {
+                        format!("{} · {} · {:.0}s", label, message.sequence, timestamp)
+                    })
                     .unwrap_or_else(|| {
                         format!(
                             "{} · {}",
