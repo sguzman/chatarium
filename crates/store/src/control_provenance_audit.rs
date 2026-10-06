@@ -81,14 +81,6 @@ pub fn replay_control_provenance_audit(
         .copied()
         .map(|record| (record.session_id, record))
         .collect::<BTreeMap<_, _>>();
-    let worker_session_by_worker = sessions
-        .iter()
-        .filter_map(|record| {
-            record
-                .worker_binding
-                .map(|binding| (binding.worker_id(), *record))
-        })
-        .collect::<BTreeMap<_, _>>();
     let controller_designated_sequence = supervision
         .controllers
         .iter()
@@ -176,15 +168,16 @@ pub fn replay_control_provenance_audit(
                 ));
             }
 
-            let worker_session = worker_session_by_worker
-                .get(&control.worker_id)
-                .ok_or_else(|| {
-                    format!(
-                        "controller issuer provenance at sequence {} targets worker {} before any worker-session binding",
-                        event.sequence,
-                        control.worker_id.get()
-                    )
-                })?;
+            let worker_session =
+                worker_session_before(&sessions, control.worker_id, event.sequence).ok_or_else(
+                    || {
+                        format!(
+                            "controller issuer provenance at sequence {} targets worker {} before any active worker-session binding",
+                            event.sequence,
+                            control.worker_id.get()
+                        )
+                    },
+                )?;
             let worker_bound_sequence = worker_session.worker_bound_sequence.ok_or_else(|| {
                 format!(
                     "target worker session {} is missing worker binding sequence",
