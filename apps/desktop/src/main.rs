@@ -51,6 +51,7 @@ use chatarium_store::local_route_delivery_audit::{
 use chatarium_store::local_route_payload_audit::{
     record_local_route_payload_attached, replay_local_route_payload_audit,
 };
+use chatarium_store::local_routed_inbox::replay_local_routed_inbox_for_conversation;
 use chatarium_store::local_routing_directory::replay_local_routing_directory;
 use chatarium_store::remote_health::{
     MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
@@ -5289,7 +5290,7 @@ impl eframe::App for ChatariumApp {
                                     );
                                     ui.label(
                                         egui::RichText::new(
-                                            "Session-message routes now carry a separately durable immutable text payload. Allow requires a payload; dispatch remains disabled.",
+                                            "Session-message routes carry an immutable payload. Allow requires a payload. Dispatch consumes one-shot authority and records local delivery provenance.",
                                         )
                                         .size(9.0)
                                         .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -5320,6 +5321,23 @@ impl eframe::App for ChatariumApp {
                                                         ui.label(
                                                             egui::RichText::new(format!(
                                                                 "route payload projection blocked: {error}"
+                                                            ))
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            )),
+                                                        );
+                                                        None
+                                                    }
+                                                };
+                                            let deliveries =
+                                                match replay_local_route_delivery_audit(&self.events)
+                                                {
+                                                    Ok(deliveries) => Some(deliveries),
+                                                    Err(error) => {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "route delivery projection blocked: {error}"
                                                             ))
                                                             .size(9.0)
                                                             .color(egui::Color32::from_rgb(
@@ -5418,6 +5436,16 @@ impl eframe::App for ChatariumApp {
                                                                         },
                                                                     )
                                                                 });
+                                                            let delivery = deliveries
+                                                                .as_ref()
+                                                                .and_then(|deliveries| {
+                                                                    deliveries.iter().find(
+                                                                        |delivery| {
+                                                                            delivery.route_id
+                                                                                == route.request.id
+                                                                        },
+                                                                    )
+                                                                });
 
                                                             ui.horizontal_wrapped(|ui| {
                                                                 ui.label(
@@ -5500,6 +5528,56 @@ impl eframe::App for ChatariumApp {
                                                                         RouteUserDecision::Deny,
                                                                     );
                                                                 }
+
+                                                                let can_dispatch = fresh
+                                                                    && payload.is_some()
+                                                                    && delivery.is_none()
+                                                                    && matches!(
+                                                                        route.gate_state,
+                                                                        RouteGateState::Allowed { .. }
+                                                                            | RouteGateState::Dispatched { .. }
+                                                                    )
+                                                                    && !self
+                                                                        .route_dispatch_command_pending
+                                                                    && !self
+                                                                        .route_policy_command_pending
+                                                                    && !self
+                                                                        .route_payload_command_pending
+                                                                    && self.persist_tx.is_some();
+                                                                let dispatch_label = if route
+                                                                    .gate_state
+                                                                    .is_dispatched()
+                                                                {
+                                                                    "Finish delivery"
+                                                                } else {
+                                                                    "Dispatch + deliver"
+                                                                };
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_dispatch,
+                                                                        egui::Button::new(
+                                                                            dispatch_label,
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.dispatch_local_session_route(
+                                                                        route.request.id,
+                                                                    );
+                                                                }
+                                                                if let Some(delivery) = delivery {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            format!(
+                                                                                "DELIVERED · event #{}",
+                                                                                delivery
+                                                                                    .delivered_sequence,
+                                                                            ),
+                                                                        )
+                                                                        .monospace()
+                                                                        .size(9.0),
+                                                                    );
+                                                                }
                                                             });
 
                                                             if let Some(payload) = payload {
@@ -5567,11 +5645,88 @@ impl eframe::App for ChatariumApp {
                                             }
                                             if self.route_policy_command_pending
                                                 || self.route_payload_command_pending
+                                                || self.route_dispatch_command_pending
                                             {
                                                 ui.spinner();
                                             }
                                         }
                                     }
+                                }
+                            }
+                        });
+
+                        ui.collapsing("Routed inbox", |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Delivered routed messages are provenance-bearing local inbox items. They are not user-authored transcript messages and are not included in inference context.",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            match replay_local_routed_inbox_for_conversation(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "routed inbox projection blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                                Ok(items) if items.is_empty() => {
+                                    ui.label(
+                                        egui::RichText::new("no delivered routed messages")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                }
+                                Ok(items) => {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("local-routed-inbox")
+                                        .max_height(180.0)
+                                        .show(ui, |ui| {
+                                            for item in items {
+                                                let source_title =
+                                                    local_conversation_display_title(
+                                                        &self.local_conversation_catalog,
+                                                        item.source_conversation_id,
+                                                        &self.events,
+                                                    );
+                                                ui.group(|ui| {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "ROUTED · {source_title}"
+                                                            ))
+                                                            .strong()
+                                                            .size(10.0),
+                                                        );
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "route {} · payload {} · source session {} → destination session {} · delivered #{}",
+                                                                item.route_id.get(),
+                                                                item.payload_id.get(),
+                                                                item.source_session_id.get(),
+                                                                item.destination_session_id.get(),
+                                                                item.delivered_sequence,
+                                                            ))
+                                                            .monospace()
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                139, 143, 153,
+                                                            )),
+                                                        );
+                                                    });
+                                                    ui.label(
+                                                        egui::RichText::new(item.text.as_str())
+                                                            .size(10.0),
+                                                    );
+                                                });
+                                            }
+                                        });
                                 }
                             }
                         });
