@@ -25,6 +25,7 @@ const CACHE_FILE: &str = "remote-history-cache.json";
 const INFERENCE_SETTINGS_FILE: &str = "local-inference-settings.json";
 const LOCAL_CONVERSATION_CATALOG_FILE: &str = "local-conversations.json";
 const CAPABILITY_PROBE_REPORT_FILE: &str = "siwc-capability-probes.json";
+const LOCAL_INFERENCE_CONTRACT_FILE: &str = "local-inference-contract.json";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_SCHEMA: &str = "chatarium-local-archive-backup";
@@ -240,6 +241,7 @@ pub fn create_backup(
         INFERENCE_SETTINGS_FILE,
         LOCAL_CONVERSATION_CATALOG_FILE,
         CAPABILITY_PROBE_REPORT_FILE,
+        LOCAL_INFERENCE_CONTRACT_FILE,
     ] {
         let source = data_dir.join(name);
         if source.exists() {
@@ -261,7 +263,8 @@ pub fn create_backup(
             "history_cache": 1,
             "local_inference_settings": 1,
             "local_conversation_catalog": 1,
-            "siwc_capability_probe": 1
+            "siwc_capability_probe": 1,
+            "local_inference_contract": 1
         },
         "files": files,
         "archive": {
@@ -371,6 +374,7 @@ pub fn restore_backup(
         INFERENCE_SETTINGS_FILE,
         LOCAL_CONVERSATION_CATALOG_FILE,
         CAPABILITY_PROBE_REPORT_FILE,
+        LOCAL_INFERENCE_CONTRACT_FILE,
     ] {
         let source = backup.join(name);
         if source.exists() {
@@ -483,13 +487,22 @@ mod tests {
             br#"{"schema":"chatarium-siwc-capability-probe","version":1,"generated_unix_ms":1234,"model":"gpt-example","probes":[]}"#,
         )
         .unwrap();
+        fs::write(
+            source.join(LOCAL_INFERENCE_CONTRACT_FILE),
+            br#"{"schema":"chatarium-local-inference-contract","version":1,"state":"incomplete"}"#,
+        )
+        .unwrap();
 
         let created = create_backup(&source, &backup).unwrap();
-        assert_eq!(created.manifest_files, 2);
+        assert_eq!(created.manifest_files, 3);
         restore_backup(&backup, &target).unwrap();
         assert_eq!(
             fs::read(source.join(CAPABILITY_PROBE_REPORT_FILE)).unwrap(),
             fs::read(target.join(CAPABILITY_PROBE_REPORT_FILE)).unwrap()
+        );
+        assert_eq!(
+            fs::read(source.join(LOCAL_INFERENCE_CONTRACT_FILE)).unwrap(),
+            fs::read(target.join(LOCAL_INFERENCE_CONTRACT_FILE)).unwrap()
         );
         let _ = fs::remove_dir_all(root);
     }
