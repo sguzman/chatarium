@@ -125,10 +125,11 @@ The repository already contains stronger downstream primitives:
 - durable orchestration-control admission/correlation/freshness;
 - logical chat-container rollover.
 
-The next local-first work should bridge local conversation identity into those
-existing routing/session domains carefully rather than duplicating them.
+The first local conversation → chat-container → current-session bridge has
+now landed; see [LOCAL_ORCHESTRATION_IDENTITY.md](LOCAL_ORCHESTRATION_IDENTITY.md).
 
 In particular, do not assume that `LocalConversationId`, `SessionId`,
 `ChatContainerId`, `WorkerId`, and `RouteEndpointId` are interchangeable.
-Their relationship must be explicit and durable before controller/worker
-routing is activated.
+The next explicit edge is current `SessionId → RouteEndpointId`
+addressability. Controller/worker routing remains inactive until its remaining
+identity and policy edges are explicit.
