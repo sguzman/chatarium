@@ -3,13 +3,13 @@
 //! The directory joins already-durable identity edges. It creates no route,
 //! permission, payload transfer, worker binding, or controller authority.
 
+use crate::EventEnvelope;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::session_audit::replay_session_audit;
-use crate::EventEnvelope;
+use chatarium_core::LocalConversationId;
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::routing::RouteEndpointId;
 use chatarium_core::session::SessionId;
-use chatarium_core::LocalConversationId;
 use std::collections::BTreeMap;
 
 /// One currently addressable local conversation leaf.
@@ -76,21 +76,18 @@ pub fn replay_local_routing_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventStore;
+    use crate::MemoryEventStore;
     use crate::chat_container_audit::{
         record_chat_container_created, record_chat_session_lifecycle_transition,
         record_chat_session_successor_bound,
     };
-    use crate::local_conversation_chat_container_audit::
-        record_local_conversation_chat_container_bound;
-    use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound,
-    };
-    use crate::MemoryEventStore;
+    use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
+    use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
     use chatarium_core::chat_container::{
         ContextHandoffId, SessionLifecycleTransition, SessionSuccessorBinding,
     };
     use chatarium_core::session::SessionEndpointBinding;
-    use crate::EventStore;
 
     const C1: ChatContainerId = ChatContainerId::new(10);
     const S1: SessionId = SessionId::new(1);
@@ -98,10 +95,7 @@ mod tests {
     const E1: RouteEndpointId = RouteEndpointId::new(100);
     const E2: RouteEndpointId = RouteEndpointId::new(200);
 
-    fn topology(
-        store: &mut impl EventStore,
-        conversation_id: LocalConversationId,
-    ) {
+    fn topology(store: &mut impl EventStore, conversation_id: LocalConversationId) {
         record_local_session_registered(store, S1).unwrap();
         record_chat_container_created(store, C1, S1).unwrap();
         record_local_conversation_chat_container_bound(store, conversation_id, C1).unwrap();
@@ -113,13 +107,13 @@ mod tests {
         let mut store = MemoryEventStore::default();
         topology(&mut store, conversation);
 
-        assert!(replay_local_routing_directory(store.events()).unwrap().is_empty());
+        assert!(
+            replay_local_routing_directory(store.events())
+                .unwrap()
+                .is_empty()
+        );
 
-        record_session_endpoint_bound(
-            &mut store,
-            SessionEndpointBinding::new(S1, E1),
-        )
-        .unwrap();
+        record_session_endpoint_bound(&mut store, SessionEndpointBinding::new(S1, E1)).unwrap();
 
         let directory = replay_local_routing_directory(store.events()).unwrap();
         assert_eq!(directory.len(), 1);
@@ -164,11 +158,7 @@ mod tests {
 
         assert!(replay_local_routing_directory(store.events()).unwrap().is_empty());
 
-        record_session_endpoint_bound(
-            &mut store,
-            SessionEndpointBinding::new(S2, E2),
-        )
-        .unwrap();
+        record_session_endpoint_bound(&mut store, SessionEndpointBinding::new(S2, E2)).unwrap();
         let directory = replay_local_routing_directory(store.events()).unwrap();
         assert_eq!(directory.len(), 1);
         assert_eq!(directory[0].current_session_id, S2);
