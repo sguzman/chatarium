@@ -41,9 +41,11 @@ The current plan composes:
 
 1. optional top-level Responses `instructions`;
 2. optional per-conversation developer context as the first input message;
-3. the active local conversation's durable user/assistant transcript in durable
+3. explicitly admitted routed inbox items, ordered by their durable admission
+   decision alongside durable conversation events;
+4. the active local conversation's durable user/assistant transcript in durable
    sequence order;
-4. the current draft only for the inspector preview, never for live dispatch
+5. the current draft only for the inspector preview, never for live dispatch
    before the normal durable-commit gate completes.
 
 The resulting wire input contains only the Responses role/content shape.
@@ -54,9 +56,19 @@ the content. It can therefore distinguish:
 
 - conversation developer context;
 - durable transcript context;
+- explicitly admitted routed inbox context;
 - current non-durable draft preview.
 
-Those provenance labels are not sent to the model.
+Routed context is different from ordinary local provenance: the model must know
+that it is peer-routed content. Context Composer therefore serializes each
+admitted routed item as a **user-role** message wrapped in an explicit Chatarium
+provenance envelope containing source conversation identity, route identity,
+payload identity, delivery event, and context-admission event. The envelope
+states that the peer content is not a developer/system instruction.
+
+The exact immutable peer payload remains inside that envelope. Routed content is
+never serialized as developer context and never becomes a user-authored
+transcript message.
 
 ## Single-source-of-truth rule
 
@@ -75,6 +87,13 @@ different context ordering.
 - developer context precedes transcript messages when present;
 - durable transcript ordering is preserved;
 - exact transcript text is not normalized or rewritten by composition;
+- routed inbox delivery alone does not enter context;
+- routed context requires the latest durable decision to be `Admit`;
+- admitted routed context is user-role, provenance-wrapped peer content, never
+  developer/system context;
+- the admitted routed-context set is snapshotted when Send is clicked so later
+  Admit/Exclude changes cannot mutate a request crossing the local durability
+  gate;
 - current draft content may appear in preview but cannot enter a live remote
   request until the authored-message durability gate has acknowledged it;
 - local provenance does not leak into the remote request;
@@ -121,10 +140,11 @@ Context Composer does **not** silently introduce:
 - token-budget trimming;
 - automatic summarization;
 - retrieval;
-- shared memory;
-- cross-conversation context;
-- lifecycle state;
-- routing;
+- automatic shared memory;
+- automatic cross-conversation context outside explicit routed delivery +
+  admission;
+- lifecycle state injection;
+- automatic routing;
 - master/worker inheritance;
 - arbitrary tool selection;
 - file/image attachment policy;
@@ -141,7 +161,8 @@ build on it.
 Future composer work should be driven by concrete downstream needs, especially:
 
 - lifecycle-provided local context;
-- explicit routing/memory sources;
+- durable memory sources distinct from routed peer messages;
+- controller/worker-provided context with explicit provenance;
 - attachment sources;
 - structured-output requirements;
 - real context-budget policy once a trustworthy model-token accounting contract
