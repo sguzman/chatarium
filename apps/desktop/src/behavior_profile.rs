@@ -118,8 +118,12 @@ impl BehaviorProfileStore {
             return Ok(Self::default());
         }
 
-        let bytes = fs::read(path)
-            .map_err(|error| format!("failed to read behavior profiles {}: {error}", path.display()))?;
+        let bytes = fs::read(path).map_err(|error| {
+            format!(
+                "failed to read behavior profiles {}: {error}",
+                path.display()
+            )
+        })?;
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|error| format!("invalid behavior profiles JSON: {error}"))?;
         if value.get("schema").and_then(Value::as_str) != Some(SCHEMA)
@@ -135,9 +139,9 @@ impl BehaviorProfileStore {
 
         let mut entries = BTreeMap::new();
         for (conversation_id, raw) in conversations {
-            let object = raw
-                .as_object()
-                .ok_or_else(|| format!("behavior profile for {conversation_id} is not an object"))?;
+            let object = raw.as_object().ok_or_else(|| {
+                format!("behavior profile for {conversation_id} is not an object")
+            })?;
             let reasoning = ReasoningMode::parse(
                 object
                     .get("reasoning")
@@ -219,9 +223,7 @@ impl BehaviorProfileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context_composer::{
-        CapabilityAdmission, CapabilityAdmissionState, CapabilitySlot,
-    };
+    use crate::context_composer::{CapabilityAdmission, CapabilityAdmissionState, CapabilitySlot};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path() -> std::path::PathBuf {
