@@ -5,6 +5,7 @@
 //! titles, message text, or raw response bodies.
 
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
+use crate::local_route_context_audit::replay_local_route_context_audit;
 use crate::local_route_delivery_audit::replay_local_route_delivery_audit;
 use crate::local_route_payload_audit::replay_local_route_payload_audit;
 use crate::local_routed_inbox::replay_local_routed_inbox;
@@ -154,6 +155,7 @@ pub fn check_archive(
     replay_local_route_payload_audit(&events).map_err(err)?;
     replay_local_route_delivery_audit(&events).map_err(err)?;
     replay_local_routed_inbox(&events).map_err(err)?;
+    replay_local_route_context_audit(&events).map_err(err)?;
     replay_remote_mirror_selection_audit(&events).map_err(err)?;
     replay_remote_read_audit(&events).map_err(err)?;
     RemoteHealthController::from_events(&events, unix_ms() as u64).map_err(err)?;
