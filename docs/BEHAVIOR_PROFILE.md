@@ -121,10 +121,12 @@ product semantics.
 
 ## Next boundary
 
-The next architectural layer is **Lifecycle State**.
+The first local-first **Lifecycle State** slice is now landed and documented in
+[LIFECYCLE_STATE.md](LIFECYCLE_STATE.md).
 
-Before controller/worker orchestration, Chatarium needs an explicit durable
-model for whether a local conversation/agent is active, dormant, resumable,
-completed, or otherwise lifecycle-governed. Lifecycle policy must remain local
-and inspectable and must not smuggle cross-conversation context into Context
-Composer.
+Behavior Profile remains independent of worker lifecycle. A lifecycle
+transition does not silently mutate inference controls, and Behavior Profile
+does not grant orchestration/routing authority.
+
+The next boundary is explicit local conversation identity bridging into the
+existing session/routing plane, followed by visible routing/memory policy.
