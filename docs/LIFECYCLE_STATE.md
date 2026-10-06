@@ -132,6 +132,10 @@ see [LOCAL_ORCHESTRATION_IDENTITY.md](LOCAL_ORCHESTRATION_IDENTITY.md).
 
 In particular, do not assume that `LocalConversationId`, `SessionId`,
 `ChatContainerId`, `WorkerId`, and `RouteEndpointId` are interchangeable.
-Manual route approval is policy state only: there is still no routed payload,
-dispatch, delivery, automatic controller action, or hidden context sharing.
-The next safe substrate is explicit durable payload identity/correlation.
+Manual route policy and immutable routed payloads are now separate durable
+layers. Approval requires the exact payload to be attached first, but there is
+still no dispatch, delivery, automatic controller action, or hidden context
+sharing.
+
+The next safe substrate is one-shot permit-gated local delivery with explicit
+routed-message provenance.
