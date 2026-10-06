@@ -200,18 +200,50 @@ addressability edge.
 Binding an endpoint still creates no route proposal, policy decision, dispatch
 permit, payload transfer, shared context, or controller authority.
 
-## Next implementation boundary
+## Landed local routing directory
 
-The next substrate is a deterministic local routing directory that joins:
+The deterministic local routing directory is now implemented as a read-only
+projection over:
 
 `LocalConversationId → ChatContainerId → current SessionId → RouteEndpointId`
 
-for all addressable local conversations.
+Only the current session leaf is eligible. A topology without a current-session
+endpoint is absent from the directory. A rollover does not inherit the
+predecessor endpoint.
 
-That directory should be projection-only. After it exists, manual local route
-proposal/policy can consume the existing RouteGate machinery without guessing
-identity edges.
+The directory creates no route, permission, payload transfer, worker binding,
+or controller authority.
 
-No hidden cross-conversation transcript sharing is authorized by topology or
-addressability alone. Routed or shared context remains a separate explicit
-policy/source.
+## Landed manual route policy
+
+The desktop can now propose an identity-only `SessionMessage` route from the
+current addressable local conversation to another addressable local
+conversation.
+
+Every such proposal starts under `RoutePolicy::RequireApproval`. The
+persistence worker resolves both conversation IDs through the current routing
+directory immediately before append, then records the existing typed
+`RouteProposed` audit fact.
+
+The user may explicitly Allow or Deny the route. Those decisions use the
+existing durable `RouteGate` replay semantics and remain reversible until
+dispatch. A decision fails closed if either endpoint is no longer the current
+leaf or can no longer accept ordinary turns.
+
+This slice deliberately carries **no routed message payload** and exposes **no
+dispatch action**. An allowed route therefore means only that policy would
+permit a future dispatch once a separately durable payload and dispatch path
+exist.
+
+## Next implementation boundary
+
+The next safe substrate is explicit durable payload identity/correlation for a
+manual local `SessionMessage` route.
+
+Payload state should remain separate from route identity/policy so routing audit
+history does not become an opaque message store. Only after payload provenance,
+immutability, and route correlation are explicit should the one-shot
+`DispatchPermit` path be connected to local conversation delivery.
+
+No hidden cross-conversation transcript sharing is authorized by topology,
+addressability, route proposal, or approval alone.
