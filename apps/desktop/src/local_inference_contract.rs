@@ -18,22 +18,33 @@ const EXPECTED_PROBES: [&str; 9] = [
 
 #[must_use]
 pub fn contract_state(run: &ProbeRun) -> &'static str {
+    if run.model.is_none() || run.profile_id.is_none() || run.generated_unix_ms.is_none() {
+        return "incomplete";
+    }
+
     let results = run
         .results
         .iter()
         .map(|result| (result.name.as_str(), result.status.as_str()))
         .collect::<BTreeMap<_, _>>();
 
-    let complete = EXPECTED_PROBES.iter().all(|name| {
+    let all_terminal = EXPECTED_PROBES.iter().all(|name| {
         matches!(
             results.get(name).copied(),
             Some("supported" | "rejected" | "unsupported_route")
         )
     });
-    if complete {
-        "ready"
+    if !all_terminal {
+        return "incomplete";
+    }
+
+    if EXPECTED_PROBES
+        .iter()
+        .any(|name| results.get(name).copied() == Some("rejected"))
+    {
+        "needs_review"
     } else {
-        "incomplete"
+        "ready"
     }
 }
 
@@ -105,8 +116,13 @@ mod tests {
     }
 
     #[test]
-    fn contract_is_ready_only_for_complete_terminal_evidence() {
-        let mut run = ProbeRun::default();
+    fn contract_state_distinguishes_ready_review_and_incomplete() {
+        let mut run = ProbeRun {
+            model: Some("gpt-example".to_owned()),
+            profile_id: Some("profile-1".to_owned()),
+            generated_unix_ms: Some(1234),
+            ..ProbeRun::default()
+        };
         run.results = EXPECTED_PROBES
             .iter()
             .map(|name| result(name, "supported"))
@@ -114,10 +130,16 @@ mod tests {
         assert_eq!(contract_state(&run), "ready");
 
         run.results[3].status = "unsupported_route".to_owned();
-        run.results[4].status = "rejected".to_owned();
         assert_eq!(contract_state(&run), "ready");
 
+        run.results[4].status = "rejected".to_owned();
+        assert_eq!(contract_state(&run), "needs_review");
+
         run.results[5].status = "error".to_owned();
+        assert_eq!(contract_state(&run), "incomplete");
+
+        run.results[5].status = "supported".to_owned();
+        run.profile_id = None;
         assert_eq!(contract_state(&run), "incomplete");
     }
 
