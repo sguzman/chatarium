@@ -1,4 +1,5 @@
 mod account_bridge;
+mod behavior_profile;
 mod capability_probes;
 mod context_composer;
 mod diagnostics;
@@ -61,6 +62,9 @@ fn unix_now_ms() -> u64 {
 enum PersistCommand {
     SaveInferenceSettings {
         store: local_inference_settings::InferenceSettingsStore,
+    },
+    SaveBehaviorProfiles {
+        store: behavior_profile::BehaviorProfileStore,
     },
     SaveLocalConversationCatalog {
         catalog: local_conversations::LocalConversationCatalog,
@@ -333,6 +337,7 @@ struct PendingInferenceIntent {
     model: String,
     instructions: Option<String>,
     developer_context: String,
+    request_patch: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -342,6 +347,7 @@ struct PendingRemoteTurn {
     model: String,
     input: Value,
     instructions: Option<String>,
+    request_patch: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -417,6 +423,8 @@ struct ChatariumApp {
     reader_search_query: String,
     reader_search_hit: Option<usize>,
     inference_settings: local_inference_settings::InferenceSettingsStore,
+    behavior_profiles: behavior_profile::BehaviorProfileStore,
+    conversation_behavior_profile: behavior_profile::BehaviorProfile,
     conversation_instructions: String,
     conversation_developer_context: String,
     archive_backup_path: String,
@@ -595,6 +603,18 @@ impl ChatariumApp {
                     };
                 let active_inference_settings =
                     inference_settings.for_conversation(local_conversation_id);
+                let behavior_profile_path = local_behavior_profile_path(&journal_path);
+                let behavior_profiles =
+                    match behavior_profile::BehaviorProfileStore::load(&behavior_profile_path) {
+                        Ok(profiles) => profiles,
+                        Err(error) => {
+                            startup_status =
+                                format!("{startup_status}; behavior profile warning: {error}");
+                            behavior_profile::BehaviorProfileStore::default()
+                        }
+                    };
+                let active_behavior_profile =
+                    behavior_profiles.for_conversation(local_conversation_id);
                 let worker_data_dir = data_dir.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
@@ -647,6 +667,8 @@ impl ChatariumApp {
                         reader_search_query: String::new(),
                         reader_search_hit: None,
                         inference_settings,
+                        behavior_profiles,
+                        conversation_behavior_profile: active_behavior_profile,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
                         archive_backup_path: String::new(),
@@ -756,6 +778,10 @@ impl ChatariumApp {
             local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
                 .unwrap_or_default();
         let active_inference_settings = inference_settings.for_conversation(local_conversation_id);
+        let behavior_profiles =
+            behavior_profile::BehaviorProfileStore::load(&local_behavior_profile_path(&journal_path))
+                .unwrap_or_default();
+        let active_behavior_profile = behavior_profiles.for_conversation(local_conversation_id);
 
         Self {
             draft,
@@ -801,6 +827,8 @@ impl ChatariumApp {
             reader_search_query: String::new(),
             reader_search_hit: None,
             inference_settings,
+            behavior_profiles,
+            conversation_behavior_profile: active_behavior_profile,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
             archive_backup_path: String::new(),
@@ -876,6 +904,8 @@ impl ChatariumApp {
         self.selected_model = settings.model;
         self.conversation_instructions = settings.instructions;
         self.conversation_developer_context = settings.developer_context;
+        self.conversation_behavior_profile =
+            self.behavior_profiles.for_conversation(conversation_id);
         if !self.remote_models.is_empty()
             && !self.selected_model.as_ref().is_some_and(|selected| {
                 self.remote_models
@@ -2073,6 +2103,13 @@ impl ChatariumApp {
         );
         if self.remote_connected() {
             if let Some(model) = self.selected_model.clone() {
+                let request_patch = match self.current_behavior_request_patch() {
+                    Ok(patch) => patch,
+                    Err(error) => {
+                        self.status = format!("cannot send with current behavior profile: {error}");
+                        return;
+                    }
+                };
                 self.commit_remote_intents.insert(
                     request_id,
                     PendingInferenceIntent {
@@ -2080,6 +2117,7 @@ impl ChatariumApp {
                         instructions: (!self.conversation_instructions.trim().is_empty())
                             .then(|| self.conversation_instructions.clone()),
                         developer_context: self.conversation_developer_context.clone(),
+                        request_patch,
                     },
                 );
             }
@@ -2170,6 +2208,7 @@ impl ChatariumApp {
                                 model: intent.model.clone(),
                                 input: context_plan.input_json(),
                                 instructions: context_plan.instructions.clone(),
+                                request_patch: intent.request_patch,
                             });
                             let payload = remote_turn_payload(
                                 message.turn_id,
@@ -2218,6 +2257,7 @@ impl ChatariumApp {
                             model: pending.model.clone(),
                             input: pending.input,
                             instructions: pending.instructions,
+                            request_patch: pending.request_patch,
                         };
                         match self.remote.send(command) {
                             Ok(()) => {
@@ -3033,6 +3073,35 @@ impl ChatariumApp {
             store: self.inference_settings.clone(),
         }) {
             self.status = format!("failed to queue inference controls: {error}");
+        }
+    }
+
+    fn current_capability_gate(&self) -> context_composer::CapabilityGate {
+        context_composer::CapabilityGate::from_contract(
+            self.local_inference_contract.as_ref(),
+            self.remote_session.profile_id.as_deref(),
+            self.selected_model.as_deref(),
+        )
+    }
+
+    fn current_behavior_request_patch(&self) -> Result<Value, String> {
+        self.conversation_behavior_profile
+            .request_patch(&self.current_capability_gate())
+    }
+
+    fn persist_current_behavior_profile(&mut self) {
+        self.behavior_profiles.set(
+            self.local_conversation_id,
+            self.conversation_behavior_profile.clone(),
+        );
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot persist behavior profile: persistence unavailable".to_owned();
+            return;
+        };
+        if let Err(error) = sender.send(PersistCommand::SaveBehaviorProfiles {
+            store: self.behavior_profiles.clone(),
+        }) {
+            self.status = format!("failed to queue behavior profile: {error}");
         }
     }
 
@@ -4326,6 +4395,7 @@ impl eframe::App for ChatariumApp {
                 };
 
                 let mut inference_controls_changed = false;
+                let mut behavior_profile_changed = false;
                 egui::CollapsingHeader::new("Context & inference controls")
                     .default_open(false)
                     .show(ui, |ui| {
@@ -4373,6 +4443,103 @@ impl eframe::App for ChatariumApp {
                                 .hint_text("Local behavior, memory, lifecycle, or policy context"),
                             )
                             .changed();
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("Behavior profile").strong());
+                        ui.label(
+                            egui::RichText::new(
+                                "Per-conversation controls. Only exact request values already accepted by the capability suite are exposed.",
+                            )
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        let behavior_gate = self.current_capability_gate();
+
+                        let mut low_reasoning = self.conversation_behavior_profile.reasoning
+                            == behavior_profile::ReasoningMode::Low;
+                        let reasoning_available =
+                            behavior_gate.allows(context_composer::CapabilitySlot::Reasoning);
+                        if ui
+                            .add_enabled(
+                                reasoning_available || low_reasoning,
+                                egui::Checkbox::new(
+                                    &mut low_reasoning,
+                                    "Low reasoning effort",
+                                ),
+                            )
+                            .changed()
+                        {
+                            self.conversation_behavior_profile.reasoning = if low_reasoning {
+                                behavior_profile::ReasoningMode::Low
+                            } else {
+                                behavior_profile::ReasoningMode::Default
+                            };
+                            behavior_profile_changed = true;
+                        }
+                        if !reasoning_available {
+                            ui.label(
+                                egui::RichText::new(
+                                    "reasoning is blocked for the active profile/model contract",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(166, 139, 112)),
+                            );
+                        }
+
+                        let mut low_verbosity = self.conversation_behavior_profile.verbosity
+                            == behavior_profile::VerbosityMode::Low;
+                        let verbosity_available =
+                            behavior_gate.allows(context_composer::CapabilitySlot::Verbosity);
+                        if ui
+                            .add_enabled(
+                                verbosity_available || low_verbosity,
+                                egui::Checkbox::new(&mut low_verbosity, "Low verbosity"),
+                            )
+                            .changed()
+                        {
+                            self.conversation_behavior_profile.verbosity = if low_verbosity {
+                                behavior_profile::VerbosityMode::Low
+                            } else {
+                                behavior_profile::VerbosityMode::Default
+                            };
+                            behavior_profile_changed = true;
+                        }
+                        if !verbosity_available {
+                            ui.label(
+                                egui::RichText::new(
+                                    "verbosity is blocked for the active profile/model contract",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(166, 139, 112)),
+                            );
+                        }
+
+                        let web_search_available =
+                            behavior_gate.allows(context_composer::CapabilitySlot::WebSearch);
+                        if ui
+                            .add_enabled(
+                                web_search_available
+                                    || self.conversation_behavior_profile.web_search,
+                                egui::Checkbox::new(
+                                    &mut self.conversation_behavior_profile.web_search,
+                                    "Allow web search",
+                                ),
+                            )
+                            .changed()
+                        {
+                            behavior_profile_changed = true;
+                        }
+                        if !web_search_available {
+                            ui.label(
+                                egui::RichText::new(
+                                    "web search is blocked for the active profile/model contract",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(166, 139, 112)),
+                            );
+                        }
 
                         ui.add_space(8.0);
                         ui.collapsing("Exact next-request context", |ui| {
@@ -4500,6 +4667,9 @@ impl eframe::App for ChatariumApp {
                 if inference_controls_changed {
                     self.persist_current_inference_settings();
                 }
+                if behavior_profile_changed {
+                    self.persist_current_behavior_profile();
+                }
 
                 ui.add_space(8.0);
                 let response = egui::Frame::default()
@@ -4526,10 +4696,13 @@ impl eframe::App for ChatariumApp {
 
                 let remote_turn_idle =
                     self.pending_remote_turn.is_none() && self.active_remote_turn.is_none();
+                let behavior_ready_for_send =
+                    !self.remote_connected() || self.current_behavior_request_patch().is_ok();
                 let remote_ready_for_send = !self.remote_connected()
                     || (self.selected_model.is_some()
                         && remote_turn_idle
-                        && !self.capability_probe.running());
+                        && !self.capability_probe.running()
+                        && behavior_ready_for_send);
                 let can_commit = self.persist_tx.is_some()
                     && self.commit_in_flight.is_none()
                     && remote_ready_for_send
@@ -5297,6 +5470,19 @@ fn persistence_worker(
                 {
                     let _ = notices.send(PersistNotice::Failed {
                         operation: "inference settings save",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            }
+            PersistCommand::SaveBehaviorProfiles { store: profiles } => {
+                if let Err(error) =
+                    profiles.save_atomic(&data_dir.join("behavior-profiles.json"))
+                {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "behavior profile save",
                         revision: None,
                         request_id: None,
                         turn_id: None,
@@ -6666,6 +6852,13 @@ fn local_inference_settings_path(journal_path: &Path) -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("local-inference-settings.json")
+}
+
+fn local_behavior_profile_path(journal_path: &Path) -> PathBuf {
+    journal_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("behavior-profiles.json")
 }
 
 fn local_conversation_catalog_path(journal_path: &Path) -> PathBuf {
