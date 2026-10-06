@@ -22,6 +22,24 @@ impl RouteId {
     }
 }
 
+/// Opaque identity for one immutable payload correlated to a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RoutePayloadId(u64);
+
+impl RoutePayloadId {
+    /// Construct a payload identity from a caller-owned local value.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Return the opaque local value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// Opaque identity for a routing endpoint such as a session or tool adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RouteEndpointId(u64);
