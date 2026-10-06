@@ -24,7 +24,7 @@ Relevant Chatarium files:
 - `apps/desktop/src/siwc_bridge.rs`
 - `apps/desktop/src/main.rs`
 
-The current OpenAI Sign in with ChatGPT documentation was also reviewed on 2026-10-05. Do not infer support merely because a control exists in the general Responses API.
+The current OpenAI Sign in with ChatGPT documentation was also reviewed and re-audited on 2026-10-05 against the SIWC preview limitations/error guidance and the current Responses API request schema. Do not infer route support merely because a control exists in the general Responses API.
 
 ## Core local-first behavior
 
@@ -152,6 +152,30 @@ Named probes now exist for:
 - `text.verbosity`;
 - structured output through `text.format`.
 
+Before the first empirical run, those request shapes were re-audited against the
+current OpenAI schema:
+
+- the pinned DevKit normalizes the baseline string to the SIWC-required HTTP
+  message-array input;
+- image and file probes use the documented Responses input content types;
+- function tools are grouped in a documented `namespace`;
+- `additional_tools` is a developer-role input item with an embedded tool list;
+- web search uses the current Responses tool declaration;
+- reasoning uses `reasoning.effort`;
+- verbosity uses `text.verbosity`;
+- structured output uses `text.format.type = "json_schema"`.
+
+That audit validates probe shape, not route/model/account acceptance. The latter
+remains empirical and is exactly what the in-app suite measures.
+
+Failed probe evidence retains only sanitized diagnostics needed to distinguish a
+bad experimental request from a real route rejection: error code, HTTP status,
+`error.param`, upstream request ID, the pinned DevKit's redacted response-body
+shape, whether text was received, and the DevKit-safe reason. The response shape
+is structural metadata, not the raw response body; the DevKit redacts submitted
+`input`/context values while constructing it. Credentials, cookies, raw request
+bodies, and raw response bodies are never written to the probe report.
+
 A successful probe establishes support only for the selected local SIWC profile
 and model at the time of the run. Chatarium binds the saved report to the
 DevKit's renderer-safe `profileId`, the model slug, and the run timestamp; it
@@ -195,7 +219,7 @@ The desktop supports:
 
 - a fixed in-app SIWC capability probe suite under Diagnostics;
 - explicit in-app disclosure that probes use the existing local sign-in, keep credentials inside the SIWC bridge, and consume small real plan-usage requests;
-- sanitized local probe-result persistence to `siwc-capability-probes.json`;
+- sanitized local probe-result persistence to `siwc-capability-probes.json`, including safe rejection parameter/request-ID/redacted-response-shape diagnostics;
 - automatic reload of the last saved probe matrix across desktop restarts;
 - profile + model + timestamp scoping with visible stale-profile/stale-model warnings;
 - inclusion of the sanitized probe report in local archive backup/restore;
@@ -218,7 +242,7 @@ The desktop supports:
 
 The request inspector renders the request-shaping state Chatarium controls: selected model, optional instructions, developer context plus transcript input, and the fixed store=false / stream=true semantics.
 
-Repository-wide validation is green on both Windows and Linux through commit `3e3f9f32838f097829d2b5436146fb089f897aa5`: bridge syntax/smoke, formatting, compilation, protocol corpus validation, Linux desktop tests, and the full Windows workspace tests all pass. That validated head includes durable probe reload, profile/model scoping, backup/restore preservation, and the Windows archive-restore handle fix.
+Repository-wide validation is green on both Windows and Linux through commit `13a9cd161ab95d2a41f3c8a8e2bbc8b7cf97077d`: bridge syntax/smoke, formatting, compilation, protocol corpus validation, Linux desktop tests, and the full Windows workspace tests all pass. That validated head includes the in-app fixed probe matrix, durable profile/model-scoped evidence, derived contract, evidence/contract clipboard export, explicit probe-blocker diagnostics, backup/restore preservation, and end-to-end retention of safe rejection diagnostics (`code`, HTTP status, `param`, upstream request ID, and redacted response shape).
 
 ## Local behavioral levers Chatarium owns
 

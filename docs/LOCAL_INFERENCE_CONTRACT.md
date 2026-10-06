@@ -88,9 +88,15 @@ The current named probe matrix is:
 - `verbosity`;
 - `structured_output`.
 
-Each result retains its sanitized classification and safe diagnostic fields.
-The contract does not silently translate a generic rejection into
-"unsupported."
+Each result retains its sanitized classification and only the safe diagnostics
+needed for review: error code, HTTP status, `param`, upstream request ID, the
+pinned DevKit's redacted response-body shape, text-received state, and its safe
+reason. The response shape is structural metadata rather than a raw body; raw
+request/response bodies and credentials do not enter the report or contract.
+
+The bridge parser, probe-report round trip, and derived-contract tests verify
+that rejection diagnostics survive all three boundaries. The contract does not
+silently translate a generic rejection into "unsupported."
 
 ## Contract states
 
