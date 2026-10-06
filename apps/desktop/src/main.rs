@@ -6118,6 +6118,24 @@ impl eframe::App for ChatariumApp {
                         ui.add_space(8.0);
                         ui.collapsing("Exact next-request context", |ui| {
                             let mut transcript = context_transcript(&local_display_messages);
+                            match admitted_routed_context_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Ok(routed_context) => transcript.extend(routed_context),
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "routed context composition blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
+                            transcript.sort_by_key(
+                                context_composer::TranscriptMessage::order_sequence,
+                            );
                             if !self.draft.trim().is_empty() {
                                 transcript.push(context_composer::TranscriptMessage::draft(
                                     self.draft.clone(),
@@ -6131,9 +6149,11 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
+                                    context_plan.routed_context_count(),
+                                    if context_plan.routed_context_count() == 1 { "" } else { "s" },
                                     if context_plan.has_developer_context() { "included" } else { "omitted" },
                                     if context_plan.has_current_draft() { "included (preview only; dispatch policy forbids draft)" } else { "omitted" },
                                 ))
