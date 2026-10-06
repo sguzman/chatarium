@@ -235,15 +235,43 @@ dispatch action**. An allowed route therefore means only that policy would
 permit a future dispatch once a separately durable payload and dispatch path
 exist.
 
+## Landed immutable route payloads
+
+Local `SessionMessage` routes now carry a separately durable immutable payload
+through `RoutePayloadId` and the `RoutePayloadAttached` journal fact.
+
+Payload replay validates the route and endpoint-to-conversation ownership using
+the journal prefix that existed immediately before attachment. Historical
+payload provenance therefore survives later session rollover without being
+reinterpreted against today's current leaf.
+
+The payload layer enforces:
+
+- one payload identity per route;
+- one route per payload identity;
+- exact text preservation;
+- prior route proposal;
+- session-message route class;
+- no payload attachment after dispatch;
+- point-in-time source/destination conversation provenance;
+- ordinary-turn-capable endpoint state at attachment time.
+
+Payload text remains outside the generic routing audit. Archive integrity checks
+replay the payload audit independently.
+
+The desktop exposes an exact payload draft for each route. Once attached, the
+payload is immutable and inspectable. A route may be denied without a payload,
+but **Allow is blocked until the immutable payload is durable**.
+
 ## Next implementation boundary
 
-The next safe substrate is explicit durable payload identity/correlation for a
-manual local `SessionMessage` route.
+The next safe substrate is one-shot local dispatch/delivery through the existing
+typed `DispatchPermit` gate.
 
-Payload state should remain separate from route identity/policy so routing audit
-history does not become an opaque message store. Only after payload provenance,
-immutability, and route correlation are explicit should the one-shot
-`DispatchPermit` path be connected to local conversation delivery.
+Dispatch must not make routed text look user-authored. Delivery needs its own
+durable provenance so the destination conversation can distinguish a routed
+message from ordinary authored transcript content. Only after that distinction
+is explicit should routed content enter inference context.
 
 No hidden cross-conversation transcript sharing is authorized by topology,
-addressability, route proposal, or approval alone.
+addressability, route proposal, approval, or payload attachment alone.
