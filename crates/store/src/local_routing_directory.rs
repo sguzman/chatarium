@@ -132,11 +132,7 @@ mod tests {
         let conversation = LocalConversationId::new();
         let mut store = MemoryEventStore::default();
         topology(&mut store, conversation);
-        record_session_endpoint_bound(
-            &mut store,
-            SessionEndpointBinding::new(S1, E1),
-        )
-        .unwrap();
+        record_session_endpoint_bound(&mut store, SessionEndpointBinding::new(S1, E1)).unwrap();
 
         record_chat_session_lifecycle_transition(
             &mut store,
@@ -156,7 +152,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(replay_local_routing_directory(store.events()).unwrap().is_empty());
+        assert!(
+            replay_local_routing_directory(store.events())
+                .unwrap()
+                .is_empty()
+        );
 
         record_session_endpoint_bound(&mut store, SessionEndpointBinding::new(S2, E2)).unwrap();
         let directory = replay_local_routing_directory(store.events()).unwrap();
