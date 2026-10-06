@@ -140,6 +140,8 @@ impl ProbeRun {
                 code: None,
                 status_code: None,
                 param: None,
+                upstream_request_id: None,
+                response_shape: None,
                 text_received: None,
                 reason: Some(reason.to_owned()),
             });
