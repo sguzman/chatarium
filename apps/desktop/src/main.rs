@@ -4762,10 +4762,14 @@ fn transcript_bubble(
     active_hit: bool,
     ctx: &egui::Context,
 ) -> egui::Response {
-    // A wrapping child inside a horizontal layout can otherwise collapse to its
-    // minimum word width. Give the bubble a real wrapping width while keeping the
-    // whole frame inside the space available to the transcript.
-    let content_width = (ui.available_width() - 28.0).clamp(1.0, 660.0);
+    // The bubble is placed from an outer horizontal layout for left/right message
+    // alignment, but its own contents must be vertical. If the inner UI inherits
+    // that horizontal layout, the header consumes the row and the body is forced
+    // into a tiny residual strip (often one character wide after a resize).
+    //
+    // Recompute the width from the current parent allocation every frame so a
+    // maximized/restored window immediately reflows the transcript.
+    let content_width = (ui.available_width() * 0.72).clamp(320.0, 900.0);
 
     egui::Frame::default()
         .fill(fill)
@@ -4773,6 +4777,7 @@ fn transcript_bubble(
         .inner_margin(egui::Margin::symmetric(14, 11))
         .show(ui, |ui| {
             ui.set_width(content_width);
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(label)
@@ -4814,6 +4819,7 @@ fn transcript_bubble(
                     .size(10.0)
                     .color(egui::Color32::from_rgb(116, 121, 133)),
             );
+            });
         })
         .response
 }
