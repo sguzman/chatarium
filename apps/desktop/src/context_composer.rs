@@ -4,6 +4,7 @@
 //! context plan that higher-level behavior/lifecycle code can inspect before the
 //! SIWC bridge strips local provenance and sends only the Responses request shape.
 
+use crate::local_inference_contract::LoadedContract;
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +339,126 @@ fn content_lines(text: &str) -> usize {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilitySlot {
+    ImageInput,
+    FileInput,
+    FunctionTools,
+    AdditionalTools,
+    WebSearch,
+    Reasoning,
+    Verbosity,
+    StructuredOutput,
+}
+
+impl CapabilitySlot {
+    pub const ALL: [Self; 8] = [
+        Self::ImageInput,
+        Self::FileInput,
+        Self::FunctionTools,
+        Self::AdditionalTools,
+        Self::WebSearch,
+        Self::Reasoning,
+        Self::Verbosity,
+        Self::StructuredOutput,
+    ];
+
+    #[must_use]
+    pub const fn contract_name(self) -> &'static str {
+        match self {
+            Self::ImageInput => "image_input",
+            Self::FileInput => "file_input",
+            Self::FunctionTools => "function_tools",
+            Self::AdditionalTools => "additional_tools",
+            Self::WebSearch => "web_search",
+            Self::Reasoning => "reasoning",
+            Self::Verbosity => "verbosity",
+            Self::StructuredOutput => "structured_output",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ImageInput => "image input",
+            Self::FileInput => "file input",
+            Self::FunctionTools => "function tools",
+            Self::AdditionalTools => "additional tools",
+            Self::WebSearch => "web search",
+            Self::Reasoning => "reasoning",
+            Self::Verbosity => "verbosity",
+            Self::StructuredOutput => "structured output",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityAdmissionState {
+    Available,
+    UnsupportedRoute,
+    BlockedContract,
+}
+
+impl CapabilityAdmissionState {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::UnsupportedRoute => "unsupported",
+            Self::BlockedContract => "blocked · contract",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityAdmission {
+    pub slot: CapabilitySlot,
+    pub state: CapabilityAdmissionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityGate {
+    pub admissions: Vec<CapabilityAdmission>,
+}
+
+impl CapabilityGate {
+    #[must_use]
+    pub fn from_contract(
+        contract: Option<&LoadedContract>,
+        profile_id: Option<&str>,
+        model: Option<&str>,
+    ) -> Self {
+        let ready = match (contract, model) {
+            (Some(contract), Some(model)) if contract.ready_for(profile_id, model) => Some(contract),
+            _ => None,
+        };
+
+        let admissions = CapabilitySlot::ALL
+            .into_iter()
+            .map(|slot| {
+                let state = match ready
+                    .and_then(|contract| contract.capabilities.get(slot.contract_name()))
+                    .map(String::as_str)
+                {
+                    Some("supported") => CapabilityAdmissionState::Available,
+                    Some("unsupported_route") => CapabilityAdmissionState::UnsupportedRoute,
+                    _ => CapabilityAdmissionState::BlockedContract,
+                };
+                CapabilityAdmission { slot, state }
+            })
+            .collect();
+
+        Self { admissions }
+    }
+
+    #[must_use]
+    pub fn allows(&self, slot: CapabilitySlot) -> bool {
+        self.admissions.iter().any(|admission| {
+            admission.slot == slot && admission.state == CapabilityAdmissionState::Available
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +571,65 @@ mod tests {
                 unicode_scalars: 7,
                 lines: 4,
             }
+        );
+    }
+
+    #[test]
+    fn capability_gate_requires_ready_contract_for_exact_profile_and_model() {
+        use std::collections::BTreeMap;
+
+        let capabilities = CapabilitySlot::ALL
+            .into_iter()
+            .map(|slot| (slot.contract_name().to_owned(), "supported".to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        let contract = LoadedContract {
+            state: "ready".to_owned(),
+            profile_id: Some("profile-1".to_owned()),
+            model: "gpt-example".to_owned(),
+            probe_generated_unix_ms: 1234,
+            capabilities,
+        };
+
+        let active =
+            CapabilityGate::from_contract(Some(&contract), Some("profile-1"), Some("gpt-example"));
+        assert!(active.allows(CapabilitySlot::WebSearch));
+        assert!(active.allows(CapabilitySlot::Reasoning));
+
+        let wrong_model =
+            CapabilityGate::from_contract(Some(&contract), Some("profile-1"), Some("gpt-other"));
+        assert!(!wrong_model.allows(CapabilitySlot::WebSearch));
+        assert!(wrong_model.admissions.iter().all(|admission| {
+            admission.state == CapabilityAdmissionState::BlockedContract
+        }));
+    }
+
+    #[test]
+    fn capability_gate_preserves_unsupported_route() {
+        use std::collections::BTreeMap;
+
+        let mut capabilities = CapabilitySlot::ALL
+            .into_iter()
+            .map(|slot| (slot.contract_name().to_owned(), "supported".to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        capabilities.insert("web_search".to_owned(), "unsupported_route".to_owned());
+        let contract = LoadedContract {
+            state: "ready".to_owned(),
+            profile_id: Some("profile-1".to_owned()),
+            model: "gpt-example".to_owned(),
+            probe_generated_unix_ms: 1234,
+            capabilities,
+        };
+
+        let gate =
+            CapabilityGate::from_contract(Some(&contract), Some("profile-1"), Some("gpt-example"));
+        assert!(!gate.allows(CapabilitySlot::WebSearch));
+        assert_eq!(
+            gate.admissions
+                .iter()
+                .find(|admission| admission.slot == CapabilitySlot::WebSearch)
+                .unwrap()
+                .state,
+            CapabilityAdmissionState::UnsupportedRoute
         );
     }
 
