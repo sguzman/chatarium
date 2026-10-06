@@ -9556,6 +9556,51 @@ fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::Tran
         .collect()
 }
 
+fn admitted_routed_context_messages(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+) -> Result<Vec<context_composer::TranscriptMessage>, String> {
+    let inbox = replay_local_routed_inbox_for_conversation(events, conversation_id)?;
+    let admitted = replay_admitted_local_route_context(events, conversation_id)?;
+    let mut messages = Vec::with_capacity(admitted.len());
+
+    for record in admitted {
+        let item = inbox
+            .iter()
+            .find(|item| item.route_id == record.route_id)
+            .ok_or_else(|| {
+                format!(
+                    "admitted routed context for route {} has no delivered inbox item",
+                    record.route_id.get()
+                )
+            })?;
+        if item.payload_id != record.payload_id
+            || item.source_conversation_id != record.source_conversation_id
+            || item.destination_conversation_id != record.destination_conversation_id
+            || item.source_session_id != record.source_session_id
+            || item.destination_session_id != record.destination_session_id
+            || item.delivered_sequence != record.delivered_sequence
+        {
+            return Err(format!(
+                "admitted routed context for route {} disagrees with delivered inbox provenance",
+                record.route_id.get()
+            ));
+        }
+
+        messages.push(context_composer::TranscriptMessage::routed(
+            item.text.as_str(),
+            record.route_id.get(),
+            record.payload_id.get(),
+            record.source_conversation_id.to_string(),
+            record.delivered_sequence,
+            record.last_decision_sequence,
+        ));
+    }
+
+    messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+    Ok(messages)
+}
+
 fn projected_working_draft(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
