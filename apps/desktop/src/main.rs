@@ -10,6 +10,9 @@ mod local_inference_settings;
 mod offline_reader;
 mod siwc_bridge;
 
+use chatarium_core::orchestration::{
+    WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
+};
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
@@ -24,6 +27,10 @@ use chatarium_store::authored::{
 use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
+};
+use chatarium_store::local_conversation_worker_audit::{
+    LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
+    replay_local_conversation_worker_bindings,
 };
 use chatarium_store::remote_health::{
     MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
@@ -42,6 +49,10 @@ use chatarium_store::remote_mirror_snapshot_audit::replay_remote_conversation_sn
 use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
+};
+use chatarium_store::session_audit::replay_session_audit;
+use chatarium_store::worker_audit::{
+    WorkerAuditRecord, record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
 };
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
@@ -65,6 +76,19 @@ enum PersistCommand {
     },
     SaveBehaviorProfiles {
         store: behavior_profile::BehaviorProfileStore,
+    },
+    BindLocalConversationWorker {
+        conversation_id: LocalConversationId,
+        worker_id: WorkerId,
+    },
+    AssignWorkerGoal {
+        worker_id: WorkerId,
+        goal_id: WorkerGoalId,
+    },
+    TransitionWorker {
+        worker_id: WorkerId,
+        goal_id: WorkerGoalId,
+        action: WorkerAction,
     },
     SaveLocalConversationCatalog {
         catalog: local_conversations::LocalConversationCatalog,
@@ -192,6 +216,9 @@ enum PersistNotice {
     RemoteHealthUpdated {
         event: EventEnvelope,
         controller: RemoteHealthController,
+    },
+    LifecycleEventAppended {
+        event: EventEnvelope,
     },
     Failed {
         operation: &'static str,
@@ -425,6 +452,7 @@ struct ChatariumApp {
     inference_settings: local_inference_settings::InferenceSettingsStore,
     behavior_profiles: behavior_profile::BehaviorProfileStore,
     conversation_behavior_profile: behavior_profile::BehaviorProfile,
+    lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
     archive_backup_path: String,
@@ -669,6 +697,7 @@ impl ChatariumApp {
                         inference_settings,
                         behavior_profiles,
                         conversation_behavior_profile: active_behavior_profile,
+                        lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
                         archive_backup_path: String::new(),
@@ -830,6 +859,7 @@ impl ChatariumApp {
             inference_settings,
             behavior_profiles,
             conversation_behavior_profile: active_behavior_profile,
+            lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
             archive_backup_path: String::new(),
