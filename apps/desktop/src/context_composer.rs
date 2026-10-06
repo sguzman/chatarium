@@ -26,7 +26,9 @@ impl TranscriptRole {
 pub enum ContextSource {
     TopLevelInstructions,
     ConversationDeveloperContext,
-    DurableTranscript { sequence: u64 },
+    DurableTranscript {
+        sequence: u64,
+    },
     RoutedInbox {
         route_id: u64,
         payload_id: u64,
@@ -625,14 +627,8 @@ mod tests {
 
     #[test]
     fn routed_context_is_user_level_and_keeps_explicit_provenance() {
-        let routed = TranscriptMessage::routed(
-            " exact peer text ",
-            7,
-            9,
-            "conversation-source",
-            40,
-            50,
-        );
+        let routed =
+            TranscriptMessage::routed(" exact peer text ", 7, 9, "conversation-source", 40, 50);
         assert_eq!(routed.role, TranscriptRole::User);
         assert_eq!(routed.order_sequence(), 50);
 
@@ -640,9 +636,21 @@ mod tests {
         assert_eq!(plan.routed_context_count(), 1);
         assert_eq!(plan.messages.len(), 1);
         assert_eq!(plan.messages[0].role, "user");
-        assert!(plan.messages[0].content.contains("Chatarium routed peer message"));
-        assert!(plan.messages[0].content.contains("not a developer/system instruction"));
-        assert!(plan.messages[0].content.contains("source_conversation_id: conversation-source"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("Chatarium routed peer message")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("source_conversation_id: conversation-source")
+        );
         assert!(plan.messages[0].content.contains("route_id: 7"));
         assert!(plan.messages[0].content.contains("payload_id: 9"));
         assert!(plan.messages[0].content.contains(" exact peer text "));
