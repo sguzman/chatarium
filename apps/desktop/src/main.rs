@@ -4766,6 +4766,93 @@ impl eframe::App for ChatariumApp {
                         ui.add_space(10.0);
                         ui.separator();
                         ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("Local orchestration topology").strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "Durable identity only: local conversation → logical chat container → current local session. This does not enable routing, shared context, or controller authority.",
+                            )
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+
+                        match local_conversation_topology(
+                            &self.events,
+                            self.local_conversation_id,
+                        ) {
+                            Err(error) => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "topology projection blocked: {error}"
+                                    ))
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(186, 108, 108)),
+                                );
+                            }
+                            Ok(None) => {
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui
+                                        .add_enabled(
+                                            !self.topology_command_pending
+                                                && self.persist_tx.is_some(),
+                                            egui::Button::new(
+                                                "Initialize orchestration topology",
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.initialize_local_orchestration_topology();
+                                    }
+                                    if self.topology_command_pending {
+                                        ui.spinner();
+                                    }
+                                });
+                            }
+                            Ok(Some(topology)) => {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "container {} · current session {} · {} · {} session{}",
+                                            topology.container_id.get(),
+                                            topology.current_session_id.get(),
+                                            session_lifecycle_phase_label(
+                                                topology.current_session_phase,
+                                            ),
+                                            topology.session_count,
+                                            if topology.session_count == 1 { "" } else { "s" },
+                                        ))
+                                        .monospace()
+                                        .size(10.0),
+                                    );
+                                    if self.topology_command_pending {
+                                        ui.spinner();
+                                    }
+                                });
+                                if topology.root_session_id != topology.current_session_id {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "root session {} · current leaf changed by explicit rollover provenance",
+                                            topology.root_session_id.get(),
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "root session is the current execution leaf",
+                                        )
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                }
+                            }
+                        }
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(6.0);
                         ui.label(egui::RichText::new("Worker lifecycle").strong());
                         ui.label(
                             egui::RichText::new(
@@ -5932,6 +6019,72 @@ impl Drop for ChatariumApp {
             let _ = worker.join();
         }
     }
+}
+
+fn append_local_orchestration_topology_checked(
+    store: &mut impl EventStore,
+    conversation_id: LocalConversationId,
+    container_id: ChatContainerId,
+    root_session_id: SessionId,
+) -> Result<Vec<EventEnvelope>, String> {
+    let bindings = replay_local_conversation_chat_container_bindings(store.events())?;
+    if let Some(existing) = bindings
+        .iter()
+        .find(|binding| binding.conversation_id == conversation_id)
+    {
+        return Err(format!(
+            "local conversation {conversation_id} already owns chat container {}",
+            existing.container_id.get()
+        ));
+    }
+    if let Some(existing) = bindings
+        .iter()
+        .find(|binding| binding.container_id == container_id)
+    {
+        return Err(format!(
+            "chat container {} already belongs to local conversation {}",
+            container_id.get(),
+            existing.conversation_id
+        ));
+    }
+    if replay_session_audit(store.events())?
+        .iter()
+        .any(|record| record.session_id == root_session_id)
+    {
+        return Err(format!(
+            "local session {} is already registered",
+            root_session_id.get()
+        ));
+    }
+    if replay_chat_container_audit(store.events())?
+        .iter()
+        .any(|record| record.container_id == container_id)
+    {
+        return Err(format!(
+            "chat container {} already exists",
+            container_id.get()
+        ));
+    }
+
+    let before = store.events().len();
+    record_local_session_registered(store, root_session_id)
+        .map_err(|error| error.to_string())?;
+    record_chat_container_created(store, container_id, root_session_id)
+        .map_err(|error| error.to_string())?;
+    record_local_conversation_chat_container_bound(store, conversation_id, container_id)
+        .map_err(|error| error.to_string())?;
+
+    let topology = replay_local_conversation_topologies(store.events())?
+        .into_iter()
+        .find(|topology| topology.conversation_id == conversation_id)
+        .ok_or_else(|| {
+            "local orchestration topology append did not replay for its conversation".to_owned()
+        })?;
+    if topology.container_id != container_id || topology.current_session_id != root_session_id {
+        return Err("local orchestration topology replay disagrees with appended identities".to_owned());
+    }
+
+    Ok(store.events()[before..].to_vec())
 }
 
 fn append_local_worker_binding_checked(
@@ -7416,6 +7569,47 @@ fn remote_turn_payload(
     .expect("remote turn observation is JSON-serializable")
 }
 
+fn local_conversation_topology(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+) -> Result<Option<LocalConversationTopologyRecord>, String> {
+    Ok(replay_local_conversation_topologies(events)?
+        .into_iter()
+        .find(|topology| topology.conversation_id == conversation_id))
+}
+
+fn next_available_local_orchestration_ids(
+    events: &[EventEnvelope],
+) -> Result<(ChatContainerId, SessionId), String> {
+    let next_container = replay_chat_container_audit(events)?
+        .into_iter()
+        .map(|record| record.container_id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "chat-container identity space exhausted".to_owned())?;
+    let next_session = replay_session_audit(events)?
+        .into_iter()
+        .map(|record| record.session_id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "session identity space exhausted".to_owned())?;
+    Ok((
+        ChatContainerId::new(next_container),
+        SessionId::new(next_session),
+    ))
+}
+
+fn session_lifecycle_phase_label(phase: SessionLifecyclePhase) -> &'static str {
+    match phase {
+        SessionLifecyclePhase::Healthy => "HEALTHY",
+        SessionLifecyclePhase::Aging => "AGING",
+        SessionLifecyclePhase::Saturated => "SATURATED",
+        SessionLifecyclePhase::Retired => "RETIRED",
+    }
+}
+
 fn local_worker_binding(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
@@ -8387,6 +8581,58 @@ mod tests {
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
+    }
+
+    #[test]
+    fn checked_local_orchestration_topology_is_durable_and_one_to_one() {
+        let conversation_id = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+        let container_id = ChatContainerId::new(1);
+        let session_id = SessionId::new(1);
+
+        let appended = append_local_orchestration_topology_checked(
+            &mut store,
+            conversation_id,
+            container_id,
+            session_id,
+        )
+        .unwrap();
+        assert_eq!(appended.len(), 3);
+        assert_eq!(appended[0].kind, EventKind::LocalSessionRegistered);
+        assert_eq!(appended[1].kind, EventKind::ChatContainerCreated);
+        assert_eq!(
+            appended[2].kind,
+            EventKind::LocalConversationChatContainerBound
+        );
+
+        let topology = local_conversation_topology(store.events(), conversation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(topology.container_id, container_id);
+        assert_eq!(topology.root_session_id, session_id);
+        assert_eq!(topology.current_session_id, session_id);
+        assert_eq!(
+            topology.current_session_phase,
+            SessionLifecyclePhase::Healthy
+        );
+
+        let before_duplicate = store.events().len();
+        assert!(
+            append_local_orchestration_topology_checked(
+                &mut store,
+                conversation_id,
+                ChatContainerId::new(2),
+                SessionId::new(2),
+            )
+            .unwrap_err()
+            .contains("already owns chat container")
+        );
+        assert_eq!(store.events().len(), before_duplicate);
+
+        let (next_container, next_session) =
+            next_available_local_orchestration_ids(store.events()).unwrap();
+        assert_eq!(next_container, ChatContainerId::new(2));
+        assert_eq!(next_session, SessionId::new(2));
     }
 
     #[test]
