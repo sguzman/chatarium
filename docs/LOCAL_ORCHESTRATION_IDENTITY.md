@@ -299,19 +299,35 @@ The desktop exposes **Routed inbox** separately from the conversation
 transcript and explicitly marks routed items as excluded from inference
 context.
 
+## Landed routed context admission
+
+Delivery and inference-context use are now separate durable decisions.
+
+Each destination inbox item defaults to excluded from context. The user can
+explicitly **Admit to context** and later **Exclude from context**. Those
+decisions are durable, reversible, destination-conversation-scoped, and survive
+session rollover.
+
+Context Composer consumes only currently admitted items. It serializes them at
+user trust level inside an explicit Chatarium routed-peer envelope carrying
+source conversation, route, payload, delivery, and admission provenance.
+
+The admitted routed-context set is snapshotted when the destination user clicks
+Send. A later Admit/Exclude change cannot mutate that pending request while the
+authored message is crossing its local durability gate.
+
+Routed peer text never becomes a user-authored transcript event and is never
+elevated to developer/system instructions.
+
 ## Next implementation boundary
 
-The next safe substrate is an explicit durable context-admission decision for
-one delivered routed inbox item.
+Basic manual local conversation routing is now vertically complete from
+addressability through payload, approval, one-shot delivery, inbox visibility,
+and explicit context admission.
 
-Admission must be separate from delivery. A delivered message should remain
-visible even when it is never admitted to model context.
+The next safe orchestration boundary is to resolve the WorkerId/session-rollover
+question and then expose explicit local controller→worker supervision over the
+already-existing typed orchestration primitives.
 
-After durable admission exists, Context Composer can gain a typed routed-context
-source with explicit provenance and an intentionally chosen request role/trust
-policy. Do not silently serialize routed text as user-authored or developer
-instructions.
-
-No hidden cross-conversation transcript sharing is authorized by topology,
-addressability, route proposal, approval, payload attachment, dispatch, or
-delivery alone.
+No controller authority should be inferred merely because two local
+conversations can route messages to each other.
