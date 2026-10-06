@@ -1,6 +1,6 @@
 # Local-First Orchestration Identity
 
-Status: **DESIGN FROZEN**, implementation boundary established 2026-10-06.
+Status: **ACTIVE**, first durable local-conversation topology slice landed 2026-10-06.
 
 Local-first Chatarium now has enough independent identity domains that accidental
 conflation would become expensive. This document freezes how those domains
@@ -139,14 +139,52 @@ and enforce whether a worker identity:
 
 Do not resolve this implicitly by adding a second contradictory binding.
 
+## Landed topology substrate
+
+The `LocalConversationId → ChatContainerId → current SessionId` path is now
+durable and inspectable.
+
+`LocalConversationChatContainerBound` is a one-to-one durable identity edge.
+Replay joins that edge to the existing chat-container lineage, so a future
+session successor changes the projected current `SessionId` without rewriting
+the `LocalConversationId → ChatContainerId` ownership edge.
+
+Desktop initialization writes three durable facts in order:
+
+1. register a fresh local `SessionId`;
+2. create a fresh `ChatContainerId` around that root session;
+3. bind the local conversation to the container.
+
+The final binding is the activation point. A crash before it may leave an
+unclaimed local session/container identity, but that orphan has no
+conversation/routing/context authority.
+
+The desktop inspector shows container identity, current session identity,
+session lifecycle phase, lineage size, and root identity when rollover has
+occurred.
+
+Topology creation does **not**:
+
+- bind a routing endpoint;
+- bind the conversation worker to the session;
+- designate a controller;
+- create a route;
+- share transcript/context;
+- alter inference requests.
+
+Archive integrity replay validates this topology along with the rest of the
+authoritative journal.
+
 ## Next implementation boundary
 
-The next substrate should make the
-`LocalConversationId → ChatContainerId → current SessionId` path durable and
-inspectable.
+The next local-first edge is explicit
+`current SessionId → RouteEndpointId` addressability using the existing
+session audit.
 
-Only after that topology exists should local controller/worker routing consume
-the existing SessionId / RouteEndpointId / RouteGate machinery.
+That endpoint binding remains identity/correlation only. Only after it exists
+should controller/worker route proposal and policy consume the existing
+RouteGate machinery.
 
-No hidden cross-conversation transcript sharing is authorized by topology
-alone. Routed or shared context remains a separate explicit policy/source.
+No hidden cross-conversation transcript sharing is authorized by topology or
+addressability alone. Routed or shared context remains a separate explicit
+policy/source.
