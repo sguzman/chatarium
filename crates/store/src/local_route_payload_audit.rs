@@ -75,16 +75,10 @@ pub fn replay_local_route_payload_audit(
         let value = typed_payload(event)?;
         let payload_id = RoutePayloadId::new(required_u64(&value, "payload_id")?);
         let route_id = RouteId::new(required_u64(&value, "route_id")?);
-        let source_conversation_id = parse_conversation_id(
-            &value,
-            "source_conversation_id",
-            event.sequence,
-        )?;
-        let destination_conversation_id = parse_conversation_id(
-            &value,
-            "destination_conversation_id",
-            event.sequence,
-        )?;
+        let source_conversation_id =
+            parse_conversation_id(&value, "source_conversation_id", event.sequence)?;
+        let destination_conversation_id =
+            parse_conversation_id(&value, "destination_conversation_id", event.sequence)?;
         let text = required_string(&value, "text")?.to_owned();
         validate_scope(event, route_id, payload_id)?;
 
@@ -280,9 +274,7 @@ fn parse_conversation_id(
     sequence: u64,
 ) -> Result<LocalConversationId, String> {
     LocalConversationId::from_str(required_string(value, field)?).map_err(|error| {
-        format!(
-            "route payload event at sequence {sequence} has invalid {field}: {error}"
-        )
+        format!("route payload event at sequence {sequence} has invalid {field}: {error}")
     })
 }
 
@@ -314,16 +306,12 @@ mod tests {
     };
     use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
     use crate::routing_audit::{record_route_dispatched, record_route_proposed};
-    use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound,
-    };
+    use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
     use chatarium_core::chat_container::{
         ChatContainerId, ContextHandoffId, SessionLifecyclePhase, SessionLifecycleTransition,
         SessionSuccessorBinding,
     };
-    use chatarium_core::routing::{
-        RouteEndpointId, RouteGate, RoutePolicy, RouteRequest,
-    };
+    use chatarium_core::routing::{RouteEndpointId, RouteGate, RoutePolicy, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, SessionId};
 
     fn addressable(
@@ -337,11 +325,8 @@ mod tests {
         record_chat_container_created(store, container_id, session_id).unwrap();
         record_local_conversation_chat_container_bound(store, conversation_id, container_id)
             .unwrap();
-        record_session_endpoint_bound(
-            store,
-            SessionEndpointBinding::new(session_id, endpoint_id),
-        )
-        .unwrap();
+        record_session_endpoint_bound(store, SessionEndpointBinding::new(session_id, endpoint_id))
+            .unwrap();
     }
 
     fn proposed_route(
@@ -466,7 +451,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(replay_local_route_payload_audit(store.events()).unwrap().len(), 1);
+        assert_eq!(
+            replay_local_route_payload_audit(store.events())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
