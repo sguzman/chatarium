@@ -14,6 +14,7 @@ pub mod control_provenance_audit;
 pub mod control_route_audit;
 pub mod historical_conversation_audit;
 pub mod historical_transcript;
+pub mod local_conversation_chat_container_audit;
 pub mod local_conversation_worker_audit;
 pub mod orchestration_route_audit;
 pub mod projection;
