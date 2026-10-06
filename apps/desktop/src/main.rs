@@ -10,9 +10,11 @@ mod local_inference_settings;
 mod offline_reader;
 mod siwc_bridge;
 
+use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::orchestration::{
     WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
+use chatarium_core::session::SessionId;
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
@@ -27,6 +29,13 @@ use chatarium_store::authored::{
 use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
+};
+use chatarium_store::chat_container_audit::{
+    record_chat_container_created, replay_chat_container_audit,
+};
+use chatarium_store::local_conversation_chat_container_audit::{
+    LocalConversationTopologyRecord, record_local_conversation_chat_container_bound,
+    replay_local_conversation_chat_container_bindings, replay_local_conversation_topologies,
 };
 use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
@@ -50,7 +59,9 @@ use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
 };
-use chatarium_store::session_audit::replay_session_audit;
+use chatarium_store::session_audit::{
+    record_local_session_registered, replay_session_audit,
+};
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
 };
@@ -76,6 +87,11 @@ enum PersistCommand {
     },
     SaveBehaviorProfiles {
         store: behavior_profile::BehaviorProfileStore,
+    },
+    InitializeLocalOrchestrationTopology {
+        conversation_id: LocalConversationId,
+        container_id: ChatContainerId,
+        root_session_id: SessionId,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -216,6 +232,9 @@ enum PersistNotice {
     RemoteHealthUpdated {
         event: EventEnvelope,
         controller: RemoteHealthController,
+    },
+    OrchestrationTopologyInitialized {
+        appended_events: Vec<EventEnvelope>,
     },
     LifecycleEventAppended {
         event: EventEnvelope,
@@ -452,6 +471,7 @@ struct ChatariumApp {
     inference_settings: local_inference_settings::InferenceSettingsStore,
     behavior_profiles: behavior_profile::BehaviorProfileStore,
     conversation_behavior_profile: behavior_profile::BehaviorProfile,
+    topology_command_pending: bool,
     lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -697,6 +717,7 @@ impl ChatariumApp {
                         inference_settings,
                         behavior_profiles,
                         conversation_behavior_profile: active_behavior_profile,
+                        topology_command_pending: false,
                         lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -859,6 +880,7 @@ impl ChatariumApp {
             inference_settings,
             behavior_profiles,
             conversation_behavior_profile: active_behavior_profile,
+            topology_command_pending: false,
             lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
@@ -2559,6 +2581,14 @@ impl ChatariumApp {
                         self.remote_health.intent.as_str()
                     );
                 }
+                PersistNotice::OrchestrationTopologyInitialized { appended_events } => {
+                    let count = appended_events.len();
+                    self.events.extend(appended_events);
+                    self.topology_command_pending = false;
+                    self.status = format!(
+                        "local orchestration topology durably initialized · {count} events"
+                    );
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -2572,6 +2602,9 @@ impl ChatariumApp {
                     turn_id,
                     error,
                 } => {
+                    if operation.starts_with("orchestration topology") {
+                        self.topology_command_pending = false;
+                    }
                     if operation.starts_with("lifecycle ") {
                         self.lifecycle_command_pending = false;
                     }
@@ -3142,6 +3175,60 @@ impl ChatariumApp {
             store: self.behavior_profiles.clone(),
         }) {
             self.status = format!("failed to queue behavior profile: {error}");
+        }
+    }
+
+    fn initialize_local_orchestration_topology(&mut self) {
+        if self.topology_command_pending {
+            return;
+        }
+        match local_conversation_topology(&self.events, self.local_conversation_id) {
+            Ok(Some(topology)) => {
+                self.status = format!(
+                    "local orchestration topology already exists · container {} · session {}",
+                    topology.container_id.get(),
+                    topology.current_session_id.get()
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.status = format!("cannot project local orchestration topology: {error}");
+                return;
+            }
+        }
+
+        let (container_id, root_session_id) =
+            match next_available_local_orchestration_ids(&self.events) {
+                Ok(ids) => ids,
+                Err(error) => {
+                    self.status = format!("cannot allocate local orchestration identities: {error}");
+                    return;
+                }
+            };
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot initialize local orchestration topology: persistence unavailable"
+                    .to_owned();
+            return;
+        };
+
+        match sender.send(PersistCommand::InitializeLocalOrchestrationTopology {
+            conversation_id: self.local_conversation_id,
+            container_id,
+            root_session_id,
+        }) {
+            Ok(()) => {
+                self.topology_command_pending = true;
+                self.status = format!(
+                    "initializing local orchestration topology · container {} · root session {}…",
+                    container_id.get(),
+                    root_session_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local orchestration topology: {error}");
+            }
         }
     }
 
@@ -6036,6 +6123,33 @@ fn persistence_worker(
                     });
                 }
             }
+            PersistCommand::InitializeLocalOrchestrationTopology {
+                conversation_id,
+                container_id,
+                root_session_id,
+            } => {
+                match append_local_orchestration_topology_checked(
+                    &mut store,
+                    conversation_id,
+                    container_id,
+                    root_session_id,
+                ) {
+                    Ok(appended_events) => {
+                        let _ = notices.send(
+                            PersistNotice::OrchestrationTopologyInitialized { appended_events },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "orchestration topology initialization",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -8267,6 +8381,9 @@ mod tests {
             }
             PersistNotice::MirrorQueueUpdated { .. } => "mirror_queue_updated",
             PersistNotice::RemoteHealthUpdated { .. } => "remote_health_updated",
+            PersistNotice::OrchestrationTopologyInitialized { .. } => {
+                "orchestration_topology_initialized"
+            }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
