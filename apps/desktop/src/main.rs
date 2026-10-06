@@ -5622,6 +5622,157 @@ impl Drop for ChatariumApp {
     }
 }
 
+fn append_local_worker_binding_checked(
+    store: &mut JsonlEventStore,
+    conversation_id: LocalConversationId,
+    worker_id: WorkerId,
+) -> Result<EventEnvelope, String> {
+    let bindings = replay_local_conversation_worker_bindings(store.events())?;
+    if let Some(existing) = bindings
+        .iter()
+        .find(|binding| binding.conversation_id == conversation_id)
+    {
+        return Err(format!(
+            "local conversation {conversation_id} is already bound to worker {}",
+            existing.worker_id.get()
+        ));
+    }
+    if let Some(existing) = bindings
+        .iter()
+        .find(|binding| binding.worker_id == worker_id)
+    {
+        return Err(format!(
+            "worker {} is already bound to local conversation {}",
+            worker_id.get(),
+            existing.conversation_id
+        ));
+    }
+    if replay_worker_audit(store.events())?
+        .iter()
+        .any(|record| record.worker_id == worker_id)
+    {
+        return Err(format!(
+            "worker {} already has lifecycle history and cannot be rebound implicitly",
+            worker_id.get()
+        ));
+    }
+    if replay_session_audit(store.events())?.iter().any(|record| {
+        record
+            .worker_binding
+            .is_some_and(|binding| binding.worker_id() == worker_id)
+    }) {
+        return Err(format!(
+            "worker {} is already bound to a local session",
+            worker_id.get()
+        ));
+    }
+
+    record_local_conversation_worker_bound(store, conversation_id, worker_id)
+        .map_err(|error| error.to_string())?;
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker binding append produced no durable event".to_owned())
+}
+
+fn append_worker_goal_checked(
+    store: &mut JsonlEventStore,
+    worker_id: WorkerId,
+    goal_id: WorkerGoalId,
+) -> Result<EventEnvelope, String> {
+    require_local_worker_binding(store.events(), worker_id)?;
+    let mut lifecycle = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == worker_id)
+        .map_or_else(WorkerLifecycle::default, |record| record.lifecycle);
+    lifecycle
+        .assign_goal(goal_id)
+        .map_err(|error| error.to_string())?;
+
+    record_worker_goal_assigned(store, worker_id, goal_id)
+        .map_err(|error| error.to_string())?;
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker goal append produced no durable event".to_owned())
+}
+
+fn append_worker_transition_checked(
+    store: &mut JsonlEventStore,
+    worker_id: WorkerId,
+    goal_id: WorkerGoalId,
+    action: WorkerAction,
+) -> Result<EventEnvelope, String> {
+    require_local_worker_binding(store.events(), worker_id)?;
+    let mut lifecycle = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == worker_id)
+        .ok_or_else(|| format!("worker {} has no assigned goal", worker_id.get()))?
+        .lifecycle;
+    apply_worker_action(&mut lifecycle, goal_id, action)?;
+
+    record_worker_transition(store, worker_id, goal_id, action)
+        .map_err(|error| error.to_string())?;
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker transition append produced no durable event".to_owned())
+}
+
+fn require_local_worker_binding(
+    events: &[EventEnvelope],
+    worker_id: WorkerId,
+) -> Result<LocalConversationWorkerBindingRecord, String> {
+    replay_local_conversation_worker_bindings(events)?
+        .into_iter()
+        .find(|binding| binding.worker_id == worker_id)
+        .ok_or_else(|| {
+            format!(
+                "worker {} is not bound to a local Chatarium conversation",
+                worker_id.get()
+            )
+        })
+}
+
+fn apply_worker_action(
+    lifecycle: &mut WorkerLifecycle,
+    goal_id: WorkerGoalId,
+    action: WorkerAction,
+) -> Result<(), String> {
+    match action {
+        WorkerAction::AssignGoal => Err(
+            "AssignGoal must use the dedicated durable goal-assignment command".to_owned(),
+        ),
+        WorkerAction::StartOrResume => lifecycle
+            .start_or_resume(goal_id)
+            .map_err(|error| error.to_string()),
+        WorkerAction::ReportProgress => lifecycle
+            .report_progress(goal_id)
+            .map_err(|error| error.to_string()),
+        WorkerAction::RequestInput => lifecycle
+            .request_input(goal_id)
+            .map_err(|error| error.to_string()),
+        WorkerAction::MarkBlocked => lifecycle
+            .mark_blocked(goal_id)
+            .map_err(|error| error.to_string()),
+        WorkerAction::Complete => lifecycle
+            .complete(goal_id)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+        WorkerAction::Fail => lifecycle
+            .fail(goal_id)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+        WorkerAction::Stop => lifecycle
+            .stop(goal_id)
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+    }
+}
+
 fn persistence_worker(
     mut store: JsonlEventStore,
     data_dir: PathBuf,
@@ -5659,6 +5810,61 @@ fn persistence_worker(
                         turn_id: None,
                         error,
                     });
+                }
+            }
+            PersistCommand::BindLocalConversationWorker {
+                conversation_id,
+                worker_id,
+            } => {
+                match append_local_worker_binding_checked(&mut store, conversation_id, worker_id) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LifecycleEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "lifecycle worker binding",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::AssignWorkerGoal { worker_id, goal_id } => {
+                match append_worker_goal_checked(&mut store, worker_id, goal_id) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LifecycleEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "lifecycle goal assignment",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::TransitionWorker {
+                worker_id,
+                goal_id,
+                action,
+            } => {
+                match append_worker_transition_checked(&mut store, worker_id, goal_id, action) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LifecycleEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "lifecycle transition",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
                 }
             }
             PersistCommand::SaveLocalConversationCatalog { catalog } => {
