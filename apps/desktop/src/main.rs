@@ -778,9 +778,10 @@ impl ChatariumApp {
             local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
                 .unwrap_or_default();
         let active_inference_settings = inference_settings.for_conversation(local_conversation_id);
-        let behavior_profiles =
-            behavior_profile::BehaviorProfileStore::load(&local_behavior_profile_path(&journal_path))
-                .unwrap_or_default();
+        let behavior_profiles = behavior_profile::BehaviorProfileStore::load(
+            &local_behavior_profile_path(&journal_path),
+        )
+        .unwrap_or_default();
         let active_behavior_profile = behavior_profiles.for_conversation(local_conversation_id);
 
         Self {
@@ -5478,9 +5479,7 @@ fn persistence_worker(
                 }
             }
             PersistCommand::SaveBehaviorProfiles { store: profiles } => {
-                if let Err(error) =
-                    profiles.save_atomic(&data_dir.join("behavior-profiles.json"))
-                {
+                if let Err(error) = profiles.save_atomic(&data_dir.join("behavior-profiles.json")) {
                     let _ = notices.send(PersistNotice::Failed {
                         operation: "behavior profile save",
                         revision: None,
