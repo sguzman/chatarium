@@ -6825,8 +6825,7 @@ fn append_local_route_user_decision_checked(
         ));
     }
 
-    record_route_user_decision(store, route_id, decision)
-        .map_err(|error| error.to_string())?;
+    record_route_user_decision(store, route_id, decision).map_err(|error| error.to_string())?;
 
     let replayed = replay_routing_audit(store.events())?
         .into_iter()
@@ -7104,7 +7103,8 @@ fn persistence_worker(
                     destination_conversation_id,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::LocalRoutePolicyEventAppended { event });
+                        let _ =
+                            notices.send(PersistNotice::LocalRoutePolicyEventAppended { event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -9712,7 +9712,10 @@ mod tests {
                 by: DecisionAuthority::User,
             }
         );
-        assert_eq!(next_available_route_id(store.events()).unwrap(), RouteId::new(2));
+        assert_eq!(
+            next_available_route_id(store.events()).unwrap(),
+            RouteId::new(2)
+        );
 
         let before_missing = store.events().len();
         assert!(
