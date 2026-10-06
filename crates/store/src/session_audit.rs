@@ -7,7 +7,9 @@ use crate::{EventEnvelope, EventStore};
 use chatarium_core::EventKind;
 use chatarium_core::orchestration::WorkerId;
 use chatarium_core::routing::RouteEndpointId;
-use chatarium_core::session::{SessionEndpointBinding, SessionId, WorkerSessionBinding};
+use chatarium_core::session::{
+    SessionEndpointBinding, SessionId, WorkerSessionBinding, WorkerSessionSuccessorBinding,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -95,6 +97,30 @@ pub fn record_worker_session_bound(
     )
 }
 
+/// Append one explicit worker-session successor handoff.
+pub fn record_worker_session_successor_bound(
+    store: &mut impl EventStore,
+    binding: WorkerSessionSuccessorBinding,
+) -> std::io::Result<u64> {
+    append_typed(
+        store,
+        Some(worker_session_successor_scope(
+            binding.worker_id(),
+            binding.predecessor_session_id(),
+            binding.successor_session_id(),
+        )),
+        EventKind::WorkerSessionSuccessorBound,
+        json!({
+            "schema": SESSION_AUDIT_SCHEMA,
+            "version": SESSION_AUDIT_VERSION,
+            "record": "worker_session_successor_bound",
+            "worker_id": binding.worker_id().get(),
+            "predecessor_session_id": binding.predecessor_session_id().get(),
+            "successor_session_id": binding.successor_session_id().get(),
+        }),
+    )
+}
+
 /// Reconstruct local sessions and their identity bindings from durable journal events.
 pub fn replay_session_audit(events: &[EventEnvelope]) -> Result<Vec<SessionAuditRecord>, String> {
     let mut sessions = BTreeMap::<SessionId, ReplaySession>::new();
@@ -109,6 +135,9 @@ pub fn replay_session_audit(events: &[EventEnvelope]) -> Result<Vec<SessionAudit
             }
             EventKind::WorkerSessionBound => {
                 replay_worker_binding(&mut sessions, &mut worker_owner, event)?
+            }
+            EventKind::WorkerSessionSuccessorBound => {
+                replay_worker_successor_binding(&mut sessions, &mut worker_owner, event)?
             }
             _ => {}
         }
@@ -267,6 +296,142 @@ fn replay_worker_binding(
     Ok(())
 }
 
+fn replay_worker_successor_binding(
+    sessions: &mut BTreeMap<SessionId, ReplaySession>,
+    worker_owner: &mut BTreeMap<WorkerId, SessionId>,
+    event: &EventEnvelope,
+) -> Result<(), String> {
+    let payload = typed_payload(event, "worker_session_successor_bound")?;
+    let worker_id = WorkerId::new(required_u64(&payload, "worker_id")?);
+    let predecessor_session_id =
+        SessionId::new(required_u64(&payload, "predecessor_session_id")?);
+    let successor_session_id =
+        SessionId::new(required_u64(&payload, "successor_session_id")?);
+    validate_scope(
+        event,
+        &worker_session_successor_scope(
+            worker_id,
+            predecessor_session_id,
+            successor_session_id,
+        ),
+    )?;
+
+    let binding = WorkerSessionSuccessorBinding::new(
+        worker_id,
+        predecessor_session_id,
+        successor_session_id,
+    )
+    .map_err(|error| {
+        format!(
+            "invalid worker-session successor binding at sequence {}: {error:?}",
+            event.sequence
+        )
+    })?;
+
+    let active_session = worker_owner.get(&worker_id).copied().ok_or_else(|| {
+        format!(
+            "worker-session successor binding at sequence {} references worker {} before any worker-session binding",
+            event.sequence,
+            worker_id.get()
+        )
+    })?;
+    if active_session != predecessor_session_id {
+        return Err(format!(
+            "worker-session successor binding at sequence {} names predecessor {}, but worker {} is active on session {}",
+            event.sequence,
+            predecessor_session_id.get(),
+            worker_id.get(),
+            active_session.get()
+        ));
+    }
+
+    let predecessor = sessions.get(&predecessor_session_id).ok_or_else(|| {
+        format!(
+            "worker-session successor binding at sequence {} references missing predecessor session {}",
+            event.sequence,
+            predecessor_session_id.get()
+        )
+    })?;
+    if predecessor.worker_binding
+        != Some(WorkerSessionBinding::new(worker_id, predecessor_session_id))
+    {
+        return Err(format!(
+            "predecessor session {} is not historically bound to worker {} at sequence {}",
+            predecessor_session_id.get(),
+            worker_id.get(),
+            event.sequence
+        ));
+    }
+
+    let successor = sessions.get_mut(&successor_session_id).ok_or_else(|| {
+        format!(
+            "worker-session successor binding at sequence {} references unregistered successor session {}",
+            event.sequence,
+            successor_session_id.get()
+        )
+    })?;
+    if let Some(existing) = successor.worker_binding {
+        return Err(format!(
+            "successor session {} is already bound to worker {}; cannot receive worker {} at sequence {}",
+            successor_session_id.get(),
+            existing.worker_id().get(),
+            worker_id.get(),
+            event.sequence
+        ));
+    }
+
+    successor.worker_binding = Some(WorkerSessionBinding::new(
+        binding.worker_id(),
+        binding.successor_session_id(),
+    ));
+    successor.worker_bound_sequence = Some(event.sequence);
+    successor.last_sequence = event.sequence;
+    worker_owner.insert(worker_id, successor_session_id);
+    Ok(())
+}
+
+/// Resolve the worker-session binding active immediately before one durable sequence.
+///
+/// Historical predecessor bindings remain in session records; the binding with
+/// the greatest durable bind/handoff sequence before `before_sequence` is the
+/// active execution leaf for that worker at that point in history.
+#[must_use]
+pub fn worker_session_before(
+    sessions: &[SessionAuditRecord],
+    worker_id: WorkerId,
+    before_sequence: u64,
+) -> Option<SessionAuditRecord> {
+    sessions
+        .iter()
+        .copied()
+        .filter(|record| {
+            record
+                .worker_binding
+                .is_some_and(|binding| binding.worker_id() == worker_id)
+                && record
+                    .worker_bound_sequence
+                    .is_some_and(|sequence| sequence < before_sequence)
+        })
+        .max_by_key(|record| record.worker_bound_sequence)
+}
+
+/// Resolve the currently active session leaf for one worker identity.
+#[must_use]
+pub fn active_worker_session(
+    sessions: &[SessionAuditRecord],
+    worker_id: WorkerId,
+) -> Option<SessionAuditRecord> {
+    sessions
+        .iter()
+        .copied()
+        .filter(|record| {
+            record
+                .worker_binding
+                .is_some_and(|binding| binding.worker_id() == worker_id)
+        })
+        .max_by_key(|record| record.worker_bound_sequence)
+}
+
 /// Stable scope for one local session registration.
 #[must_use]
 pub fn session_scope(session_id: SessionId) -> String {
@@ -287,6 +452,21 @@ pub fn session_endpoint_scope(session_id: SessionId, endpoint_id: RouteEndpointI
 #[must_use]
 pub fn worker_session_scope(worker_id: WorkerId, session_id: SessionId) -> String {
     format!("worker-session:{}:{}", worker_id.get(), session_id.get())
+}
+
+/// Stable scope for one worker identity handoff between session leaves.
+#[must_use]
+pub fn worker_session_successor_scope(
+    worker_id: WorkerId,
+    predecessor_session_id: SessionId,
+    successor_session_id: SessionId,
+) -> String {
+    format!(
+        "worker-session-successor:{}:{}:{}",
+        worker_id.get(),
+        predecessor_session_id.get(),
+        successor_session_id.get()
+    )
 }
 
 fn append_typed(
