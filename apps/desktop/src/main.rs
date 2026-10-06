@@ -26,12 +26,12 @@ use chatarium_store::archive_maintenance::{
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
+use chatarium_store::chat_container_audit::{
+    record_chat_container_created, replay_chat_container_audit,
+};
 use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
-};
-use chatarium_store::chat_container_audit::{
-    record_chat_container_created, replay_chat_container_audit,
 };
 use chatarium_store::local_conversation_chat_container_audit::{
     LocalConversationTopologyRecord, record_local_conversation_chat_container_bound,
@@ -59,9 +59,7 @@ use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
 };
-use chatarium_store::session_audit::{
-    record_local_session_registered, replay_session_audit,
-};
+use chatarium_store::session_audit::{record_local_session_registered, replay_session_audit};
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
 };
@@ -3202,14 +3200,14 @@ impl ChatariumApp {
             match next_available_local_orchestration_ids(&self.events) {
                 Ok(ids) => ids,
                 Err(error) => {
-                    self.status = format!("cannot allocate local orchestration identities: {error}");
+                    self.status =
+                        format!("cannot allocate local orchestration identities: {error}");
                     return;
                 }
             };
         let Some(sender) = &self.persist_tx else {
-            self.status =
-                "cannot initialize local orchestration topology: persistence unavailable"
-                    .to_owned();
+            self.status = "cannot initialize local orchestration topology: persistence unavailable"
+                .to_owned();
             return;
         };
 
@@ -6067,8 +6065,7 @@ fn append_local_orchestration_topology_checked(
     }
 
     let before = store.events().len();
-    record_local_session_registered(store, root_session_id)
-        .map_err(|error| error.to_string())?;
+    record_local_session_registered(store, root_session_id).map_err(|error| error.to_string())?;
     record_chat_container_created(store, container_id, root_session_id)
         .map_err(|error| error.to_string())?;
     record_local_conversation_chat_container_bound(store, conversation_id, container_id)
@@ -6081,7 +6078,9 @@ fn append_local_orchestration_topology_checked(
             "local orchestration topology append did not replay for its conversation".to_owned()
         })?;
     if topology.container_id != container_id || topology.current_session_id != root_session_id {
-        return Err("local orchestration topology replay disagrees with appended identities".to_owned());
+        return Err(
+            "local orchestration topology replay disagrees with appended identities".to_owned(),
+        );
     }
 
     Ok(store.events()[before..].to_vec())
@@ -6288,9 +6287,9 @@ fn persistence_worker(
                     root_session_id,
                 ) {
                     Ok(appended_events) => {
-                        let _ = notices.send(
-                            PersistNotice::OrchestrationTopologyInitialized { appended_events },
-                        );
+                        let _ = notices.send(PersistNotice::OrchestrationTopologyInitialized {
+                            appended_events,
+                        });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
