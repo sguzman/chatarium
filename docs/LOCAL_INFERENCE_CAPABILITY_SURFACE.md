@@ -270,17 +270,24 @@ One local conversation must not acquire another conversation's state implicitly.
 
 The first known-control exposure set is complete: instructions, developer context, stop/cancel, per-conversation model persistence, conversation isolation, and request inspection are now user-controllable.
 
-The route-documented and previously unknown capability probes are now executable from the desktop Diagnostics panel without widening the product API or exposing credentials. The same fixed suite also remains available through the standalone developer CLI.
+The first real in-app authenticated fixed-suite run completed on 2026-10-06
+against `gpt-5.6-sol`. All nine probes returned `supported`: baseline, image
+input, file input, function tools, additional tools, web search, reasoning,
+verbosity, and structured output. Chatarium derived a `ready` Local Inference
+Contract.
 
-Next run the in-app authenticated probe suite against the selected account-visible model. Chatarium will persist the sanitized evidence and derive the Local Inference Contract automatically.
+The user-specific SIWC profile identifier remains in the local sanitized
+evidence/contract artifacts and is intentionally not copied into this public
+ledger.
 
-Then follow the contract state:
+The capability-discovery backlog is therefore closed for this profile/model
+scope. Further work should consume the typed contract rather than add
+speculative probe scaffolding.
 
-1. `ready` — freeze that profile/model contract and decide which supported capabilities deserve first-class product exposure;
-2. `needs_review` — inspect the rejected probe shapes and current route schema, fix the engineering probe if necessary, and rerun without converting that work into principal-operated terminal QA;
-3. `incomplete` — diagnose the missing/error/model-unavailable evidence and keep lifecycle/context-composer consumers blocked.
-
-Lifecycle/context-composer work may depend on empirical remote capabilities only after the contract is `ready` for the active profile/model.
+Context Composer has now started; see
+[CONTEXT_COMPOSER.md](CONTEXT_COMPOSER.md). The next capability-facing work is
+to admit supported controls/attachments/tools through explicit typed context
+policy rather than wiring them ad hoc into transport.
 
 ## Completion criterion
 
