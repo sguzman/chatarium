@@ -125,11 +125,12 @@ The repository already contains stronger downstream primitives:
 - durable orchestration-control admission/correlation/freshness;
 - logical chat-container rollover.
 
-The first local conversation → chat-container → current-session bridge has
-now landed; see [LOCAL_ORCHESTRATION_IDENTITY.md](LOCAL_ORCHESTRATION_IDENTITY.md).
+The local conversation → chat-container → current-session bridge and the
+explicit current-session → route-endpoint addressability edge have now landed;
+see [LOCAL_ORCHESTRATION_IDENTITY.md](LOCAL_ORCHESTRATION_IDENTITY.md).
 
 In particular, do not assume that `LocalConversationId`, `SessionId`,
 `ChatContainerId`, `WorkerId`, and `RouteEndpointId` are interchangeable.
-The next explicit edge is current `SessionId → RouteEndpointId`
-addressability. Controller/worker routing remains inactive until its remaining
+The next safe substrate is a read-only local routing directory over those
+explicit edges. Controller/worker routing remains inactive until its remaining
 identity and policy edges are explicit.
