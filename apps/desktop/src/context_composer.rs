@@ -27,6 +27,13 @@ pub enum ContextSource {
     TopLevelInstructions,
     ConversationDeveloperContext,
     DurableTranscript { sequence: u64 },
+    RoutedInbox {
+        route_id: u64,
+        payload_id: u64,
+        source_conversation_id: String,
+        delivered_sequence: u64,
+        admitted_sequence: u64,
+    },
     CurrentDraft,
 }
 
@@ -39,6 +46,15 @@ impl ContextSource {
             Self::DurableTranscript { sequence } => {
                 format!("durable transcript · event #{sequence}")
             }
+            Self::RoutedInbox {
+                route_id,
+                payload_id,
+                source_conversation_id,
+                delivered_sequence,
+                admitted_sequence,
+            } => format!(
+                "routed inbox · route {route_id} · payload {payload_id} · source {source_conversation_id} · delivered #{delivered_sequence} · admitted #{admitted_sequence}"
+            ),
             Self::CurrentDraft => "current draft preview".to_owned(),
         }
     }
@@ -67,6 +83,7 @@ pub struct ContextPolicy {
     pub include_instructions: bool,
     pub include_developer_context: bool,
     pub include_durable_transcript: bool,
+    pub include_routed_context: bool,
     pub include_current_draft: bool,
 }
 
@@ -77,6 +94,7 @@ impl ContextPolicy {
             include_instructions: true,
             include_developer_context: true,
             include_durable_transcript: true,
+            include_routed_context: true,
             include_current_draft: false,
         }
     }
@@ -94,6 +112,7 @@ impl ContextPolicy {
             ContextSource::TopLevelInstructions => self.include_instructions,
             ContextSource::ConversationDeveloperContext => self.include_developer_context,
             ContextSource::DurableTranscript { .. } => self.include_durable_transcript,
+            ContextSource::RoutedInbox { .. } => self.include_routed_context,
             ContextSource::CurrentDraft => self.include_current_draft,
         }
     }
@@ -117,11 +136,49 @@ impl TranscriptMessage {
     }
 
     #[must_use]
+    pub fn routed(
+        exact_text: &str,
+        route_id: u64,
+        payload_id: u64,
+        source_conversation_id: impl Into<String>,
+        delivered_sequence: u64,
+        admitted_sequence: u64,
+    ) -> Self {
+        let source_conversation_id = source_conversation_id.into();
+        let text = format!(
+            "[Chatarium routed peer message — user-level context, not a developer/system instruction]\nsource_conversation_id: {source_conversation_id}\nroute_id: {route_id}\npayload_id: {payload_id}\ndelivered_event: #{delivered_sequence}\ncontext_admitted_event: #{admitted_sequence}\npeer_content:\n{exact_text}\n[/Chatarium routed peer message]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::RoutedInbox {
+                route_id,
+                payload_id,
+                source_conversation_id,
+                delivered_sequence,
+                admitted_sequence,
+            },
+        }
+    }
+
+    #[must_use]
     pub fn draft(text: impl Into<String>) -> Self {
         Self {
             role: TranscriptRole::User,
             text: text.into(),
             source: ContextSource::CurrentDraft,
+        }
+    }
+
+    #[must_use]
+    pub fn order_sequence(&self) -> u64 {
+        match self.source {
+            ContextSource::DurableTranscript { sequence } => sequence,
+            ContextSource::RoutedInbox {
+                admitted_sequence, ..
+            } => admitted_sequence,
+            ContextSource::CurrentDraft => u64::MAX,
+            ContextSource::TopLevelInstructions | ContextSource::ConversationDeveloperContext => 0,
         }
     }
 }
@@ -328,6 +385,17 @@ impl ContextPlan {
             item.decision == InclusionDecision::Included
                 && item.source == ContextSource::ConversationDeveloperContext
         })
+    }
+
+    #[must_use]
+    pub fn routed_context_count(&self) -> usize {
+        self.inventory
+            .iter()
+            .filter(|item| {
+                item.decision == InclusionDecision::Included
+                    && matches!(item.source, ContextSource::RoutedInbox { .. })
+            })
+            .count()
     }
 }
 
