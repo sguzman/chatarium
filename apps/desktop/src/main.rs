@@ -42,7 +42,6 @@ use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
 };
-use chatarium_store::routing_audit::replay_routing_audit;
 use chatarium_store::remote_health::{
     MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
     record_remote_health_signal,
@@ -61,6 +60,7 @@ use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
 };
+use chatarium_store::routing_audit::replay_routing_audit;
 use chatarium_store::session_audit::{
     record_local_session_registered, record_session_endpoint_bound, replay_session_audit,
 };
@@ -6218,9 +6218,7 @@ fn append_current_session_route_endpoint_checked(
         .into_iter()
         .find(|topology| topology.conversation_id == conversation_id)
         .ok_or_else(|| {
-            format!(
-                "local conversation {conversation_id} has no orchestration topology"
-            )
+            format!("local conversation {conversation_id} has no orchestration topology")
         })?;
     if topology.current_session_id != session_id {
         return Err(format!(
@@ -6264,11 +6262,8 @@ fn append_current_session_route_endpoint_checked(
         ));
     }
 
-    record_session_endpoint_bound(
-        store,
-        SessionEndpointBinding::new(session_id, endpoint_id),
-    )
-    .map_err(|error| error.to_string())?;
+    record_session_endpoint_bound(store, SessionEndpointBinding::new(session_id, endpoint_id))
+        .map_err(|error| error.to_string())?;
 
     let replayed = replay_session_audit(store.events())?
         .into_iter()
@@ -7827,9 +7822,7 @@ fn next_available_local_orchestration_ids(
     ))
 }
 
-fn next_available_route_endpoint_id(
-    events: &[EventEnvelope],
-) -> Result<RouteEndpointId, String> {
+fn next_available_route_endpoint_id(events: &[EventEnvelope]) -> Result<RouteEndpointId, String> {
     let mut highest = 0_u64;
 
     for record in replay_session_audit(events)? {
