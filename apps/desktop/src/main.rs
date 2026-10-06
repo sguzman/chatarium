@@ -1,5 +1,6 @@
 mod account_bridge;
 mod capability_probes;
+mod context_composer;
 mod diagnostics;
 mod local_archive_search;
 mod local_conversations;
@@ -2148,19 +2149,23 @@ impl ChatariumApp {
 
                         if let Some(intent) = self.commit_remote_intents.remove(&request_id) {
                             let remote_request_id = message.turn_id.to_string();
-                            let input = responses_input(
+                            let transcript = context_transcript(
                                 &projected_local_display_messages(
                                     &self.events,
                                     self.local_conversation_id,
                                 ),
+                            );
+                            let context_plan = context_composer::ContextPlan::compose(
+                                intent.instructions.as_deref().unwrap_or_default(),
                                 intent.developer_context.as_str(),
+                                transcript,
                             );
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
                                 model: intent.model.clone(),
-                                input,
-                                instructions: intent.instructions.clone(),
+                                input: context_plan.input_json(),
+                                instructions: context_plan.instructions.clone(),
                             });
                             let payload = remote_turn_payload(
                                 message.turn_id,
@@ -4348,34 +4353,30 @@ impl eframe::App for ChatariumApp {
 
                         ui.add_space(8.0);
                         ui.collapsing("Exact next-request context", |ui| {
-                            let mut preview_messages = local_display_messages.clone();
+                            let mut transcript = context_transcript(&local_display_messages);
                             if !self.draft.trim().is_empty() {
-                                preview_messages.push(DisplayMessage {
-                                    role: DisplayRole::User,
-                                    text: self.draft.clone(),
-                                    sequence: u64::MAX,
-                                    timestamp: None,
-                                    provenance_label: Some("current draft · commits before send".to_owned()),
-                                });
+                                transcript.push(context_composer::TranscriptMessage::draft(
+                                    self.draft.clone(),
+                                ));
                             }
-                            let mut preview = serde_json::json!({
-                                "model": self.selected_model,
-                                "input": responses_input(
-                                    &preview_messages,
-                                    self.conversation_developer_context.as_str(),
-                                ),
-                                "store": false,
-                                "stream": true,
-                            });
-                            if !self.conversation_instructions.trim().is_empty() {
-                                preview
-                                    .as_object_mut()
-                                    .expect("request preview is an object")
-                                    .insert(
-                                        "instructions".to_owned(),
-                                        Value::String(self.conversation_instructions.clone()),
-                                    );
-                            }
+                            let context_plan = context_composer::ContextPlan::compose(
+                                self.conversation_instructions.as_str(),
+                                self.conversation_developer_context.as_str(),
+                                transcript,
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Context Composer · {} durable transcript message{} · developer context {} · current draft {}",
+                                    context_plan.durable_transcript_count(),
+                                    if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
+                                    if context_plan.has_developer_context() { "included" } else { "omitted" },
+                                    if context_plan.has_current_draft() { "included (not yet durable)" } else { "omitted" },
+                                ))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            ui.add_space(4.0);
+                            let preview = context_plan.request_preview(self.selected_model.as_deref());
                             let preview_text = serde_json::to_string_pretty(&preview)
                                 .unwrap_or_else(|_| "<failed to render request preview>".to_owned());
                             egui::ScrollArea::vertical()
@@ -6392,31 +6393,22 @@ fn remote_turn_payload(
     .expect("remote turn observation is JSON-serializable")
 }
 
-fn responses_input(messages: &[DisplayMessage], developer_context: &str) -> Value {
-    let mut input = Vec::with_capacity(
-        messages.len()
-            + if developer_context.trim().is_empty() {
-                0
-            } else {
-                1
-            },
-    );
-    if !developer_context.trim().is_empty() {
-        input.push(serde_json::json!({
-            "role": "developer",
-            "content": developer_context,
-        }));
-    }
-    input.extend(messages.iter().map(|message| {
-        serde_json::json!({
-            "role": match message.role {
-                DisplayRole::User => "user",
-                DisplayRole::Assistant => "assistant",
-            },
-            "content": message.text,
+fn context_transcript(
+    messages: &[DisplayMessage],
+) -> Vec<context_composer::TranscriptMessage> {
+    messages
+        .iter()
+        .map(|message| {
+            context_composer::TranscriptMessage::durable(
+                match message.role {
+                    DisplayRole::User => context_composer::TranscriptRole::User,
+                    DisplayRole::Assistant => context_composer::TranscriptRole::Assistant,
+                },
+                message.text.clone(),
+                message.sequence,
+            )
         })
-    }));
-    Value::Array(input)
+        .collect()
 }
 
 fn projected_working_draft(
@@ -7751,8 +7743,9 @@ mod tests {
         assert_eq!(projected[1].role, DisplayRole::Assistant);
         assert_eq!(projected[1].text, "second answer");
 
-        let input = responses_input(&projected, "");
-        let serialized = input.to_string();
+        let context_plan =
+            context_composer::ContextPlan::compose("", "", context_transcript(&projected));
+        let serialized = context_plan.input_json().to_string();
         assert!(!serialized.contains("first private conversation"));
         assert!(!serialized.contains("first answer"));
     }
@@ -8047,7 +8040,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_input_uses_durable_transcript_order() {
+    fn context_composer_uses_durable_transcript_order() {
         let messages = vec![
             DisplayMessage {
                 role: DisplayRole::User,
@@ -8072,8 +8065,13 @@ mod tests {
             },
         ];
 
+        let plan = context_composer::ContextPlan::compose(
+            "",
+            "behavior",
+            context_transcript(&messages),
+        );
         assert_eq!(
-            responses_input(&messages, "behavior"),
+            plan.input_json(),
             serde_json::json!([
                 {"role": "developer", "content": "behavior"},
                 {"role": "user", "content": "one"},
