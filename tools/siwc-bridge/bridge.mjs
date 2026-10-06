@@ -253,6 +253,164 @@ function validateResponseProbePatch(value) {
   return patch;
 }
 
+function validateStreamResponsePatch(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw bridgeError(
+      "invalid_stream_patch",
+      "Normal inference request_patch must be a JSON object.",
+    );
+  }
+
+  const patch = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "reasoning") {
+      if (
+        !nested ||
+        typeof nested !== "object" ||
+        Array.isArray(nested) ||
+        Object.keys(nested).length !== 1 ||
+        nested.effort !== "low"
+      ) {
+        throw bridgeError(
+          "invalid_stream_patch",
+          'Normal inference currently permits only reasoning={"effort":"low"}.',
+        );
+      }
+      patch.reasoning = { effort: "low" };
+      continue;
+    }
+
+    if (key === "text") {
+      if (
+        !nested ||
+        typeof nested !== "object" ||
+        Array.isArray(nested) ||
+        Object.keys(nested).length !== 1 ||
+        nested.verbosity !== "low"
+      ) {
+        throw bridgeError(
+          "invalid_stream_patch",
+          'Normal inference currently permits only text={"verbosity":"low"}.',
+        );
+      }
+      patch.text = { verbosity: "low" };
+      continue;
+    }
+
+    if (key === "tools") {
+      if (
+        !Array.isArray(nested) ||
+        nested.length !== 1 ||
+        !nested[0] ||
+        typeof nested[0] !== "object" ||
+        Array.isArray(nested[0]) ||
+        Object.keys(nested[0]).length !== 1 ||
+        nested[0].type !== "web_search"
+      ) {
+        throw bridgeError(
+          "invalid_stream_patch",
+          'Normal inference currently permits only tools=[{"type":"web_search"}].',
+        );
+      }
+      patch.tools = [{ type: "web_search" }];
+      continue;
+    }
+
+    throw bridgeError(
+      "invalid_stream_patch",
+      `Normal inference cannot patch Responses field ${key}.`,
+    );
+  }
+
+  const encoded = JSON.stringify(patch);
+  if (encoded.length > 64 * 1024) {
+    throw bridgeError(
+      "invalid_stream_patch",
+      "Normal inference request_patch is too large.",
+    );
+  }
+  return patch;
+}
+
+async function runWithStreamResponsePatch(patch, operation) {
+  if (Object.keys(patch).length === 0) return operation();
+
+  const originalFetch = globalThis.fetch;
+  let patched = false;
+  const streamFetch = async (input, init = {}) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input?.url;
+    const method = String(
+      init?.method ?? (input instanceof Request ? input.method : "GET"),
+    ).toUpperCase();
+
+    if (url !== RESPONSES_URL || method !== "POST") {
+      return originalFetch(input, init);
+    }
+    if (patched) {
+      throw bridgeError(
+        "stream_request_count",
+        "Normal inference attempted more than one Responses request while applying a request patch.",
+      );
+    }
+    if (typeof init?.body !== "string") {
+      throw bridgeError(
+        "stream_request_shape",
+        "Normal inference expected a JSON Responses request body.",
+      );
+    }
+
+    let body;
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      throw bridgeError(
+        "stream_request_shape",
+        "Normal inference could not parse the Responses request body.",
+      );
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw bridgeError(
+        "stream_request_shape",
+        "Normal inference received an unexpected Responses request body.",
+      );
+    }
+
+    patched = true;
+    if (globalThis.fetch === streamFetch) globalThis.fetch = originalFetch;
+    return originalFetch(input, {
+      ...init,
+      body: JSON.stringify({
+        ...body,
+        ...patch,
+        model: body.model,
+        input: body.input,
+        instructions: body.instructions,
+        store: false,
+        stream: true,
+      }),
+    });
+  };
+
+  globalThis.fetch = streamFetch;
+  try {
+    const result = await operation();
+    if (!patched) {
+      throw bridgeError(
+        "stream_patch_not_applied",
+        "Normal inference did not observe the expected Responses request.",
+      );
+    }
+    return result;
+  } finally {
+    if (globalThis.fetch === streamFetch) globalThis.fetch = originalFetch;
+  }
+}
+
 async function runWithResponseProbePatch(patch, operation) {
   const originalFetch = globalThis.fetch;
   let patched = false;
@@ -391,6 +549,7 @@ async function handle(command) {
         ) {
           throw new Error("stream_response requires input");
         }
+        const patch = validateStreamResponsePatch(command.request_patch ?? {});
         if (responseProbeInFlight) {
           throw bridgeError(
             "probe_busy",
@@ -401,21 +560,23 @@ async function handle(command) {
         const controller = new AbortController();
         if (requestId) responseControllers.set(requestId, controller);
         try {
-          const result = await chatgpt.streamResponse({
-            model: command.model,
-            input: command.input,
-            ...(typeof command.instructions === "string"
-              ? { instructions: command.instructions }
-              : {}),
-            signal: controller.signal,
-            onDelta(delta) {
-              emit({
-                type: "delta",
-                request_id: requestId,
-                delta,
-              });
-            },
-          });
+          const operation = () =>
+            chatgpt.streamResponse({
+              model: command.model,
+              input: command.input,
+              ...(typeof command.instructions === "string"
+                ? { instructions: command.instructions }
+                : {}),
+              signal: controller.signal,
+              onDelta(delta) {
+                emit({
+                  type: "delta",
+                  request_id: requestId,
+                  delta,
+                });
+              },
+            });
+          const result = await runWithStreamResponsePatch(patch, operation);
           emit({
             type: "result",
             request_id: requestId,
