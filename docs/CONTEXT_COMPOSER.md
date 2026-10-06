@@ -96,7 +96,10 @@ different context ordering.
   gate;
 - current draft content may appear in preview but cannot enter a live remote
   request until the authored-message durability gate has acknowledged it;
-- local provenance does not leak into the remote request;
+- internal Chatarium bookkeeping provenance does not leak into the remote request;
+- routed-peer provenance is the deliberate exception: source/route/payload/
+  delivery/admission metadata is serialized explicitly so the model can identify
+  that content as routed peer context rather than authored or developer content;
 - request preview preserves `store: false` and `stream: true`.
 
 ## Source policy and size ledger
