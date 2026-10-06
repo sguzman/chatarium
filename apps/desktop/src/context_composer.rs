@@ -172,11 +172,11 @@ impl TranscriptMessage {
 
     #[must_use]
     pub fn order_sequence(&self) -> u64 {
-        match self.source {
-            ContextSource::DurableTranscript { sequence } => sequence,
+        match &self.source {
+            ContextSource::DurableTranscript { sequence } => *sequence,
             ContextSource::RoutedInbox {
                 admitted_sequence, ..
-            } => admitted_sequence,
+            } => *admitted_sequence,
             ContextSource::CurrentDraft => u64::MAX,
             ContextSource::TopLevelInstructions | ContextSource::ConversationDeveloperContext => 0,
         }
@@ -621,6 +621,60 @@ mod tests {
                 .decision,
             InclusionDecision::ExcludedByPolicy
         );
+    }
+
+    #[test]
+    fn routed_context_is_user_level_and_keeps_explicit_provenance() {
+        let routed = TranscriptMessage::routed(
+            " exact peer text ",
+            7,
+            9,
+            "conversation-source",
+            40,
+            50,
+        );
+        assert_eq!(routed.role, TranscriptRole::User);
+        assert_eq!(routed.order_sequence(), 50);
+
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [routed]);
+        assert_eq!(plan.routed_context_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(plan.messages[0].content.contains("Chatarium routed peer message"));
+        assert!(plan.messages[0].content.contains("not a developer/system instruction"));
+        assert!(plan.messages[0].content.contains("source_conversation_id: conversation-source"));
+        assert!(plan.messages[0].content.contains("route_id: 7"));
+        assert!(plan.messages[0].content.contains("payload_id: 9"));
+        assert!(plan.messages[0].content.contains(" exact peer text "));
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::RoutedInbox {
+                route_id: 7,
+                payload_id: 9,
+                delivered_sequence: 40,
+                admitted_sequence: 50,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn routed_context_can_be_excluded_by_context_policy() {
+        let policy = ContextPolicy {
+            include_routed_context: false,
+            ..ContextPolicy::dispatch()
+        };
+        let routed = TranscriptMessage::routed("peer", 1, 2, "source", 3, 4);
+        let plan = ContextPlan::compose(policy, "", "", [routed]);
+
+        assert_eq!(plan.routed_context_count(), 0);
+        assert!(plan.messages.is_empty());
+        let item = plan
+            .inventory
+            .iter()
+            .find(|item| matches!(item.source, ContextSource::RoutedInbox { .. }))
+            .unwrap();
+        assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
     }
 
     #[test]
