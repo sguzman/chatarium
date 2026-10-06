@@ -1,6 +1,6 @@
 # Context Composer
 
-Status: **ACTIVE**, first executable slice landed 2026-10-06.
+Status: **ACTIVE**, source-policy/capability-admission boundary landed 2026-10-06.
 
 The Context Composer is the deterministic local boundary between Chatarium's
 durable conversation state and a concrete inference request.
@@ -80,23 +80,54 @@ different context ordering.
 - local provenance does not leak into the remote request;
 - request preview preserves `store: false` and `stream: true`.
 
+## Source policy and size ledger
+
+The second executable slice makes context inclusion explicit.
+
+The plan records an inventory entry for instructions, developer context, every
+durable transcript item, and the current draft preview. Each item carries:
+
+- local source/provenance;
+- role when applicable;
+- `included`, `omitted · empty`, or `excluded · policy`;
+- exact UTF-8 byte count;
+- exact Unicode scalar count;
+- exact line count.
+
+These are intentionally content-size units, **not model-token estimates**.
+
+Dispatch and preview use separate typed policies. Preview may include the
+current draft, while dispatch mechanically excludes `CurrentDraft` even if a
+future caller accidentally supplies one before the durability gate.
+
+## Capability admissions
+
+Context Composer also projects the active Local Inference Contract into typed
+request slots for image input, file input, function tools, additional tools,
+web search, reasoning, verbosity, and structured output.
+
+A slot is `available`, `unsupported`, or `blocked · contract`.
+
+This is admission information only. Context Composer does not automatically
+enable any capability.
+
+The first consumer is [BEHAVIOR_PROFILE.md](BEHAVIOR_PROFILE.md), which uses
+the admitted reasoning, verbosity, and web-search slots.
+
 ## Explicitly not implemented yet
 
-This first slice does **not** silently introduce:
+Context Composer does **not** silently introduce:
 
 - token-budget trimming;
 - automatic summarization;
 - retrieval;
 - shared memory;
 - cross-conversation context;
-- behavior profiles;
 - lifecycle state;
 - routing;
 - master/worker inheritance;
-- tool selection;
-- web-search policy;
+- arbitrary tool selection;
 - file/image attachment policy;
-- reasoning/verbosity policy;
 - structured-output policy.
 
 Those must become explicit typed inputs to composition rather than hidden
@@ -104,18 +135,17 @@ mutations of the transcript.
 
 ## Next Context Composer work
 
-The next composer slice should make inclusion policy visible before adding
-higher-level behavior:
+Context Composer is now sufficiently explicit for higher-level local policy to
+build on it.
 
-- explicit source inventory/provenance in the inspector;
-- deterministic inclusion/exclusion policy;
-- an inspectable context-size/budget ledger without pretending byte/character
-  counts are model-token counts;
-- typed attachment/tool/control slots admitted only when the active Local
-  Inference Contract says the capability is supported;
-- tests proving that one local conversation cannot acquire another
-  conversation's transcript unless an explicit future routing/memory source is
-  added.
+Future composer work should be driven by concrete downstream needs, especially:
 
-Only after that boundary is explicit should Behavior Profile begin to add
-higher-level policy.
+- lifecycle-provided local context;
+- explicit routing/memory sources;
+- attachment sources;
+- structured-output requirements;
+- real context-budget policy once a trustworthy model-token accounting contract
+  exists.
+
+Do not add hidden automatic context mutation merely because a higher layer needs
+more information.
