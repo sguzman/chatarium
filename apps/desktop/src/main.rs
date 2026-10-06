@@ -4651,7 +4651,45 @@ impl eframe::App for ChatariumApp {
                                 }
                             });
                             ui.add_space(4.0);
-                            let preview = context_plan.request_preview(self.selected_model.as_deref());
+                            let mut preview =
+                                context_plan.request_preview(self.selected_model.as_deref());
+                            match self.current_behavior_request_patch() {
+                                Ok(Value::Object(request_patch)) => {
+                                    if !request_patch.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Behavior Profile patch included in this preview",
+                                            )
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                        );
+                                    }
+                                    let preview_object = preview
+                                        .as_object_mut()
+                                        .expect("context request preview is an object");
+                                    for (field, value) in request_patch {
+                                        preview_object.insert(field, value);
+                                    }
+                                }
+                                Ok(_) => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Behavior Profile produced an invalid non-object patch",
+                                        )
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Behavior Profile blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
                             let preview_text = serde_json::to_string_pretty(&preview)
                                 .unwrap_or_else(|_| "<failed to render request preview>".to_owned());
                             egui::ScrollArea::vertical()
