@@ -6438,6 +6438,181 @@ fn append_current_session_route_endpoint_checked(
         .ok_or_else(|| "session endpoint append produced no durable event".to_owned())
 }
 
+fn append_local_session_route_proposal_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    source_conversation_id: LocalConversationId,
+    destination_conversation_id: LocalConversationId,
+) -> Result<EventEnvelope, String> {
+    if source_conversation_id == destination_conversation_id {
+        return Err("a local conversation cannot route a session message to itself".to_owned());
+    }
+    if replay_routing_audit(store.events())?
+        .iter()
+        .any(|route| route.request.id == route_id)
+    {
+        return Err(format!("route {} already exists", route_id.get()));
+    }
+
+    let directory = replay_local_routing_directory(store.events())?;
+    let source = directory
+        .iter()
+        .find(|entry| entry.conversation_id == source_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "source local conversation {source_conversation_id} is not currently addressable"
+            )
+        })?;
+    let destination = directory
+        .iter()
+        .find(|entry| entry.conversation_id == destination_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "destination local conversation {destination_conversation_id} is not currently addressable"
+            )
+        })?;
+
+    if !source.current_session_phase.accepts_ordinary_turns() {
+        return Err(format!(
+            "source conversation {source_conversation_id} current session {} is {} and cannot accept ordinary session-message routing",
+            source.current_session_id.get(),
+            session_lifecycle_phase_label(source.current_session_phase),
+        ));
+    }
+    if !destination.current_session_phase.accepts_ordinary_turns() {
+        return Err(format!(
+            "destination conversation {destination_conversation_id} current session {} is {} and cannot accept ordinary session-message routing",
+            destination.current_session_id.get(),
+            session_lifecycle_phase_label(destination.current_session_phase),
+        ));
+    }
+
+    let request = RouteRequest {
+        id: route_id,
+        source: source.endpoint_id,
+        destination: destination.endpoint_id,
+        class: RouteClass::SessionMessage,
+    };
+    record_route_proposed(store, request, RoutePolicy::RequireApproval)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| "local route proposal append did not replay".to_owned())?;
+    if replayed.request != request
+        || replayed.initial_policy != RoutePolicy::RequireApproval
+        || replayed.gate_state != RouteGateState::PendingApproval
+    {
+        return Err("local route proposal replay disagrees with appended policy".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local route proposal append produced no durable event".to_owned())
+}
+
+fn append_local_route_user_decision_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    decision: RouteUserDecision,
+) -> Result<EventEnvelope, String> {
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| format!("local route {} does not exist", route_id.get()))?;
+
+    if route.request.class != RouteClass::SessionMessage {
+        return Err(format!(
+            "route {} is not a local session-message route",
+            route_id.get()
+        ));
+    }
+    if route.initial_policy != RoutePolicy::RequireApproval {
+        return Err(format!(
+            "route {} was not created under explicit-approval policy",
+            route_id.get()
+        ));
+    }
+    if route.gate_state.is_dispatched() {
+        return Err(format!(
+            "route {} has already dispatched and its policy history is immutable",
+            route_id.get()
+        ));
+    }
+    if route.latest_user_decision == Some(decision) {
+        return Err(format!(
+            "route {} already has explicit user decision {}",
+            route_id.get(),
+            route_user_decision_label(decision),
+        ));
+    }
+
+    let directory = replay_local_routing_directory(store.events())?;
+    let source = directory
+        .iter()
+        .find(|entry| entry.endpoint_id == route.request.source)
+        .ok_or_else(|| {
+            format!(
+                "route {} source endpoint {} is no longer a current local conversation leaf",
+                route_id.get(),
+                route.request.source.get()
+            )
+        })?;
+    let destination = directory
+        .iter()
+        .find(|entry| entry.endpoint_id == route.request.destination)
+        .ok_or_else(|| {
+            format!(
+                "route {} destination endpoint {} is no longer a current local conversation leaf",
+                route_id.get(),
+                route.request.destination.get()
+            )
+        })?;
+
+    if source.conversation_id == destination.conversation_id {
+        return Err(format!(
+            "route {} resolves to the same local conversation on both ends",
+            route_id.get()
+        ));
+    }
+    if !source.current_session_phase.accepts_ordinary_turns()
+        || !destination.current_session_phase.accepts_ordinary_turns()
+    {
+        return Err(format!(
+            "route {} is stale because one of its current local session leaves cannot accept ordinary turns",
+            route_id.get()
+        ));
+    }
+
+    record_route_user_decision(store, route_id, decision)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|candidate| candidate.request.id == route_id)
+        .ok_or_else(|| "local route decision append did not replay".to_owned())?;
+    let expected_state = match decision {
+        RouteUserDecision::Allow => RouteGateState::Allowed {
+            by: DecisionAuthority::User,
+        },
+        RouteUserDecision::Deny => RouteGateState::Denied {
+            by: DecisionAuthority::User,
+        },
+    };
+    if replayed.latest_user_decision != Some(decision) || replayed.gate_state != expected_state {
+        return Err("local route decision replay disagrees with appended decision".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local route decision append produced no durable event".to_owned())
+}
+
 fn append_local_worker_binding_checked(
     store: &mut impl EventStore,
     conversation_id: LocalConversationId,
@@ -8018,6 +8193,17 @@ fn next_available_local_orchestration_ids(
     ))
 }
 
+fn next_available_route_id(events: &[EventEnvelope]) -> Result<RouteId, String> {
+    let next = replay_routing_audit(events)?
+        .into_iter()
+        .map(|route| route.request.id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "route identity space exhausted".to_owned())?;
+    Ok(RouteId::new(next))
+}
+
 fn next_available_route_endpoint_id(events: &[EventEnvelope]) -> Result<RouteEndpointId, String> {
     let mut highest = 0_u64;
 
@@ -8046,6 +8232,37 @@ fn session_endpoint_binding(
         .into_iter()
         .find(|record| record.session_id == session_id)
         .and_then(|record| record.endpoint_binding))
+}
+
+fn route_user_decision_label(decision: RouteUserDecision) -> &'static str {
+    match decision {
+        RouteUserDecision::Allow => "allow",
+        RouteUserDecision::Deny => "deny",
+    }
+}
+
+fn route_gate_state_label(state: RouteGateState) -> &'static str {
+    match state {
+        RouteGateState::PendingApproval => "PENDING APPROVAL",
+        RouteGateState::Allowed {
+            by: DecisionAuthority::Policy,
+        } => "ALLOWED · POLICY",
+        RouteGateState::Allowed {
+            by: DecisionAuthority::User,
+        } => "ALLOWED · USER",
+        RouteGateState::Denied {
+            by: DecisionAuthority::Policy,
+        } => "DENIED · POLICY",
+        RouteGateState::Denied {
+            by: DecisionAuthority::User,
+        } => "DENIED · USER",
+        RouteGateState::Dispatched {
+            authorized_by: DecisionAuthority::Policy,
+        } => "DISPATCHED · POLICY",
+        RouteGateState::Dispatched {
+            authorized_by: DecisionAuthority::User,
+        } => "DISPATCHED · USER",
+    }
 }
 
 fn session_lifecycle_phase_label(phase: SessionLifecyclePhase) -> &'static str {
