@@ -388,14 +388,8 @@ mod tests {
             plan.input_json(),
             json!([{"role": "user", "content": " exact text "}])
         );
-        assert_eq!(
-            plan.inventory[0].decision,
-            InclusionDecision::OmittedEmpty
-        );
-        assert_eq!(
-            plan.inventory[1].decision,
-            InclusionDecision::OmittedEmpty
-        );
+        assert_eq!(plan.inventory[0].decision, InclusionDecision::OmittedEmpty);
+        assert_eq!(plan.inventory[1].decision, InclusionDecision::OmittedEmpty);
         assert!(!plan.has_developer_context());
     }
 
@@ -444,11 +438,7 @@ mod tests {
             ContextPolicy::dispatch(),
             "abc",
             "é",
-            [TranscriptMessage::durable(
-                TranscriptRole::User,
-                "x\ny",
-                42,
-            )],
+            [TranscriptMessage::durable(TranscriptRole::User, "x\ny", 42)],
         );
 
         assert_eq!(
