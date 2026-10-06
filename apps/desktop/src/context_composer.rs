@@ -429,7 +429,9 @@ impl CapabilityGate {
         model: Option<&str>,
     ) -> Self {
         let ready = match (contract, model) {
-            (Some(contract), Some(model)) if contract.ready_for(profile_id, model) => Some(contract),
+            (Some(contract), Some(model)) if contract.ready_for(profile_id, model) => {
+                Some(contract)
+            }
             _ => None,
         };
 
@@ -598,9 +600,12 @@ mod tests {
         let wrong_model =
             CapabilityGate::from_contract(Some(&contract), Some("profile-1"), Some("gpt-other"));
         assert!(!wrong_model.allows(CapabilitySlot::WebSearch));
-        assert!(wrong_model.admissions.iter().all(|admission| {
-            admission.state == CapabilityAdmissionState::BlockedContract
-        }));
+        assert!(
+            wrong_model
+                .admissions
+                .iter()
+                .all(|admission| { admission.state == CapabilityAdmissionState::BlockedContract })
+        );
     }
 
     #[test]
