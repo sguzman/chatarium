@@ -175,15 +175,42 @@ Topology creation does **not**:
 Archive integrity replay validates this topology along with the rest of the
 authoritative journal.
 
+## Landed route addressability
+
+The current local session can now acquire an explicit durable
+`SessionId → RouteEndpointId` binding through the existing session audit.
+
+The desktop exposes this as **Bind routing endpoint** only after a local
+conversation topology exists. The checked append requires:
+
+- the requested session is the conversation's current chat-container leaf;
+- the current session has no endpoint already;
+- the endpoint is not bound to another session;
+- the endpoint has never appeared as the source or destination of a durable
+  historical route.
+
+Fresh endpoint allocation therefore scans both session bindings and route
+history. A session cannot retroactively claim an endpoint identity previously
+used by another routing surface.
+
+A future chat-container rollover does not inherit the predecessor endpoint
+implicitly. The successor current session must acquire its own explicit
+addressability edge.
+
+Binding an endpoint still creates no route proposal, policy decision, dispatch
+permit, payload transfer, shared context, or controller authority.
+
 ## Next implementation boundary
 
-The next local-first edge is explicit
-`current SessionId → RouteEndpointId` addressability using the existing
-session audit.
+The next substrate is a deterministic local routing directory that joins:
 
-That endpoint binding remains identity/correlation only. Only after it exists
-should controller/worker route proposal and policy consume the existing
-RouteGate machinery.
+`LocalConversationId → ChatContainerId → current SessionId → RouteEndpointId`
+
+for all addressable local conversations.
+
+That directory should be projection-only. After it exists, manual local route
+proposal/policy can consume the existing RouteGate machinery without guessing
+identity edges.
 
 No hidden cross-conversation transcript sharing is authorized by topology or
 addressability alone. Routed or shared context remains a separate explicit
