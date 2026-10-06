@@ -2154,6 +2154,7 @@ impl ChatariumApp {
                                 self.local_conversation_id,
                             ));
                             let context_plan = context_composer::ContextPlan::compose(
+                                context_composer::ContextPolicy::dispatch(),
                                 intent.instructions.as_deref().unwrap_or_default(),
                                 intent.developer_context.as_str(),
                                 transcript,
@@ -4358,6 +4359,7 @@ impl eframe::App for ChatariumApp {
                                 ));
                             }
                             let context_plan = context_composer::ContextPlan::compose(
+                                context_composer::ContextPolicy::preview(),
                                 self.conversation_instructions.as_str(),
                                 self.conversation_developer_context.as_str(),
                                 transcript,
@@ -4368,11 +4370,68 @@ impl eframe::App for ChatariumApp {
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     if context_plan.has_developer_context() { "included" } else { "omitted" },
-                                    if context_plan.has_current_draft() { "included (not yet durable)" } else { "omitted" },
+                                    if context_plan.has_current_draft() { "included (preview only; dispatch policy forbids draft)" } else { "omitted" },
                                 ))
                                 .size(10.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Size ledger · {} included · {} omitted · {} UTF-8 bytes · {} Unicode scalar{} · {} line{} · exact content units, not model tokens",
+                                    context_plan.size.included_items,
+                                    context_plan.size.omitted_items,
+                                    context_plan.size.utf8_bytes,
+                                    context_plan.size.unicode_scalars,
+                                    if context_plan.size.unicode_scalars == 1 { "" } else { "s" },
+                                    context_plan.size.lines,
+                                    if context_plan.size.lines == 1 { "" } else { "s" },
+                                ))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            ui.collapsing("Context source inventory", |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("context-source-inventory")
+                                    .max_height(150.0)
+                                    .show(ui, |ui| {
+                                        for item in &context_plan.inventory {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(item.decision.label())
+                                                        .monospace()
+                                                        .size(9.0),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(item.source.label())
+                                                        .size(10.0),
+                                                );
+                                                if let Some(role) = item.role.as_deref() {
+                                                    ui.label(
+                                                        egui::RichText::new(format!("role={role}"))
+                                                            .monospace()
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                139, 143, 153,
+                                                            )),
+                                                    );
+                                                }
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{}B · {} chars · {} lines",
+                                                        item.utf8_bytes,
+                                                        item.unicode_scalars,
+                                                        item.lines,
+                                                    ))
+                                                    .monospace()
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        139, 143, 153,
+                                                    )),
+                                                );
+                                            });
+                                        }
+                                    });
+                            });
                             ui.add_space(4.0);
                             let preview = context_plan.request_preview(self.selected_model.as_deref());
                             let preview_text = serde_json::to_string_pretty(&preview)
@@ -7739,8 +7798,12 @@ mod tests {
         assert_eq!(projected[1].role, DisplayRole::Assistant);
         assert_eq!(projected[1].text, "second answer");
 
-        let context_plan =
-            context_composer::ContextPlan::compose("", "", context_transcript(&projected));
+        let context_plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            context_transcript(&projected),
+        );
         let serialized = context_plan.input_json().to_string();
         assert!(!serialized.contains("first private conversation"));
         assert!(!serialized.contains("first answer"));
@@ -8061,8 +8124,12 @@ mod tests {
             },
         ];
 
-        let plan =
-            context_composer::ContextPlan::compose("", "behavior", context_transcript(&messages));
+        let plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "behavior",
+            context_transcript(&messages),
+        );
         assert_eq!(
             plan.input_json(),
             serde_json::json!([
