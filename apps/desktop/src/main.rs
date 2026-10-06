@@ -5716,7 +5716,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Routed inbox", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Delivered routed messages are provenance-bearing local inbox items. They are not user-authored transcript messages and are not included in inference context.",
+                                    "Delivered routed messages are provenance-bearing local inbox items. Context eligibility is explicit and reversible; admitted items are still not serialized into inference until Context Composer support lands.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -5742,9 +5742,25 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                                 Ok(items) => {
+                                    let context_records =
+                                        match replay_local_route_context_audit(&self.events) {
+                                            Ok(records) => Some(records),
+                                            Err(error) => {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "routed context projection blocked: {error}"
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        186, 108, 108,
+                                                    )),
+                                                );
+                                                None
+                                            }
+                                        };
                                     egui::ScrollArea::vertical()
                                         .id_salt("local-routed-inbox")
-                                        .max_height(180.0)
+                                        .max_height(220.0)
                                         .show(ui, |ui| {
                                             for item in items {
                                                 let source_title =
@@ -5782,6 +5798,73 @@ impl eframe::App for ChatariumApp {
                                                         egui::RichText::new(item.text.as_str())
                                                             .size(10.0),
                                                     );
+
+                                                    let current_decision = context_records
+                                                        .as_ref()
+                                                        .and_then(|records| {
+                                                            records.iter().find(|record| {
+                                                                record.route_id == item.route_id
+                                                            })
+                                                        })
+                                                        .map(|record| record.decision);
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(match current_decision {
+                                                                Some(LocalRouteContextDecision::Admit) => {
+                                                                    "CONTEXT: ADMITTED"
+                                                                }
+                                                                Some(LocalRouteContextDecision::Exclude) => {
+                                                                    "CONTEXT: EXCLUDED"
+                                                                }
+                                                                None => "CONTEXT: EXCLUDED · DEFAULT",
+                                                            })
+                                                            .monospace()
+                                                            .size(9.0),
+                                                        );
+
+                                                        let can_change =
+                                                            !self.route_context_command_pending
+                                                                && self.persist_tx.is_some();
+                                                        if ui
+                                                            .add_enabled(
+                                                                can_change
+                                                                    && current_decision
+                                                                        != Some(
+                                                                            LocalRouteContextDecision::Admit,
+                                                                        ),
+                                                                egui::Button::new(
+                                                                    "Admit to context",
+                                                                ),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.decide_local_route_context(
+                                                                item.route_id,
+                                                                LocalRouteContextDecision::Admit,
+                                                            );
+                                                        }
+                                                        if ui
+                                                            .add_enabled(
+                                                                can_change
+                                                                    && current_decision
+                                                                        == Some(
+                                                                            LocalRouteContextDecision::Admit,
+                                                                        ),
+                                                                egui::Button::new(
+                                                                    "Exclude from context",
+                                                                ),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.decide_local_route_context(
+                                                                item.route_id,
+                                                                LocalRouteContextDecision::Exclude,
+                                                            );
+                                                        }
+                                                        if self.route_context_command_pending {
+                                                            ui.spinner();
+                                                        }
+                                                    });
                                                 });
                                             }
                                         });
