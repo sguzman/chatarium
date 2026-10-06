@@ -680,6 +680,99 @@ mod tests {
     }
 
     #[test]
+    fn explicit_successor_moves_active_worker_without_erasing_history() {
+        let mut store = MemoryEventStore::default();
+        register(&mut store, S1);
+        register(&mut store, S2);
+        record_worker_session_bound(&mut store, WorkerSessionBinding::new(W1, S1)).unwrap();
+        let first_binding_sequence = store.events().last().unwrap().sequence;
+
+        record_worker_session_successor_bound(
+            &mut store,
+            WorkerSessionSuccessorBinding::new(W1, S1, S2).unwrap(),
+        )
+        .unwrap();
+        let handoff_sequence = store.events().last().unwrap().sequence;
+
+        let records = replay_session_audit(store.events()).unwrap();
+        let predecessor = records
+            .iter()
+            .find(|record| record.session_id == S1)
+            .copied()
+            .unwrap();
+        let successor = records
+            .iter()
+            .find(|record| record.session_id == S2)
+            .copied()
+            .unwrap();
+
+        assert_eq!(
+            predecessor.worker_binding,
+            Some(WorkerSessionBinding::new(W1, S1))
+        );
+        assert_eq!(predecessor.worker_bound_sequence, Some(first_binding_sequence));
+        assert_eq!(
+            successor.worker_binding,
+            Some(WorkerSessionBinding::new(W1, S2))
+        );
+        assert_eq!(successor.worker_bound_sequence, Some(handoff_sequence));
+        assert_eq!(active_worker_session(&records, W1).unwrap().session_id, S2);
+        assert_eq!(
+            worker_session_before(&records, W1, handoff_sequence)
+                .unwrap()
+                .session_id,
+            S1
+        );
+        assert_eq!(
+            worker_session_before(&records, W1, handoff_sequence + 1)
+                .unwrap()
+                .session_id,
+            S2
+        );
+    }
+
+    #[test]
+    fn successor_requires_current_predecessor() {
+        let mut store = MemoryEventStore::default();
+        register(&mut store, S1);
+        register(&mut store, S2);
+        let s3 = SessionId::new(3);
+        register(&mut store, s3);
+        record_worker_session_bound(&mut store, WorkerSessionBinding::new(W1, S1)).unwrap();
+        record_worker_session_successor_bound(
+            &mut store,
+            WorkerSessionSuccessorBinding::new(W1, S1, S2).unwrap(),
+        )
+        .unwrap();
+        record_worker_session_successor_bound(
+            &mut store,
+            WorkerSessionSuccessorBinding::new(W1, S1, s3).unwrap(),
+        )
+        .unwrap();
+
+        let error = replay_session_audit(store.events()).unwrap_err();
+        assert!(error.contains("names predecessor"));
+        assert!(error.contains("active on session"));
+    }
+
+    #[test]
+    fn successor_cannot_target_already_worker_bound_session() {
+        let mut store = MemoryEventStore::default();
+        register(&mut store, S1);
+        register(&mut store, S2);
+        record_worker_session_bound(&mut store, WorkerSessionBinding::new(W1, S1)).unwrap();
+        record_worker_session_bound(&mut store, WorkerSessionBinding::new(W2, S2)).unwrap();
+        record_worker_session_successor_bound(
+            &mut store,
+            WorkerSessionSuccessorBinding::new(W1, S1, S2).unwrap(),
+        )
+        .unwrap();
+
+        let error = replay_session_audit(store.events()).unwrap_err();
+        assert!(error.contains("already bound to worker"));
+    }
+
+    #[test]
     fn duplicate_registration_is_rejected() {
         let mut store = MemoryEventStore::default();
         register(&mut store, S1);
