@@ -137,12 +137,7 @@ impl ContextPlan {
     pub fn durable_transcript_count(&self) -> usize {
         self.messages
             .iter()
-            .filter(|message| {
-                matches!(
-                    message.source,
-                    ContextSource::DurableTranscript { .. }
-                )
-            })
+            .filter(|message| matches!(message.source, ContextSource::DurableTranscript { .. }))
             .count()
     }
 
