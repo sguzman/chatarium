@@ -3136,6 +3136,101 @@ impl ChatariumApp {
         }
     }
 
+    fn enable_worker_lifecycle(&mut self) {
+        if self.lifecycle_command_pending {
+            return;
+        }
+        let worker_id = match next_available_worker_id(&self.events) {
+            Ok(worker_id) => worker_id,
+            Err(error) => {
+                self.status = format!("cannot allocate worker identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot enable worker lifecycle: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::BindLocalConversationWorker {
+            conversation_id: self.local_conversation_id,
+            worker_id,
+        }) {
+            Ok(()) => {
+                self.lifecycle_command_pending = true;
+                self.status = format!("binding local conversation to worker {}…", worker_id.get());
+            }
+            Err(error) => {
+                self.status = format!("failed to queue worker binding: {error}");
+            }
+        }
+    }
+
+    fn assign_next_worker_goal(&mut self, worker_id: WorkerId) {
+        if self.lifecycle_command_pending {
+            return;
+        }
+        let current = match worker_record(&self.events, worker_id) {
+            Ok(record) => record,
+            Err(error) => {
+                self.status = format!("cannot project worker lifecycle: {error}");
+                return;
+            }
+        };
+        let goal_id = WorkerGoalId::new(
+            current
+                .and_then(|record| record.lifecycle.goal_id())
+                .map_or(1, |goal_id| goal_id.get().saturating_add(1)),
+        );
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot assign worker goal: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::AssignWorkerGoal { worker_id, goal_id }) {
+            Ok(()) => {
+                self.lifecycle_command_pending = true;
+                self.status = format!(
+                    "assigning worker {} goal {}…",
+                    worker_id.get(),
+                    goal_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue worker goal assignment: {error}");
+            }
+        }
+    }
+
+    fn transition_worker(
+        &mut self,
+        worker_id: WorkerId,
+        goal_id: WorkerGoalId,
+        action: WorkerAction,
+    ) {
+        if self.lifecycle_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot update worker lifecycle: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::TransitionWorker {
+            worker_id,
+            goal_id,
+            action,
+        }) {
+            Ok(()) => {
+                self.lifecycle_command_pending = true;
+                self.status = format!(
+                    "recording worker {} lifecycle action {action:?}…",
+                    worker_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue worker lifecycle action: {error}");
+            }
+        }
+    }
+
     fn persist_local_conversation_catalog(&mut self) -> bool {
         let Some(sender) = &self.persist_tx else {
             self.status =
