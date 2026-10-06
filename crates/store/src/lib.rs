@@ -18,6 +18,7 @@ pub mod local_conversation_chat_container_audit;
 pub mod local_conversation_worker_audit;
 pub mod local_route_delivery_audit;
 pub mod local_route_payload_audit;
+pub mod local_routed_inbox;
 pub mod local_routing_directory;
 pub mod orchestration_route_audit;
 pub mod projection;
