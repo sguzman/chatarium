@@ -140,25 +140,19 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
         )
     })?;
 
-    if value.get("schema").and_then(Value::as_str)
-        != Some(LOCAL_CONVERSATION_WORKER_SCHEMA)
-    {
+    if value.get("schema").and_then(Value::as_str) != Some(LOCAL_CONVERSATION_WORKER_SCHEMA) {
         return Err(format!(
             "local conversation worker event at sequence {} has missing/unsupported schema",
             event.sequence
         ));
     }
-    if value.get("version").and_then(Value::as_u64)
-        != Some(LOCAL_CONVERSATION_WORKER_VERSION)
-    {
+    if value.get("version").and_then(Value::as_u64) != Some(LOCAL_CONVERSATION_WORKER_VERSION) {
         return Err(format!(
             "local conversation worker event at sequence {} has unsupported version",
             event.sequence
         ));
     }
-    if value.get("record").and_then(Value::as_str)
-        != Some("local_conversation_worker_bound")
-    {
+    if value.get("record").and_then(Value::as_str) != Some("local_conversation_worker_bound") {
         return Err(format!(
             "local conversation worker event at sequence {} has unexpected record",
             event.sequence
@@ -184,21 +178,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            format!("typed local conversation worker payload is missing integer field '{field}'")
-        })
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed local conversation worker payload is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            format!("typed local conversation worker payload is missing string field '{field}'")
-        })
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed local conversation worker payload is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
