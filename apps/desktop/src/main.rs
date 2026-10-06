@@ -5069,9 +5069,15 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                                 Ok(entries) => {
+                                    let current_entry = entries
+                                        .iter()
+                                        .find(|entry| {
+                                            entry.conversation_id == self.local_conversation_id
+                                        })
+                                        .copied();
                                     ui.label(
                                         egui::RichText::new(format!(
-                                            "{} addressable local conversation{} · directory only · no routes created",
+                                            "{} addressable local conversation{} · route intent/policy is durable; dispatch remains disabled",
                                             entries.len(),
                                             if entries.len() == 1 { "" } else { "s" },
                                         ))
@@ -5080,9 +5086,9 @@ impl eframe::App for ChatariumApp {
                                     );
                                     egui::ScrollArea::vertical()
                                         .id_salt("local-routing-directory")
-                                        .max_height(120.0)
+                                        .max_height(140.0)
                                         .show(ui, |ui| {
-                                            for entry in entries {
+                                            for entry in &entries {
                                                 let title = local_conversation_display_title(
                                                     &self.local_conversation_catalog,
                                                     entry.conversation_id,
@@ -5118,9 +5124,241 @@ impl eframe::App for ChatariumApp {
                                                             139, 143, 153,
                                                         )),
                                                     );
+
+                                                    if entry.conversation_id
+                                                        != self.local_conversation_id
+                                                    {
+                                                        let route_fresh = current_entry.is_some_and(
+                                                            |source| {
+                                                                source
+                                                                    .current_session_phase
+                                                                    .accepts_ordinary_turns()
+                                                                    && entry
+                                                                        .current_session_phase
+                                                                        .accepts_ordinary_turns()
+                                                            },
+                                                        );
+                                                        if ui
+                                                            .add_enabled(
+                                                                route_fresh
+                                                                    && !self
+                                                                        .route_policy_command_pending
+                                                                    && self.persist_tx.is_some(),
+                                                                egui::Button::new(
+                                                                    "Propose route",
+                                                                ),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.propose_local_session_route(
+                                                                entry.conversation_id,
+                                                            );
+                                                        }
+                                                    }
                                                 });
                                             }
                                         });
+
+                                    ui.add_space(6.0);
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new("Manual local route policy")
+                                            .strong()
+                                            .size(10.0),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Session-message route proposals carry identity and policy only. No message payload is attached and no route can dispatch yet.",
+                                        )
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+
+                                    match replay_routing_audit(&self.events) {
+                                        Err(error) => {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "route policy projection blocked: {error}"
+                                                ))
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(186, 108, 108)),
+                                            );
+                                        }
+                                        Ok(routes) => {
+                                            let routes = routes
+                                                .into_iter()
+                                                .filter(|route| {
+                                                    route.request.class
+                                                        == RouteClass::SessionMessage
+                                                })
+                                                .collect::<Vec<_>>();
+                                            if routes.is_empty() {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "no local session-message routes proposed",
+                                                    )
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        139, 143, 153,
+                                                    )),
+                                                );
+                                            } else {
+                                                egui::ScrollArea::vertical()
+                                                    .id_salt("local-route-policy")
+                                                    .max_height(180.0)
+                                                    .show(ui, |ui| {
+                                                        for route in routes {
+                                                            let source = entries.iter().find(
+                                                                |entry| {
+                                                                    entry.endpoint_id
+                                                                        == route.request.source
+                                                                },
+                                                            );
+                                                            let destination = entries.iter().find(
+                                                                |entry| {
+                                                                    entry.endpoint_id
+                                                                        == route
+                                                                            .request
+                                                                            .destination
+                                                                },
+                                                            );
+                                                            let fresh = source.is_some_and(
+                                                                |entry| {
+                                                                    entry
+                                                                        .current_session_phase
+                                                                        .accepts_ordinary_turns()
+                                                                },
+                                                            ) && destination.is_some_and(
+                                                                |entry| {
+                                                                    entry
+                                                                        .current_session_phase
+                                                                        .accepts_ordinary_turns()
+                                                                },
+                                                            );
+                                                            let source_label = source
+                                                                .map(|entry| {
+                                                                    local_conversation_display_title(
+                                                                        &self
+                                                                            .local_conversation_catalog,
+                                                                        entry.conversation_id,
+                                                                        &self.events,
+                                                                    )
+                                                                })
+                                                                .unwrap_or_else(|| {
+                                                                    format!(
+                                                                        "endpoint {}",
+                                                                        route
+                                                                            .request
+                                                                            .source
+                                                                            .get()
+                                                                    )
+                                                                });
+                                                            let destination_label = destination
+                                                                .map(|entry| {
+                                                                    local_conversation_display_title(
+                                                                        &self
+                                                                            .local_conversation_catalog,
+                                                                        entry.conversation_id,
+                                                                        &self.events,
+                                                                    )
+                                                                })
+                                                                .unwrap_or_else(|| {
+                                                                    format!(
+                                                                        "endpoint {}",
+                                                                        route
+                                                                            .request
+                                                                            .destination
+                                                                            .get()
+                                                                    )
+                                                                });
+
+                                                            ui.horizontal_wrapped(|ui| {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "route {} · {}",
+                                                                        route.request.id.get(),
+                                                                        route_gate_state_label(
+                                                                            route.gate_state,
+                                                                        ),
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "{source_label} → {destination_label}"
+                                                                    ))
+                                                                    .size(10.0),
+                                                                );
+                                                                if !fresh {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            "STALE",
+                                                                        )
+                                                                        .monospace()
+                                                                        .size(9.0)
+                                                                        .color(
+                                                                            egui::Color32::from_rgb(
+                                                                                186, 108, 108,
+                                                                            ),
+                                                                        ),
+                                                                    );
+                                                                }
+
+                                                                let can_decide = fresh
+                                                                    && !route
+                                                                        .gate_state
+                                                                        .is_dispatched()
+                                                                    && !self
+                                                                        .route_policy_command_pending
+                                                                    && self.persist_tx.is_some();
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_decide
+                                                                            && route
+                                                                                .latest_user_decision
+                                                                                != Some(
+                                                                                    RouteUserDecision::Allow,
+                                                                                ),
+                                                                        egui::Button::new(
+                                                                            "Allow",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.decide_local_session_route(
+                                                                        route.request.id,
+                                                                        RouteUserDecision::Allow,
+                                                                    );
+                                                                }
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_decide
+                                                                            && route
+                                                                                .latest_user_decision
+                                                                                != Some(
+                                                                                    RouteUserDecision::Deny,
+                                                                                ),
+                                                                        egui::Button::new(
+                                                                            "Deny",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.decide_local_session_route(
+                                                                        route.request.id,
+                                                                        RouteUserDecision::Deny,
+                                                                    );
+                                                                }
+                                                            });
+                                                        }
+                                                    });
+                                            }
+                                            if self.route_policy_command_pending {
+                                                ui.spinner();
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         });
