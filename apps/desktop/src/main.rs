@@ -6158,9 +6158,24 @@ fn latest_live_transcript(
 
 fn load_capability_probe_state(journal_path: &Path) -> capability_probes::ProbeRun {
     let data_dir = journal_path.parent().unwrap_or_else(|| Path::new("."));
-    let path = data_dir.join("siwc-capability-probes.json");
-    match capability_probes::load_report(&path) {
-        Ok(Some(run)) => run,
+    let report_path = data_dir.join("siwc-capability-probes.json");
+    let contract_path = data_dir.join("local-inference-contract.json");
+    match capability_probes::load_report(&report_path) {
+        Ok(Some(mut run)) => {
+            let contract_status =
+                match local_inference_contract::save_contract(&contract_path, &run, unix_now_ms()) {
+                    Ok(()) => format!(
+                        "contract {}",
+                        local_inference_contract::contract_state(&run)
+                    ),
+                    Err(error) => format!("contract error: {error}"),
+                };
+            run.status = format!(
+                "loaded {} saved capability probe results · {contract_status}",
+                run.results.len()
+            );
+            run
+        }
         Ok(None) => capability_probes::ProbeRun::default(),
         Err(error) => capability_probes::ProbeRun {
             status: format!("saved capability probe report ignored · {error}"),
