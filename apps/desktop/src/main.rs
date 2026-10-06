@@ -7080,6 +7080,58 @@ fn remote_turn_payload(
     .expect("remote turn observation is JSON-serializable")
 }
 
+fn local_worker_binding(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+) -> Result<Option<LocalConversationWorkerBindingRecord>, String> {
+    Ok(replay_local_conversation_worker_bindings(events)?
+        .into_iter()
+        .find(|binding| binding.conversation_id == conversation_id))
+}
+
+fn worker_record(
+    events: &[EventEnvelope],
+    worker_id: WorkerId,
+) -> Result<Option<WorkerAuditRecord>, String> {
+    Ok(replay_worker_audit(events)?
+        .into_iter()
+        .find(|record| record.worker_id == worker_id))
+}
+
+fn next_available_worker_id(events: &[EventEnvelope]) -> Result<WorkerId, String> {
+    let mut highest = 0_u64;
+
+    for binding in replay_local_conversation_worker_bindings(events)? {
+        highest = highest.max(binding.worker_id.get());
+    }
+    for record in replay_worker_audit(events)? {
+        highest = highest.max(record.worker_id.get());
+    }
+    for record in replay_session_audit(events)? {
+        if let Some(binding) = record.worker_binding {
+            highest = highest.max(binding.worker_id().get());
+        }
+    }
+
+    let next = highest
+        .checked_add(1)
+        .ok_or_else(|| "worker identity space exhausted".to_owned())?;
+    Ok(WorkerId::new(next))
+}
+
+fn worker_phase_label(phase: WorkerPhase) -> &'static str {
+    match phase {
+        WorkerPhase::Unassigned => "UNASSIGNED",
+        WorkerPhase::Ready => "READY",
+        WorkerPhase::Working => "WORKING",
+        WorkerPhase::NeedsInput => "NEEDS INPUT",
+        WorkerPhase::Blocked => "BLOCKED",
+        WorkerPhase::Completed => "COMPLETED",
+        WorkerPhase::Failed => "FAILED",
+        WorkerPhase::Stopped => "STOPPED",
+    }
+}
+
 fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::TranscriptMessage> {
     messages
         .iter()
