@@ -145,4 +145,28 @@ Current local-first substrate:
 
 This is intentionally enough substrate to begin serious context-policy and behavioral experiments once the empirical contract is `ready`.
 
-The next capability step is not more speculative implementation: run the in-app suite, let Chatarium derive the contract, and resolve only any `needs_review` or `incomplete` evidence. Do not reopen browser/history work as part of this phase.
+## Empirical gate closed — 2026-10-06
+
+The first real in-app fixed-suite run against `gpt-5.6-sol` completed with all
+nine named probes classified `supported`, and Chatarium derived a `ready`
+Local Inference Contract. The repository does not copy the user-specific SIWC
+profile identifier; the local contract artifact remains the machine-readable
+scope authority.
+
+The speculative-capability phase is therefore closed for this model/profile
+scope. Do not add more capability-probe scaffolding merely to postpone
+higher-level product work.
+
+## Context Composer started
+
+The first executable Context Composer slice is now landed and documented in
+[CONTEXT_COMPOSER.md](CONTEXT_COMPOSER.md).
+
+Both live post-durable-commit dispatch and the **Exact next-request context**
+inspector now consume the same typed local `ContextPlan`. The plan keeps
+top-level instructions separate, places developer context before the durable
+transcript, retains local source provenance, and strips that provenance before
+constructing the remote role/content payload.
+
+The active next work is explicit context inclusion/budget/control policy, then
+Behavior Profile. Do not reopen browser/history work as part of this phase.
