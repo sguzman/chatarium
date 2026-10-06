@@ -263,15 +263,55 @@ The desktop exposes an exact payload draft for each route. Once attached, the
 payload is immutable and inspectable. A route may be denied without a payload,
 but **Allow is blocked until the immutable payload is durable**.
 
+## Landed one-shot local dispatch and delivery
+
+Approved local `SessionMessage` routes can now consume the existing typed
+`DispatchPermit` exactly once.
+
+The persistence worker revalidates the current local routing directory,
+immutable payload provenance, ordinary-turn-capable session leaves, and durable
+RouteGate state immediately before dispatch.
+
+Successful local delivery records a separate `LocalRouteDelivered` fact with:
+
+- route and payload identity;
+- source/destination local conversation identity;
+- source/destination current SessionId at delivery time;
+- the durable dispatch sequence;
+- the durable delivery sequence.
+
+A crash after durable dispatch but before durable delivery can be recovered by
+finishing delivery without consuming a second dispatch permit.
+
+Delivery does not append a user-authored message and does not alter inference
+context.
+
+## Landed routed inbox projection
+
+Successfully delivered payloads now project into a read-only routed inbox for
+the destination local conversation.
+
+The inbox joins immutable payload text with route/payload/session provenance.
+It creates no new journal fact and does not masquerade as ordinary transcript
+content.
+
+The desktop exposes **Routed inbox** separately from the conversation
+transcript and explicitly marks routed items as excluded from inference
+context.
+
 ## Next implementation boundary
 
-The next safe substrate is one-shot local dispatch/delivery through the existing
-typed `DispatchPermit` gate.
+The next safe substrate is an explicit durable context-admission decision for
+one delivered routed inbox item.
 
-Dispatch must not make routed text look user-authored. Delivery needs its own
-durable provenance so the destination conversation can distinguish a routed
-message from ordinary authored transcript content. Only after that distinction
-is explicit should routed content enter inference context.
+Admission must be separate from delivery. A delivered message should remain
+visible even when it is never admitted to model context.
+
+After durable admission exists, Context Composer can gain a typed routed-context
+source with explicit provenance and an intentionally chosen request role/trust
+policy. Do not silently serialize routed text as user-authored or developer
+instructions.
 
 No hidden cross-conversation transcript sharing is authorized by topology,
-addressability, route proposal, approval, or payload attachment alone.
+addressability, route proposal, approval, payload attachment, dispatch, or
+delivery alone.
