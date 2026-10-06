@@ -26,7 +26,7 @@ The active product exploration is now **local-first Chatarium conversations** us
 
 The purpose of this phase is to find out how much of the intended "fancy behavioral" product can be built and learned locally before returning to remote ChatGPT-history interoperability.
 
-The exact current inference/control matrix lives in [LOCAL_INFERENCE_CAPABILITY_SURFACE.md](LOCAL_INFERENCE_CAPABILITY_SURFACE.md). The near-term rule is: expose and understand the knobs we actually have before building elaborate lifecycle behavior.
+The exact current inference/control matrix lives in [LOCAL_INFERENCE_CAPABILITY_SURFACE.md](LOCAL_INFERENCE_CAPABILITY_SURFACE.md), and the machine-readable freeze gate is defined in [LOCAL_INFERENCE_CONTRACT.md](LOCAL_INFERENCE_CONTRACT.md). The near-term rule is: expose and understand the knobs we actually have before building elaborate lifecycle behavior. Empirical remote capabilities may enter behavior/lifecycle code only through a `ready` contract scoped to the active SIWC profile and model.
 
 Priority areas include:
 
@@ -139,8 +139,10 @@ Current local-first substrate:
 - streamed assistant output;
 - Stop generation / active-request cancellation;
 - an Exact next-request context inspector;
-- local backup/restore coverage for conversation workspace metadata and inference settings.
+- an in-app fixed SIWC capability-probe suite with sanitized durable evidence;
+- a derived, typed, profile/model-scoped Local Inference Contract with `ready`, `needs_review`, and `incomplete` states;
+- local backup/restore coverage for conversation workspace metadata, inference settings, probe evidence, and the derived contract.
 
-This is intentionally enough substrate to begin serious context-policy and behavioral experiments once the remaining capability unknowns are classified.
+This is intentionally enough substrate to begin serious context-policy and behavioral experiments once the empirical contract is `ready`.
 
-The next capability work should stay narrow: route-documented image/file/custom-tool/web-search support, then targeted probes for reasoning, verbosity, and structured-output controls. Do not reopen browser/history work as part of this phase.
+The next capability step is not more speculative implementation: run the in-app suite, let Chatarium derive the contract, and resolve only any `needs_review` or `incomplete` evidence. Do not reopen browser/history work as part of this phase.

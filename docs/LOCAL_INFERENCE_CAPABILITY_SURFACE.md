@@ -20,6 +20,7 @@ Relevant Chatarium files:
 - `tools/siwc-bridge/bridge.mjs`
 - `tools/siwc-bridge/capability-probe.mjs`
 - `apps/desktop/src/capability_probes.rs`
+- `apps/desktop/src/local_inference_contract.rs`
 - `apps/desktop/src/siwc_bridge.rs`
 - `apps/desktop/src/main.rs`
 
@@ -157,6 +158,35 @@ DevKit's renderer-safe `profileId`, the model slug, and the run timestamp; it
 does not persist the account email in the probe report. A rejected probe remains
 evidence, not a reason to invent product support.
 
+## Derived Local Inference Contract
+
+The sanitized probe report remains the empirical evidence source. Chatarium now
+derives `local-inference-contract.json` from that report rather than treating a
+second hand-maintained capability table as authority.
+
+The contract separates:
+
+- fixed Chatarium guarantees such as local context ownership, conversation
+  isolation, `store:false`, streaming, supported text roles, top-level
+  instructions, and cancellation;
+- fixed transport constraints such as no persistent Responses conversation and
+  no `previous_response_id`;
+- profile/model/timestamp-scoped empirical probe classifications.
+
+Contract states are:
+
+- `ready` — the report is profile/model/timestamp scoped and every named probe
+  has conclusive `supported` or `unsupported_route` evidence;
+- `needs_review` — every probe reached a terminal response but at least one is
+  merely `rejected`, which may reflect a malformed/obsolete probe shape rather
+  than a genuine unsupported capability;
+- `incomplete` — scope is missing or at least one probe is missing,
+  `not_run`, `error`, or `model_unavailable`.
+
+Downstream behavior must not consume empirical capabilities unless the typed
+contract loader reports `ready_for(current_profile, current_model)`. See
+[LOCAL_INFERENCE_CONTRACT.md](LOCAL_INFERENCE_CONTRACT.md).
+
 ## Current Chatarium implementation
 
 The first local-first control milestone is now implemented.
@@ -169,6 +199,9 @@ The desktop supports:
 - automatic reload of the last saved probe matrix across desktop restarts;
 - profile + model + timestamp scoping with visible stale-profile/stale-model warnings;
 - inclusion of the sanitized probe report in local archive backup/restore;
+- deterministic derivation of `local-inference-contract.json` after probe completion and from saved evidence on startup;
+- typed contract loading with profile/model freshness gating;
+- inclusion of the derived inference contract in local archive backup/restore;
 - normal Send blocking while a capability probe is active, preserving the one-Responses-request probe invariant;
 - multiple isolated local conversations with durable active selection;
 - create, switch, rename, archive, and restore;
@@ -213,17 +246,15 @@ The first known-control exposure set is complete: instructions, developer contex
 
 The route-documented and previously unknown capability probes are now executable from the desktop Diagnostics panel without widening the product API or exposing credentials. The same fixed suite also remains available through the standalone developer CLI.
 
-Next run the in-app authenticated probe suite against the selected account-visible model and record each result as accepted, route-unsupported, rejected, or model/account constrained:
+Next run the in-app authenticated probe suite against the selected account-visible model. Chatarium will persist the sanitized evidence and derive the Local Inference Contract automatically.
 
-1. image/file input;
-2. namespaced function/custom tools;
-3. additional_tools;
-4. web search;
-5. reasoning;
-6. verbosity;
-7. structured output.
+Then follow the contract state:
 
-After those empirical results are recorded, decide which supported capabilities deserve first-class product exposure and freeze the Local Inference Contract before lifecycle work.
+1. `ready` — freeze that profile/model contract and decide which supported capabilities deserve first-class product exposure;
+2. `needs_review` — inspect the rejected probe shapes and current route schema, fix the engineering probe if necessary, and rerun without converting that work into principal-operated terminal QA;
+3. `incomplete` — diagnose the missing/error/model-unavailable evidence and keep lifecycle/context-composer consumers blocked.
+
+Lifecycle/context-composer work may depend on empirical remote capabilities only after the contract is `ready` for the active profile/model.
 
 ## Completion criterion
 
