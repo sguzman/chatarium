@@ -141,7 +141,7 @@ Current local-first substrate:
 - an Exact next-request context inspector;
 - an in-app fixed SIWC capability-probe suite with sanitized durable evidence;
 - a derived, typed, profile/model-scoped Local Inference Contract with `ready`, `needs_review`, and `incomplete` states;
-- local backup/restore coverage for conversation workspace metadata, inference settings, probe evidence, and the derived contract.
+- local backup/restore coverage for conversation workspace metadata, inference settings, Behavior Profiles, probe evidence, and the derived contract.
 
 This is intentionally enough substrate to begin serious context-policy and behavioral experiments once the empirical contract is `ready`.
 
@@ -157,16 +157,23 @@ The speculative-capability phase is therefore closed for this model/profile
 scope. Do not add more capability-probe scaffolding merely to postpone
 higher-level product work.
 
-## Context Composer started
+## Context Composer and Behavior Profile landed
 
-The first executable Context Composer slice is now landed and documented in
+Context Composer is documented in
 [CONTEXT_COMPOSER.md](CONTEXT_COMPOSER.md).
 
 Both live post-durable-commit dispatch and the **Exact next-request context**
-inspector now consume the same typed local `ContextPlan`. The plan keeps
-top-level instructions separate, places developer context before the durable
-transcript, retains local source provenance, and strips that provenance before
-constructing the remote role/content payload.
+inspector consume the same typed local `ContextPlan`. The composer now has
+explicit preview/dispatch inclusion policy, local source provenance, exact
+byte/character/line accounting, and Local-Inference-Contract-gated capability
+slots.
 
-The active next work is explicit context inclusion/budget/control policy, then
-Behavior Profile. Do not reopen browser/history work as part of this phase.
+The first durable per-conversation Behavior Profile is documented in
+[BEHAVIOR_PROFILE.md](BEHAVIOR_PROFILE.md). It currently exposes only exact
+empirically accepted values for low reasoning, low verbosity, and web search.
+Those settings are snapshotted at commit time and fail closed if the active
+profile/model contract no longer admits them.
+
+The active next architectural layer is Lifecycle State, followed by explicit
+routing/memory and controller/worker orchestration. Do not reopen
+browser/history work as part of this phase.
