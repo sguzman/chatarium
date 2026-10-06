@@ -9,7 +9,7 @@ use crate::{EventEnvelope, EventStore};
 use chatarium_core::orchestration::WorkerId;
 use chatarium_core::{EventKind, LocalConversationId};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 const LOCAL_CONVERSATION_WORKER_SCHEMA: &str = "chatarium-local-conversation-worker-audit";
@@ -210,6 +210,7 @@ mod tests {
     use super::*;
     use crate::projection::SqliteProjection;
     use crate::{JsonlEventStore, MemoryEventStore};
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
