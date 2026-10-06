@@ -196,11 +196,15 @@ Allow/Deny decisions are durable and fail closed when route endpoints become
 stale.
 
 Routes now carry a separate immutable exact-text payload with point-in-time
-conversation provenance. Allow is blocked until that payload is durable. The
-payload does not dispatch itself and is not silently inserted into another
-conversation's context.
+conversation provenance. Allow is blocked until that payload is durable.
 
-The active next architectural boundary is one-shot local delivery through the
-existing dispatch-permit semantics, with an explicit routed-message provenance
-record at the destination. Memory/controller-worker orchestration remains
-later. Do not reopen browser/history work as part of this phase.
+Approved routes can now consume one-shot dispatch authority and durably record
+delivery to the destination's current local session leaf. Delivered items
+project into a separate routed inbox with source/route/payload/session
+provenance. They do not become user-authored transcript messages and are not
+silently inserted into inference context.
+
+The active next architectural boundary is explicit durable admission of a
+delivered routed inbox item into Context Composer, with a visible provenance and
+trust/role policy. Memory/controller-worker orchestration remains later. Do not
+reopen browser/history work as part of this phase.
