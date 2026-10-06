@@ -449,6 +449,7 @@ struct ChatariumApp {
     remote_session: siwc_bridge::SessionState,
     remote_models: Vec<siwc_bridge::Model>,
     capability_probe: capability_probes::ProbeRun,
+    local_inference_contract: Option<local_inference_contract::LoadedContract>,
     model_list_pending: bool,
     selected_model: Option<String>,
     remote_status: String,
@@ -679,6 +680,9 @@ impl ChatariumApp {
                         remote_session: siwc_bridge::SessionState::default(),
                         remote_models: Vec::new(),
                         capability_probe: load_capability_probe_state(&journal_path),
+                        local_inference_contract: load_local_inference_contract_state(
+                            &journal_path,
+                        ),
                         model_list_pending: false,
                         selected_model: active_inference_settings.model,
                         remote_status: "starting sign-in runtime…".to_owned(),
@@ -830,6 +834,7 @@ impl ChatariumApp {
             remote_session: siwc_bridge::SessionState::default(),
             remote_models: Vec::new(),
             capability_probe: load_capability_probe_state(&journal_path),
+            local_inference_contract: load_local_inference_contract_state(&journal_path),
             model_list_pending: false,
             selected_model: active_inference_settings.model,
             remote_status: "starting sign-in runtime…".to_owned(),
@@ -2962,14 +2967,33 @@ impl ChatariumApp {
                     &self.capability_probe,
                     unix_now_ms(),
                 ) {
-                    Ok(()) => format!(
-                        "capability probes complete · saved {} · contract {}",
-                        report_path.display(),
-                        local_inference_contract::contract_state(&self.capability_probe)
-                    ),
-                    Err(error) => format!(
-                        "capability probes complete · report saved · contract error: {error}"
-                    ),
+                    Ok(()) => match local_inference_contract::load_contract(&contract_path) {
+                        Ok(contract @ Some(_)) => {
+                            self.local_inference_contract = contract;
+                            format!(
+                                "capability probes complete · saved {} · contract {}",
+                                report_path.display(),
+                                local_inference_contract::contract_state(&self.capability_probe)
+                            )
+                        }
+                        Ok(None) => {
+                            self.local_inference_contract = None;
+                            "capability probes complete · report saved · contract reload missing"
+                                .to_owned()
+                        }
+                        Err(error) => {
+                            self.local_inference_contract = None;
+                            format!(
+                                "capability probes complete · report saved · contract reload error: {error}"
+                            )
+                        }
+                    },
+                    Err(error) => {
+                        self.local_inference_contract = None;
+                        format!(
+                            "capability probes complete · report saved · contract error: {error}"
+                        )
+                    }
                 }
             }
             Err(error) => format!("capability probes complete · {error}"),
@@ -4431,6 +4455,32 @@ impl eframe::App for ChatariumApp {
                                             });
                                         }
                                     });
+                            });
+                            let capability_gate = context_composer::CapabilityGate::from_contract(
+                                self.local_inference_contract.as_ref(),
+                                self.remote_session.profile_id.as_deref(),
+                                self.selected_model.as_deref(),
+                            );
+                            ui.collapsing("Capability-gated request slots", |ui| {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Availability only. Nothing here is enabled automatically.",
+                                    )
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
+                                for admission in &capability_gate.admissions {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(admission.state.label())
+                                                .monospace()
+                                                .size(9.0),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(admission.slot.label()).size(10.0),
+                                        );
+                                    });
+                                }
                             });
                             ui.add_space(4.0);
                             let preview = context_plan.request_preview(self.selected_model.as_deref());
@@ -6339,6 +6389,23 @@ fn load_capability_probe_state(journal_path: &Path) -> capability_probes::ProbeR
             status: format!("saved capability probe report ignored · {error}"),
             ..capability_probes::ProbeRun::default()
         },
+    }
+}
+
+fn load_local_inference_contract_state(
+    journal_path: &Path,
+) -> Option<local_inference_contract::LoadedContract> {
+    let data_dir = journal_path.parent().unwrap_or_else(|| Path::new("."));
+    let contract_path = data_dir.join("local-inference-contract.json");
+    match local_inference_contract::load_contract(&contract_path) {
+        Ok(contract) => contract,
+        Err(error) => {
+            diagnostics::warn(
+                "inference",
+                format!("local inference contract ignored: {error}"),
+            );
+            None
+        }
     }
 }
 
