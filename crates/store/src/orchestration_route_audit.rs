@@ -15,7 +15,7 @@ use crate::control_provenance_audit::{
 };
 use crate::control_route_audit::{ControlRouteAuditRecord, replay_control_route_audit};
 use crate::routing_audit::{RouteAuditRecord, replay_routing_audit};
-use crate::session_audit::{SessionAuditRecord, replay_session_audit};
+use crate::session_audit::{SessionAuditRecord, replay_session_audit, worker_session_before};
 use crate::supervision_audit::{ControllerWorkerAuditRecord, replay_supervision_audit};
 use chatarium_core::control::ControlId;
 use chatarium_core::control_provenance::ControlIssuer;
@@ -74,14 +74,6 @@ pub fn replay_validated_orchestration_routes(
         .copied()
         .map(|record| (record.session_id, record))
         .collect::<BTreeMap<_, _>>();
-    let worker_session_by_worker = sessions
-        .iter()
-        .filter_map(|record| {
-            record
-                .worker_binding
-                .map(|binding| (binding.worker_id(), *record))
-        })
-        .collect::<BTreeMap<_, _>>();
     let supervision_by_worker_session = supervision
         .bindings
         .iter()
@@ -102,7 +94,7 @@ pub fn replay_validated_orchestration_routes(
                 &admissions_by_id,
                 &provenance_by_control,
                 &sessions_by_id,
-                &worker_session_by_worker,
+                &sessions,
                 &supervision_by_worker_session,
                 &routes_by_id,
             )
@@ -116,7 +108,7 @@ fn validate_binding(
     admissions: &BTreeMap<ControlId, ValidatedControlAdmission>,
     provenance: &BTreeMap<ControlId, ControlProvenanceAuditRecord>,
     sessions: &BTreeMap<SessionId, SessionAuditRecord>,
-    worker_sessions: &BTreeMap<WorkerId, SessionAuditRecord>,
+    session_records: &[SessionAuditRecord],
     supervision: &BTreeMap<SessionId, ControllerWorkerAuditRecord>,
     routes: &BTreeMap<RouteId, RouteAuditRecord>,
 ) -> Result<ValidatedOrchestrationRoute, String> {
@@ -173,19 +165,15 @@ fn validate_binding(
             bound_sequence: binding.bound_sequence,
         }),
         ControlIssuer::ControllerSession(controller_session_id) => {
-            validate_controller_route(
+            let worker_session = validate_controller_route(
                 binding.bound_sequence,
                 control,
                 route,
                 controller_session_id,
                 sessions,
-                worker_sessions,
+                session_records,
                 supervision,
             )?;
-
-            let worker_session = worker_sessions
-                .get(&control.worker_id)
-                .expect("controller route validation resolved worker session");
 
             Ok(ValidatedOrchestrationRoute {
                 control_id,
@@ -208,16 +196,20 @@ fn validate_controller_route(
     route: &RouteAuditRecord,
     controller_session_id: SessionId,
     sessions: &BTreeMap<SessionId, SessionAuditRecord>,
-    worker_sessions: &BTreeMap<WorkerId, SessionAuditRecord>,
+    session_records: &[SessionAuditRecord],
     supervision: &BTreeMap<SessionId, ControllerWorkerAuditRecord>,
-) -> Result<(), String> {
-    let worker_session = worker_sessions.get(&control.worker_id).ok_or_else(|| {
-        format!(
-            "controller-issued control {} targets worker {} with no session binding",
-            control.control_id.get(),
-            control.worker_id.get()
-        )
-    })?;
+) -> Result<SessionAuditRecord, String> {
+    let worker_session =
+        worker_session_before(session_records, control.worker_id, binding_sequence).ok_or_else(
+            || {
+                format!(
+                    "controller-issued control {} targets worker {} with no active session binding before sequence {}",
+                    control.control_id.get(),
+                    control.worker_id.get(),
+                    binding_sequence
+                )
+            },
+        )?;
 
     require_before(
         "worker-session binding",
@@ -297,7 +289,7 @@ fn validate_controller_route(
         ));
     }
 
-    Ok(())
+    Ok(worker_session)
 }
 
 fn require_before(label: &str, sequence: Option<u64>, binding_sequence: u64) -> Result<(), String> {
