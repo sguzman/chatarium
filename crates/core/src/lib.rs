@@ -446,9 +446,7 @@ impl EventKind {
             Self::RouteUserDecisionRecorded => "route_user_decision_recorded",
             Self::RouteDispatched => "route_dispatched",
             Self::LocalRouteDelivered => "local_route_delivered",
-            Self::LocalRouteContextDecisionRecorded => {
-                "local_route_context_decision_recorded"
-            }
+            Self::LocalRouteContextDecisionRecorded => "local_route_context_decision_recorded",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
