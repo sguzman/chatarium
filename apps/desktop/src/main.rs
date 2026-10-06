@@ -47,7 +47,7 @@ use chatarium_store::local_conversation_worker_audit::{
 };
 use chatarium_store::local_route_context_audit::{
     LocalRouteContextDecision, record_local_route_context_decision,
-    replay_local_route_context_audit,
+    replay_admitted_local_route_context, replay_local_route_context_audit,
 };
 use chatarium_store::local_route_delivery_audit::{
     record_local_route_delivered, replay_local_route_delivery_audit,
@@ -448,6 +448,7 @@ struct PendingInferenceIntent {
     model: String,
     instructions: Option<String>,
     developer_context: String,
+    routed_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
 }
 
@@ -2246,6 +2247,17 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                let routed_context = match admitted_routed_context_messages(
+                    &self.events,
+                    self.local_conversation_id,
+                ) {
+                    Ok(messages) => messages,
+                    Err(error) => {
+                        self.status =
+                            format!("cannot snapshot admitted routed context: {error}");
+                        return;
+                    }
+                };
                 self.commit_remote_intents.insert(
                     request_id,
                     PendingInferenceIntent {
@@ -2253,6 +2265,7 @@ impl ChatariumApp {
                         instructions: (!self.conversation_instructions.trim().is_empty())
                             .then(|| self.conversation_instructions.clone()),
                         developer_context: self.conversation_developer_context.clone(),
+                        routed_context,
                         request_patch,
                     },
                 );
@@ -2328,10 +2341,15 @@ impl ChatariumApp {
 
                         if let Some(intent) = self.commit_remote_intents.remove(&request_id) {
                             let remote_request_id = message.turn_id.to_string();
-                            let transcript = context_transcript(&projected_local_display_messages(
-                                &self.events,
-                                self.local_conversation_id,
-                            ));
+                            let mut transcript =
+                                context_transcript(&projected_local_display_messages(
+                                    &self.events,
+                                    self.local_conversation_id,
+                                ));
+                            transcript.extend(intent.routed_context);
+                            transcript.sort_by_key(
+                                context_composer::TranscriptMessage::order_sequence,
+                            );
                             let context_plan = context_composer::ContextPlan::compose(
                                 context_composer::ContextPolicy::dispatch(),
                                 intent.instructions.as_deref().unwrap_or_default(),
