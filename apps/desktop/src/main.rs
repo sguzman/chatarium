@@ -42,6 +42,7 @@ use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
 };
+use chatarium_store::local_routing_directory::replay_local_routing_directory;
 use chatarium_store::remote_health::{
     MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
     record_remote_health_signal,
@@ -4969,6 +4970,74 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                         }
+
+                        ui.collapsing("Local routing directory", |ui| {
+                            match replay_local_routing_directory(&self.events) {
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "routing directory projection blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                                Ok(entries) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} addressable local conversation{} · directory only · no routes created",
+                                            entries.len(),
+                                            if entries.len() == 1 { "" } else { "s" },
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("local-routing-directory")
+                                        .max_height(120.0)
+                                        .show(ui, |ui| {
+                                            for entry in entries {
+                                                let title = local_conversation_display_title(
+                                                    &self.local_conversation_catalog,
+                                                    entry.conversation_id,
+                                                    &self.events,
+                                                );
+                                                ui.horizontal_wrapped(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(if entry.conversation_id
+                                                            == self.local_conversation_id
+                                                        {
+                                                            "CURRENT"
+                                                        } else {
+                                                            "LOCAL"
+                                                        })
+                                                        .monospace()
+                                                        .size(9.0),
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(title).size(10.0),
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "endpoint {} · session {} · {}",
+                                                            entry.endpoint_id.get(),
+                                                            entry.current_session_id.get(),
+                                                            session_lifecycle_phase_label(
+                                                                entry.current_session_phase,
+                                                            ),
+                                                        ))
+                                                        .monospace()
+                                                        .size(9.0)
+                                                        .color(egui::Color32::from_rgb(
+                                                            139, 143, 153,
+                                                        )),
+                                                    );
+                                                });
+                                            }
+                                        });
+                                }
+                            }
+                        });
 
                         ui.add_space(10.0);
                         ui.separator();
