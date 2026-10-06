@@ -19,6 +19,7 @@ const lines = createInterface({
 let ready = false;
 let requestedSession = false;
 let requestedProbeGuard = false;
+let requestedStreamGuard = false;
 let sessionStatus;
 const result = await new Promise((resolvePromise, rejectPromise) => {
   const timeout = setTimeout(() => {
@@ -121,13 +122,18 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
         );
         return;
       }
-      clearTimeout(timeout);
-      lines.close();
-      resolvePromise({
-        protocol: 1,
-        sessionStatus,
-        probeGuard: "invalid_probe_patch",
-      });
+      if (!requestedStreamGuard) {
+        requestedStreamGuard = true;
+        child.stdin.write(
+          JSON.stringify({
+            type: "stream_response",
+            request_id: "smoke-stream-guard",
+            model: "smoke-model",
+            input: "probe",
+            request_patch: { temperature: 0 },
+          }) + "\n",
+        );
+      }
       return;
     }
 
@@ -140,6 +146,45 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
       lines.close();
       rejectPromise(
         new Error("Capability probe guard accepted a forbidden request field."),
+      );
+      return;
+    }
+
+    if (
+      ready &&
+      value?.type === "error" &&
+      value?.request_id === "smoke-stream-guard"
+    ) {
+      if (value?.error?.code !== "invalid_stream_patch") {
+        clearTimeout(timeout);
+        lines.close();
+        rejectPromise(
+          new Error(
+            `Normal inference guard returned unexpected error code ${value?.error?.code ?? "missing"}.`,
+          ),
+        );
+        return;
+      }
+      clearTimeout(timeout);
+      lines.close();
+      resolvePromise({
+        protocol: 1,
+        sessionStatus,
+        probeGuard: "invalid_probe_patch",
+        streamGuard: "invalid_stream_patch",
+      });
+      return;
+    }
+
+    if (
+      ready &&
+      value?.type === "result" &&
+      value?.request_id === "smoke-stream-guard"
+    ) {
+      clearTimeout(timeout);
+      lines.close();
+      rejectPromise(
+        new Error("Normal inference guard accepted a forbidden request field."),
       );
     }
   });
@@ -155,5 +200,5 @@ await new Promise((resolvePromise) => {
 });
 
 console.log(
-  `Chatarium SIWC bridge ready: protocol ${result.protocol}; session ${result.sessionStatus}; probe guard ${result.probeGuard}`,
+  `Chatarium SIWC bridge ready: protocol ${result.protocol}; session ${result.sessionStatus}; probe guard ${result.probeGuard}; stream guard ${result.streamGuard}`,
 );
