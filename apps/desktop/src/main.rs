@@ -4903,6 +4903,70 @@ impl eframe::App for ChatariumApp {
                                         .color(egui::Color32::from_rgb(139, 143, 153)),
                                     );
                                 }
+
+                                match session_endpoint_binding(
+                                    &self.events,
+                                    topology.current_session_id,
+                                ) {
+                                    Err(error) => {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "route addressability projection blocked: {error}"
+                                            ))
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(186, 108, 108)),
+                                        );
+                                    }
+                                    Ok(None) => {
+                                        ui.horizontal_wrapped(|ui| {
+                                            if ui
+                                                .add_enabled(
+                                                    !self.route_addressability_command_pending
+                                                        && self.persist_tx.is_some(),
+                                                    egui::Button::new("Bind routing endpoint"),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.bind_current_session_route_endpoint(
+                                                    topology.current_session_id,
+                                                );
+                                            }
+                                            if self.route_addressability_command_pending {
+                                                ui.spinner();
+                                            }
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "addressability only · routing remains inactive",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    139, 143, 153,
+                                                )),
+                                            );
+                                        });
+                                    }
+                                    Ok(Some(binding)) => {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "route endpoint {} · ADDRESSABLE",
+                                                    binding.endpoint_id().get(),
+                                                ))
+                                                .monospace()
+                                                .size(10.0),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "routing inactive · no route or dispatch authority created",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    139, 143, 153,
+                                                )),
+                                            );
+                                        });
+                                    }
+                                }
                             }
                         }
 
@@ -6142,6 +6206,86 @@ fn append_local_orchestration_topology_checked(
     }
 
     Ok(store.events()[before..].to_vec())
+}
+
+fn append_current_session_route_endpoint_checked(
+    store: &mut impl EventStore,
+    conversation_id: LocalConversationId,
+    session_id: SessionId,
+    endpoint_id: RouteEndpointId,
+) -> Result<EventEnvelope, String> {
+    let topology = replay_local_conversation_topologies(store.events())?
+        .into_iter()
+        .find(|topology| topology.conversation_id == conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "local conversation {conversation_id} has no orchestration topology"
+            )
+        })?;
+    if topology.current_session_id != session_id {
+        return Err(format!(
+            "session {} is not current for local conversation {conversation_id}; current session is {}",
+            session_id.get(),
+            topology.current_session_id.get()
+        ));
+    }
+
+    let sessions = replay_session_audit(store.events())?;
+    let session = sessions
+        .iter()
+        .find(|record| record.session_id == session_id)
+        .ok_or_else(|| format!("current session {} is not registered", session_id.get()))?;
+    if let Some(existing) = session.endpoint_binding {
+        return Err(format!(
+            "current session {} is already bound to routing endpoint {}",
+            session_id.get(),
+            existing.endpoint_id().get()
+        ));
+    }
+    if let Some(existing) = sessions.iter().find_map(|record| {
+        record
+            .endpoint_binding
+            .filter(|binding| binding.endpoint_id() == endpoint_id)
+            .map(|binding| binding.session_id())
+    }) {
+        return Err(format!(
+            "routing endpoint {} is already bound to session {}",
+            endpoint_id.get(),
+            existing.get()
+        ));
+    }
+
+    if replay_routing_audit(store.events())?.iter().any(|route| {
+        route.request.source == endpoint_id || route.request.destination == endpoint_id
+    }) {
+        return Err(format!(
+            "routing endpoint {} already appears in durable route history and cannot be claimed by a new session",
+            endpoint_id.get()
+        ));
+    }
+
+    record_session_endpoint_bound(
+        store,
+        SessionEndpointBinding::new(session_id, endpoint_id),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_session_audit(store.events())?
+        .into_iter()
+        .find(|record| record.session_id == session_id)
+        .and_then(|record| record.endpoint_binding)
+        .ok_or_else(|| {
+            "session endpoint append did not replay for the current session".to_owned()
+        })?;
+    if replayed.endpoint_id() != endpoint_id {
+        return Err("session endpoint replay disagrees with appended endpoint".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "session endpoint append produced no durable event".to_owned())
 }
 
 fn append_local_worker_binding_checked(
@@ -7683,6 +7827,38 @@ fn next_available_local_orchestration_ids(
     ))
 }
 
+fn next_available_route_endpoint_id(
+    events: &[EventEnvelope],
+) -> Result<RouteEndpointId, String> {
+    let mut highest = 0_u64;
+
+    for record in replay_session_audit(events)? {
+        if let Some(binding) = record.endpoint_binding {
+            highest = highest.max(binding.endpoint_id().get());
+        }
+    }
+    for route in replay_routing_audit(events)? {
+        highest = highest
+            .max(route.request.source.get())
+            .max(route.request.destination.get());
+    }
+
+    let next = highest
+        .checked_add(1)
+        .ok_or_else(|| "routing endpoint identity space exhausted".to_owned())?;
+    Ok(RouteEndpointId::new(next))
+}
+
+fn session_endpoint_binding(
+    events: &[EventEnvelope],
+    session_id: SessionId,
+) -> Result<Option<SessionEndpointBinding>, String> {
+    Ok(replay_session_audit(events)?
+        .into_iter()
+        .find(|record| record.session_id == session_id)
+        .and_then(|record| record.endpoint_binding))
+}
+
 fn session_lifecycle_phase_label(phase: SessionLifecyclePhase) -> &'static str {
     match phase {
         SessionLifecyclePhase::Healthy => "HEALTHY",
@@ -8716,6 +8892,94 @@ mod tests {
             next_available_local_orchestration_ids(store.events()).unwrap();
         assert_eq!(next_container, ChatContainerId::new(2));
         assert_eq!(next_session, SessionId::new(2));
+    }
+
+    #[test]
+    fn current_session_route_addressability_is_durable_and_fails_closed() {
+        let conversation_id = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+        append_local_orchestration_topology_checked(
+            &mut store,
+            conversation_id,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
+
+        let event = append_current_session_route_endpoint_checked(
+            &mut store,
+            conversation_id,
+            SessionId::new(1),
+            RouteEndpointId::new(1),
+        )
+        .unwrap();
+        assert_eq!(event.kind, EventKind::SessionEndpointBound);
+        assert_eq!(
+            session_endpoint_binding(store.events(), SessionId::new(1))
+                .unwrap()
+                .unwrap()
+                .endpoint_id(),
+            RouteEndpointId::new(1)
+        );
+
+        let before_duplicate = store.events().len();
+        assert!(
+            append_current_session_route_endpoint_checked(
+                &mut store,
+                conversation_id,
+                SessionId::new(1),
+                RouteEndpointId::new(2),
+            )
+            .unwrap_err()
+            .contains("already bound to routing endpoint")
+        );
+        assert_eq!(store.events().len(), before_duplicate);
+    }
+
+    #[test]
+    fn route_endpoint_allocator_reserves_historical_route_endpoints() {
+        use chatarium_core::routing::{RouteClass, RouteId, RoutePolicy, RouteRequest};
+        use chatarium_store::routing_audit::record_route_proposed;
+
+        let conversation_id = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+        append_local_orchestration_topology_checked(
+            &mut store,
+            conversation_id,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
+
+        record_route_proposed(
+            &mut store,
+            RouteRequest {
+                id: RouteId::new(1),
+                source: RouteEndpointId::new(40),
+                destination: RouteEndpointId::new(41),
+                class: RouteClass::SessionMessage,
+            },
+            RoutePolicy::RequireApproval,
+        )
+        .unwrap();
+
+        assert_eq!(
+            next_available_route_endpoint_id(store.events()).unwrap(),
+            RouteEndpointId::new(42)
+        );
+
+        let before = store.events().len();
+        assert!(
+            append_current_session_route_endpoint_checked(
+                &mut store,
+                conversation_id,
+                SessionId::new(1),
+                RouteEndpointId::new(40),
+            )
+            .unwrap_err()
+            .contains("durable route history")
+        );
+        assert_eq!(store.events().len(), before);
     }
 
     #[test]
