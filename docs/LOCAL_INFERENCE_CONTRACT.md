@@ -176,6 +176,19 @@ exists. Higher-level code may also be designed around the typed contract
 interface. But it must not assume an empirical remote capability is usable
 until the active profile/model contract is `ready`.
 
+### First empirical freeze — 2026-10-06
+
+The first real in-app fixed-suite run against `gpt-5.6-sol` reached `ready`
+with all nine expected probes classified `supported`.
+
+That closes the admission gate for Context Composer work on that local
+profile/model scope. The user-specific profile identifier remains only in the
+local machine-readable artifact and is intentionally not copied into repository
+documentation.
+
+The first Context Composer implementation is documented in
+[CONTEXT_COMPOSER.md](CONTEXT_COMPOSER.md).
+
 ## Relationship to the human capability ledger
 
 [LOCAL_INFERENCE_CAPABILITY_SURFACE.md](LOCAL_INFERENCE_CAPABILITY_SURFACE.md)
