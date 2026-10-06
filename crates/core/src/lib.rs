@@ -352,6 +352,8 @@ pub enum EventKind {
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
     LocalConversationWorkerBound,
+    /// One local conversation was durably correlated to a logical chat container.
+    LocalConversationChatContainerBound,
     /// A worker received a new typed goal assignment.
     WorkerGoalAssigned,
     /// A typed worker lifecycle transition was recorded.
@@ -434,6 +436,9 @@ impl EventKind {
             Self::RouteDispatched => "route_dispatched",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
+            Self::LocalConversationChatContainerBound => {
+                "local_conversation_chat_container_bound"
+            }
             Self::WorkerGoalAssigned => "worker_goal_assigned",
             Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
             Self::WorkerControlAdmitted => "worker_control_admitted",
@@ -493,6 +498,9 @@ impl EventKind {
             "route_dispatched" => Some(Self::RouteDispatched),
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
+            "local_conversation_chat_container_bound" => {
+                Some(Self::LocalConversationChatContainerBound)
+            }
             "worker_goal_assigned" => Some(Self::WorkerGoalAssigned),
             "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
             "worker_control_admitted" => Some(Self::WorkerControlAdmitted),
