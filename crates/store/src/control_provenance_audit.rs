@@ -329,14 +329,17 @@ mod tests {
     use super::*;
     use crate::control_audit::record_worker_control_admitted;
     use crate::projection::SqliteProjection;
-    use crate::session_audit::{record_local_session_registered, record_worker_session_bound};
+    use crate::session_audit::{
+        record_local_session_registered, record_worker_session_bound,
+        record_worker_session_successor_bound,
+    };
     use crate::supervision_audit::{
         record_controller_session_designated, record_controller_worker_bound,
     };
     use crate::{JsonlEventStore, MemoryEventStore};
     use chatarium_core::control::WorkerControl;
     use chatarium_core::orchestration::{WorkerGoalId, WorkerId, WorkerLifecycle};
-    use chatarium_core::session::WorkerSessionBinding;
+    use chatarium_core::session::{WorkerSessionBinding, WorkerSessionSuccessorBinding};
     use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
     use std::fs::{self, OpenOptions};
     use std::io::Write;
@@ -347,6 +350,7 @@ mod tests {
     const G1: WorkerGoalId = WorkerGoalId::new(100);
     const C1: SessionId = SessionId::new(1);
     const S1: SessionId = SessionId::new(10);
+    const S2: SessionId = SessionId::new(11);
 
     fn temp_path(label: &str, extension: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -579,6 +583,50 @@ mod tests {
 
         let error = replay_control_provenance_audit(store.events()).unwrap_err();
         assert!(error.contains("precedes target worker-session binding"));
+    }
+
+    #[test]
+    fn controller_provenance_resolves_worker_session_at_each_event_sequence() {
+        let mut store = MemoryEventStore::default();
+        register_controller(&mut store, C1);
+        register_supervised_worker(&mut store, C1);
+
+        let first = record_control(&mut store, 1);
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(first.id(), ControlIssuer::ControllerSession(C1)),
+        )
+        .unwrap();
+
+        record_local_session_registered(&mut store, S2).unwrap();
+        record_worker_session_successor_bound(
+            &mut store,
+            WorkerSessionSuccessorBinding::new(W1, S1, S2).unwrap(),
+        )
+        .unwrap();
+        record_controller_worker_bound(
+            &mut store,
+            ControllerWorkerBinding::new(C1, S2).unwrap(),
+        )
+        .unwrap();
+
+        let second = record_control(&mut store, 2);
+        record_worker_control_issuer_bound(
+            &mut store,
+            ControlProvenance::new(second.id(), ControlIssuer::ControllerSession(C1)),
+        )
+        .unwrap();
+
+        let records = replay_control_provenance_audit(store.events()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].provenance.issuer(),
+            ControlIssuer::ControllerSession(C1)
+        );
+        assert_eq!(
+            records[1].provenance.issuer(),
+            ControlIssuer::ControllerSession(C1)
+        );
     }
 
     #[test]
