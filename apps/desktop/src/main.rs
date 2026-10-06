@@ -10807,6 +10807,127 @@ mod tests {
     }
 
     #[test]
+    fn delivered_routed_context_is_explicit_reversible_and_not_transcript_authorship() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        append_local_orchestration_topology_checked(
+            &mut store,
+            source,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
+        append_current_session_route_endpoint_checked(
+            &mut store,
+            source,
+            SessionId::new(1),
+            RouteEndpointId::new(1),
+        )
+        .unwrap();
+        append_local_orchestration_topology_checked(
+            &mut store,
+            destination,
+            ChatContainerId::new(2),
+            SessionId::new(2),
+        )
+        .unwrap();
+        append_current_session_route_endpoint_checked(
+            &mut store,
+            destination,
+            SessionId::new(2),
+            RouteEndpointId::new(2),
+        )
+        .unwrap();
+
+        append_local_session_route_proposal_checked(
+            &mut store,
+            RouteId::new(1),
+            source,
+            destination,
+        )
+        .unwrap();
+        append_local_route_payload_checked(
+            &mut store,
+            RoutePayloadId::new(1),
+            RouteId::new(1),
+            "peer payload".to_owned(),
+        )
+        .unwrap();
+        append_local_route_user_decision_checked(
+            &mut store,
+            RouteId::new(1),
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        let delivery_events =
+            append_local_route_dispatch_and_delivery_checked(&mut store, RouteId::new(1)).unwrap();
+        assert_eq!(delivery_events.len(), 2);
+        assert_eq!(delivery_events[0].kind, EventKind::RouteDispatched);
+        assert_eq!(delivery_events[1].kind, EventKind::LocalRouteDelivered);
+
+        assert!(
+            projected_local_display_messages(store.events(), destination)
+                .iter()
+                .all(|message| message.text != "peer payload")
+        );
+        assert!(
+            admitted_routed_context_messages(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+
+        let admit = append_local_route_context_decision_checked(
+            &mut store,
+            RouteId::new(1),
+            destination,
+            LocalRouteContextDecision::Admit,
+        )
+        .unwrap();
+        assert_eq!(
+            admit.kind,
+            EventKind::LocalRouteContextDecisionRecorded
+        );
+
+        let routed = admitted_routed_context_messages(store.events(), destination).unwrap();
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0].role, context_composer::TranscriptRole::User);
+        assert_eq!(routed[0].order_sequence(), admit.sequence);
+        assert!(routed[0].text.contains("Chatarium routed peer message"));
+        assert!(routed[0].text.contains("peer payload"));
+
+        let plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            routed,
+        );
+        assert_eq!(plan.routed_context_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+
+        append_local_route_context_decision_checked(
+            &mut store,
+            RouteId::new(1),
+            destination,
+            LocalRouteContextDecision::Exclude,
+        )
+        .unwrap();
+        assert!(
+            admitted_routed_context_messages(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            replay_local_route_delivery_audit(store.events())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn checked_local_worker_lifecycle_is_durable_and_rejects_illegal_transition() {
         let conversation_id = LocalConversationId::new();
         let worker_id = WorkerId::new(1);
