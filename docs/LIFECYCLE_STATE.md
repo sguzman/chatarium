@@ -137,9 +137,13 @@ dispatch, and explicit local delivery provenance are now separate durable
 layers.
 
 Delivered routed content projects into a destination-side routed inbox, not the
-ordinary transcript. It is still excluded from inference context and creates no
-automatic controller action.
+ordinary transcript. Context use is now separately user-controlled through
+durable Admit/Exclude decisions.
 
-The next safe substrate is an explicit durable context-admission decision for
-one delivered routed inbox item, followed by a typed Context Composer source
-whose trust/role policy is visible rather than inferred.
+Currently admitted routed items enter Context Composer at user trust level with
+explicit route/payload/source provenance and are snapshotted at Send. They never
+become authored transcript messages and create no automatic controller action.
+
+The next lifecycle/orchestration boundary is explicit WorkerId behavior across
+chat-container session rollover, followed by local controller→worker supervision
+using the already-existing typed session/supervision/control machinery.
