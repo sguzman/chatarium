@@ -14,7 +14,10 @@ use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::orchestration::{
     WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
-use chatarium_core::routing::RouteEndpointId;
+use chatarium_core::routing::{
+    DecisionAuthority, RouteClass, RouteEndpointId, RouteGateState, RouteId, RoutePolicy,
+    RouteRequest,
+};
 use chatarium_core::session::{SessionEndpointBinding, SessionId};
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
@@ -61,7 +64,10 @@ use chatarium_store::remote_mirror_transcript::{
     RemoteTranscriptMessage, RemoteTranscriptProjection, RemoteTranscriptRole,
     project_remote_active_transcript,
 };
-use chatarium_store::routing_audit::replay_routing_audit;
+use chatarium_store::routing_audit::{
+    RouteAuditRecord, RouteUserDecision, record_route_proposed, record_route_user_decision,
+    replay_routing_audit,
+};
 use chatarium_store::session_audit::{
     record_local_session_registered, record_session_endpoint_bound, replay_session_audit,
 };
@@ -100,6 +106,15 @@ enum PersistCommand {
         conversation_id: LocalConversationId,
         session_id: SessionId,
         endpoint_id: RouteEndpointId,
+    },
+    ProposeLocalSessionRoute {
+        route_id: RouteId,
+        source_conversation_id: LocalConversationId,
+        destination_conversation_id: LocalConversationId,
+    },
+    DecideLocalSessionRoute {
+        route_id: RouteId,
+        decision: RouteUserDecision,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -245,6 +260,9 @@ enum PersistNotice {
         appended_events: Vec<EventEnvelope>,
     },
     RouteEndpointBound {
+        event: EventEnvelope,
+    },
+    LocalRoutePolicyEventAppended {
         event: EventEnvelope,
     },
     LifecycleEventAppended {
@@ -484,6 +502,7 @@ struct ChatariumApp {
     conversation_behavior_profile: behavior_profile::BehaviorProfile,
     topology_command_pending: bool,
     route_addressability_command_pending: bool,
+    route_policy_command_pending: bool,
     lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -731,6 +750,7 @@ impl ChatariumApp {
                         conversation_behavior_profile: active_behavior_profile,
                         topology_command_pending: false,
                         route_addressability_command_pending: false,
+                        route_policy_command_pending: false,
                         lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -895,6 +915,7 @@ impl ChatariumApp {
             conversation_behavior_profile: active_behavior_profile,
             topology_command_pending: false,
             route_addressability_command_pending: false,
+            route_policy_command_pending: false,
             lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
@@ -2608,6 +2629,12 @@ impl ChatariumApp {
                     self.route_addressability_command_pending = false;
                     self.status = "current session routing endpoint durably bound".to_owned();
                 }
+                PersistNotice::LocalRoutePolicyEventAppended { event } => {
+                    let kind = event.kind.stable_name();
+                    self.events.push(event);
+                    self.route_policy_command_pending = false;
+                    self.status = format!("local route policy durably updated · {kind}");
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -2626,6 +2653,9 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("route addressability") {
                         self.route_addressability_command_pending = false;
+                    }
+                    if operation.starts_with("local route ") {
+                        self.route_policy_command_pending = false;
                     }
                     if operation.starts_with("lifecycle ") {
                         self.lifecycle_command_pending = false;
@@ -3285,6 +3315,62 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue routing endpoint binding: {error}");
+            }
+        }
+    }
+
+    fn propose_local_session_route(&mut self, destination_conversation_id: LocalConversationId) {
+        if self.route_policy_command_pending {
+            return;
+        }
+        let route_id = match next_available_route_id(&self.events) {
+            Ok(route_id) => route_id,
+            Err(error) => {
+                self.status = format!("cannot allocate local route identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot propose local route: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::ProposeLocalSessionRoute {
+            route_id,
+            source_conversation_id: self.local_conversation_id,
+            destination_conversation_id,
+        }) {
+            Ok(()) => {
+                self.route_policy_command_pending = true;
+                self.status = format!(
+                    "proposing local route {} for explicit approval…",
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local route proposal: {error}");
+            }
+        }
+    }
+
+    fn decide_local_session_route(&mut self, route_id: RouteId, decision: RouteUserDecision) {
+        if self.route_policy_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot record local route decision: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideLocalSessionRoute { route_id, decision }) {
+            Ok(()) => {
+                self.route_policy_command_pending = true;
+                self.status = format!(
+                    "recording explicit {} decision for local route {}…",
+                    route_user_decision_label(decision),
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local route decision: {error}");
             }
         }
     }
@@ -6593,6 +6679,47 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::ProposeLocalSessionRoute {
+                route_id,
+                source_conversation_id,
+                destination_conversation_id,
+            } => {
+                match append_local_session_route_proposal_checked(
+                    &mut store,
+                    route_id,
+                    source_conversation_id,
+                    destination_conversation_id,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalRoutePolicyEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local route proposal",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DecideLocalSessionRoute { route_id, decision } => {
+                match append_local_route_user_decision_checked(&mut store, route_id, decision) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalRoutePolicyEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local route decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -8899,6 +9026,9 @@ mod tests {
                 "orchestration_topology_initialized"
             }
             PersistNotice::RouteEndpointBound { .. } => "route_endpoint_bound",
+            PersistNotice::LocalRoutePolicyEventAppended { .. } => {
+                "local_route_policy_event_appended"
+            }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
