@@ -132,10 +132,14 @@ see [LOCAL_ORCHESTRATION_IDENTITY.md](LOCAL_ORCHESTRATION_IDENTITY.md).
 
 In particular, do not assume that `LocalConversationId`, `SessionId`,
 `ChatContainerId`, `WorkerId`, and `RouteEndpointId` are interchangeable.
-Manual route policy and immutable routed payloads are now separate durable
-layers. Approval requires the exact payload to be attached first, but there is
-still no dispatch, delivery, automatic controller action, or hidden context
-sharing.
+Manual route policy, immutable routed payloads, one-shot permit-gated
+dispatch, and explicit local delivery provenance are now separate durable
+layers.
 
-The next safe substrate is one-shot permit-gated local delivery with explicit
-routed-message provenance.
+Delivered routed content projects into a destination-side routed inbox, not the
+ordinary transcript. It is still excluded from inference context and creates no
+automatic controller action.
+
+The next safe substrate is an explicit durable context-admission decision for
+one delivered routed inbox item, followed by a typed Context Composer source
+whose trust/role policy is visible rather than inferred.
