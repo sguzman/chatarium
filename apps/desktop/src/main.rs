@@ -6824,6 +6824,118 @@ fn append_local_session_route_proposal_checked(
         .ok_or_else(|| "local route proposal append produced no durable event".to_owned())
 }
 
+fn append_local_route_payload_checked(
+    store: &mut impl EventStore,
+    payload_id: RoutePayloadId,
+    route_id: RouteId,
+    text: String,
+) -> Result<EventEnvelope, String> {
+    if text.trim().is_empty() {
+        return Err("route payload text cannot be empty".to_owned());
+    }
+
+    let payloads = replay_local_route_payload_audit(store.events())?;
+    if let Some(existing) = payloads.iter().find(|payload| payload.route_id == route_id) {
+        return Err(format!(
+            "route {} already has immutable payload {}",
+            route_id.get(),
+            existing.payload_id.get()
+        ));
+    }
+    if let Some(existing) = payloads
+        .iter()
+        .find(|payload| payload.payload_id == payload_id)
+    {
+        return Err(format!(
+            "route payload identity {} already belongs to route {}",
+            payload_id.get(),
+            existing.route_id.get()
+        ));
+    }
+
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| format!("local route {} does not exist", route_id.get()))?;
+    if route.request.class != RouteClass::SessionMessage {
+        return Err(format!(
+            "route {} is not a local session-message route",
+            route_id.get()
+        ));
+    }
+    if route.gate_state.is_dispatched() {
+        return Err(format!(
+            "route {} has already dispatched and cannot acquire a new payload",
+            route_id.get()
+        ));
+    }
+
+    let directory = replay_local_routing_directory(store.events())?;
+    let source = directory
+        .iter()
+        .find(|entry| entry.endpoint_id == route.request.source)
+        .ok_or_else(|| {
+            format!(
+                "route {} source endpoint {} is no longer a current local conversation leaf",
+                route_id.get(),
+                route.request.source.get()
+            )
+        })?;
+    let destination = directory
+        .iter()
+        .find(|entry| entry.endpoint_id == route.request.destination)
+        .ok_or_else(|| {
+            format!(
+                "route {} destination endpoint {} is no longer a current local conversation leaf",
+                route_id.get(),
+                route.request.destination.get()
+            )
+        })?;
+
+    if source.conversation_id == destination.conversation_id {
+        return Err(format!(
+            "route {} resolves to the same local conversation on both ends",
+            route_id.get()
+        ));
+    }
+    if !source.current_session_phase.accepts_ordinary_turns()
+        || !destination.current_session_phase.accepts_ordinary_turns()
+    {
+        return Err(format!(
+            "route {} is stale because one of its current local session leaves cannot accept ordinary turns",
+            route_id.get()
+        ));
+    }
+
+    record_local_route_payload_attached(
+        store,
+        payload_id,
+        route_id,
+        source.conversation_id,
+        destination.conversation_id,
+        text.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_local_route_payload_audit(store.events())?
+        .into_iter()
+        .find(|payload| payload.route_id == route_id)
+        .ok_or_else(|| "local route payload append did not replay".to_owned())?;
+    if replayed.payload_id != payload_id
+        || replayed.source_conversation_id != source.conversation_id
+        || replayed.destination_conversation_id != destination.conversation_id
+        || replayed.text != text
+    {
+        return Err("local route payload replay disagrees with appended payload".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local route payload append produced no durable event".to_owned())
+}
+
 fn append_local_route_user_decision_checked(
     store: &mut impl EventStore,
     route_id: RouteId,
@@ -6857,6 +6969,16 @@ fn append_local_route_user_decision_checked(
             "route {} already has explicit user decision {}",
             route_id.get(),
             route_user_decision_label(decision),
+        ));
+    }
+    if decision == RouteUserDecision::Allow
+        && !replay_local_route_payload_audit(store.events())?
+            .iter()
+            .any(|payload| payload.route_id == route_id)
+    {
+        return Err(format!(
+            "route {} cannot be allowed before an immutable payload is durably attached",
+            route_id.get()
         ));
     }
 
@@ -8530,6 +8652,19 @@ fn next_available_local_orchestration_ids(
         ChatContainerId::new(next_container),
         SessionId::new(next_session),
     ))
+}
+
+fn next_available_route_payload_id(
+    events: &[EventEnvelope],
+) -> Result<RoutePayloadId, String> {
+    let next = replay_local_route_payload_audit(events)?
+        .into_iter()
+        .map(|payload| payload.payload_id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "route payload identity space exhausted".to_owned())?;
+    Ok(RoutePayloadId::new(next))
 }
 
 fn next_available_route_id(events: &[EventEnvelope]) -> Result<RouteId, String> {
