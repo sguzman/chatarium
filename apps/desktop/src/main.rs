@@ -7192,7 +7192,12 @@ fn route_gate_before_dispatch(route: &RouteAuditRecord) -> Result<RouteGate, Str
             RouteUserDecision::Allow => gate.user_allow(),
             RouteUserDecision::Deny => gate.user_deny(),
         }
-        .map_err(|error| format!("cannot reconstruct route {} gate: {error:?}", route.request.id.get()))?;
+        .map_err(|error| {
+            format!(
+                "cannot reconstruct route {} gate: {error:?}",
+                route.request.id.get()
+            )
+        })?;
     }
     if gate.state() != route.gate_state {
         return Err(format!(
@@ -7288,9 +7293,9 @@ fn append_local_route_dispatch_and_delivery_checked(
     let dispatch_sequence = match route.gate_state {
         RouteGateState::Allowed { .. } => {
             let mut gate = route_gate_before_dispatch(&route)?;
-            let permit = gate
-                .authorize_dispatch(route_id)
-                .map_err(|error| format!("route {} dispatch gate rejected: {error:?}", route_id.get()))?;
+            let permit = gate.authorize_dispatch(route_id).map_err(|error| {
+                format!("route {} dispatch gate rejected: {error:?}", route_id.get())
+            })?;
             record_route_dispatched(store, permit).map_err(|error| error.to_string())?
         }
         RouteGateState::Dispatched { .. } => route.dispatch_sequence.ok_or_else(|| {
@@ -7306,7 +7311,10 @@ fn append_local_route_dispatch_and_delivery_checked(
             ));
         }
         RouteGateState::Denied { .. } => {
-            return Err(format!("route {} is denied and cannot dispatch", route_id.get()));
+            return Err(format!(
+                "route {} is denied and cannot dispatch",
+                route_id.get()
+            ));
         }
     };
 
