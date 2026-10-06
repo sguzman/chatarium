@@ -4,6 +4,24 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedContract {
+    pub state: String,
+    pub profile_id: Option<String>,
+    pub model: String,
+    pub probe_generated_unix_ms: u64,
+    pub capabilities: BTreeMap<String, String>,
+}
+
+impl LoadedContract {
+    #[must_use]
+    pub fn ready_for(&self, profile_id: Option<&str>, model: &str) -> bool {
+        self.state == "ready"
+            && self.profile_id.as_deref() == profile_id
+            && self.model == model
+    }
+}
+
 const EXPECTED_PROBES: [&str; 9] = [
     "baseline",
     "image_input",
@@ -46,6 +64,108 @@ pub fn contract_state(run: &ProbeRun) -> &'static str {
     } else {
         "ready"
     }
+}
+
+pub fn load_contract(path: &Path) -> Result<Option<LoadedContract>, String> {
+    let encoded = match fs::read(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "could not read local inference contract {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let value: Value = serde_json::from_slice(&encoded).map_err(|error| {
+        format!(
+            "invalid local inference contract {}: {error}",
+            path.display()
+        )
+    })?;
+    if value.get("schema").and_then(Value::as_str) != Some("chatarium-local-inference-contract")
+        || value.get("version").and_then(Value::as_u64) != Some(1)
+    {
+        return Err(format!(
+            "unsupported local inference contract format at {}",
+            path.display()
+        ));
+    }
+
+    let state = value
+        .get("state")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("local inference contract {} has no state", path.display()))?;
+    if !matches!(state, "ready" | "needs_review" | "incomplete") {
+        return Err(format!(
+            "local inference contract {} has unknown state {state}",
+            path.display()
+        ));
+    }
+
+    let evidence = value
+        .get("evidence")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("local inference contract {} has no evidence", path.display()))?;
+    let model = evidence
+        .get("model")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("local inference contract {} has no model", path.display()))?;
+    let profile_id = evidence
+        .get("profile_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let probe_generated_unix_ms = evidence
+        .get("probe_generated_unix_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            format!(
+                "local inference contract {} has no probe timestamp",
+                path.display()
+            )
+        })?;
+
+    let empirical = value
+        .get("empirical_capabilities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            format!(
+                "local inference contract {} has no empirical capabilities",
+                path.display()
+            )
+        })?;
+    let mut capabilities = BTreeMap::new();
+    for item in empirical {
+        let name = item.get("name").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "local inference contract {} has a capability without a name",
+                path.display()
+            )
+        })?;
+        let status = item.get("status").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "local inference contract {} has a capability without a status",
+                path.display()
+            )
+        })?;
+        if capabilities
+            .insert(name.to_owned(), status.to_owned())
+            .is_some()
+        {
+            return Err(format!(
+                "local inference contract {} has duplicate capability {name}",
+                path.display()
+            ));
+        }
+    }
+
+    Ok(Some(LoadedContract {
+        state: state.to_owned(),
+        profile_id,
+        model: model.to_owned(),
+        probe_generated_unix_ms,
+        capabilities,
+    }))
 }
 
 pub fn save_contract(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Result<(), String> {
@@ -162,6 +282,15 @@ mod tests {
             .collect();
 
         save_contract(&path, &run, 5678).unwrap();
+        let loaded = load_contract(&path).unwrap().unwrap();
+        assert!(loaded.ready_for(Some("profile-1"), "gpt-example"));
+        assert!(!loaded.ready_for(Some("profile-2"), "gpt-example"));
+        assert!(!loaded.ready_for(Some("profile-1"), "gpt-other"));
+        assert_eq!(
+            loaded.capabilities.get("reasoning").map(String::as_str),
+            Some("supported")
+        );
+
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(value["state"], "ready");
         assert_eq!(value["evidence"]["model"], "gpt-example");
