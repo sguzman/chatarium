@@ -15,8 +15,8 @@ use chatarium_core::orchestration::{
     WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
 use chatarium_core::routing::{
-    DecisionAuthority, RouteClass, RouteEndpointId, RouteGateState, RouteId, RoutePayloadId,
-    RoutePolicy, RouteRequest,
+    DecisionAuthority, RouteClass, RouteEndpointId, RouteGate, RouteGateState, RouteId,
+    RoutePayloadId, RoutePolicy, RouteRequest,
 };
 use chatarium_core::session::{SessionEndpointBinding, SessionId};
 use chatarium_core::{
@@ -45,6 +45,9 @@ use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
 };
+use chatarium_store::local_route_delivery_audit::{
+    record_local_route_delivered, replay_local_route_delivery_audit,
+};
 use chatarium_store::local_route_payload_audit::{
     record_local_route_payload_attached, replay_local_route_payload_audit,
 };
@@ -68,8 +71,8 @@ use chatarium_store::remote_mirror_transcript::{
     project_remote_active_transcript,
 };
 use chatarium_store::routing_audit::{
-    RouteAuditRecord, RouteUserDecision, record_route_proposed, record_route_user_decision,
-    replay_routing_audit,
+    RouteAuditRecord, RouteUserDecision, record_route_dispatched, record_route_proposed,
+    record_route_user_decision, replay_routing_audit,
 };
 use chatarium_store::session_audit::{
     record_local_session_registered, record_session_endpoint_bound, replay_session_audit,
@@ -123,6 +126,9 @@ enum PersistCommand {
     DecideLocalSessionRoute {
         route_id: RouteId,
         decision: RouteUserDecision,
+    },
+    DispatchLocalSessionRoute {
+        route_id: RouteId,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -276,6 +282,10 @@ enum PersistNotice {
     LocalRoutePayloadAttached {
         route_id: RouteId,
         event: EventEnvelope,
+    },
+    LocalRouteDispatchUpdated {
+        route_id: RouteId,
+        appended_events: Vec<EventEnvelope>,
     },
     LifecycleEventAppended {
         event: EventEnvelope,
@@ -517,6 +527,7 @@ struct ChatariumApp {
     route_policy_command_pending: bool,
     route_payload_command_pending: bool,
     route_payload_drafts: BTreeMap<RouteId, String>,
+    route_dispatch_command_pending: bool,
     lifecycle_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -767,6 +778,7 @@ impl ChatariumApp {
                         route_policy_command_pending: false,
                         route_payload_command_pending: false,
                         route_payload_drafts: BTreeMap::new(),
+                        route_dispatch_command_pending: false,
                         lifecycle_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -934,6 +946,7 @@ impl ChatariumApp {
             route_policy_command_pending: false,
             route_payload_command_pending: false,
             route_payload_drafts: BTreeMap::new(),
+            route_dispatch_command_pending: false,
             lifecycle_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
@@ -2660,6 +2673,20 @@ impl ChatariumApp {
                     self.status =
                         format!("local route {} payload durably attached", route_id.get());
                 }
+                PersistNotice::LocalRouteDispatchUpdated {
+                    route_id,
+                    appended_events,
+                } => {
+                    let count = appended_events.len();
+                    self.events.extend(appended_events);
+                    self.route_dispatch_command_pending = false;
+                    self.status = format!(
+                        "local route {} dispatch/delivery durably advanced · {} event{}",
+                        route_id.get(),
+                        count,
+                        if count == 1 { "" } else { "s" },
+                    );
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -2681,6 +2708,8 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("local route payload") {
                         self.route_payload_command_pending = false;
+                    } else if operation.starts_with("local route dispatch") {
+                        self.route_dispatch_command_pending = false;
                     } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
                     }
@@ -3441,6 +3470,28 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue local route decision: {error}");
+            }
+        }
+    }
+
+    fn dispatch_local_session_route(&mut self, route_id: RouteId) {
+        if self.route_dispatch_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot dispatch local route: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DispatchLocalSessionRoute { route_id }) {
+            Ok(()) => {
+                self.route_dispatch_command_pending = true;
+                self.status = format!(
+                    "consuming local route {} dispatch authority and recording delivery…",
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local route dispatch: {error}");
             }
         }
     }
@@ -7437,6 +7488,25 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::DispatchLocalSessionRoute { route_id } => {
+                match append_local_route_dispatch_and_delivery_checked(&mut store, route_id) {
+                    Ok(appended_events) => {
+                        let _ = notices.send(PersistNotice::LocalRouteDispatchUpdated {
+                            route_id,
+                            appended_events,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local route dispatch/delivery",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -9800,6 +9870,7 @@ mod tests {
                 "local_route_policy_event_appended"
             }
             PersistNotice::LocalRoutePayloadAttached { .. } => "local_route_payload_attached",
+            PersistNotice::LocalRouteDispatchUpdated { .. } => "local_route_dispatch_updated",
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
