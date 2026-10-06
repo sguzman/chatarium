@@ -4,12 +4,12 @@
 //! transcript history, or Context Composer directly.
 
 use crate::EventEnvelope;
-use crate::local_routed_inbox::replay_local_routed_inbox;
 use crate::EventStore;
+use crate::local_routed_inbox::replay_local_routed_inbox;
+use chatarium_core::EventKind;
 use chatarium_core::LocalConversationId;
 use chatarium_core::routing::{RouteId, RoutePayloadId};
 use chatarium_core::session::SessionId;
-use chatarium_core::EventKind;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -209,7 +209,9 @@ fn parse_decision(value: &str) -> Result<LocalRouteContextDecision, String> {
     match value {
         "admit" => Ok(LocalRouteContextDecision::Admit),
         "exclude" => Ok(LocalRouteContextDecision::Exclude),
-        _ => Err(format!("unsupported local route context decision '{value}'")),
+        _ => Err(format!(
+            "unsupported local route context decision '{value}'"
+        )),
     }
 }
 
@@ -257,17 +259,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed local route context decision is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed local route context decision is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed local route context decision is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed local route context decision is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -321,8 +321,7 @@ mod tests {
         ] {
             record_local_session_registered(store, session).unwrap();
             record_chat_container_created(store, container, session).unwrap();
-            record_local_conversation_chat_container_bound(store, conversation, container)
-                .unwrap();
+            record_local_conversation_chat_container_bound(store, conversation, container).unwrap();
             record_session_endpoint_bound(store, SessionEndpointBinding::new(session, endpoint))
                 .unwrap();
         }
