@@ -12333,6 +12333,208 @@ mod tests {
     }
 
     #[test]
+    fn checked_controller_controls_require_approval_and_revalidate_freshness() {
+        fn ready_supervised_pair(
+            store: &mut chatarium_store::MemoryEventStore,
+        ) -> (LocalConversationId, LocalConversationId, WorkerId, WorkerGoalId) {
+            let controller_conversation = LocalConversationId::new();
+            let worker_conversation = LocalConversationId::new();
+            let worker_id = WorkerId::new(1);
+            let goal_id = WorkerGoalId::new(1);
+
+            append_local_orchestration_topology_checked(
+                store,
+                controller_conversation,
+                ChatContainerId::new(1),
+                SessionId::new(1),
+            )
+            .unwrap();
+            append_current_session_route_endpoint_checked(
+                store,
+                controller_conversation,
+                SessionId::new(1),
+                RouteEndpointId::new(1),
+            )
+            .unwrap();
+            append_local_orchestration_topology_checked(
+                store,
+                worker_conversation,
+                ChatContainerId::new(2),
+                SessionId::new(2),
+            )
+            .unwrap();
+            append_current_session_route_endpoint_checked(
+                store,
+                worker_conversation,
+                SessionId::new(2),
+                RouteEndpointId::new(2),
+            )
+            .unwrap();
+            append_local_worker_binding_checked(store, worker_conversation, worker_id).unwrap();
+            append_current_session_worker_binding_checked(
+                store,
+                worker_conversation,
+                worker_id,
+            )
+            .unwrap();
+            append_current_session_controller_designation_checked(
+                store,
+                controller_conversation,
+            )
+            .unwrap();
+            append_local_controller_worker_binding_checked(
+                store,
+                controller_conversation,
+                worker_conversation,
+            )
+            .unwrap();
+            append_worker_goal_checked(store, worker_id, goal_id).unwrap();
+            append_worker_transition_checked(
+                store,
+                worker_id,
+                goal_id,
+                WorkerAction::StartOrResume,
+            )
+            .unwrap();
+
+            (
+                controller_conversation,
+                worker_conversation,
+                worker_id,
+                goal_id,
+            )
+        }
+
+        let mut store = chatarium_store::MemoryEventStore::default();
+        let (controller, worker_conversation, worker_id, goal_id) =
+            ready_supervised_pair(&mut store);
+
+        let (control_id, route_id, proposed) =
+            append_controller_worker_control_proposal_checked(
+                &mut store,
+                controller,
+                worker_conversation,
+                ControllerControlAction::Stop,
+            )
+            .unwrap();
+        assert_eq!(proposed.len(), 4);
+        assert_eq!(proposed[0].kind, EventKind::WorkerControlAdmitted);
+        assert_eq!(proposed[1].kind, EventKind::WorkerControlIssuerBound);
+        assert_eq!(proposed[2].kind, EventKind::RouteProposed);
+        assert_eq!(proposed[3].kind, EventKind::ControlRouteBound);
+        assert_eq!(
+            replay_control_audit(store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.control_id == control_id)
+                .unwrap()
+                .kind,
+            WorkerControlKind::Stop
+        );
+        assert_eq!(
+            replay_routing_audit(store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.request.id == route_id)
+                .unwrap()
+                .gate_state,
+            RouteGateState::PendingApproval
+        );
+
+        append_controller_control_route_decision_checked(
+            &mut store,
+            route_id,
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        let dispatch =
+            append_controller_control_dispatch_checked(&mut store, route_id).unwrap();
+        assert_eq!(dispatch.kind, EventKind::RouteDispatched);
+
+        let validated = replay_validated_control_dispatches(store.events()).unwrap();
+        let dispatched = validated
+            .into_iter()
+            .find(|record| record.control_id == control_id)
+            .unwrap();
+        assert_eq!(
+            dispatched.issuer,
+            ControlIssuer::ControllerSession(SessionId::new(1))
+        );
+        assert_eq!(dispatched.worker_id, worker_id);
+        assert_eq!(dispatched.worker_session_id, Some(SessionId::new(2)));
+        assert_eq!(dispatched.authorized_by, DecisionAuthority::User);
+        assert_eq!(
+            worker_record(store.events(), worker_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::Working
+        );
+
+        let mut stale_store = chatarium_store::MemoryEventStore::default();
+        let (controller, worker_conversation, worker_id, goal_id) =
+            ready_supervised_pair(&mut stale_store);
+        let (_, stale_route, _) = append_controller_worker_control_proposal_checked(
+            &mut stale_store,
+            controller,
+            worker_conversation,
+            ControllerControlAction::Stop,
+        )
+        .unwrap();
+        append_controller_control_route_decision_checked(
+            &mut stale_store,
+            stale_route,
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        append_worker_transition_checked(
+            &mut stale_store,
+            worker_id,
+            goal_id,
+            WorkerAction::Complete,
+        )
+        .unwrap();
+        let before_stale_dispatch = stale_store.events().len();
+        let error =
+            append_controller_control_dispatch_checked(&mut stale_store, stale_route).unwrap_err();
+        assert!(error.contains("Stop"));
+        assert!(error.contains("Completed"));
+        assert_eq!(stale_store.events().len(), before_stale_dispatch);
+
+        let mut status_store = chatarium_store::MemoryEventStore::default();
+        let (controller, worker_conversation, worker_id, goal_id) =
+            ready_supervised_pair(&mut status_store);
+        let (_, status_route, _) = append_controller_worker_control_proposal_checked(
+            &mut status_store,
+            controller,
+            worker_conversation,
+            ControllerControlAction::StatusRequest,
+        )
+        .unwrap();
+        append_controller_control_route_decision_checked(
+            &mut status_store,
+            status_route,
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        append_worker_transition_checked(
+            &mut status_store,
+            worker_id,
+            goal_id,
+            WorkerAction::Complete,
+        )
+        .unwrap();
+        append_controller_control_dispatch_checked(&mut status_store, status_route).unwrap();
+        let status_dispatch = replay_validated_control_dispatches(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.route.id == status_route)
+            .unwrap();
+        assert_eq!(status_dispatch.dispatched_phase, WorkerPhase::Completed);
+    }
+
+    #[test]
     fn checked_local_worker_lifecycle_is_durable_and_rejects_illegal_transition() {
         let conversation_id = LocalConversationId::new();
         let worker_id = WorkerId::new(1);
