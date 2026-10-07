@@ -7910,6 +7910,277 @@ fn append_local_worker_binding_checked(
         .ok_or_else(|| "worker binding append produced no durable event".to_owned())
 }
 
+fn append_current_session_worker_binding_checked(
+    store: &mut impl EventStore,
+    conversation_id: LocalConversationId,
+    worker_id: WorkerId,
+) -> Result<EventEnvelope, String> {
+    let conversation_worker = require_local_worker_binding(store.events(), worker_id)?;
+    if conversation_worker.conversation_id != conversation_id {
+        return Err(format!(
+            "worker {} belongs to local conversation {}, not {}",
+            worker_id.get(),
+            conversation_worker.conversation_id,
+            conversation_id,
+        ));
+    }
+
+    let topology = local_conversation_topology(store.events(), conversation_id)?
+        .ok_or_else(|| format!("local conversation {conversation_id} has no orchestration topology"))?;
+    let sessions = replay_session_audit(store.events())?;
+    let current = sessions
+        .iter()
+        .find(|record| record.session_id == topology.current_session_id)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "current session {} for local conversation {conversation_id} is not registered",
+                topology.current_session_id.get()
+            )
+        })?;
+
+    if replay_supervision_audit(store.events())?
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == topology.current_session_id)
+    {
+        return Err(format!(
+            "current session {} is controller-designated and cannot become worker-bound",
+            topology.current_session_id.get()
+        ));
+    }
+
+    match active_worker_session(&sessions, worker_id) {
+        None => {
+            if let Some(existing) = current.worker_binding {
+                return Err(format!(
+                    "current session {} is already bound to worker {}",
+                    topology.current_session_id.get(),
+                    existing.worker_id().get()
+                ));
+            }
+            record_worker_session_bound(
+                store,
+                WorkerSessionBinding::new(worker_id, topology.current_session_id),
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        Some(active) if active.session_id == topology.current_session_id => {
+            return Err(format!(
+                "worker {} is already active on current session {}",
+                worker_id.get(),
+                topology.current_session_id.get()
+            ));
+        }
+        Some(active) => {
+            if let Some(existing) = current.worker_binding {
+                return Err(format!(
+                    "current session {} is already bound to worker {}",
+                    topology.current_session_id.get(),
+                    existing.worker_id().get()
+                ));
+            }
+
+            let container = replay_chat_container_audit(store.events())?
+                .into_iter()
+                .find(|record| record.container_id == topology.container_id)
+                .ok_or_else(|| {
+                    format!(
+                        "chat container {} for local conversation {conversation_id} disappeared",
+                        topology.container_id.get()
+                    )
+                })?;
+            let current_leaf = container
+                .sessions
+                .iter()
+                .find(|session| session.session_id == topology.current_session_id)
+                .ok_or_else(|| {
+                    format!(
+                        "chat container {} lacks current session {}",
+                        topology.container_id.get(),
+                        topology.current_session_id.get()
+                    )
+                })?;
+            if current_leaf.predecessor_session_id != Some(active.session_id) {
+                return Err(format!(
+                    "worker {} is active on session {}, but current session {} is not its direct chat-container successor",
+                    worker_id.get(),
+                    active.session_id.get(),
+                    topology.current_session_id.get()
+                ));
+            }
+
+            record_worker_session_successor_bound(
+                store,
+                WorkerSessionSuccessorBinding::new(
+                    worker_id,
+                    active.session_id,
+                    topology.current_session_id,
+                )
+                .map_err(|error| format!("invalid worker-session successor: {error:?}"))?,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+
+    let replayed = replay_session_audit(store.events())?;
+    let active = active_worker_session(&replayed, worker_id)
+        .ok_or_else(|| "worker-session append did not replay".to_owned())?;
+    if active.session_id != topology.current_session_id {
+        return Err("worker-session replay did not advance to current session".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker-session append produced no durable event".to_owned())
+}
+
+fn append_current_session_controller_designation_checked(
+    store: &mut impl EventStore,
+    conversation_id: LocalConversationId,
+) -> Result<EventEnvelope, String> {
+    let topology = local_conversation_topology(store.events(), conversation_id)?
+        .ok_or_else(|| format!("local conversation {conversation_id} has no orchestration topology"))?;
+    let session = replay_session_audit(store.events())?
+        .into_iter()
+        .find(|record| record.session_id == topology.current_session_id)
+        .ok_or_else(|| {
+            format!(
+                "current session {} for local conversation {conversation_id} is not registered",
+                topology.current_session_id.get()
+            )
+        })?;
+    if let Some(binding) = session.worker_binding {
+        return Err(format!(
+            "current session {} is worker-bound to worker {} and cannot become a controller",
+            topology.current_session_id.get(),
+            binding.worker_id().get()
+        ));
+    }
+
+    let supervision = replay_supervision_audit(store.events())?;
+    if supervision
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == topology.current_session_id)
+    {
+        return Err(format!(
+            "current session {} is already controller-designated",
+            topology.current_session_id.get()
+        ));
+    }
+
+    record_controller_session_designated(
+        store,
+        ControllerDesignation::new(topology.current_session_id),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_supervision_audit(store.events())?;
+    if !replayed
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == topology.current_session_id)
+    {
+        return Err("controller designation append did not replay".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "controller designation append produced no durable event".to_owned())
+}
+
+fn append_local_controller_worker_binding_checked(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+    worker_conversation_id: LocalConversationId,
+) -> Result<EventEnvelope, String> {
+    if controller_conversation_id == worker_conversation_id {
+        return Err("a local conversation cannot supervise itself".to_owned());
+    }
+
+    let controller_topology =
+        local_conversation_topology(store.events(), controller_conversation_id)?.ok_or_else(|| {
+            format!(
+                "controller conversation {controller_conversation_id} has no orchestration topology"
+            )
+        })?;
+    let worker_topology =
+        local_conversation_topology(store.events(), worker_conversation_id)?.ok_or_else(|| {
+            format!("worker conversation {worker_conversation_id} has no orchestration topology")
+        })?;
+    let worker_binding = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!("worker conversation {worker_conversation_id} has no local WorkerId binding")
+        })?;
+
+    let sessions = replay_session_audit(store.events())?;
+    let active_worker = active_worker_session(&sessions, worker_binding.worker_id).ok_or_else(|| {
+        format!(
+            "worker {} for local conversation {} has no active session binding",
+            worker_binding.worker_id.get(),
+            worker_conversation_id
+        )
+    })?;
+    if active_worker.session_id != worker_topology.current_session_id {
+        return Err(format!(
+            "worker {} is active on session {}, but local conversation {} current session is {}; advance the worker session first",
+            worker_binding.worker_id.get(),
+            active_worker.session_id.get(),
+            worker_conversation_id,
+            worker_topology.current_session_id.get()
+        ));
+    }
+
+    let supervision = replay_supervision_audit(store.events())?;
+    if !supervision
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == controller_topology.current_session_id)
+    {
+        return Err(format!(
+            "controller conversation {} current session {} is not controller-designated",
+            controller_conversation_id,
+            controller_topology.current_session_id.get()
+        ));
+    }
+    if let Some(existing) = supervision
+        .bindings
+        .iter()
+        .find(|record| record.binding.worker_session_id() == active_worker.session_id)
+    {
+        return Err(format!(
+            "worker session {} is already supervised by controller session {}",
+            active_worker.session_id.get(),
+            existing.binding.controller_session_id().get()
+        ));
+    }
+
+    let binding = ControllerWorkerBinding::new(
+        controller_topology.current_session_id,
+        active_worker.session_id,
+    )
+    .map_err(|error| format!("invalid controller-worker binding: {error:?}"))?;
+    record_controller_worker_bound(store, binding).map_err(|error| error.to_string())?;
+
+    let replayed = replay_supervision_audit(store.events())?;
+    if !replayed.bindings.iter().any(|record| record.binding == binding) {
+        return Err("controller-worker binding append did not replay".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "controller-worker binding append produced no durable event".to_owned())
+}
+
 fn append_worker_goal_checked(
     store: &mut impl EventStore,
     worker_id: WorkerId,
