@@ -188,23 +188,59 @@ No label, query, or facet action can Admit, Exclude, supersede, or otherwise
 mutate memory authority. Model-generated labels remain non-authoritative unless a
 future explicit acceptance layer is designed.
 
-## Next memory boundary: request-scoped manual use
+## Landed request-scoped manual use
 
-Persistent Admit is appropriate for memory that should participate in every
-future request for a destination conversation. It is too strong for a memory the
-user wants only once.
+Persistent Admit remains appropriate for memory that should participate in every
+future request for a destination conversation. Next-request-only selection now
+covers the weaker one-shot case without changing persistent context authority.
 
-The next safe layer is therefore explicit **next-request-only memory
-selection**:
+The desktop exposes **Use once next request** / **Remove one-shot** on eligible
+memory artifacts. Selection is local UI state until Send.
 
-- discovery remains read-only;
-- selecting a memory for one request must not change persistent Admit/Exclude;
-- the exact selected set must be visible in the next-request inspector;
-- the set must be snapshotted at Send so later UI changes cannot mutate an
-  in-flight request;
-- one-shot use must retain memory/source provenance and user-level trust;
-- superseded artifacts must remain ineligible;
-- selection must not silently survive into later requests after it is consumed.
+At Send, Chatarium freezes:
 
-Automatic semantic retrieval, embedding search, and token-budget-driven
-selection remain later.
+- the exact sorted unique LocalMemoryId set;
+- the current journal high-water sequence;
+- the destination LocalConversationId.
+
+The persistence worker validates that frozen snapshot **before** committing the
+authored user message. A one-shot selection fails closed if it is empty but
+carries a snapshot marker, missing its snapshot marker, oversized, unsorted,
+duplicated, absent from the frozen journal prefix, superseded at that prefix, or
+already persistently admitted for the destination conversation.
+
+After the authored message is durably committed, Chatarium appends one
+LocalMemoryTurnSelectionRecorded fact scoped to that exact LocalTurnId. Replay
+requires the selection snapshot to predate the authored commit and revalidates
+the exact memory set against the frozen historical prefix.
+
+Context Composer then reconstructs those memories as explicit
+LocalMemoryOneShot user-level sources. Their envelope identifies the memory,
+source conversation, artifact event, frozen snapshot high-water, and durable
+turn-selection event. The envelope marks the memory **NEXT REQUEST ONLY** and
+does not claim user authorship or developer/system authority.
+
+The pre-send selection is cleared after the durable commit/selection
+acknowledgement. A later authored turn receives no one-shot memory unless the
+user explicitly selects it again.
+
+One-shot use never changes persistent Admit/Exclude state. Later supersession
+also does not rewrite the historical fact that an earlier turn used the memory
+when it was valid at its frozen snapshot.
+
+## Memory frontier
+
+The explicit manual memory stack is now vertically complete enough for
+dogfooding:
+
+artifact recording -> correction/supersession -> labels/facets -> read-only
+discovery -> persistent per-conversation admission -> next-request-only manual
+selection -> typed Context Composer provenance.
+
+Automatic semantic retrieval, embeddings, model-authored extraction, confidence
+scoring, and token-budget-driven selection remain deliberately deferred. None
+should be introduced as a hidden extension of the manual memory authority model.
+
+The active local-first product frontier now moves to the first MCP/tool
+integration substrate. Memory should evolve further only when a concrete
+dogfooding need justifies another explicit boundary.
