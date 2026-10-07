@@ -3109,6 +3109,22 @@ impl ChatariumApp {
                         suggestion_id.get()
                     );
                 }
+                PersistNotice::ControllerCoordinationSuggestionPromoted {
+                    suggestion_id,
+                    control_id,
+                    route_id,
+                    appended_events,
+                } => {
+                    self.events.extend(appended_events);
+                    self.controller_coordination_suggestion_command_pending = false;
+                    self.controller_control_command_pending = false;
+                    self.status = format!(
+                        "suggestion {} promoted to control {} on route {} · still awaiting explicit route approval",
+                        suggestion_id.get(),
+                        control_id.get(),
+                        route_id.get(),
+                    );
+                }
                 PersistNotice::WorkerControlAcknowledged { route_id, event } => {
                     self.events.push(event);
                     self.worker_control_command_pending = false;
@@ -3192,6 +3208,11 @@ impl ChatariumApp {
                         self.controller_coordination_result_context_command_pending = false;
                     } else if operation.starts_with("controller coordination suggestion") {
                         self.controller_coordination_suggestion_command_pending = false;
+                        if operation.starts_with(
+                            "controller coordination suggestion promotion",
+                        ) {
+                            self.controller_control_command_pending = false;
+                        }
                     } else if operation.starts_with("controller coordination") {
                         self.controller_coordination_command_pending = false;
                     }
@@ -4315,6 +4336,38 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue coordination suggestion: {error}");
+            }
+        }
+    }
+
+    fn promote_controller_coordination_suggestion(
+        &mut self,
+        suggestion_id: CoordinationSuggestionId,
+    ) {
+        if self.controller_coordination_suggestion_command_pending
+            || self.controller_control_command_pending
+        {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot promote coordination suggestion: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::PromoteControllerCoordinationSuggestion {
+            controller_conversation_id: self.local_conversation_id,
+            suggestion_id,
+        }) {
+            Ok(()) => {
+                self.controller_coordination_suggestion_command_pending = true;
+                self.controller_control_command_pending = true;
+                self.status = format!(
+                    "promoting coordination suggestion {} through ordinary control admission…",
+                    suggestion_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue suggestion promotion: {error}");
             }
         }
     }
@@ -13572,6 +13625,36 @@ fn persistence_worker(
                             revision: None,
                             request_id: None,
                             turn_id: Some(coordination_turn_id),
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::PromoteControllerCoordinationSuggestion {
+                controller_conversation_id,
+                suggestion_id,
+            } => {
+                match append_controller_coordination_suggestion_promotion_checked(
+                    &mut store,
+                    controller_conversation_id,
+                    suggestion_id,
+                ) {
+                    Ok((control_id, route_id, appended_events)) => {
+                        let _ = notices.send(
+                            PersistNotice::ControllerCoordinationSuggestionPromoted {
+                                suggestion_id,
+                                control_id,
+                                route_id,
+                                appended_events,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller coordination suggestion promotion",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
                             error,
                         });
                     }
