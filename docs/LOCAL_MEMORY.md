@@ -159,18 +159,52 @@ Admit/Exclude and Supersede controls. Finding a memory never admits it.
 No embedding service, model-authored query rewrite, semantic ranking, or
 automatic retrieval is implied by this search projection.
 
-## Next memory boundary: explicit organization metadata
+## Landed organization metadata and faceted discovery
 
-The next safe memory layer is optional user-authored organization metadata
-(labels/tags) stored separately from immutable artifact text.
+Optional user-authored labels are now a separate durable metadata layer through
+`LocalMemoryLabelAdded` and `LocalMemoryLabelRemoved`.
 
-That layer must preserve the same authority boundary:
+`LocalMemoryLabel` preserves exact user text while rejecting empty,
+surrounding-whitespace, control-character, and overlong values. Label replay
+requires the artifact to exist first and fails closed on duplicate Add or
+removing an inactive label.
 
-- labels do not change artifact text;
-- labels do not Admit memory to context;
-- removing or changing a label does not rewrite history;
-- retrieval/search may use labels only as explicit local metadata;
-- model-generated labels must not become authoritative without a separate user
-  acceptance boundary.
+Labels do not change artifact text, supersession, or context admission. They may
+be added, removed, and re-added without rewriting history.
 
-Automatic semantic retrieval remains later.
+The desktop now exposes the complete label workflow:
+
+- active labels are visible on each memory;
+- **Add label** validates and durably records exact user-authored metadata;
+- each active label can be explicitly removed;
+- free-text discovery searches both artifact text and active label text;
+- an exact label facet narrows results without changing context state;
+- an exact source-conversation facet narrows by durable artifact provenance;
+- facet counts respect the **Show superseded history** boundary.
+
+The search/facet joins also participate in archive-integrity validation.
+
+No label, query, or facet action can Admit, Exclude, supersede, or otherwise
+mutate memory authority. Model-generated labels remain non-authoritative unless a
+future explicit acceptance layer is designed.
+
+## Next memory boundary: request-scoped manual use
+
+Persistent Admit is appropriate for memory that should participate in every
+future request for a destination conversation. It is too strong for a memory the
+user wants only once.
+
+The next safe layer is therefore explicit **next-request-only memory
+selection**:
+
+- discovery remains read-only;
+- selecting a memory for one request must not change persistent Admit/Exclude;
+- the exact selected set must be visible in the next-request inspector;
+- the set must be snapshotted at Send so later UI changes cannot mutate an
+  in-flight request;
+- one-shot use must retain memory/source provenance and user-level trust;
+- superseded artifacts must remain ineligible;
+- selection must not silently survive into later requests after it is consumed.
+
+Automatic semantic retrieval, embedding search, and token-budget-driven
+selection remain later.
