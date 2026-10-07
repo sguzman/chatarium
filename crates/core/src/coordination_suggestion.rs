@@ -48,6 +48,17 @@ impl CoordinationSuggestionAction {
             Self::StatusRequest => "status_request",
         }
     }
+
+    #[must_use]
+    pub const fn from_stable_name(value: &str) -> Option<Self> {
+        match value {
+            "start_or_resume" => Some(Self::StartOrResume),
+            "continue" => Some(Self::Continue),
+            "stop" => Some(Self::Stop),
+            "status_request" => Some(Self::StatusRequest),
+            _ => None,
+        }
+    }
 }
 
 /// Typed, powerless proposal produced from controller coordination.
@@ -132,6 +143,21 @@ mod tests {
         assert_eq!(
             CoordinationSuggestionAction::StatusRequest.stable_name(),
             "status_request"
+        );
+        for action in [
+            CoordinationSuggestionAction::StartOrResume,
+            CoordinationSuggestionAction::Continue,
+            CoordinationSuggestionAction::Stop,
+            CoordinationSuggestionAction::StatusRequest,
+        ] {
+            assert_eq!(
+                CoordinationSuggestionAction::from_stable_name(action.stable_name()),
+                Some(action)
+            );
+        }
+        assert_eq!(
+            CoordinationSuggestionAction::from_stable_name("unknown"),
+            None
         );
     }
 }
