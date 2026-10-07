@@ -723,6 +723,53 @@ mod tests {
     }
 
     #[test]
+    fn controller_continuation_is_user_level_but_never_claims_user_authorship() {
+        let continuation =
+            TranscriptMessage::controller_continuation(1, 2, 3, 4, 5, 6, 7);
+        assert_eq!(continuation.role, TranscriptRole::User);
+        assert_eq!(continuation.order_sequence(), 7);
+
+        let plan =
+            ContextPlan::compose(ContextPolicy::dispatch(), "", "", [continuation]);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("bounded controller continuation")
+        );
+        assert!(plan.messages[0].content.contains("not user-authored"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(plan.messages[0].content.contains("control_id: 1"));
+        assert!(plan.messages[0].content.contains("route_id: 2"));
+        assert!(plan.messages[0].content.contains("worker_id: 3"));
+        assert!(plan.messages[0].content.contains("goal_id: 4"));
+        assert!(plan.messages[0].content.contains("continuation_lease: 5"));
+        assert!(plan.messages[0].content.contains("permit_ordinal: 6"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("Continue working on the current goal")
+        );
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::ControllerContinuation {
+                control_id: 1,
+                route_id: 2,
+                worker_id: 3,
+                goal_id: 4,
+                lease_id: 5,
+                permit_ordinal: 6,
+                started_sequence: 7,
+            }
+        ));
+    }
+
+    #[test]
     fn routed_context_can_be_excluded_by_context_policy() {
         let policy = ContextPolicy {
             include_routed_context: false,
