@@ -148,6 +148,24 @@ decision.
 See [LOCAL_MEMORY.md](LOCAL_MEMORY.md) for the durable artifact/admission
 ontology.
 
+### Next-request-only local memory
+
+Context Composer also has a distinct `LocalMemoryOneShot` source for manual
+request-scoped memory use.
+
+The pre-send selection is frozen against a journal high-water and validated
+before the authored message commit. After commit, the exact selection is
+durably correlated to that LocalTurnId. Dispatch reconstructs one-shot memory
+from the journal instead of trusting mutable UI selection state.
+
+One-shot memory serializes at user-level trust and carries separate provenance:
+memory identity, source conversation, artifact event, frozen snapshot
+high-water, and durable turn-selection event. Its envelope explicitly marks the
+source **NEXT REQUEST ONLY**.
+
+It does not change persistent memory admission, and later turns do not inherit
+the selection automatically.
+
 ## Controller orchestration sources
 
 Context Composer now has four explicit orchestration source types in addition
@@ -206,8 +224,8 @@ Context Composer does **not** silently introduce:
 - token-budget trimming;
 - automatic summarization;
 - retrieval;
-- automatic memory extraction, semantic retrieval, or sharing beyond explicitly
-  recorded and admitted `LocalMemory` artifacts;
+- automatic memory extraction or semantic retrieval beyond explicitly recorded
+  artifacts and explicit persistent/one-shot selection;
 - automatic cross-conversation context outside explicit routed delivery,
   admitted local memory, and their separate admission boundaries;
 - lifecycle state injection;
