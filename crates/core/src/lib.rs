@@ -270,6 +270,7 @@ impl TurnEvidence {
             | EventKind::WorkerLifecycleTransitionRecorded
             | EventKind::WorkerControlAdmitted
             | EventKind::ControlRouteBound
+            | EventKind::WorkerControlDelivered
             | EventKind::LocalSessionRegistered
             | EventKind::SessionEndpointBound
             | EventKind::WorkerSessionBound
@@ -373,6 +374,8 @@ pub enum EventKind {
     WorkerControlAdmitted,
     /// An admitted worker control was correlated to its orchestration route.
     ControlRouteBound,
+    /// A dispatched worker control was durably delivered to its local worker conversation.
+    WorkerControlDelivered,
     /// A local Chatarium session identity was registered.
     LocalSessionRegistered,
     /// A local session was correlated to one routing endpoint.
@@ -457,6 +460,7 @@ impl EventKind {
             Self::WorkerLifecycleTransitionRecorded => "worker_lifecycle_transition_recorded",
             Self::WorkerControlAdmitted => "worker_control_admitted",
             Self::ControlRouteBound => "control_route_bound",
+            Self::WorkerControlDelivered => "worker_control_delivered",
             Self::LocalSessionRegistered => "local_session_registered",
             Self::SessionEndpointBound => "session_endpoint_bound",
             Self::WorkerSessionBound => "worker_session_bound",
@@ -525,6 +529,7 @@ impl EventKind {
             "worker_lifecycle_transition_recorded" => Some(Self::WorkerLifecycleTransitionRecorded),
             "worker_control_admitted" => Some(Self::WorkerControlAdmitted),
             "control_route_bound" => Some(Self::ControlRouteBound),
+            "worker_control_delivered" => Some(Self::WorkerControlDelivered),
             "local_session_registered" => Some(Self::LocalSessionRegistered),
             "session_endpoint_bound" => Some(Self::SessionEndpointBound),
             "worker_session_bound" => Some(Self::WorkerSessionBound),
