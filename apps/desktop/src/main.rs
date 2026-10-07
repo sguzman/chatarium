@@ -4080,6 +4080,38 @@ impl ChatariumApp {
         }
     }
 
+    fn decide_controller_worker_result_context(
+        &mut self,
+        route_id: RouteId,
+        decision: ControllerWorkerResultContextDecision,
+    ) {
+        if self.controller_result_context_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot update controller result context: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideControllerWorkerResultContext {
+            route_id,
+            controller_conversation_id: self.local_conversation_id,
+            decision,
+        }) {
+            Ok(()) => {
+                self.controller_result_context_command_pending = true;
+                self.status = format!(
+                    "recording controller result context {} decision for route {}…",
+                    controller_worker_result_context_decision_label(decision),
+                    route_id.get(),
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller result context decision: {error}");
+            }
+        }
+    }
+
     fn acknowledge_worker_control(&mut self, route_id: RouteId) {
         if self.worker_control_command_pending {
             return;
@@ -10928,6 +10960,79 @@ fn append_controller_control_dispatch_checked(
     Ok(store.events()[before..].to_vec())
 }
 
+fn append_controller_worker_result_context_decision_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    controller_conversation_id: LocalConversationId,
+    decision: ControllerWorkerResultContextDecision,
+) -> Result<EventEnvelope, String> {
+    let result = replay_controller_worker_results_for_conversation(
+        store.events(),
+        controller_conversation_id,
+    )?
+    .into_iter()
+    .find(|item| item.route_id == route_id)
+    .ok_or_else(|| {
+        format!(
+            "route {} has no terminal worker result owned by controller conversation {}",
+            route_id.get(),
+            controller_conversation_id,
+        )
+    })?;
+
+    if let Some(existing) = replay_controller_worker_result_context_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+    {
+        if existing.control_id != result.control_id
+            || existing.controller_conversation_id != controller_conversation_id
+            || existing.result_sequence != result.result_sequence
+        {
+            return Err(format!(
+                "controller result route {} context provenance conflicts with terminal result",
+                route_id.get()
+            ));
+        }
+        if existing.decision == decision {
+            return Err(format!(
+                "controller result route {} already has context decision {}",
+                route_id.get(),
+                controller_worker_result_context_decision_label(decision),
+            ));
+        }
+    }
+
+    record_controller_worker_result_context_decision(
+        store,
+        result.control_id,
+        route_id,
+        controller_conversation_id,
+        result.result_sequence,
+        decision,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_controller_worker_result_context_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+        .ok_or_else(|| "controller result context decision append did not replay".to_owned())?;
+    if replayed.control_id != result.control_id
+        || replayed.controller_conversation_id != controller_conversation_id
+        || replayed.result_sequence != result.result_sequence
+        || replayed.decision != decision
+    {
+        return Err(
+            "controller result context decision replay disagrees with appended decision".to_owned(),
+        );
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "controller result context decision append produced no durable event".to_owned())
+}
+
 fn append_worker_control_acknowledgement_checked(
     store: &mut impl EventStore,
     worker_conversation_id: LocalConversationId,
@@ -12008,6 +12113,36 @@ fn persistence_worker(
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "controller control dispatch",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DecideControllerWorkerResultContext {
+                route_id,
+                controller_conversation_id,
+                decision,
+            } => {
+                match append_controller_worker_result_context_decision_checked(
+                    &mut store,
+                    route_id,
+                    controller_conversation_id,
+                    decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(
+                            PersistNotice::ControllerWorkerResultContextDecisionUpdated {
+                                route_id,
+                                event,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller result context decision",
                             revision: None,
                             request_id: None,
                             turn_id: None,
@@ -13507,6 +13642,15 @@ fn session_endpoint_binding(
         .and_then(|record| record.endpoint_binding))
 }
 
+fn controller_worker_result_context_decision_label(
+    decision: ControllerWorkerResultContextDecision,
+) -> &'static str {
+    match decision {
+        ControllerWorkerResultContextDecision::Admit => "admit",
+        ControllerWorkerResultContextDecision::Exclude => "exclude",
+    }
+}
+
 fn local_route_context_decision_label(decision: LocalRouteContextDecision) -> &'static str {
     match decision {
         LocalRouteContextDecision::Admit => "admit",
@@ -14648,6 +14792,9 @@ mod tests {
                 "controller_control_route_policy_updated"
             }
             PersistNotice::ControllerControlDispatched { .. } => "controller_control_dispatched",
+            PersistNotice::ControllerWorkerResultContextDecisionUpdated { .. } => {
+                "controller_worker_result_context_decision_updated"
+            }
             PersistNotice::WorkerControlAcknowledged { .. } => "worker_control_acknowledged",
             PersistNotice::WorkerControlStatusResultRecorded { .. } => {
                 "worker_control_status_result_recorded"
