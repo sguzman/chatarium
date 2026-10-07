@@ -752,8 +752,6 @@ struct PendingInferenceIntent {
     developer_context: String,
     routed_context: Vec<context_composer::TranscriptMessage>,
     local_memory_context: Vec<context_composer::TranscriptMessage>,
-    local_memory_one_shot: Vec<PendingOneShotMemory>,
-    local_memory_one_shot_snapshot_after_sequence: Option<u64>,
     controller_result_context: Vec<context_composer::TranscriptMessage>,
     controller_coordination_result_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
@@ -2680,9 +2678,6 @@ impl ChatariumApp {
                         developer_context: self.conversation_developer_context.clone(),
                         routed_context,
                         local_memory_context,
-                        local_memory_one_shot,
-                        local_memory_one_shot_snapshot_after_sequence:
-                            one_shot_memory_snapshot_after_sequence,
                         controller_result_context,
                         controller_coordination_result_context,
                         request_patch,
@@ -2777,33 +2772,19 @@ impl ChatariumApp {
                                 ));
                             transcript.extend(intent.routed_context);
                             transcript.extend(intent.local_memory_context);
-                            if !intent.local_memory_one_shot.is_empty() {
-                                let Some(snapshot_after_sequence) =
-                                    intent.local_memory_one_shot_snapshot_after_sequence
-                                else {
-                                    self.status =
-                                        "one-shot local memory snapshot lost before dispatch"
-                                            .to_owned();
-                                    continue;
-                                };
-                                let Some(selection_sequence) = one_shot_selection_sequence else {
-                                    self.status =
-                                        "one-shot local memory was not durably bound before dispatch"
-                                            .to_owned();
-                                    continue;
-                                };
-                                transcript.extend(intent.local_memory_one_shot.into_iter().map(
-                                    |memory| {
-                                        context_composer::TranscriptMessage::local_memory_one_shot(
-                                            memory.text.as_str(),
-                                            memory.memory_id.get(),
-                                            memory.source_conversation_id.to_string(),
-                                            memory.artifact_sequence,
-                                            snapshot_after_sequence,
-                                            Some(selection_sequence),
-                                        )
-                                    },
-                                ));
+                            if one_shot_selection_sequence.is_some() {
+                                match one_shot_local_memory_messages_for_turn(
+                                    &self.events,
+                                    message.turn_id,
+                                ) {
+                                    Ok(one_shot) => transcript.extend(one_shot),
+                                    Err(error) => {
+                                        self.status = format!(
+                                            "cannot compose durable one-shot local memory: {error}"
+                                        );
+                                        continue;
+                                    }
+                                }
                             }
                             transcript.extend(intent.controller_result_context);
                             transcript.extend(intent.controller_coordination_result_context);
