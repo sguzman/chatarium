@@ -15768,6 +15768,47 @@ fn admitted_routed_context_messages(
     Ok(messages)
 }
 
+fn admitted_local_memory_messages(
+    events: &[EventEnvelope],
+    destination_conversation_id: LocalConversationId,
+) -> Result<Vec<context_composer::TranscriptMessage>, String> {
+    let artifacts = replay_local_memory_audit(events)?;
+    let admitted =
+        replay_admitted_local_memory_context(events, destination_conversation_id)?;
+    let mut messages = Vec::with_capacity(admitted.len());
+
+    for record in admitted {
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.memory_id == record.memory_id)
+            .ok_or_else(|| {
+                format!(
+                    "admitted local memory {} has no immutable artifact",
+                    record.memory_id.get()
+                )
+            })?;
+        if artifact.source_conversation_id != record.source_conversation_id
+            || artifact.recorded_sequence != record.artifact_sequence
+        {
+            return Err(format!(
+                "admitted local memory {} disagrees with artifact provenance",
+                record.memory_id.get()
+            ));
+        }
+
+        messages.push(context_composer::TranscriptMessage::local_memory(
+            artifact.text.as_str(),
+            record.memory_id.get(),
+            record.source_conversation_id.to_string(),
+            record.artifact_sequence,
+            record.last_decision_sequence,
+        ));
+    }
+
+    messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+    Ok(messages)
+}
+
 fn admitted_controller_worker_result_messages(
     events: &[EventEnvelope],
     controller_conversation_id: LocalConversationId,
