@@ -11764,6 +11764,21 @@ fn append_current_session_route_endpoint_checked(
         ));
     }
 
+    if let Some(provider) = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|provider| {
+            provider
+                .endpoint_binding
+                .is_some_and(|binding| binding.endpoint_id() == endpoint_id)
+        })
+    {
+        return Err(format!(
+            "routing endpoint {} is already bound to tool provider {}",
+            endpoint_id.get(),
+            provider.provider_id.get()
+        ));
+    }
+
     if replay_routing_audit(store.events())?.iter().any(|route| {
         route.request.source == endpoint_id || route.request.destination == endpoint_id
     }) {
@@ -12326,6 +12341,277 @@ fn append_local_route_context_decision_checked(
         .last()
         .cloned()
         .ok_or_else(|| "routed context decision append produced no durable event".to_owned())
+}
+
+fn append_tool_provider_registration_checked(
+    store: &mut impl EventStore,
+    provider_id: ToolProviderId,
+    name: ToolProviderName,
+) -> Result<EventEnvelope, String> {
+    if replay_tool_provider_audit(store.events())?
+        .iter()
+        .any(|record| record.provider_id == provider_id)
+    {
+        return Err(format!(
+            "tool provider {} already exists",
+            provider_id.get()
+        ));
+    }
+
+    record_tool_provider_registered(store, provider_id, &name)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|record| record.provider_id == provider_id)
+        .ok_or_else(|| "tool provider registration did not replay".to_owned())?;
+    if replayed.name != name || replayed.endpoint_binding.is_some() {
+        return Err("tool provider replay disagrees with registration".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "tool provider registration produced no durable event".to_owned())
+}
+
+fn append_tool_provider_endpoint_checked(
+    store: &mut impl EventStore,
+    provider_id: ToolProviderId,
+    endpoint_id: RouteEndpointId,
+) -> Result<EventEnvelope, String> {
+    let provider = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|record| record.provider_id == provider_id)
+        .ok_or_else(|| format!("tool provider {} does not exist", provider_id.get()))?;
+    if let Some(existing) = provider.endpoint_binding {
+        return Err(format!(
+            "tool provider {} is already bound to routing endpoint {}",
+            provider_id.get(),
+            existing.endpoint_id().get()
+        ));
+    }
+
+    if replay_session_audit(store.events())?.iter().any(|record| {
+        record
+            .endpoint_binding
+            .is_some_and(|binding| binding.endpoint_id() == endpoint_id)
+    }) {
+        return Err(format!(
+            "routing endpoint {} is already bound to a local session",
+            endpoint_id.get()
+        ));
+    }
+    if replay_tool_provider_audit(store.events())?
+        .iter()
+        .any(|record| {
+            record
+                .endpoint_binding
+                .is_some_and(|binding| binding.endpoint_id() == endpoint_id)
+        })
+    {
+        return Err(format!(
+            "routing endpoint {} is already bound to another tool provider",
+            endpoint_id.get()
+        ));
+    }
+    if replay_routing_audit(store.events())?.iter().any(|route| {
+        route.request.source == endpoint_id || route.request.destination == endpoint_id
+    }) {
+        return Err(format!(
+            "routing endpoint {} already appears in durable route history",
+            endpoint_id.get()
+        ));
+    }
+
+    record_tool_provider_endpoint_bound(
+        store,
+        ToolProviderEndpointBinding::new(provider_id, endpoint_id),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|record| record.provider_id == provider_id)
+        .and_then(|record| record.endpoint_binding)
+        .ok_or_else(|| "tool provider endpoint binding did not replay".to_owned())?;
+    if replayed.endpoint_id() != endpoint_id {
+        return Err("tool provider endpoint replay disagrees with appended endpoint".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "tool provider endpoint binding produced no durable event".to_owned())
+}
+
+fn append_tool_call_proposal_checked(
+    store: &mut impl EventStore,
+    call_id: ToolCallId,
+    route_id: RouteId,
+    source_conversation_id: LocalConversationId,
+    provider_id: ToolProviderId,
+    operation: ToolOperationName,
+    arguments_text: String,
+) -> Result<Vec<EventEnvelope>, String> {
+    if replay_tool_call_audit(store.events())?
+        .iter()
+        .any(|record| record.call_id == call_id)
+    {
+        return Err(format!("tool call {} already exists", call_id.get()));
+    }
+    if replay_routing_audit(store.events())?
+        .iter()
+        .any(|route| route.request.id == route_id)
+    {
+        return Err(format!("route {} already exists", route_id.get()));
+    }
+
+    let directory = replay_local_routing_directory(store.events())?;
+    let source = directory
+        .iter()
+        .find(|entry| entry.conversation_id == source_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "source local conversation {source_conversation_id} is not currently addressable"
+            )
+        })?;
+    if !source.current_session_phase.accepts_ordinary_turns() {
+        return Err(format!(
+            "source conversation {source_conversation_id} current session {} is {} and cannot originate a tool call",
+            source.current_session_id.get(),
+            session_lifecycle_phase_label(source.current_session_phase),
+        ));
+    }
+
+    let provider = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|record| record.provider_id == provider_id)
+        .ok_or_else(|| format!("tool provider {} does not exist", provider_id.get()))?;
+    let provider_endpoint = provider.endpoint_binding.ok_or_else(|| {
+        format!(
+            "tool provider {} is not routing-addressable",
+            provider_id.get()
+        )
+    })?;
+
+    let before = store.events().len();
+    record_tool_call(
+        store,
+        call_id,
+        source.current_session_id,
+        provider_id,
+        &operation,
+        arguments_text.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let request = RouteRequest {
+        id: route_id,
+        source: source.endpoint_id,
+        destination: provider_endpoint.endpoint_id(),
+        class: RouteClass::ToolCall,
+    };
+    record_route_proposed(store, request, RoutePolicy::RequireApproval)
+        .map_err(|error| error.to_string())?;
+    record_tool_call_route_bound(store, call_id, route_id)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_tool_call_audit(store.events())?
+        .into_iter()
+        .find(|record| record.call_id == call_id)
+        .ok_or_else(|| "tool call proposal did not replay".to_owned())?;
+    if replayed.source_session_id != source.current_session_id
+        || replayed.provider_id != provider_id
+        || replayed.operation != operation
+        || replayed.arguments_text != arguments_text
+        || replayed.route_id != Some(route_id)
+    {
+        return Err("tool call replay disagrees with appended proposal".to_owned());
+    }
+
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| "tool call route proposal did not replay".to_owned())?;
+    if route.request != request
+        || route.initial_policy != RoutePolicy::RequireApproval
+        || route.gate_state != RouteGateState::PendingApproval
+    {
+        return Err("tool call route replay disagrees with explicit-approval policy".to_owned());
+    }
+
+    Ok(store.events()[before..].to_vec())
+}
+
+fn append_tool_call_route_user_decision_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    decision: RouteUserDecision,
+) -> Result<EventEnvelope, String> {
+    let call = replay_tool_call_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == Some(route_id))
+        .ok_or_else(|| format!("route {} is not bound to a tool call", route_id.get()))?;
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|record| record.request.id == route_id)
+        .ok_or_else(|| format!("tool route {} does not exist", route_id.get()))?;
+
+    if route.request.class != RouteClass::ToolCall {
+        return Err(format!("route {} is not a tool-call route", route_id.get()));
+    }
+    if route.initial_policy != RoutePolicy::RequireApproval {
+        return Err(format!(
+            "tool route {} was not created under explicit-approval policy",
+            route_id.get()
+        ));
+    }
+    if route.gate_state.is_dispatched() {
+        return Err(format!(
+            "tool route {} has already dispatched and its policy history is immutable",
+            route_id.get()
+        ));
+    }
+    if route.latest_user_decision == Some(decision) {
+        return Err(format!(
+            "tool route {} already has explicit user decision {}",
+            route_id.get(),
+            route_user_decision_label(decision),
+        ));
+    }
+    if call.route_bound_sequence.is_none() {
+        return Err(format!(
+            "tool call {} has no durable route correlation",
+            call.call_id.get()
+        ));
+    }
+
+    record_route_user_decision(store, route_id, decision).map_err(|error| error.to_string())?;
+
+    let replayed = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|candidate| candidate.request.id == route_id)
+        .ok_or_else(|| "tool route decision append did not replay".to_owned())?;
+    let expected_state = match decision {
+        RouteUserDecision::Allow => RouteGateState::Allowed {
+            by: DecisionAuthority::User,
+        },
+        RouteUserDecision::Deny => RouteGateState::Denied {
+            by: DecisionAuthority::User,
+        },
+    };
+    if replayed.latest_user_decision != Some(decision) || replayed.gate_state != expected_state {
+        return Err("tool route decision replay disagrees with appended decision".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "tool route decision append produced no durable event".to_owned())
 }
 
 fn commit_message_with_one_shot_memory_checked(
@@ -17021,6 +17307,28 @@ fn next_available_control_id(events: &[EventEnvelope]) -> Result<ControlId, Stri
     Ok(ControlId::new(next))
 }
 
+fn next_available_tool_provider_id(events: &[EventEnvelope]) -> Result<ToolProviderId, String> {
+    let next = replay_tool_provider_audit(events)?
+        .into_iter()
+        .map(|record| record.provider_id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "tool provider identity space exhausted".to_owned())?;
+    Ok(ToolProviderId::new(next))
+}
+
+fn next_available_tool_call_id(events: &[EventEnvelope]) -> Result<ToolCallId, String> {
+    let next = replay_tool_call_audit(events)?
+        .into_iter()
+        .map(|record| record.call_id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "tool call identity space exhausted".to_owned())?;
+    Ok(ToolCallId::new(next))
+}
+
 fn next_available_local_memory_id(events: &[EventEnvelope]) -> Result<LocalMemoryId, String> {
     let next = replay_local_memory_audit(events)?
         .into_iter()
@@ -17059,6 +17367,11 @@ fn next_available_route_endpoint_id(events: &[EventEnvelope]) -> Result<RouteEnd
 
     for record in replay_session_audit(events)? {
         if let Some(binding) = record.endpoint_binding {
+            highest = highest.max(binding.endpoint_id().get());
+        }
+    }
+    for provider in replay_tool_provider_audit(events)? {
+        if let Some(binding) = provider.endpoint_binding {
             highest = highest.max(binding.endpoint_id().get());
         }
     }
