@@ -12,6 +12,7 @@ use crate::EventEnvelope;
 use crate::EventStore;
 use crate::continuation_audit::replay_continuation_audit;
 use crate::control_audit::replay_control_audit;
+use crate::authored::local_turn_scope;
 use crate::control_inbox::replay_worker_control_inbox_for_conversation;
 use crate::worker_audit::replay_worker_audit;
 use chatarium_core::control::{ControlId, WorkerControlKind};
@@ -24,6 +25,37 @@ use std::str::FromStr;
 
 const SCHEMA: &str = "chatarium-worker-continuation-execution-audit";
 const VERSION: u64 = 1;
+
+/// Durable remote-transport evidence for one non-authored continuation turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContinuationExecutionTransportState {
+    pub dispatch_sequence: Option<u64>,
+    pub acceptance_sequence: Option<u64>,
+    pub stream_started_sequence: Option<u64>,
+    pub latest_output_sequence: Option<u64>,
+    pub completion_sequence: Option<u64>,
+    pub failure_sequence: Option<u64>,
+    pub interruption_sequence: Option<u64>,
+}
+
+impl ContinuationExecutionTransportState {
+    #[must_use]
+    pub const fn was_dispatched(self) -> bool {
+        self.dispatch_sequence.is_some()
+    }
+
+    #[must_use]
+    pub const fn is_completed(self) -> bool {
+        self.completion_sequence.is_some()
+    }
+
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        self.completion_sequence.is_some()
+            || self.failure_sequence.is_some()
+            || self.interruption_sequence.is_some()
+    }
+}
 
 /// One explicit worker-side start of a bounded Continue execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,7 +329,130 @@ pub fn replay_worker_continuation_execution_audit(
 
     let mut records = by_route.into_values().collect::<Vec<_>>();
     records.sort_by_key(|record| record.started_sequence);
+    for record in &records {
+        continuation_execution_transport_state(events, record.execution_turn_id)?;
+    }
     Ok(records)
+}
+
+/// Replay remote transport evidence scoped to one non-authored continuation turn.
+///
+/// The execution turn may carry the same durable remote observation kinds as an
+/// authored turn, but it must never contain UserMessageCommitted.
+pub fn continuation_execution_transport_state(
+    events: &[EventEnvelope],
+    execution_turn_id: LocalTurnId,
+) -> Result<ContinuationExecutionTransportState, String> {
+    let scope = local_turn_scope(execution_turn_id);
+    let mut state = ContinuationExecutionTransportState::default();
+
+    for event in events
+        .iter()
+        .filter(|event| event.scope.as_deref() == Some(scope.as_str()))
+    {
+        if event.kind == EventKind::UserMessageCommitted {
+            return Err(format!(
+                "non-authored continuation turn {} contains a user-message commit at sequence {}",
+                execution_turn_id, event.sequence
+            ));
+        }
+
+        match event.kind {
+            EventKind::DispatchAttempted => {
+                if state.dispatch_sequence.replace(event.sequence).is_some() {
+                    return Err(format!(
+                        "continuation turn {} has multiple dispatch attempts",
+                        execution_turn_id
+                    ));
+                }
+            }
+            EventKind::RemoteAcceptanceObserved => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+                if state.acceptance_sequence.replace(event.sequence).is_some() {
+                    return Err(format!(
+                        "continuation turn {} has multiple remote-acceptance observations",
+                        execution_turn_id
+                    ));
+                }
+            }
+            EventKind::AssistantStreamStarted => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+                if state.stream_started_sequence.replace(event.sequence).is_some() {
+                    return Err(format!(
+                        "continuation turn {} has multiple assistant-stream starts",
+                        execution_turn_id
+                    ));
+                }
+            }
+            EventKind::AssistantDeltaObserved | EventKind::AssistantSnapshotObserved => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+                state.latest_output_sequence = Some(event.sequence);
+            }
+            EventKind::AssistantCompletionObserved => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+                if state.completion_sequence.replace(event.sequence).is_some() {
+                    return Err(format!(
+                        "continuation turn {} has multiple completion observations",
+                        execution_turn_id
+                    ));
+                }
+                if state.failure_sequence.is_some() || state.interruption_sequence.is_some() {
+                    return Err(format!(
+                        "continuation turn {} records completion after failure/interruption",
+                        execution_turn_id
+                    ));
+                }
+                state.latest_output_sequence = Some(event.sequence);
+            }
+            EventKind::RemoteFailureObserved => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+                if state.failure_sequence.replace(event.sequence).is_some() {
+                    return Err(format!(
+                        "continuation turn {} has multiple definitive failure observations",
+                        execution_turn_id
+                    ));
+                }
+                if state.completion_sequence.is_some() {
+                    return Err(format!(
+                        "continuation turn {} records remote failure after completion",
+                        execution_turn_id
+                    ));
+                }
+            }
+            EventKind::TransportInterrupted => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+                if state.interruption_sequence.replace(event.sequence).is_some() {
+                    return Err(format!(
+                        "continuation turn {} has multiple interruption observations",
+                        execution_turn_id
+                    ));
+                }
+                if state.completion_sequence.is_some() {
+                    return Err(format!(
+                        "continuation turn {} records interruption after completion",
+                        execution_turn_id
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(state)
+}
+
+fn require_dispatch(
+    state: ContinuationExecutionTransportState,
+    execution_turn_id: LocalTurnId,
+    sequence: u64,
+) -> Result<(), String> {
+    if state.dispatch_sequence.is_none() {
+        return Err(format!(
+            "continuation turn {} has remote evidence at sequence {} before dispatch",
+            execution_turn_id, sequence
+        ));
+    }
+    Ok(())
 }
 
 #[must_use]
