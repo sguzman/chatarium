@@ -75,6 +75,12 @@ use chatarium_store::control_result_audit::{
 use chatarium_store::control_route_audit::{
     record_control_route_bound, replay_control_route_audit,
 };
+use chatarium_store::controller_coordination_audit::{
+    ControllerCoordinationOutcome, controller_coordination_output_text,
+    controller_coordination_transport_state, coordination_terminal_outcome,
+    record_controller_coordination_result, record_controller_coordination_started,
+    replay_controller_coordination_audit,
+};
 use chatarium_store::controller_result_context_audit::{
     ControllerWorkerResultContextDecision, record_controller_worker_result_context_decision,
     replay_admitted_controller_worker_result_context,
@@ -252,6 +258,9 @@ enum PersistCommand {
         route_id: RouteId,
         controller_conversation_id: LocalConversationId,
         decision: ControllerWorkerResultContextDecision,
+    },
+    StartControllerCoordination {
+        controller_conversation_id: LocalConversationId,
     },
     AcknowledgeWorkerControl {
         worker_conversation_id: LocalConversationId,
@@ -451,6 +460,14 @@ enum PersistNotice {
     },
     ControllerWorkerResultContextDecisionUpdated {
         route_id: RouteId,
+        event: EventEnvelope,
+    },
+    ControllerCoordinationStarted {
+        turn_id: LocalTurnId,
+        event: EventEnvelope,
+    },
+    ControllerCoordinationResultRecorded {
+        turn_id: LocalTurnId,
         event: EventEnvelope,
     },
     WorkerControlAcknowledged {
@@ -718,6 +735,7 @@ struct ChatariumApp {
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
     controller_result_context_command_pending: bool,
+    controller_coordination_command_pending: bool,
     continuation_allowance_drafts: BTreeMap<LocalConversationId, u32>,
     worker_control_command_pending: bool,
     conversation_instructions: String,
@@ -975,6 +993,7 @@ impl ChatariumApp {
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
                         controller_result_context_command_pending: false,
+                        controller_coordination_command_pending: false,
                         continuation_allowance_drafts: BTreeMap::new(),
                         worker_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
@@ -1149,6 +1168,7 @@ impl ChatariumApp {
             supervision_command_pending: false,
             controller_control_command_pending: false,
             controller_result_context_command_pending: false,
+            controller_coordination_command_pending: false,
             continuation_allowance_drafts: BTreeMap::new(),
             worker_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
