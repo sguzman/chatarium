@@ -13195,6 +13195,49 @@ mod tests {
         assert_eq!(inbox[0].control_id, control_id);
         assert_eq!(inbox[0].kind, WorkerControlKind::Stop);
         assert_eq!(inbox[0].goal_id, goal_id);
+        assert_eq!(inbox[0].acknowledged_sequence, None);
+
+        let acknowledgement = append_worker_control_acknowledgement_checked(
+            &mut store,
+            worker_conversation,
+            route_id,
+        )
+        .unwrap();
+        assert_eq!(
+            acknowledgement.kind,
+            EventKind::WorkerControlAcknowledged
+        );
+        let acknowledgement_record =
+            replay_worker_control_acknowledgement_audit(store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.control_id == control_id)
+                .unwrap();
+        assert_eq!(acknowledgement_record.route_id, route_id);
+        assert_eq!(
+            acknowledgement_record.worker_conversation_id,
+            worker_conversation
+        );
+
+        let acknowledged_inbox =
+            replay_worker_control_inbox_for_conversation(store.events(), worker_conversation)
+                .unwrap();
+        assert_eq!(
+            acknowledged_inbox[0].acknowledged_sequence,
+            Some(acknowledgement.sequence)
+        );
+
+        let before_duplicate_ack = store.events().len();
+        assert!(
+            append_worker_control_acknowledgement_checked(
+                &mut store,
+                worker_conversation,
+                route_id,
+            )
+            .unwrap_err()
+            .contains("already acknowledged")
+        );
+        assert_eq!(store.events().len(), before_duplicate_ack);
 
         let validated = replay_validated_control_dispatches(store.events()).unwrap();
         let dispatched = validated
