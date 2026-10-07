@@ -3227,6 +3227,38 @@ impl ChatariumApp {
                         route_id.get()
                     );
                 }
+                PersistNotice::ToolProviderUpdated { provider_id, event } => {
+                    let registered = event.kind == EventKind::ToolProviderRegistered;
+                    self.events.push(event);
+                    self.tool_command_pending = false;
+                    self.tool_selected_provider = Some(provider_id);
+                    if registered {
+                        self.tool_provider_name_draft.clear();
+                    }
+                    self.status =
+                        format!("tool provider {} durably updated", provider_id.get());
+                }
+                PersistNotice::ToolCallProposed {
+                    call_id,
+                    route_id,
+                    appended_events,
+                } => {
+                    self.events.extend(appended_events);
+                    self.tool_command_pending = false;
+                    self.tool_operation_draft.clear();
+                    self.tool_arguments_draft.clear();
+                    self.status = format!(
+                        "tool call {} durably proposed on pending route {}",
+                        call_id.get(),
+                        route_id.get(),
+                    );
+                }
+                PersistNotice::ToolCallRoutePolicyUpdated { route_id, event } => {
+                    self.events.push(event);
+                    self.tool_command_pending = false;
+                    self.status =
+                        format!("tool route {} policy durably updated", route_id.get());
+                }
                 PersistNotice::LocalMemoryArtifactRecorded { memory_id, event } => {
                     self.events.push(event);
                     self.local_memory_command_pending = false;
@@ -3464,6 +3496,9 @@ impl ChatariumApp {
                         self.route_context_command_pending = false;
                     } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
+                    }
+                    if operation.starts_with("tool ") {
+                        self.tool_command_pending = false;
                     }
                     if operation.starts_with("local memory ") {
                         self.local_memory_command_pending = false;
@@ -15376,6 +15411,105 @@ fn persistence_worker(
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "local route context decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::RegisterToolProvider { provider_id, name } => {
+                match append_tool_provider_registration_checked(&mut store, provider_id, name) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ToolProviderUpdated {
+                            provider_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool provider registration",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::BindToolProviderEndpoint {
+                provider_id,
+                endpoint_id,
+            } => {
+                match append_tool_provider_endpoint_checked(&mut store, provider_id, endpoint_id) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ToolProviderUpdated {
+                            provider_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool provider endpoint binding",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::ProposeToolCall {
+                call_id,
+                route_id,
+                source_conversation_id,
+                provider_id,
+                operation,
+                arguments_text,
+            } => {
+                match append_tool_call_proposal_checked(
+                    &mut store,
+                    call_id,
+                    route_id,
+                    source_conversation_id,
+                    provider_id,
+                    operation,
+                    arguments_text,
+                ) {
+                    Ok(appended_events) => {
+                        let _ = notices.send(PersistNotice::ToolCallProposed {
+                            call_id,
+                            route_id,
+                            appended_events,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool call proposal",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DecideToolCallRoute { route_id, decision } => {
+                match append_tool_call_route_user_decision_checked(
+                    &mut store,
+                    route_id,
+                    decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ToolCallRoutePolicyUpdated {
+                            route_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool route decision",
                             revision: None,
                             request_id: None,
                             turn_id: None,
