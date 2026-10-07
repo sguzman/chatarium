@@ -290,6 +290,7 @@ impl TurnEvidence {
             | EventKind::ControllerCoordinationTurnResultRecorded
             | EventKind::ControllerCoordinationResultContextDecisionRecorded
             | EventKind::ControllerCoordinationSuggestionRecorded
+            | EventKind::ControllerCoordinationSuggestionPromoted
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
@@ -424,6 +425,8 @@ pub enum EventKind {
     ControllerCoordinationResultContextDecisionRecorded,
     /// A non-authoritative typed next-action suggestion was recorded from controller coordination.
     ControllerCoordinationSuggestionRecorded,
+    /// An explicit user promotion correlated a coordination suggestion to a real control proposal.
+    ControllerCoordinationSuggestionPromoted,
     /// A bounded continuation lease was durably created.
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
@@ -523,6 +526,9 @@ impl EventKind {
             Self::ControllerCoordinationSuggestionRecorded => {
                 "controller_coordination_suggestion_recorded"
             }
+            Self::ControllerCoordinationSuggestionPromoted => {
+                "controller_coordination_suggestion_promoted"
+            }
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
@@ -618,6 +624,9 @@ impl EventKind {
             }
             "controller_coordination_suggestion_recorded" => {
                 Some(Self::ControllerCoordinationSuggestionRecorded)
+            }
+            "controller_coordination_suggestion_promoted" => {
+                Some(Self::ControllerCoordinationSuggestionPromoted)
             }
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
