@@ -651,8 +651,7 @@ mod tests {
             destination: worker_endpoint,
             class: RouteClass::OrchestrationControl,
         };
-        let proposed_sequence =
-            record_route_proposed(store, request, RoutePolicy::Allow).unwrap();
+        let proposed_sequence = record_route_proposed(store, request, RoutePolicy::Allow).unwrap();
         record_control_route_bound(store, ControlRouteBinding::new(control, &request).unwrap())
             .unwrap();
         let mut gate = RouteGate::new(request, RoutePolicy::Allow);
