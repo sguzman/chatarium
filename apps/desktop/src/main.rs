@@ -17,8 +17,8 @@ use chatarium_core::control::{
 use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
 use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::orchestration::{
-    ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerId,
-    WorkerLifecycle, WorkerPhase,
+    ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle,
+    WorkerPhase,
 };
 use chatarium_core::routing::{
     DecisionAuthority, RouteClass, RouteEndpointId, RouteGate, RouteGateState, RouteId,
@@ -43,9 +43,9 @@ use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
 };
 use chatarium_store::continuation_audit::{
-    reconstruct_continuation_lease_for_next_issue,
-    reconstruct_unconsumed_continuation_permit, record_continuation_lease_created,
-    record_continuation_permit_issued, replay_continuation_audit,
+    reconstruct_continuation_lease_for_next_issue, reconstruct_unconsumed_continuation_permit,
+    record_continuation_lease_created, record_continuation_permit_issued,
+    replay_continuation_audit,
 };
 use chatarium_store::control_ack_audit::{
     record_worker_control_acknowledged, replay_worker_control_acknowledgement_audit,
@@ -3914,8 +3914,7 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status =
-                "cannot create continuation lease: persistence unavailable".to_owned();
+            self.status = "cannot create continuation lease: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::CreateControllerContinuationLease {
@@ -3925,9 +3924,8 @@ impl ChatariumApp {
         }) {
             Ok(()) => {
                 self.controller_control_command_pending = true;
-                self.status = format!(
-                    "creating bounded continuation lease with allowance {allowance}…"
-                );
+                self.status =
+                    format!("creating bounded continuation lease with allowance {allowance}…");
             }
             Err(error) => {
                 self.status = format!("failed to queue continuation lease creation: {error}");
@@ -7233,25 +7231,28 @@ impl eframe::App for ChatariumApp {
                                                                                 .size(9.0),
                                                                             );
 
-                                                                            let allowance = self
-                                                                                .continuation_allowance_drafts
-                                                                                .entry(
-                                                                                    topology
-                                                                                        .conversation_id,
-                                                                                )
-                                                                                .or_insert(1);
-                                                                            *allowance =
-                                                                                (*allowance)
-                                                                                    .clamp(1, 100);
-                                                                            ui.add(
-                                                                                egui::DragValue::new(
-                                                                                    allowance,
-                                                                                )
-                                                                                .range(1..=100)
-                                                                                .prefix(
-                                                                                    "lease allowance ",
-                                                                                ),
-                                                                            );
+                                                                            let allowance_value = {
+                                                                                let allowance = self
+                                                                                    .continuation_allowance_drafts
+                                                                                    .entry(
+                                                                                        topology
+                                                                                            .conversation_id,
+                                                                                    )
+                                                                                    .or_insert(1);
+                                                                                *allowance =
+                                                                                    (*allowance)
+                                                                                        .clamp(1, 100);
+                                                                                ui.add(
+                                                                                    egui::DragValue::new(
+                                                                                        allowance,
+                                                                                    )
+                                                                                    .range(1..=100)
+                                                                                    .prefix(
+                                                                                        "lease allowance ",
+                                                                                    ),
+                                                                                );
+                                                                                *allowance
+                                                                            };
                                                                             if ui
                                                                                 .add_enabled(
                                                                                     controls_enabled
@@ -7268,7 +7269,7 @@ impl eframe::App for ChatariumApp {
                                                                                 self.create_controller_continuation_lease(
                                                                                     topology
                                                                                         .conversation_id,
-                                                                                    *allowance,
+                                                                                    allowance_value,
                                                                                 );
                                                                             }
 
@@ -9660,7 +9661,9 @@ fn append_controller_continuation_lease_checked(
         return Err("continuation lease allowance must be greater than zero".to_owned());
     }
     if controller_conversation_id == worker_conversation_id {
-        return Err("a controller conversation cannot authorize continuation for itself".to_owned());
+        return Err(
+            "a controller conversation cannot authorize continuation for itself".to_owned(),
+        );
     }
 
     let controller_topology = local_conversation_topology(
@@ -9751,9 +9754,7 @@ fn append_controller_continuation_lease_checked(
 
     let existing = replay_continuation_audit(store.events())?
         .into_iter()
-        .filter(|record| {
-            record.worker_id == worker_binding.worker_id && record.goal_id == goal_id
-        })
+        .filter(|record| record.worker_id == worker_binding.worker_id && record.goal_id == goal_id)
         .filter(|record| {
             record.remaining > 0
                 || record
@@ -9771,12 +9772,7 @@ fn append_controller_continuation_lease_checked(
     }
 
     let lease_id = next_available_continuation_lease_id(store.events())?;
-    let lease = ContinuationLease::new(
-        lease_id,
-        worker_binding.worker_id,
-        goal_id,
-        allowance,
-    );
+    let lease = ContinuationLease::new(lease_id, worker_binding.worker_id, goal_id, allowance);
     record_continuation_lease_created(store, &lease).map_err(|error| error.to_string())?;
 
     let replayed = replay_continuation_audit(store.events())?
@@ -9943,11 +9939,9 @@ fn append_controller_worker_control_proposal_checked(
                 .collect::<Vec<_>>();
 
             let permit = match unconsumed.as_slice() {
-                [(lease_id, ordinal)] => reconstruct_unconsumed_continuation_permit(
-                    store.events(),
-                    *lease_id,
-                    *ordinal,
-                )?,
+                [(lease_id, ordinal)] => {
+                    reconstruct_unconsumed_continuation_permit(store.events(), *lease_id, *ordinal)?
+                }
                 [] => {
                     let live = leases
                         .iter()
@@ -14605,10 +14599,7 @@ mod tests {
             .unwrap_err()
             .contains("no live continuation lease")
         );
-        assert_eq!(
-            continuation_store.events().len(),
-            before_missing_authority
-        );
+        assert_eq!(continuation_store.events().len(), before_missing_authority);
 
         let (_, lease_event) = append_controller_continuation_lease_checked(
             &mut continuation_store,
@@ -14618,9 +14609,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(lease_event.kind, EventKind::ContinuationLeaseCreated);
-        let lease_id = replay_continuation_audit(continuation_store.events())
-            .unwrap()[0]
-            .lease_id;
+        let lease_id = replay_continuation_audit(continuation_store.events()).unwrap()[0].lease_id;
         let lease = replay_continuation_audit(continuation_store.events())
             .unwrap()
             .remove(0);
@@ -14674,7 +14663,10 @@ mod tests {
         assert_eq!(replayed_lease.issued, 1);
         assert_eq!(replayed_lease.remaining, 1);
         assert_eq!(replayed_lease.consumed, 1);
-        assert_eq!(replayed_lease.permits[0].consumed_by, Some(continue_control));
+        assert_eq!(
+            replayed_lease.permits[0].consumed_by,
+            Some(continue_control)
+        );
         assert_eq!(
             replay_routing_audit(continuation_store.events())
                 .unwrap()
