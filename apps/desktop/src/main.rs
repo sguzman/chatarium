@@ -12690,13 +12690,19 @@ fn persistence_worker(
             } => match store.append_scoped(Some(local_turn_scope(turn_id)), kind, payload) {
                 Ok(_) => {
                     let event = store.events().last().cloned();
-                    let continuation_result = if matches!(
+                    let terminal_turn_event = matches!(
                         kind,
                         EventKind::AssistantCompletionObserved
                             | EventKind::RemoteFailureObserved
                             | EventKind::TransportInterrupted
-                    ) {
+                    );
+                    let continuation_result = if terminal_turn_event {
                         append_worker_continuation_result_if_terminal(&mut store, turn_id)
+                    } else {
+                        Ok(None)
+                    };
+                    let coordination_result = if terminal_turn_event {
+                        append_controller_coordination_result_if_terminal(&mut store, turn_id)
                     } else {
                         Ok(None)
                     };
@@ -12721,6 +12727,26 @@ fn persistence_worker(
                         Err(error) => {
                             let _ = notices.send(PersistNotice::Failed {
                                 operation: "worker continuation execution result",
+                                revision: None,
+                                request_id: None,
+                                turn_id: Some(turn_id),
+                                error,
+                            });
+                        }
+                    }
+                    match coordination_result {
+                        Ok(Some(event)) => {
+                            let _ = notices.send(
+                                PersistNotice::ControllerCoordinationResultRecorded {
+                                    turn_id,
+                                    event,
+                                },
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "controller coordination result",
                                 revision: None,
                                 request_id: None,
                                 turn_id: Some(turn_id),
