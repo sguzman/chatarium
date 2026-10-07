@@ -264,9 +264,35 @@ dispatch deliberately does not recursively ingest prior coordination results;
 that would require a separate explicit policy rather than emerging from ordinary
 context admission.
 
-The next safe boundary is a **typed, non-authoritative coordination suggestion
-layer**. A coordination result may propose a possible next worker action in a
-machine-readable form, but the suggestion itself must grant no control,
-lifecycle, route, dispatch, or continuation authority. Promotion of a suggestion
-into a real WorkerControl must remain an explicit user action and still traverse
-the existing control admission, route approval, and dispatch gates.
+Typed, non-authoritative coordination suggestions are now landed.
+
+A completed coordination result may be manually encoded into one or more durable
+typed suggestions. Each suggestion has its own `CoordinationSuggestionId` and
+records:
+
+- the exact completed coordination turn/result;
+- one exact worker-result route frozen into that coordination turn as its basis;
+- the worker conversation, WorkerId, and goal carried by that basis result;
+- one proposed action: Start/Resume, Continue, Stop, or StatusRequest.
+
+Suggestion replay requires the basis route to have actually participated in the
+coordination snapshot. Recording a suggestion appends only the suggestion fact:
+it creates no WorkerControl, route, policy decision, lifecycle transition,
+continuation authority, dispatch, or inference-context item.
+
+Promotion is a separate explicit user action. Before promotion, persistence
+revalidates that the target conversation still owns the same WorkerId and that
+the worker is still on the suggestion's frozen goal. Stale suggestions therefore
+fail without creating a control.
+
+A valid promotion then traverses the existing controller-control proposal path:
+typed control admission, controller issuer provenance, RequireApproval route,
+and control↔route correlation are written first. Only after that path replays as
+valid does Chatarium append a suggestion-promotion correlation. The resulting
+route remains **PendingApproval**; promotion never approves or dispatches it.
+
+The next safe boundary is **structured coordination suggestion candidates**.
+The coordination model may return machine-readable candidate actions, but model
+output must remain untrusted proposal evidence. A candidate must not become a
+durable suggestion automatically; the user must explicitly accept/record it
+before the existing promotion and route-approval gates can apply.
