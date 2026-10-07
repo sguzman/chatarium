@@ -42,6 +42,7 @@ use chatarium_store::chat_container_audit::{
 use chatarium_store::control_audit::{
     record_worker_control_admitted, replay_control_audit,
 };
+use chatarium_store::control_admission_audit::validate_control_freshness_before;
 use chatarium_store::control_dispatch_audit::replay_validated_control_dispatches;
 use chatarium_store::control_provenance_audit::{
     record_worker_control_issuer_bound, replay_control_provenance_audit,
@@ -8683,6 +8684,292 @@ fn append_local_controller_worker_binding_checked(
         .ok_or_else(|| "controller-worker binding append produced no durable event".to_owned())
 }
 
+fn append_controller_worker_control_proposal_checked(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+    worker_conversation_id: LocalConversationId,
+    action: ControllerControlAction,
+) -> Result<(ControlId, RouteId, Vec<EventEnvelope>), String> {
+    if controller_conversation_id == worker_conversation_id {
+        return Err("a controller conversation cannot issue a worker control to itself".to_owned());
+    }
+
+    let controller_topology =
+        local_conversation_topology(store.events(), controller_conversation_id)?.ok_or_else(|| {
+            format!(
+                "controller conversation {controller_conversation_id} has no orchestration topology"
+            )
+        })?;
+    let worker_topology =
+        local_conversation_topology(store.events(), worker_conversation_id)?.ok_or_else(|| {
+            format!("worker conversation {worker_conversation_id} has no orchestration topology")
+        })?;
+    let worker_binding = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!("worker conversation {worker_conversation_id} has no local WorkerId binding")
+        })?;
+
+    let sessions = replay_session_audit(store.events())?;
+    let active_worker =
+        active_worker_session(&sessions, worker_binding.worker_id).ok_or_else(|| {
+            format!(
+                "worker {} for local conversation {} has no active session binding",
+                worker_binding.worker_id.get(),
+                worker_conversation_id
+            )
+        })?;
+    if active_worker.session_id != worker_topology.current_session_id {
+        return Err(format!(
+            "worker {} is active on session {}, but local conversation {} current session is {}; advance the worker session first",
+            worker_binding.worker_id.get(),
+            active_worker.session_id.get(),
+            worker_conversation_id,
+            worker_topology.current_session_id.get()
+        ));
+    }
+
+    let supervision = replay_supervision_audit(store.events())?;
+    if !supervision.controllers.iter().any(|record| {
+        record.designation.session_id() == controller_topology.current_session_id
+    }) {
+        return Err(format!(
+            "controller conversation {} current session {} is not controller-designated",
+            controller_conversation_id,
+            controller_topology.current_session_id.get()
+        ));
+    }
+    if !supervision.bindings.iter().any(|record| {
+        record.binding.controller_session_id() == controller_topology.current_session_id
+            && record.binding.worker_session_id() == active_worker.session_id
+    }) {
+        return Err(format!(
+            "controller session {} does not supervise worker {} active session {}",
+            controller_topology.current_session_id.get(),
+            worker_binding.worker_id.get(),
+            active_worker.session_id.get()
+        ));
+    }
+
+    let directory = replay_local_routing_directory(store.events())?;
+    let controller_endpoint = directory
+        .iter()
+        .find(|entry| entry.conversation_id == controller_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "controller conversation {controller_conversation_id} current session is not routing-addressable"
+            )
+        })?;
+    let worker_endpoint = directory
+        .iter()
+        .find(|entry| entry.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "worker conversation {worker_conversation_id} current session is not routing-addressable"
+            )
+        })?;
+    if controller_endpoint.current_session_id != controller_topology.current_session_id
+        || worker_endpoint.current_session_id != worker_topology.current_session_id
+    {
+        return Err("local routing directory disagrees with current controller/worker topology".to_owned());
+    }
+
+    let worker = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == worker_binding.worker_id)
+        .ok_or_else(|| format!("worker {} has no assigned goal", worker_binding.worker_id.get()))?;
+    let goal_id = worker
+        .lifecycle
+        .goal_id()
+        .ok_or_else(|| format!("worker {} has no assigned goal", worker_binding.worker_id.get()))?;
+
+    let control_id = next_available_control_id(store.events())?;
+    let route_id = next_available_route_id(store.events())?;
+    let control = match action {
+        ControllerControlAction::StartOrResume => WorkerControl::start_or_resume(
+            control_id,
+            worker_binding.worker_id,
+            goal_id,
+            &worker.lifecycle,
+        ),
+        ControllerControlAction::Stop => {
+            WorkerControl::stop(control_id, worker_binding.worker_id, goal_id, &worker.lifecycle)
+        }
+        ControllerControlAction::StatusRequest => WorkerControl::status_request(
+            control_id,
+            worker_binding.worker_id,
+            goal_id,
+            &worker.lifecycle,
+        ),
+    }
+    .map_err(|error| format!("controller {} control is not admissible: {error}", action.label()))?;
+
+    let request = RouteRequest {
+        id: route_id,
+        source: controller_endpoint.endpoint_id,
+        destination: worker_endpoint.endpoint_id,
+        class: RouteClass::OrchestrationControl,
+    };
+    let route_binding = ControlRouteBinding::new(control_id, &request)
+        .map_err(|error| format!("invalid controller control route binding: {error:?}"))?;
+
+    let before = store.events().len();
+    record_worker_control_admitted(store, &control).map_err(|error| error.to_string())?;
+    record_worker_control_issuer_bound(
+        store,
+        ControlProvenance::new(
+            control_id,
+            ControlIssuer::ControllerSession(controller_topology.current_session_id),
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    record_route_proposed(store, request, RoutePolicy::RequireApproval)
+        .map_err(|error| error.to_string())?;
+    record_control_route_bound(store, route_binding).map_err(|error| error.to_string())?;
+
+    let validated = replay_validated_orchestration_routes(store.events())?
+        .into_iter()
+        .find(|record| record.control_id == control_id && record.route.id == route_id)
+        .ok_or_else(|| "controller control proposal did not replay as a validated route".to_owned())?;
+    if validated.issuer
+        != ControlIssuer::ControllerSession(controller_topology.current_session_id)
+        || validated.worker_id != worker_binding.worker_id
+        || validated.worker_session_id != Some(active_worker.session_id)
+    {
+        return Err("validated controller control route disagrees with requested provenance".to_owned());
+    }
+
+    Ok((control_id, route_id, store.events()[before..].to_vec()))
+}
+
+fn append_controller_control_route_decision_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    decision: RouteUserDecision,
+) -> Result<EventEnvelope, String> {
+    let validated = replay_validated_orchestration_routes(store.events())?
+        .into_iter()
+        .find(|record| record.route.id == route_id)
+        .ok_or_else(|| format!("route {} is not a validated orchestration control", route_id.get()))?;
+    if !matches!(validated.issuer, ControlIssuer::ControllerSession(_)) {
+        return Err(format!(
+            "route {} is not controller-issued and cannot use the controller control UI",
+            route_id.get()
+        ));
+    }
+
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|record| record.request.id == route_id)
+        .ok_or_else(|| format!("controller control route {} does not exist", route_id.get()))?;
+    if route.initial_policy != RoutePolicy::RequireApproval {
+        return Err(format!(
+            "controller control route {} was not created under explicit-approval policy",
+            route_id.get()
+        ));
+    }
+    if route.gate_state.is_dispatched() {
+        return Err(format!("controller control route {} has already dispatched", route_id.get()));
+    }
+    if route.latest_user_decision == Some(decision) {
+        return Err(format!(
+            "controller control route {} already has explicit user decision {}",
+            route_id.get(),
+            route_user_decision_label(decision)
+        ));
+    }
+
+    let control = replay_control_audit(store.events())?
+        .into_iter()
+        .find(|record| record.control_id == validated.control_id)
+        .ok_or_else(|| format!("controller control {} disappeared", validated.control_id.get()))?;
+    let next_sequence = store
+        .events()
+        .last()
+        .map_or(1, |event| event.sequence.saturating_add(1));
+    validate_control_freshness_before(store.events(), &control, next_sequence)?;
+
+    record_route_user_decision(store, route_id, decision).map_err(|error| error.to_string())?;
+
+    let replayed = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|record| record.request.id == route_id)
+        .ok_or_else(|| "controller control route decision did not replay".to_owned())?;
+    let expected = match decision {
+        RouteUserDecision::Allow => RouteGateState::Allowed {
+            by: DecisionAuthority::User,
+        },
+        RouteUserDecision::Deny => RouteGateState::Denied {
+            by: DecisionAuthority::User,
+        },
+    };
+    if replayed.gate_state != expected {
+        return Err("controller control route gate disagrees with appended decision".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "controller control decision append produced no durable event".to_owned())
+}
+
+fn append_controller_control_dispatch_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+) -> Result<EventEnvelope, String> {
+    let validated = replay_validated_orchestration_routes(store.events())?
+        .into_iter()
+        .find(|record| record.route.id == route_id)
+        .ok_or_else(|| format!("route {} is not a validated orchestration control", route_id.get()))?;
+    if !matches!(validated.issuer, ControlIssuer::ControllerSession(_)) {
+        return Err(format!(
+            "route {} is not controller-issued and cannot use the controller control UI",
+            route_id.get()
+        ));
+    }
+
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|record| record.request.id == route_id)
+        .ok_or_else(|| format!("controller control route {} does not exist", route_id.get()))?;
+    let control = replay_control_audit(store.events())?
+        .into_iter()
+        .find(|record| record.control_id == validated.control_id)
+        .ok_or_else(|| format!("controller control {} disappeared", validated.control_id.get()))?;
+
+    let next_sequence = store
+        .events()
+        .last()
+        .map_or(1, |event| event.sequence.saturating_add(1));
+    validate_control_freshness_before(store.events(), &control, next_sequence)?;
+
+    let mut gate = route_gate_before_dispatch(&route)?;
+    let permit = gate
+        .authorize_dispatch(route_id)
+        .map_err(|error| format!("controller control route {} dispatch gate rejected: {error:?}", route_id.get()))?;
+    let dispatch_sequence =
+        record_route_dispatched(store, permit).map_err(|error| error.to_string())?;
+
+    let dispatched = replay_validated_control_dispatches(store.events())?
+        .into_iter()
+        .find(|record| record.route.id == route_id)
+        .ok_or_else(|| "controller control dispatch did not replay as validated".to_owned())?;
+    if dispatched.control_id != validated.control_id
+        || dispatched.dispatch_sequence != dispatch_sequence
+        || dispatched.authorized_by != DecisionAuthority::User
+    {
+        return Err("validated controller control dispatch disagrees with appended dispatch".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "controller control dispatch append produced no durable event".to_owned())
+}
+
 fn append_worker_goal_checked(
     store: &mut impl EventStore,
     worker_id: WorkerId,
@@ -10410,6 +10697,18 @@ fn next_available_local_orchestration_ids(
         ChatContainerId::new(next_container),
         SessionId::new(next_session),
     ))
+}
+
+fn next_available_control_id(events: &[EventEnvelope]) -> Result<ControlId, String> {
+    let highest = replay_control_audit(events)?
+        .into_iter()
+        .map(|record| record.control_id.get())
+        .max()
+        .unwrap_or(0);
+    let next = highest
+        .checked_add(1)
+        .ok_or_else(|| "control identity space exhausted".to_owned())?;
+    Ok(ControlId::new(next))
 }
 
 fn next_available_route_payload_id(events: &[EventEnvelope]) -> Result<RoutePayloadId, String> {
