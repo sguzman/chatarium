@@ -2593,6 +2593,8 @@ impl ChatariumApp {
             LocalMessageId::new(),
             self.draft.clone(),
         );
+        let mut one_shot_memory_ids = Vec::new();
+        let mut one_shot_memory_snapshot_after_sequence = None;
         if self.remote_connected() {
             if let Some(model) = self.selected_model.clone() {
                 let request_patch = match self.current_behavior_request_patch() {
@@ -2622,6 +2624,29 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                let selected_one_shot = self
+                    .local_memory_one_shot_selections
+                    .get(&self.local_conversation_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let (local_memory_one_shot, snapshot_after_sequence) =
+                    match snapshot_one_shot_local_memory(
+                        &self.events,
+                        self.local_conversation_id,
+                        &selected_one_shot,
+                    ) {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            self.status =
+                                format!("cannot snapshot one-shot local memory: {error}");
+                            return;
+                        }
+                    };
+                one_shot_memory_ids = local_memory_one_shot
+                    .iter()
+                    .map(|memory| memory.memory_id)
+                    .collect();
+                one_shot_memory_snapshot_after_sequence = snapshot_after_sequence;
                 let controller_result_context = match admitted_controller_worker_result_messages(
                     &self.events,
                     self.local_conversation_id,
@@ -2655,6 +2680,9 @@ impl ChatariumApp {
                         developer_context: self.conversation_developer_context.clone(),
                         routed_context,
                         local_memory_context,
+                        local_memory_one_shot,
+                        local_memory_one_shot_snapshot_after_sequence:
+                            one_shot_memory_snapshot_after_sequence,
                         controller_result_context,
                         controller_coordination_result_context,
                         request_patch,
@@ -2665,6 +2693,8 @@ impl ChatariumApp {
         match sender.send(PersistCommand::CommitMessage {
             request_id,
             message,
+            one_shot_memory_ids,
+            one_shot_memory_snapshot_after_sequence,
         }) {
             Ok(()) => {
                 self.commit_in_flight = Some(request_id);
