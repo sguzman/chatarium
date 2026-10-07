@@ -11297,6 +11297,7 @@ mod tests {
                 "local_route_context_decision_updated"
             }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
+            PersistNotice::SupervisionEventAppended { .. } => "supervision_event_appended",
             PersistNotice::Failed { .. } => "failed",
         }
     }
@@ -11688,6 +11689,94 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn checked_local_controller_supervision_requires_explicit_worker_session_role() {
+        let controller_conversation = LocalConversationId::new();
+        let worker_conversation = LocalConversationId::new();
+        let worker_id = WorkerId::new(1);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        append_local_orchestration_topology_checked(
+            &mut store,
+            controller_conversation,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
+        append_local_orchestration_topology_checked(
+            &mut store,
+            worker_conversation,
+            ChatContainerId::new(2),
+            SessionId::new(2),
+        )
+        .unwrap();
+        append_local_worker_binding_checked(&mut store, worker_conversation, worker_id).unwrap();
+
+        let worker_session = append_current_session_worker_binding_checked(
+            &mut store,
+            worker_conversation,
+            worker_id,
+        )
+        .unwrap();
+        assert_eq!(worker_session.kind, EventKind::WorkerSessionBound);
+        assert_eq!(
+            active_worker_session(&replay_session_audit(store.events()).unwrap(), worker_id)
+                .unwrap()
+                .session_id,
+            SessionId::new(2)
+        );
+
+        let before_role_conflict = store.events().len();
+        assert!(
+            append_current_session_controller_designation_checked(
+                &mut store,
+                worker_conversation,
+            )
+            .unwrap_err()
+            .contains("worker-bound")
+        );
+        assert_eq!(store.events().len(), before_role_conflict);
+
+        let controller = append_current_session_controller_designation_checked(
+            &mut store,
+            controller_conversation,
+        )
+        .unwrap();
+        assert_eq!(controller.kind, EventKind::ControllerSessionDesignated);
+
+        let supervised = append_local_controller_worker_binding_checked(
+            &mut store,
+            controller_conversation,
+            worker_conversation,
+        )
+        .unwrap();
+        assert_eq!(supervised.kind, EventKind::ControllerWorkerBound);
+
+        let audit = replay_supervision_audit(store.events()).unwrap();
+        assert_eq!(audit.controllers.len(), 1);
+        assert_eq!(audit.bindings.len(), 1);
+        assert_eq!(
+            audit.bindings[0].binding.controller_session_id(),
+            SessionId::new(1)
+        );
+        assert_eq!(
+            audit.bindings[0].binding.worker_session_id(),
+            SessionId::new(2)
+        );
+
+        let before_duplicate = store.events().len();
+        assert!(
+            append_local_controller_worker_binding_checked(
+                &mut store,
+                controller_conversation,
+                worker_conversation,
+            )
+            .unwrap_err()
+            .contains("already supervised")
+        );
+        assert_eq!(store.events().len(), before_duplicate);
     }
 
     #[test]
