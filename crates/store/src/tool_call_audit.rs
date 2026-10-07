@@ -86,8 +86,7 @@ pub fn replay_tool_call_audit(
             EventKind::ToolCallRecorded => {
                 let value = typed_payload(event, "tool_call_recorded")?;
                 let call_id = ToolCallId::new(required_u64(&value, "call_id")?);
-                let source_session_id =
-                    SessionId::new(required_u64(&value, "source_session_id")?);
+                let source_session_id = SessionId::new(required_u64(&value, "source_session_id")?);
                 let provider_id = ToolProviderId::new(required_u64(&value, "provider_id")?);
                 let operation =
                     ToolOperationName::new(required_string(&value, "operation")?.to_owned())
@@ -338,7 +337,10 @@ pub fn replay_tool_call_audit(
 
 #[must_use]
 pub fn bound_tool_route_ids(records: &[ToolCallAuditRecord]) -> BTreeSet<RouteId> {
-    records.iter().filter_map(|record| record.route_id).collect()
+    records
+        .iter()
+        .filter_map(|record| record.route_id)
+        .collect()
 }
 
 #[must_use]
@@ -421,18 +423,12 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 mod tests {
     use super::*;
     use crate::MemoryEventStore;
-    use crate::routing_audit::{
-        record_route_proposed, record_route_user_decision,
-    };
-    use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound,
-    };
+    use crate::routing_audit::{record_route_proposed, record_route_user_decision};
+    use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
     use crate::tool_provider_audit::{
         record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
-    use chatarium_core::routing::{
-        RouteEndpointId, RouteRequest, RouteUserDecision,
-    };
+    use chatarium_core::routing::{RouteEndpointId, RouteRequest, RouteUserDecision};
     use chatarium_core::session::{SessionEndpointBinding, SessionId};
     use chatarium_core::tool::{ToolProviderEndpointBinding, ToolProviderName};
 
@@ -490,7 +486,11 @@ mod tests {
         let mut store = MemoryEventStore::default();
         setup_addressable(&mut store);
         record_call(&mut store);
-        propose(&mut store, RouteClass::ToolCall, RoutePolicy::RequireApproval);
+        propose(
+            &mut store,
+            RouteClass::ToolCall,
+            RoutePolicy::RequireApproval,
+        );
         record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
 
         let records = replay_tool_call_audit(store.events()).unwrap();
@@ -548,18 +548,18 @@ mod tests {
                 RoutePolicy::RequireApproval,
                 "non-tool route",
             ),
-            (
-                RouteClass::ToolCall,
-                RoutePolicy::Allow,
-                "RequireApproval",
-            ),
+            (RouteClass::ToolCall, RoutePolicy::Allow, "RequireApproval"),
         ] {
             let mut store = MemoryEventStore::default();
             setup_addressable(&mut store);
             record_call(&mut store);
             propose(&mut store, class, policy);
             record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
-            assert!(replay_tool_call_audit(store.events()).unwrap_err().contains(expected));
+            assert!(
+                replay_tool_call_audit(store.events())
+                    .unwrap_err()
+                    .contains(expected)
+            );
         }
     }
 
