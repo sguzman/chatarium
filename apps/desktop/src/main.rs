@@ -15495,15 +15495,21 @@ fn persistence_worker(
             PersistCommand::CommitMessage {
                 request_id,
                 message,
-            } => match commit_user_message(&mut store, &message) {
-                Ok(receipt) => {
-                    if let Some(event) = store.events().last().cloned() {
-                        let _ = notices.send(PersistNotice::MessageCommitted {
-                            request_id,
-                            message: receipt.message,
-                            event,
-                        });
-                    }
+                one_shot_memory_ids,
+                one_shot_memory_snapshot_after_sequence,
+            } => match commit_message_with_one_shot_memory_checked(
+                &mut store,
+                &message,
+                &one_shot_memory_ids,
+                one_shot_memory_snapshot_after_sequence,
+            ) {
+                Ok((event, one_shot_memory_event)) => {
+                    let _ = notices.send(PersistNotice::MessageCommitted {
+                        request_id,
+                        message,
+                        event,
+                        one_shot_memory_event,
+                    });
                 }
                 Err(error) => {
                     let _ = notices.send(PersistNotice::Failed {
@@ -15511,7 +15517,7 @@ fn persistence_worker(
                         revision: None,
                         request_id: Some(request_id),
                         turn_id: Some(message.turn_id),
-                        error: error.to_string(),
+                        error,
                     });
                 }
             },
