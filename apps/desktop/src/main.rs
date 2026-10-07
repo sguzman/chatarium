@@ -127,7 +127,6 @@ use chatarium_store::local_memory_context_audit::{
 };
 use chatarium_store::local_memory_supersession_audit::{
     record_local_memory_superseded, replay_local_memory_supersession_audit,
-    superseded_memory_ids,
 };
 use chatarium_store::local_route_context_audit::{
     LocalRouteContextDecision, record_local_route_context_decision,
@@ -16521,14 +16520,9 @@ fn admitted_local_memory_messages(
 ) -> Result<Vec<context_composer::TranscriptMessage>, String> {
     let artifacts = replay_local_memory_audit(events)?;
     let admitted = replay_admitted_local_memory_context(events, destination_conversation_id)?;
-    let supersessions = replay_local_memory_supersession_audit(events)?;
-    let superseded = superseded_memory_ids(&supersessions);
     let mut messages = Vec::with_capacity(admitted.len());
 
     for record in admitted {
-        if superseded.contains(&record.memory_id) {
-            continue;
-        }
         let artifact = artifacts
             .iter()
             .find(|artifact| artifact.memory_id == record.memory_id)
