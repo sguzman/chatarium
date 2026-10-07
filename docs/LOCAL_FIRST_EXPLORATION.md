@@ -241,5 +241,12 @@ inference context.
 Worker-side control acknowledgement is now landed as a separate durable fact and
 does not mutate lifecycle.
 
-The next safe boundary is explicit worker-side action/result after
-acknowledgement, with separately durable lifecycle/status evidence.
+Acknowledged StatusRequest controls now have an explicit durable worker-side
+result. Recording that result snapshots the already-existing WorkerLifecycle
+goal/phase; it does not mutate lifecycle. The worker control inbox exposes the
+recorded phase and result-event provenance.
+
+The next safe boundary is explicit worker-side application of mutating
+Start/Resume and Stop controls after acknowledgement, with crash-safe separation
+between action intent, durable WorkerLifecycle transition evidence, and the
+control-correlated result.
