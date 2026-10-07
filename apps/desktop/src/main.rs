@@ -3129,7 +3129,8 @@ impl ChatariumApp {
                     if added {
                         self.local_memory_label_drafts.remove(&memory_id);
                     }
-                    self.status = format!("local memory {} labels durably updated", memory_id.get());
+                    self.status =
+                        format!("local memory {} labels durably updated", memory_id.get());
                 }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
@@ -4280,11 +4281,7 @@ impl ChatariumApp {
         }
     }
 
-    fn remove_local_memory_label(
-        &mut self,
-        memory_id: LocalMemoryId,
-        label: LocalMemoryLabel,
-    ) {
+    fn remove_local_memory_label(&mut self, memory_id: LocalMemoryId, label: LocalMemoryLabel) {
         if self.local_memory_command_pending {
             return;
         }
@@ -14621,15 +14618,10 @@ fn persistence_worker(
                 }
             }
             PersistCommand::AddLocalMemoryLabel { memory_id, label } => {
-                match append_local_memory_label_change_checked(
-                    &mut store,
-                    memory_id,
-                    label,
-                    true,
-                ) {
+                match append_local_memory_label_change_checked(&mut store, memory_id, label, true) {
                     Ok(event) => {
-                        let _ =
-                            notices.send(PersistNotice::LocalMemoryLabelUpdated { memory_id, event });
+                        let _ = notices
+                            .send(PersistNotice::LocalMemoryLabelUpdated { memory_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -14643,15 +14635,11 @@ fn persistence_worker(
                 }
             }
             PersistCommand::RemoveLocalMemoryLabel { memory_id, label } => {
-                match append_local_memory_label_change_checked(
-                    &mut store,
-                    memory_id,
-                    label,
-                    false,
-                ) {
+                match append_local_memory_label_change_checked(&mut store, memory_id, label, false)
+                {
                     Ok(event) => {
-                        let _ =
-                            notices.send(PersistNotice::LocalMemoryLabelUpdated { memory_id, event });
+                        let _ = notices
+                            .send(PersistNotice::LocalMemoryLabelUpdated { memory_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
