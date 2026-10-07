@@ -590,16 +590,10 @@ mod tests {
             SessionEndpointBinding::new(controller_session, controller_endpoint),
         )
         .unwrap();
-        record_worker_session_bound(
-            store,
-            WorkerSessionBinding::new(worker, worker_session),
-        )
-        .unwrap();
-        record_controller_session_designated(
-            store,
-            ControllerDesignation::new(controller_session),
-        )
-        .unwrap();
+        record_worker_session_bound(store, WorkerSessionBinding::new(worker, worker_session))
+            .unwrap();
+        record_controller_session_designated(store, ControllerDesignation::new(controller_session))
+            .unwrap();
         record_controller_worker_bound(
             store,
             ControllerWorkerBinding::new(controller_session, worker_session).unwrap(),
@@ -658,11 +652,8 @@ mod tests {
             class: RouteClass::OrchestrationControl,
         };
         record_route_proposed(store, request, RoutePolicy::Allow).unwrap();
-        record_control_route_bound(
-            store,
-            ControlRouteBinding::new(control, &request).unwrap(),
-        )
-        .unwrap();
+        record_control_route_bound(store, ControlRouteBinding::new(control, &request).unwrap())
+            .unwrap();
         let mut gate = RouteGate::new(request, RoutePolicy::Allow);
         let permit = gate.authorize_dispatch(route).unwrap();
         let dispatch_sequence = record_route_dispatched(store, permit).unwrap();
