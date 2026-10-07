@@ -591,7 +591,11 @@ mod tests {
         let mut decided = MemoryEventStore::default();
         setup_addressable(&mut decided);
         record_call(&mut decided);
-        propose(&mut decided, RouteClass::ToolCall, RoutePolicy::RequireApproval);
+        propose(
+            &mut decided,
+            RouteClass::ToolCall,
+            RoutePolicy::RequireApproval,
+        );
         record_route_user_decision(&mut decided, ROUTE, RouteUserDecision::Allow).unwrap();
         record_tool_call_route_bound(&mut decided, CALL, ROUTE).unwrap();
         assert!(
@@ -605,7 +609,11 @@ mod tests {
     fn route_must_be_proposed_after_immutable_call() {
         let mut store = MemoryEventStore::default();
         setup_addressable(&mut store);
-        propose(&mut store, RouteClass::ToolCall, RoutePolicy::RequireApproval);
+        propose(
+            &mut store,
+            RouteClass::ToolCall,
+            RoutePolicy::RequireApproval,
+        );
         record_call(&mut store);
         record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
 
@@ -621,7 +629,11 @@ mod tests {
         let mut store = MemoryEventStore::default();
         setup_addressable(&mut store);
         record_call(&mut store);
-        propose(&mut store, RouteClass::ToolCall, RoutePolicy::RequireApproval);
+        propose(
+            &mut store,
+            RouteClass::ToolCall,
+            RoutePolicy::RequireApproval,
+        );
         record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
         record_tool_call_route_bound(&mut store, CALL, RouteId::new(2)).unwrap();
         assert!(
