@@ -10088,6 +10088,32 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::AcknowledgeWorkerControl {
+                worker_conversation_id,
+                route_id,
+            } => {
+                match append_worker_control_acknowledgement_checked(
+                    &mut store,
+                    worker_conversation_id,
+                    route_id,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::WorkerControlAcknowledged {
+                            route_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "worker control acknowledgement",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AssignWorkerGoal { worker_id, goal_id } => {
                 match append_worker_goal_checked(&mut store, worker_id, goal_id) {
                     Ok(event) => {
@@ -12529,6 +12555,7 @@ mod tests {
                 "controller_control_route_policy_updated"
             }
             PersistNotice::ControllerControlDispatched { .. } => "controller_control_dispatched",
+            PersistNotice::WorkerControlAcknowledged { .. } => "worker_control_acknowledged",
             PersistNotice::Failed { .. } => "failed",
         }
     }
