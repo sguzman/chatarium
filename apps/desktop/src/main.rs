@@ -6579,7 +6579,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Worker control inbox", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command; neither delivery nor acknowledgement mutates lifecycle, ordinary transcript, or inference context.",
+                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command. An acknowledged STATUS request may snapshot existing durable lifecycle state; delivery, acknowledgement, and status reporting do not mutate lifecycle, ordinary transcript, or inference context.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6605,9 +6605,25 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                                 Ok(items) => {
+                                    let status_results =
+                                        match replay_worker_control_status_results(&self.events) {
+                                            Ok(results) => Some(results),
+                                            Err(error) => {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "worker status result projection blocked: {error}"
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        186, 108, 108,
+                                                    )),
+                                                );
+                                                None
+                                            }
+                                        };
                                     egui::ScrollArea::vertical()
                                         .id_salt("worker-control-inbox")
-                                        .max_height(180.0)
+                                        .max_height(220.0)
                                         .show(ui, |ui| {
                                             for item in items {
                                                 ui.group(|ui| {
@@ -6660,6 +6676,52 @@ impl eframe::App for ChatariumApp {
                                                             self.acknowledge_worker_control(
                                                                 item.route_id,
                                                             );
+                                                        }
+
+                                                        if item.kind
+                                                            == WorkerControlKind::StatusRequest
+                                                            && item.acknowledged_sequence.is_some()
+                                                        {
+                                                            let status_result = status_results
+                                                                .as_ref()
+                                                                .and_then(|results| {
+                                                                    results.iter().find(
+                                                                        |record| {
+                                                                            record.route_id
+                                                                                == item.route_id
+                                                                        },
+                                                                    )
+                                                                });
+                                                            if let Some(result) = status_result {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "STATUS RESULT · {} · goal {} · event #{}",
+                                                                        worker_phase_label(
+                                                                            result.phase,
+                                                                        ),
+                                                                        result.goal_id.get(),
+                                                                        result.recorded_sequence,
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                            } else if ui
+                                                                .add_enabled(
+                                                                    status_results.is_some()
+                                                                        && !self
+                                                                            .worker_control_command_pending
+                                                                        && self.persist_tx.is_some(),
+                                                                    egui::Button::new(
+                                                                        "Record status result",
+                                                                    ),
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                self
+                                                                    .record_worker_control_status_result(
+                                                                        item.route_id,
+                                                                    );
+                                                            }
                                                         }
                                                         if self.worker_control_command_pending {
                                                             ui.spinner();
