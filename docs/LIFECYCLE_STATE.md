@@ -291,8 +291,26 @@ and control↔route correlation are written first. Only after that path replays 
 valid does Chatarium append a suggestion-promotion correlation. The resulting
 route remains **PendingApproval**; promotion never approves or dispatches it.
 
-The next safe boundary is **structured coordination suggestion candidates**.
-The coordination model may return machine-readable candidate actions, but model
-output must remain untrusted proposal evidence. A candidate must not become a
-durable suggestion automatically; the user must explicitly accept/record it
-before the existing promotion and route-approval gates can apply.
+Structured coordination suggestion candidates are now landed.
+
+New coordination starts record the versioned `suggestion_candidates_v1`
+contract. The coordination marker requests a strict JSON summary plus
+`basis_result_route_id`/action candidate pairs.
+
+Candidate parsing is deliberately **not** an audit. It is a read-only projection
+over terminal model output. Chatarium rejects malformed/extra fields, unknown or
+non-frozen routes, unsupported actions, duplicate route/action candidates, and
+oversized candidate sets. The model never supplies trusted WorkerId/goal
+provenance; those identities are joined back from the frozen worker-result route.
+
+The UI labels candidates **UNTRUSTED**. Explicit **Accept candidate** is required
+before the existing durable `CoordinationSuggestionId` layer is touched.
+Acceptance still creates no WorkerControl. Promotion remains separate, and route
+approval/dispatch remain separate after promotion.
+
+The controller reasoning/control loop is therefore end-to-end while preserving
+human authority at every state-changing boundary.
+
+The next safe higher-level substrate is durable local memory as a distinct
+provenance/admission domain, not an implicit side effect of lifecycle,
+coordination, routing, or transcript history.
