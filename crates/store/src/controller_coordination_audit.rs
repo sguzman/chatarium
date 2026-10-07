@@ -158,8 +158,7 @@ pub fn replay_controller_coordination_audit(
     for (index, event) in events.iter().enumerate() {
         match event.kind {
             EventKind::ControllerCoordinationTurnStarted => {
-                let (value, version) =
-                    typed_payload(event, "controller_coordination_started")?;
+                let (value, version) = typed_payload(event, "controller_coordination_started")?;
                 let output_contract = parse_output_contract(&value, version, event.sequence)?;
                 let controller_conversation_id = parse_conversation_id(&value, event.sequence)?;
                 let controller_session_id =
@@ -282,8 +281,7 @@ pub fn replay_controller_coordination_audit(
                 );
             }
             EventKind::ControllerCoordinationTurnResultRecorded => {
-                let (value, _) =
-                    typed_payload(event, "controller_coordination_result")?;
+                let (value, _) = typed_payload(event, "controller_coordination_result")?;
                 let controller_conversation_id = parse_conversation_id(&value, event.sequence)?;
                 let controller_session_id =
                     SessionId::new(required_u64(&value, "controller_session_id")?);
@@ -550,10 +548,7 @@ fn append_typed(
     store.append_scoped(Some(scope), kind, encoded)
 }
 
-fn typed_payload(
-    event: &EventEnvelope,
-    expected_record: &str,
-) -> Result<(Value, u64), String> {
+fn typed_payload(event: &EventEnvelope, expected_record: &str) -> Result<(Value, u64), String> {
     let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
         format!(
             "malformed controller coordination payload at sequence {}: {error}",
@@ -694,7 +689,6 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }
-
 
 #[cfg(test)]
 mod output_contract_tests {
