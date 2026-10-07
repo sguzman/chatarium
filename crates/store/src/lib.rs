@@ -14,6 +14,7 @@ pub mod control_delivery_audit;
 pub mod control_dispatch_audit;
 pub mod control_inbox;
 pub mod control_provenance_audit;
+pub mod control_result_audit;
 pub mod control_route_audit;
 pub mod historical_conversation_audit;
 pub mod historical_transcript;
