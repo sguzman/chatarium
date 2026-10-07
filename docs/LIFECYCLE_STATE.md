@@ -180,7 +180,14 @@ authoritative WorkerLifecycle state at result time.
 Status reporting therefore does not fabricate lifecycle evidence: it reports
 existing durable state and cannot change that state.
 
-The next lifecycle/orchestration boundary is explicit worker-side application
-of the mutating Start/Resume and Stop controls after acknowledgement, with
-crash-safe correlation between the control action, the normal durable
-WorkerLifecycle transition, and a separately replayable action result.
+Acknowledged Start/Resume and Stop controls now have an explicit worker-side
+application path. The application audit durably separates action start, the
+ordinary WorkerLifecycle transition carrying control correlation, and the final
+action result. Restart can finish a partially applied action without repeating a
+completed transition, while conflicting unrelated lifecycle changes fail
+closed.
+
+Continue remains deliberately outside that lifecycle-action audit. Its next
+boundary is bounded continuation execution under the existing
+ContinuationLease/ContinuationPermit authority model, with separate durable
+execution/result provenance rather than a fabricated lifecycle phase change.
