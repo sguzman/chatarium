@@ -48,8 +48,9 @@ use chatarium_store::continuation_audit::{
     replay_continuation_audit,
 };
 use chatarium_store::continuation_execution_audit::{
-    continuation_execution_transport_state, record_worker_continuation_execution_started,
-    replay_worker_continuation_execution_audit,
+    continuation_execution_transport_state, record_worker_continuation_execution_result,
+    record_worker_continuation_execution_started, replay_worker_continuation_execution_audit,
+    transport_terminal_outcome,
 };
 use chatarium_store::control_ack_audit::{
     record_worker_control_acknowledged, replay_worker_control_acknowledgement_audit,
@@ -447,6 +448,10 @@ enum PersistNotice {
         appended_events: Vec<EventEnvelope>,
     },
     WorkerContinuationExecutionStarted {
+        route_id: RouteId,
+        event: EventEnvelope,
+    },
+    WorkerContinuationExecutionResultRecorded {
         route_id: RouteId,
         event: EventEnvelope,
     },
@@ -2976,6 +2981,13 @@ impl ChatariumApp {
                     self.worker_control_command_pending = false;
                     self.status = format!(
                         "worker control route {} continuation execution durably started",
+                        route_id.get()
+                    );
+                }
+                PersistNotice::WorkerContinuationExecutionResultRecorded { route_id, event } => {
+                    self.events.push(event);
+                    self.status = format!(
+                        "worker control route {} continuation execution result durably recorded",
                         route_id.get()
                     );
                 }
@@ -14323,6 +14335,9 @@ mod tests {
             PersistNotice::WorkerControlActionAdvanced { .. } => "worker_control_action_advanced",
             PersistNotice::WorkerContinuationExecutionStarted { .. } => {
                 "worker_continuation_execution_started"
+            }
+            PersistNotice::WorkerContinuationExecutionResultRecorded { .. } => {
+                "worker_continuation_execution_result_recorded"
             }
             PersistNotice::Failed { .. } => "failed",
         }
