@@ -228,3 +228,15 @@ The active next architectural boundary is controller-issued typed worker
 controls through the existing control admission/provenance/routing/dispatch
 stack. Durable local memory remains a separate later source. Do not reopen
 browser/history work as part of this phase.
+
+
+## Controller control delivery landed
+
+Controller-issued typed worker controls now pass through durable admission,
+controller provenance, route correlation, explicit approval, one-shot dispatch,
+and a separate worker-side delivery fact. Delivered controls project into a
+read-only worker control inbox and do not mutate lifecycle, transcript, or
+inference context.
+
+The next safe boundary is worker-side acknowledgement/action with separately
+observed lifecycle/status evidence.
