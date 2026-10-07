@@ -84,6 +84,7 @@ use chatarium_store::controller_coordination_audit::{
     record_controller_coordination_result, record_controller_coordination_started,
     replay_controller_coordination_audit,
 };
+use chatarium_store::controller_coordination_candidate_projection::project_controller_coordination_suggestion_candidates;
 use chatarium_store::controller_coordination_context_audit::{
     ControllerCoordinationResultContextDecision,
     record_controller_coordination_result_context_decision,
@@ -9078,6 +9079,134 @@ impl eframe::App for ChatariumApp {
                                                             if outcome
                                                                 == ControllerCoordinationOutcome::Completed
                                                             {
+                                                                ui.collapsing(
+                                                                    "Model suggestion candidates · UNTRUSTED",
+                                                                    |ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                "Parsed from the coordination model's strict JSON output. Candidates have no durable identity or authority until you explicitly accept one into the durable suggestion layer.",
+                                                                            )
+                                                                            .size(9.0)
+                                                                            .color(egui::Color32::from_rgb(
+                                                                                139, 143, 153,
+                                                                            )),
+                                                                        );
+                                                                        match project_controller_coordination_suggestion_candidates(
+                                                                            &self.events,
+                                                                            record.coordination_turn_id,
+                                                                        ) {
+                                                                            Err(error) => {
+                                                                                ui.label(
+                                                                                    egui::RichText::new(format!(
+                                                                                        "candidate output invalid: {error}"
+                                                                                    ))
+                                                                                    .size(9.0)
+                                                                                    .color(egui::Color32::from_rgb(
+                                                                                        186, 108, 108,
+                                                                                    )),
+                                                                                );
+                                                                            }
+                                                                            Ok(projection) => {
+                                                                                ui.label(
+                                                                                    egui::RichText::new(format!(
+                                                                                        "Summary: {}",
+                                                                                        projection.summary
+                                                                                    ))
+                                                                                    .size(10.0),
+                                                                                );
+                                                                                if projection.candidates.is_empty() {
+                                                                                    ui.label(
+                                                                                        egui::RichText::new(
+                                                                                            "model proposed no worker actions",
+                                                                                        )
+                                                                                        .size(9.0)
+                                                                                        .color(egui::Color32::from_rgb(
+                                                                                            139, 143, 153,
+                                                                                        )),
+                                                                                    );
+                                                                                }
+                                                                                for candidate in projection.candidates {
+                                                                                    let already_accepted =
+                                                                                        coordination_suggestions
+                                                                                            .as_ref()
+                                                                                            .is_some_and(|suggestions| {
+                                                                                                suggestions.iter().any(|suggestion| {
+                                                                                                    suggestion.coordination_turn_id
+                                                                                                        == record.coordination_turn_id
+                                                                                                        && suggestion.basis_result_route_id
+                                                                                                            == candidate
+                                                                                                                .basis_result_route_id
+                                                                                                        && suggestion.suggestion.action()
+                                                                                                            == candidate.action
+                                                                                                })
+                                                                                            });
+                                                                                    let worker_title =
+                                                                                        local_conversation_display_title(
+                                                                                            &self.local_conversation_catalog,
+                                                                                            candidate.worker_conversation_id,
+                                                                                            &self.events,
+                                                                                        );
+                                                                                    ui.group(|ui| {
+                                                                                        ui.horizontal_wrapped(|ui| {
+                                                                                            ui.label(
+                                                                                                egui::RichText::new(format!(
+                                                                                                    "CANDIDATE {} · {} · {worker_title} · worker {} · goal {} · basis route {} · NO AUTHORITY",
+                                                                                                    candidate.candidate_index + 1,
+                                                                                                    coordination_suggestion_action_label(
+                                                                                                        candidate.action
+                                                                                                    ),
+                                                                                                    candidate.worker_id.get(),
+                                                                                                    candidate.goal_id.get(),
+                                                                                                    candidate.basis_result_route_id.get(),
+                                                                                                ))
+                                                                                                .monospace()
+                                                                                                .size(9.0),
+                                                                                            );
+                                                                                            if already_accepted {
+                                                                                                ui.label(
+                                                                                                    egui::RichText::new(
+                                                                                                        "ACCEPTED → durable suggestion",
+                                                                                                    )
+                                                                                                    .monospace()
+                                                                                                    .size(9.0),
+                                                                                                );
+                                                                                            } else {
+                                                                                                let can_accept = coordination_suggestions
+                                                                                                    .is_some()
+                                                                                                    && !self
+                                                                                                        .controller_coordination_suggestion_command_pending
+                                                                                                    && !self
+                                                                                                        .controller_control_command_pending
+                                                                                                    && self.persist_tx.is_some();
+                                                                                                if ui
+                                                                                                    .add_enabled(
+                                                                                                        can_accept,
+                                                                                                        egui::Button::new(
+                                                                                                            "Accept candidate",
+                                                                                                        ),
+                                                                                                    )
+                                                                                                    .clicked()
+                                                                                                {
+                                                                                                    self.record_controller_coordination_suggestion(
+                                                                                                        record.coordination_turn_id,
+                                                                                                        candidate.basis_result_route_id,
+                                                                                                        candidate.action,
+                                                                                                    );
+                                                                                                }
+                                                                                            }
+                                                                                        });
+                                                                                    });
+                                                                                }
+                                                                                if self
+                                                                                    .controller_coordination_suggestion_command_pending
+                                                                                {
+                                                                                    ui.spinner();
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                );
+
                                                                 ui.collapsing(
                                                                     "Typed suggestions · NO AUTHORITY",
                                                                     |ui| {
