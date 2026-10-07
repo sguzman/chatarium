@@ -130,7 +130,7 @@ use chatarium_store::local_memory_label_audit::{
     replay_local_memory_label_audit,
 };
 use chatarium_store::local_memory_search::{
-    local_memory_label_facets, search_local_memory_filtered,
+    local_memory_label_facets, local_memory_source_facets, search_local_memory_faceted,
 };
 use chatarium_store::local_memory_supersession_audit::{
     record_local_memory_superseded, replay_local_memory_supersession_audit,
@@ -838,6 +838,7 @@ struct ChatariumApp {
     local_memory_draft: String,
     local_memory_search_query: String,
     local_memory_label_filter: Option<LocalMemoryLabel>,
+    local_memory_source_filter: Option<LocalConversationId>,
     show_superseded_local_memory: bool,
     local_memory_label_drafts: BTreeMap<LocalMemoryId, String>,
     lifecycle_command_pending: bool,
@@ -1104,6 +1105,7 @@ impl ChatariumApp {
                         local_memory_draft: String::new(),
                         local_memory_search_query: String::new(),
                         local_memory_label_filter: None,
+                        local_memory_source_filter: None,
                         show_superseded_local_memory: false,
                         local_memory_label_drafts: BTreeMap::new(),
                         lifecycle_command_pending: false,
@@ -1287,6 +1289,7 @@ impl ChatariumApp {
             local_memory_draft: String::new(),
             local_memory_search_query: String::new(),
             local_memory_label_filter: None,
+            local_memory_source_filter: None,
             show_superseded_local_memory: false,
             local_memory_label_drafts: BTreeMap::new(),
             lifecycle_command_pending: false,
@@ -7490,11 +7493,75 @@ impl eframe::App for ChatariumApp {
                                         });
                                     }
 
-                                    let search_items = match search_local_memory_filtered(
+                                    let source_facets = match local_memory_source_facets(
+                                        &self.events,
+                                        self.show_superseded_local_memory,
+                                    ) {
+                                        Ok(facets) => Some(facets),
+                                        Err(error) => {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "local memory source facets blocked: {error}"
+                                                ))
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    186, 108, 108,
+                                                )),
+                                            );
+                                            None
+                                        }
+                                    };
+                                    if let Some(facets) = source_facets.as_ref() {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Source facet")
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        139, 143, 153,
+                                                    )),
+                                            );
+                                            if ui
+                                                .selectable_label(
+                                                    self.local_memory_source_filter.is_none(),
+                                                    "All",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.local_memory_source_filter = None;
+                                            }
+                                            for facet in facets {
+                                                let source_title =
+                                                    local_conversation_display_title(
+                                                        &self.local_conversation_catalog,
+                                                        facet.source_conversation_id,
+                                                        &self.events,
+                                                    );
+                                                let selected = self.local_memory_source_filter
+                                                    == Some(facet.source_conversation_id);
+                                                if ui
+                                                    .selectable_label(
+                                                        selected,
+                                                        format!(
+                                                            "{} ({})",
+                                                            source_title,
+                                                            facet.artifact_count,
+                                                        ),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    self.local_memory_source_filter =
+                                                        Some(facet.source_conversation_id);
+                                                }
+                                            }
+                                        });
+                                    }
+
+                                    let search_items = match search_local_memory_faceted(
                                         &self.events,
                                         self.local_memory_search_query.as_str(),
                                         self.show_superseded_local_memory,
                                         self.local_memory_label_filter.as_ref(),
+                                        self.local_memory_source_filter,
                                     ) {
                                         Ok(items) => Some(items),
                                         Err(error) => {
