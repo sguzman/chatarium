@@ -137,7 +137,7 @@ use chatarium_store::local_memory_supersession_audit::{
 };
 use chatarium_store::local_memory_turn_selection_audit::{
     MAX_ONE_SHOT_MEMORIES_PER_TURN, record_local_memory_turn_selection,
-    replay_local_memory_turn_selection_audit,
+    replay_local_memory_turn_selection_audit, validate_local_memory_one_shot_snapshot,
 };
 use chatarium_store::local_route_context_audit::{
     LocalRouteContextDecision, record_local_route_context_decision,
@@ -16960,6 +16960,37 @@ fn admitted_routed_context_messages(
 
     messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
     Ok(messages)
+}
+
+fn snapshot_one_shot_local_memory(
+    events: &[EventEnvelope],
+    destination_conversation_id: LocalConversationId,
+    selected_memory_ids: &BTreeSet<LocalMemoryId>,
+) -> Result<(Vec<PendingOneShotMemory>, Option<u64>), String> {
+    if selected_memory_ids.is_empty() {
+        return Ok((Vec::new(), None));
+    }
+
+    let snapshot_after_sequence = events.last().map(|event| event.sequence).unwrap_or(0);
+    let memory_ids = selected_memory_ids.iter().copied().collect::<Vec<_>>();
+    let artifacts = validate_local_memory_one_shot_snapshot(
+        events,
+        destination_conversation_id,
+        &memory_ids,
+        snapshot_after_sequence,
+    )?;
+
+    let pending = artifacts
+        .into_iter()
+        .map(|artifact| PendingOneShotMemory {
+            memory_id: artifact.memory_id,
+            source_conversation_id: artifact.source_conversation_id,
+            text: artifact.text,
+            artifact_sequence: artifact.recorded_sequence,
+        })
+        .collect::<Vec<_>>();
+
+    Ok((pending, Some(snapshot_after_sequence)))
 }
 
 fn admitted_local_memory_messages(
