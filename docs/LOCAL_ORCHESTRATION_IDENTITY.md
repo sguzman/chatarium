@@ -440,20 +440,33 @@ acknowledgement and displays the resulting durable phase snapshot.
 Status reporting does not mutate WorkerLifecycle, transcript, routing, or
 inference context.
 
-## Next implementation boundary
+## Landed worker-side mutating control application
 
-The next safe boundary is explicit worker-side application of the mutating
-`StartOrResume` and `Stop` controls.
+Acknowledged `StartOrResume` and `Stop` controls can now be explicitly
+applied from the worker conversation.
 
-That boundary must preserve the distinction between:
+Application preserves seven distinct durable boundaries:
 
 1. command admission;
 2. user-approved route dispatch;
 3. durable delivery;
 4. worker acknowledgement;
 5. explicit worker-side action intent;
-6. the normal durable WorkerLifecycle transition;
+6. the normal durable WorkerLifecycle transition carrying control correlation;
 7. a separately replayable control-correlated action result.
 
-Crash recovery must not infer execution merely from acknowledgement or from an
-unrelated lifecycle transition.
+The path is crash-recoverable. Restart after action start can still perform the
+missing correlated lifecycle transition; restart after that transition can add
+only the missing result. An unrelated lifecycle transition after action start
+causes recovery to fail closed rather than being misidentified as execution.
+
+## Next implementation boundary
+
+The next safe boundary is bounded `Continue` execution.
+
+Continue must not be forced through the Start/Stop lifecycle-action audit,
+because a Continue command consumes finite continuation authority but does not
+change WorkerPhase. The desktop must expose the existing
+`ContinuationLease → ContinuationPermit → Continue control` chain explicitly,
+and worker-side continuation execution/result must receive its own durable,
+crash-safe provenance.
