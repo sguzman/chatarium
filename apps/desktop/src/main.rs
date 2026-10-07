@@ -18314,23 +18314,15 @@ mod tests {
             1
         );
 
-        let supersession = append_local_memory_supersession_checked(
-            &mut store,
-            predecessor,
-            successor,
-        )
-        .unwrap();
-        assert_eq!(
-            supersession.kind,
-            EventKind::LocalMemoryArtifactSuperseded
-        );
+        let supersession =
+            append_local_memory_supersession_checked(&mut store, predecessor, successor).unwrap();
+        assert_eq!(supersession.kind, EventKind::LocalMemoryArtifactSuperseded);
 
         let raw_context = replay_local_memory_context_audit(store.events()).unwrap();
         let old_decision = raw_context
             .iter()
             .find(|record| {
-                record.memory_id == predecessor
-                    && record.destination_conversation_id == destination
+                record.memory_id == predecessor && record.destination_conversation_id == destination
             })
             .unwrap();
         assert_eq!(old_decision.decision, LocalMemoryContextDecision::Admit);
