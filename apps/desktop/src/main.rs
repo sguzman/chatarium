@@ -9265,7 +9265,18 @@ fn append_controller_control_route_decision_checked(
 fn append_controller_control_dispatch_checked(
     store: &mut impl EventStore,
     route_id: RouteId,
-) -> Result<EventEnvelope, String> {
+) -> Result<Vec<EventEnvelope>, String> {
+    if let Some(existing) = replay_worker_control_delivery_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+    {
+        return Err(format!(
+            "controller control route {} is already delivered at event #{}",
+            route_id.get(),
+            existing.delivered_sequence
+        ));
+    }
+
     let validated = replay_validated_orchestration_routes(store.events())?
         .into_iter()
         .find(|record| record.route.id == route_id)
@@ -9275,12 +9286,15 @@ fn append_controller_control_dispatch_checked(
                 route_id.get()
             )
         })?;
-    if !matches!(validated.issuer, ControlIssuer::ControllerSession(_)) {
-        return Err(format!(
-            "route {} is not controller-issued and cannot use the controller control UI",
-            route_id.get()
-        ));
-    }
+    let controller_session_id = match validated.issuer {
+        ControlIssuer::ControllerSession(session_id) => session_id,
+        ControlIssuer::User => {
+            return Err(format!(
+                "route {} is not controller-issued and cannot use the controller control UI",
+                route_id.get()
+            ));
+        }
+    };
 
     let route = replay_routing_audit(store.events())?
         .into_iter()
@@ -9296,21 +9310,43 @@ fn append_controller_control_dispatch_checked(
             )
         })?;
 
-    let next_sequence = store
-        .events()
-        .last()
-        .map_or(1, |event| event.sequence.saturating_add(1));
-    validate_control_freshness_before(store.events(), &control, next_sequence)?;
+    let before = store.events().len();
+    let dispatch_sequence = match route.gate_state {
+        RouteGateState::Allowed { .. } => {
+            let next_sequence = store
+                .events()
+                .last()
+                .map_or(1, |event| event.sequence.saturating_add(1));
+            validate_control_freshness_before(store.events(), &control, next_sequence)?;
 
-    let mut gate = route_gate_before_dispatch(&route)?;
-    let permit = gate.authorize_dispatch(route_id).map_err(|error| {
-        format!(
-            "controller control route {} dispatch gate rejected: {error:?}",
-            route_id.get()
-        )
-    })?;
-    let dispatch_sequence =
-        record_route_dispatched(store, permit).map_err(|error| error.to_string())?;
+            let mut gate = route_gate_before_dispatch(&route)?;
+            let permit = gate.authorize_dispatch(route_id).map_err(|error| {
+                format!(
+                    "controller control route {} dispatch gate rejected: {error:?}",
+                    route_id.get()
+                )
+            })?;
+            record_route_dispatched(store, permit).map_err(|error| error.to_string())?
+        }
+        RouteGateState::Dispatched { .. } => route.dispatch_sequence.ok_or_else(|| {
+            format!(
+                "controller control route {} is marked dispatched without a durable dispatch sequence",
+                route_id.get()
+            )
+        })?,
+        RouteGateState::PendingApproval => {
+            return Err(format!(
+                "controller control route {} is still awaiting explicit user approval",
+                route_id.get()
+            ));
+        }
+        RouteGateState::Denied { .. } => {
+            return Err(format!(
+                "controller control route {} is denied and cannot dispatch",
+                route_id.get()
+            ));
+        }
+    };
 
     let dispatched = replay_validated_control_dispatches(store.events())?
         .into_iter()
@@ -9321,15 +9357,62 @@ fn append_controller_control_dispatch_checked(
         || dispatched.authorized_by != DecisionAuthority::User
     {
         return Err(
-            "validated controller control dispatch disagrees with appended dispatch".to_owned(),
+            "validated controller control dispatch disagrees with durable dispatch".to_owned(),
         );
     }
 
-    store
-        .events()
-        .last()
-        .cloned()
-        .ok_or_else(|| "controller control dispatch append produced no durable event".to_owned())
+    let worker_session_id = dispatched.worker_session_id.ok_or_else(|| {
+        format!(
+            "controller control {} has no resolved worker session at dispatch",
+            dispatched.control_id.get()
+        )
+    })?;
+    if dispatched.controller_session_id != Some(controller_session_id) {
+        return Err(
+            "validated controller control dispatch controller provenance disagrees".to_owned(),
+        );
+    }
+
+    let worker_owner = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.worker_id == dispatched.worker_id)
+        .ok_or_else(|| {
+            format!(
+                "controller control {} targets worker {} without local conversation ownership",
+                dispatched.control_id.get(),
+                dispatched.worker_id.get()
+            )
+        })?;
+
+    record_worker_control_delivered(
+        store,
+        dispatched.control_id,
+        route_id,
+        dispatched.worker_id,
+        worker_owner.conversation_id,
+        worker_session_id,
+        controller_session_id,
+        dispatch_sequence,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let delivery = replay_worker_control_delivery_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+        .ok_or_else(|| "controller control delivery did not replay".to_owned())?;
+    if delivery.control_id != dispatched.control_id
+        || delivery.worker_id != dispatched.worker_id
+        || delivery.worker_conversation_id != worker_owner.conversation_id
+        || delivery.worker_session_id != worker_session_id
+        || delivery.controller_session_id != controller_session_id
+        || delivery.dispatch_sequence != dispatch_sequence
+    {
+        return Err(
+            "worker control delivery replay disagrees with dispatched control provenance".to_owned(),
+        );
+    }
+
+    Ok(store.events()[before..].to_vec())
 }
 
 fn append_worker_goal_checked(
@@ -9764,9 +9847,11 @@ fn persistence_worker(
             }
             PersistCommand::DispatchControllerWorkerControlRoute { route_id } => {
                 match append_controller_control_dispatch_checked(&mut store, route_id) {
-                    Ok(event) => {
-                        let _ = notices
-                            .send(PersistNotice::ControllerControlDispatched { route_id, event });
+                    Ok(appended_events) => {
+                        let _ = notices.send(PersistNotice::ControllerControlDispatched {
+                            route_id,
+                            appended_events,
+                        });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
