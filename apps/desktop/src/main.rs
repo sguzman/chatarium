@@ -39,10 +39,8 @@ use chatarium_store::authored::{
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
 };
-use chatarium_store::control_audit::{
-    record_worker_control_admitted, replay_control_audit,
-};
 use chatarium_store::control_admission_audit::validate_control_freshness_before;
+use chatarium_store::control_audit::{record_worker_control_admitted, replay_control_audit};
 use chatarium_store::control_dispatch_audit::replay_validated_control_dispatches;
 use chatarium_store::control_provenance_audit::{
     record_worker_control_issuer_bound, replay_control_provenance_audit,
@@ -2848,8 +2846,10 @@ impl ChatariumApp {
                 PersistNotice::ControllerControlDispatched { route_id, event } => {
                     self.events.push(event);
                     self.controller_control_command_pending = false;
-                    self.status =
-                        format!("controller control route {} durably dispatched", route_id.get());
+                    self.status = format!(
+                        "controller control route {} durably dispatched",
+                        route_id.get()
+                    );
                 }
                 PersistNotice::Failed {
                     operation,
@@ -3827,13 +3827,12 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status = "cannot decide controller control route: persistence unavailable".to_owned();
+            self.status =
+                "cannot decide controller control route: persistence unavailable".to_owned();
             return;
         };
-        match sender.send(PersistCommand::DecideControllerWorkerControlRoute {
-            route_id,
-            decision,
-        }) {
+        match sender.send(PersistCommand::DecideControllerWorkerControlRoute { route_id, decision })
+        {
             Ok(()) => {
                 self.controller_control_command_pending = true;
                 self.status = format!(
@@ -3853,7 +3852,8 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status = "cannot dispatch controller control route: persistence unavailable".to_owned();
+            self.status =
+                "cannot dispatch controller control route: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::DispatchControllerWorkerControlRoute { route_id }) {
@@ -8993,14 +8993,17 @@ fn append_controller_worker_control_proposal_checked(
         return Err("a controller conversation cannot issue a worker control to itself".to_owned());
     }
 
-    let controller_topology =
-        local_conversation_topology(store.events(), controller_conversation_id)?.ok_or_else(|| {
-            format!(
-                "controller conversation {controller_conversation_id} has no orchestration topology"
-            )
-        })?;
-    let worker_topology =
-        local_conversation_topology(store.events(), worker_conversation_id)?.ok_or_else(|| {
+    let controller_topology = local_conversation_topology(
+        store.events(),
+        controller_conversation_id,
+    )?
+    .ok_or_else(|| {
+        format!(
+            "controller conversation {controller_conversation_id} has no orchestration topology"
+        )
+    })?;
+    let worker_topology = local_conversation_topology(store.events(), worker_conversation_id)?
+        .ok_or_else(|| {
             format!("worker conversation {worker_conversation_id} has no orchestration topology")
         })?;
     let worker_binding = replay_local_conversation_worker_bindings(store.events())?
@@ -9030,9 +9033,11 @@ fn append_controller_worker_control_proposal_checked(
     }
 
     let supervision = replay_supervision_audit(store.events())?;
-    if !supervision.controllers.iter().any(|record| {
-        record.designation.session_id() == controller_topology.current_session_id
-    }) {
+    if !supervision
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == controller_topology.current_session_id)
+    {
         return Err(format!(
             "controller conversation {} current session {} is not controller-designated",
             controller_conversation_id,
@@ -9071,17 +9076,26 @@ fn append_controller_worker_control_proposal_checked(
     if controller_endpoint.current_session_id != controller_topology.current_session_id
         || worker_endpoint.current_session_id != worker_topology.current_session_id
     {
-        return Err("local routing directory disagrees with current controller/worker topology".to_owned());
+        return Err(
+            "local routing directory disagrees with current controller/worker topology".to_owned(),
+        );
     }
 
     let worker = replay_worker_audit(store.events())?
         .into_iter()
         .find(|record| record.worker_id == worker_binding.worker_id)
-        .ok_or_else(|| format!("worker {} has no assigned goal", worker_binding.worker_id.get()))?;
-    let goal_id = worker
-        .lifecycle
-        .goal_id()
-        .ok_or_else(|| format!("worker {} has no assigned goal", worker_binding.worker_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "worker {} has no assigned goal",
+                worker_binding.worker_id.get()
+            )
+        })?;
+    let goal_id = worker.lifecycle.goal_id().ok_or_else(|| {
+        format!(
+            "worker {} has no assigned goal",
+            worker_binding.worker_id.get()
+        )
+    })?;
 
     let control_id = next_available_control_id(store.events())?;
     let route_id = next_available_route_id(store.events())?;
@@ -9092,9 +9106,12 @@ fn append_controller_worker_control_proposal_checked(
             goal_id,
             &worker.lifecycle,
         ),
-        ControllerControlAction::Stop => {
-            WorkerControl::stop(control_id, worker_binding.worker_id, goal_id, &worker.lifecycle)
-        }
+        ControllerControlAction::Stop => WorkerControl::stop(
+            control_id,
+            worker_binding.worker_id,
+            goal_id,
+            &worker.lifecycle,
+        ),
         ControllerControlAction::StatusRequest => WorkerControl::status_request(
             control_id,
             worker_binding.worker_id,
@@ -9102,7 +9119,12 @@ fn append_controller_worker_control_proposal_checked(
             &worker.lifecycle,
         ),
     }
-    .map_err(|error| format!("controller {} control is not admissible: {error}", action.label()))?;
+    .map_err(|error| {
+        format!(
+            "controller {} control is not admissible: {error}",
+            action.label()
+        )
+    })?;
 
     let request = RouteRequest {
         id: route_id,
@@ -9130,13 +9152,16 @@ fn append_controller_worker_control_proposal_checked(
     let validated = replay_validated_orchestration_routes(store.events())?
         .into_iter()
         .find(|record| record.control_id == control_id && record.route.id == route_id)
-        .ok_or_else(|| "controller control proposal did not replay as a validated route".to_owned())?;
-    if validated.issuer
-        != ControlIssuer::ControllerSession(controller_topology.current_session_id)
+        .ok_or_else(|| {
+            "controller control proposal did not replay as a validated route".to_owned()
+        })?;
+    if validated.issuer != ControlIssuer::ControllerSession(controller_topology.current_session_id)
         || validated.worker_id != worker_binding.worker_id
         || validated.worker_session_id != Some(active_worker.session_id)
     {
-        return Err("validated controller control route disagrees with requested provenance".to_owned());
+        return Err(
+            "validated controller control route disagrees with requested provenance".to_owned(),
+        );
     }
 
     Ok((control_id, route_id, store.events()[before..].to_vec()))
@@ -9150,7 +9175,12 @@ fn append_controller_control_route_decision_checked(
     let validated = replay_validated_orchestration_routes(store.events())?
         .into_iter()
         .find(|record| record.route.id == route_id)
-        .ok_or_else(|| format!("route {} is not a validated orchestration control", route_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "route {} is not a validated orchestration control",
+                route_id.get()
+            )
+        })?;
     if !matches!(validated.issuer, ControlIssuer::ControllerSession(_)) {
         return Err(format!(
             "route {} is not controller-issued and cannot use the controller control UI",
@@ -9169,7 +9199,10 @@ fn append_controller_control_route_decision_checked(
         ));
     }
     if route.gate_state.is_dispatched() {
-        return Err(format!("controller control route {} has already dispatched", route_id.get()));
+        return Err(format!(
+            "controller control route {} has already dispatched",
+            route_id.get()
+        ));
     }
     if route.latest_user_decision == Some(decision) {
         return Err(format!(
@@ -9182,7 +9215,12 @@ fn append_controller_control_route_decision_checked(
     let control = replay_control_audit(store.events())?
         .into_iter()
         .find(|record| record.control_id == validated.control_id)
-        .ok_or_else(|| format!("controller control {} disappeared", validated.control_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "controller control {} disappeared",
+                validated.control_id.get()
+            )
+        })?;
     let next_sequence = store
         .events()
         .last()
@@ -9245,9 +9283,12 @@ fn append_controller_control_dispatch_checked(
     validate_control_freshness_before(store.events(), &control, next_sequence)?;
 
     let mut gate = route_gate_before_dispatch(&route)?;
-    let permit = gate
-        .authorize_dispatch(route_id)
-        .map_err(|error| format!("controller control route {} dispatch gate rejected: {error:?}", route_id.get()))?;
+    let permit = gate.authorize_dispatch(route_id).map_err(|error| {
+        format!(
+            "controller control route {} dispatch gate rejected: {error:?}",
+            route_id.get()
+        )
+    })?;
     let dispatch_sequence =
         record_route_dispatched(store, permit).map_err(|error| error.to_string())?;
 
@@ -9259,7 +9300,9 @@ fn append_controller_control_dispatch_checked(
         || dispatched.dispatch_sequence != dispatch_sequence
         || dispatched.authorized_by != DecisionAuthority::User
     {
-        return Err("validated controller control dispatch disagrees with appended dispatch".to_owned());
+        return Err(
+            "validated controller control dispatch disagrees with appended dispatch".to_owned(),
+        );
     }
 
     store
@@ -9680,14 +9723,13 @@ fn persistence_worker(
             }
             PersistCommand::DecideControllerWorkerControlRoute { route_id, decision } => {
                 match append_controller_control_route_decision_checked(
-                    &mut store,
-                    route_id,
-                    decision,
+                    &mut store, route_id, decision,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(
-                            PersistNotice::ControllerControlRoutePolicyUpdated { route_id, event },
-                        );
+                        let _ = notices.send(PersistNotice::ControllerControlRoutePolicyUpdated {
+                            route_id,
+                            event,
+                        });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -9703,10 +9745,8 @@ fn persistence_worker(
             PersistCommand::DispatchControllerWorkerControlRoute { route_id } => {
                 match append_controller_control_dispatch_checked(&mut store, route_id) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::ControllerControlDispatched {
-                            route_id,
-                            event,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::ControllerControlDispatched { route_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -12159,9 +12199,7 @@ mod tests {
             PersistNotice::ControllerControlRoutePolicyUpdated { .. } => {
                 "controller_control_route_policy_updated"
             }
-            PersistNotice::ControllerControlDispatched { .. } => {
-                "controller_control_dispatched"
-            }
+            PersistNotice::ControllerControlDispatched { .. } => "controller_control_dispatched",
             PersistNotice::Failed { .. } => "failed",
         }
     }
@@ -12644,7 +12682,12 @@ mod tests {
     fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         fn ready_supervised_pair(
             store: &mut chatarium_store::MemoryEventStore,
-        ) -> (LocalConversationId, LocalConversationId, WorkerId, WorkerGoalId) {
+        ) -> (
+            LocalConversationId,
+            LocalConversationId,
+            WorkerId,
+            WorkerGoalId,
+        ) {
             let controller_conversation = LocalConversationId::new();
             let worker_conversation = LocalConversationId::new();
             let worker_id = WorkerId::new(1);
@@ -12679,17 +12722,10 @@ mod tests {
             )
             .unwrap();
             append_local_worker_binding_checked(store, worker_conversation, worker_id).unwrap();
-            append_current_session_worker_binding_checked(
-                store,
-                worker_conversation,
-                worker_id,
-            )
-            .unwrap();
-            append_current_session_controller_designation_checked(
-                store,
-                controller_conversation,
-            )
-            .unwrap();
+            append_current_session_worker_binding_checked(store, worker_conversation, worker_id)
+                .unwrap();
+            append_current_session_controller_designation_checked(store, controller_conversation)
+                .unwrap();
             append_local_controller_worker_binding_checked(
                 store,
                 controller_conversation,
@@ -12717,14 +12753,13 @@ mod tests {
         let (controller, worker_conversation, worker_id, goal_id) =
             ready_supervised_pair(&mut store);
 
-        let (control_id, route_id, proposed) =
-            append_controller_worker_control_proposal_checked(
-                &mut store,
-                controller,
-                worker_conversation,
-                ControllerControlAction::Stop,
-            )
-            .unwrap();
+        let (control_id, route_id, proposed) = append_controller_worker_control_proposal_checked(
+            &mut store,
+            controller,
+            worker_conversation,
+            ControllerControlAction::Stop,
+        )
+        .unwrap();
         assert_eq!(proposed.len(), 4);
         assert_eq!(proposed[0].kind, EventKind::WorkerControlAdmitted);
         assert_eq!(proposed[1].kind, EventKind::WorkerControlIssuerBound);
@@ -12755,8 +12790,7 @@ mod tests {
             RouteUserDecision::Allow,
         )
         .unwrap();
-        let dispatch =
-            append_controller_control_dispatch_checked(&mut store, route_id).unwrap();
+        let dispatch = append_controller_control_dispatch_checked(&mut store, route_id).unwrap();
         assert_eq!(dispatch.kind, EventKind::RouteDispatched);
 
         let validated = replay_validated_control_dispatches(store.events()).unwrap();
