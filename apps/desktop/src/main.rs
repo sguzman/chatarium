@@ -11950,10 +11950,9 @@ fn append_controller_coordination_result_context_decision_checked(
         )
     })?;
 
-    if let Some(existing) =
-        replay_controller_coordination_result_context_audit(store.events())?
-            .into_iter()
-            .find(|record| record.coordination_turn_id == coordination_turn_id)
+    if let Some(existing) = replay_controller_coordination_result_context_audit(store.events())?
+        .into_iter()
+        .find(|record| record.coordination_turn_id == coordination_turn_id)
     {
         if existing.controller_conversation_id != controller_conversation_id
             || existing.result_sequence != result_sequence
@@ -14998,10 +14997,8 @@ fn admitted_controller_coordination_result_messages(
     events: &[EventEnvelope],
     controller_conversation_id: LocalConversationId,
 ) -> Result<Vec<context_composer::TranscriptMessage>, String> {
-    let admitted = replay_admitted_controller_coordination_result_context(
-        events,
-        controller_conversation_id,
-    )?;
+    let admitted =
+        replay_admitted_controller_coordination_result_context(events, controller_conversation_id)?;
     let coordinations = replay_controller_coordination_audit(events)?;
     let mut messages = Vec::with_capacity(admitted.len());
 
@@ -15029,11 +15026,8 @@ fn admitted_controller_coordination_result_messages(
                 record.coordination_turn_id
             )
         })?;
-        let output = controller_coordination_output_text(
-            events,
-            record.coordination_turn_id,
-        )?
-        .unwrap_or_else(|| "(no durable coordination output)".to_owned());
+        let output = controller_coordination_output_text(events, record.coordination_turn_id)?
+            .unwrap_or_else(|| "(no durable coordination output)".to_owned());
 
         messages.push(
             context_composer::TranscriptMessage::controller_coordination_result(
@@ -17039,14 +17033,13 @@ mod tests {
             .is_empty()
         );
 
-        let coordination_admit =
-            append_controller_coordination_result_context_decision_checked(
-                &mut status_store,
-                coordination_turn_id,
-                status_controller,
-                ControllerCoordinationResultContextDecision::Admit,
-            )
-            .unwrap();
+        let coordination_admit = append_controller_coordination_result_context_decision_checked(
+            &mut status_store,
+            coordination_turn_id,
+            status_controller,
+            ControllerCoordinationResultContextDecision::Admit,
+        )
+        .unwrap();
         assert_eq!(
             coordination_admit.kind,
             EventKind::ControllerCoordinationResultContextDecisionRecorded
