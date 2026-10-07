@@ -88,8 +88,7 @@ pub fn replay_worker_control_delivery_audit(
                     )
                 })?;
         let worker_session_id = SessionId::new(required_u64(&value, "worker_session_id")?);
-        let controller_session_id =
-            SessionId::new(required_u64(&value, "controller_session_id")?);
+        let controller_session_id = SessionId::new(required_u64(&value, "controller_session_id")?);
         let dispatch_sequence = required_u64(&value, "dispatch_sequence")?;
         validate_scope(event, route_id, control_id)?;
 
