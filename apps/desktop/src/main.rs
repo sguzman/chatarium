@@ -8496,6 +8496,74 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::BindCurrentSessionWorker {
+                conversation_id,
+                worker_id,
+            } => {
+                match append_current_session_worker_binding_checked(
+                    &mut store,
+                    conversation_id,
+                    worker_id,
+                ) {
+                    Ok(event) => {
+                        let _ =
+                            notices.send(PersistNotice::SupervisionEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "supervision worker-session binding",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DesignateCurrentSessionController { conversation_id } => {
+                match append_current_session_controller_designation_checked(
+                    &mut store,
+                    conversation_id,
+                ) {
+                    Ok(event) => {
+                        let _ =
+                            notices.send(PersistNotice::SupervisionEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "supervision controller designation",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::BindControllerToLocalWorker {
+                controller_conversation_id,
+                worker_conversation_id,
+            } => {
+                match append_local_controller_worker_binding_checked(
+                    &mut store,
+                    controller_conversation_id,
+                    worker_conversation_id,
+                ) {
+                    Ok(event) => {
+                        let _ =
+                            notices.send(PersistNotice::SupervisionEventAppended { event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "supervision controller-worker binding",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AssignWorkerGoal { worker_id, goal_id } => {
                 match append_worker_goal_checked(&mut store, worker_id, goal_id) {
                     Ok(event) => {
