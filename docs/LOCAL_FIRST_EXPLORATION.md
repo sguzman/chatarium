@@ -348,8 +348,16 @@ is snapshotted at Send.
 No transcript sharing, routed-message delivery, coordination result, lifecycle
 state, or model output silently becomes memory.
 
-The active next architectural boundary is **explicit memory supersession** so a
-new immutable artifact can correct/replace an older one without rewriting
-journal history. Supersession must make stale memory context behavior explicit;
-it must not silently migrate old admission to a successor. Do not reopen
+Memory supersession, read-only discovery, durable user-authored labels, exact
+label facets, and exact source-conversation facets are now landed. Superseded
+predecessors remain historically visible but mechanically excluded from
+effective context; labels and facets never grant context authority.
+
+The active next architectural boundary is **next-request-only manual memory
+selection**. A discovered memory should be usable for one authored request
+without converting that choice into persistent Admit state. The exact one-shot
+set must be visible and frozen at Send, then consumed without leaking into later
+requests.
+
+Automatic semantic retrieval and embedding search remain later. Do not reopen
 browser/history work as part of this phase.
