@@ -51,8 +51,10 @@ session lifecycle.
 The current local-first bridge may associate a worker with a local conversation,
 but that does not make WorkerId equal to LocalConversationId or SessionId.
 
-Exactly how worker identity follows a future session rollover must remain
-explicit; do not silently infer it from numeric or creation order.
+Worker identity now explicitly **persists across session rollover**. SessionId is
+the replaceable execution leaf. Active WorkerId→SessionId ownership may move
+only through a durable worker-session successor handoff; it is never inferred
+from numeric order, container membership, or creation order.
 
 ### `RouteEndpointId`
 
@@ -122,22 +124,34 @@ ChatGPT session identity.
 
 It is a local orchestration/execution leaf only.
 
-## Worker rollover question
+## Landed worker-session rollover semantics
 
-The existing repository has both conversation-level lifecycle goals and
-WorkerId↔SessionId machinery from the broader orchestration design.
+WorkerId is the durable logical worker identity. SessionId is its replaceable
+execution leaf.
 
-The local-first worker bridge currently attaches WorkerId to the durable local
-conversation so worker lifecycle can be explored without fabricating a remote
-session.
+The initial `WorkerSessionBound` fact remains one-time and one-to-one. Ordinary
+binding still cannot attach one WorkerId to two sessions.
 
-Before controller-issued routing is activated, Chatarium must explicitly decide
-and enforce whether a worker identity:
+Rollover uses the separate typed `WorkerSessionSuccessorBound` fact naming:
 
-- persists across a chat-container session successor; or
-- is replaced and handed off to a successor worker identity.
+- WorkerId;
+- predecessor SessionId;
+- successor SessionId.
 
-Do not resolve this implicitly by adding a second contradictory binding.
+Replay requires the named predecessor to be the worker's currently active
+session and the successor to be registered and not already worker-bound.
+
+Historical predecessor bindings remain on their old session records. They are
+not erased or rewritten. The active WorkerId→SessionId projection is instead
+the most recent valid binding/handoff.
+
+Historical control validation resolves the worker session that was active
+**before the event being validated**. A later rollover therefore cannot
+retroactively make older controller provenance or orchestration routes point at
+the successor.
+
+Tests cover both sides of the boundary: controls/routes before handoff resolve
+the predecessor; later controls/routes resolve the successor.
 
 ## Landed topology substrate
 
@@ -325,9 +339,11 @@ Basic manual local conversation routing is now vertically complete from
 addressability through payload, approval, one-shot delivery, inbox visibility,
 and explicit context admission.
 
-The next safe orchestration boundary is to resolve the WorkerId/session-rollover
-question and then expose explicit local controller→worker supervision over the
-already-existing typed orchestration primitives.
+WorkerId/session-rollover semantics are now frozen and replay-safe.
+
+The next safe orchestration boundary is explicit local controller→worker
+supervision over the already-existing typed session, supervision, control, and
+routing primitives.
 
 No controller authority should be inferred merely because two local
 conversations can route messages to each other.
