@@ -6530,7 +6530,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Worker control inbox", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Delivered controller controls are durable command provenance only. They do not mutate worker lifecycle, ordinary transcript, or inference context.",
+                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command; neither delivery nor acknowledgement mutates lifecycle, ordinary transcript, or inference context.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6589,6 +6589,32 @@ impl eframe::App for ChatariumApp {
                                                                 139, 143, 153,
                                                             )),
                                                         );
+                                                        if let Some(sequence) =
+                                                            item.acknowledged_sequence
+                                                        {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "ACKNOWLEDGED · event #{sequence}"
+                                                                ))
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                        } else if ui
+                                                            .add_enabled(
+                                                                !self
+                                                                    .worker_control_command_pending
+                                                                    && self.persist_tx.is_some(),
+                                                                egui::Button::new("Acknowledge"),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.acknowledge_worker_control(
+                                                                item.route_id,
+                                                            );
+                                                        }
+                                                        if self.worker_control_command_pending {
+                                                            ui.spinner();
+                                                        }
                                                     });
                                                 });
                                             }
