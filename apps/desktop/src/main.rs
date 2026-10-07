@@ -11650,6 +11650,20 @@ fn append_local_memory_context_decision_checked(
         .find(|record| record.memory_id == memory_id)
         .ok_or_else(|| format!("local memory {} does not exist", memory_id.get()))?;
 
+    if decision == LocalMemoryContextDecision::Admit {
+        let supersessions = replay_local_memory_supersession_audit(store.events())?;
+        if let Some(lineage) = supersessions
+            .iter()
+            .find(|record| record.predecessor_memory_id == memory_id)
+        {
+            return Err(format!(
+                "local memory {} is superseded by {} and cannot be admitted",
+                memory_id.get(),
+                lineage.successor_memory_id.get(),
+            ));
+        }
+    }
+
     if let Some(existing) = replay_local_memory_context_audit(store.events())?
         .into_iter()
         .find(|record| {
@@ -11699,6 +11713,93 @@ fn append_local_memory_context_decision_checked(
         .last()
         .cloned()
         .ok_or_else(|| "local memory context decision append produced no durable event".to_owned())
+}
+
+fn append_local_memory_supersession_checked(
+    store: &mut impl EventStore,
+    predecessor_memory_id: LocalMemoryId,
+    successor_memory_id: LocalMemoryId,
+) -> Result<EventEnvelope, String> {
+    if predecessor_memory_id == successor_memory_id {
+        return Err(format!(
+            "local memory {} cannot supersede itself",
+            predecessor_memory_id.get()
+        ));
+    }
+
+    let artifacts = replay_local_memory_audit(store.events())?;
+    let predecessor = artifacts
+        .iter()
+        .find(|record| record.memory_id == predecessor_memory_id)
+        .ok_or_else(|| {
+            format!(
+                "predecessor local memory {} does not exist",
+                predecessor_memory_id.get()
+            )
+        })?;
+    let successor = artifacts
+        .iter()
+        .find(|record| record.memory_id == successor_memory_id)
+        .ok_or_else(|| {
+            format!(
+                "successor local memory {} does not exist",
+                successor_memory_id.get()
+            )
+        })?;
+
+    if predecessor.source_conversation_id != successor.source_conversation_id {
+        return Err(format!(
+            "local memory {} and {} have different source conversations",
+            predecessor_memory_id.get(),
+            successor_memory_id.get(),
+        ));
+    }
+    if successor.recorded_sequence <= predecessor.recorded_sequence {
+        return Err(format!(
+            "successor local memory {} must be recorded after predecessor {}",
+            successor_memory_id.get(),
+            predecessor_memory_id.get(),
+        ));
+    }
+
+    let existing = replay_local_memory_supersession_audit(store.events())?;
+    if let Some(record) = existing
+        .iter()
+        .find(|record| record.predecessor_memory_id == predecessor_memory_id)
+    {
+        return Err(format!(
+            "local memory {} is already superseded by {}",
+            predecessor_memory_id.get(),
+            record.successor_memory_id.get(),
+        ));
+    }
+    if let Some(record) = existing
+        .iter()
+        .find(|record| record.successor_memory_id == successor_memory_id)
+    {
+        return Err(format!(
+            "local memory {} already succeeds memory {}",
+            successor_memory_id.get(),
+            record.predecessor_memory_id.get(),
+        ));
+    }
+
+    record_local_memory_superseded(store, predecessor_memory_id, successor_memory_id)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_local_memory_supersession_audit(store.events())?
+        .into_iter()
+        .find(|record| record.predecessor_memory_id == predecessor_memory_id)
+        .ok_or_else(|| "local memory supersession append did not replay".to_owned())?;
+    if replayed.successor_memory_id != successor_memory_id {
+        return Err("local memory supersession replay disagrees with appended lineage".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local memory supersession append produced no durable event".to_owned())
 }
 
 fn append_local_worker_binding_checked(
@@ -16310,9 +16411,14 @@ fn admitted_local_memory_messages(
 ) -> Result<Vec<context_composer::TranscriptMessage>, String> {
     let artifacts = replay_local_memory_audit(events)?;
     let admitted = replay_admitted_local_memory_context(events, destination_conversation_id)?;
+    let supersessions = replay_local_memory_supersession_audit(events)?;
+    let superseded = superseded_memory_ids(&supersessions);
     let mut messages = Vec::with_capacity(admitted.len());
 
     for record in admitted {
+        if superseded.contains(&record.memory_id) {
+            continue;
+        }
         let artifact = artifacts
             .iter()
             .find(|artifact| artifact.memory_id == record.memory_id)
