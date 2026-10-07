@@ -531,18 +531,29 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 mod tests {
     use super::*;
     use crate::MemoryEventStore;
-    use crate::chat_container_audit::record_chat_container_created;
     use crate::control_ack_audit::record_worker_control_acknowledged;
     use crate::control_audit::record_worker_control_admitted;
     use crate::control_delivery_audit::record_worker_control_delivered;
-    use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
+    use crate::control_provenance_audit::record_worker_control_issuer_bound;
+    use crate::control_route_audit::record_control_route_bound;
     use crate::local_conversation_worker_audit::record_local_conversation_worker_bound;
-    use crate::session_audit::{record_local_session_registered, record_worker_session_bound};
+    use crate::routing_audit::{record_route_dispatched, record_route_proposed};
+    use crate::session_audit::{
+        record_local_session_registered, record_session_endpoint_bound, record_worker_session_bound,
+    };
+    use crate::supervision_audit::{
+        record_controller_session_designated, record_controller_worker_bound,
+    };
     use crate::worker_audit::{
         record_worker_control_transition, record_worker_goal_assigned, record_worker_transition,
     };
-    use chatarium_core::chat_container::ChatContainerId;
-    use chatarium_core::session::{SessionId, WorkerSessionBinding};
+    use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
+    use chatarium_core::control_route::ControlRouteBinding;
+    use chatarium_core::routing::{
+        RouteClass, RouteEndpointId, RouteGate, RoutePolicy, RouteRequest,
+    };
+    use chatarium_core::session::{SessionEndpointBinding, SessionId, WorkerSessionBinding};
+    use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
 
     fn acknowledged_control(
         store: &mut impl EventStore,
@@ -561,18 +572,39 @@ mod tests {
         let goal = WorkerGoalId::new(1);
         let control = ControlId::new(1);
         let route = RouteId::new(1);
-        let session = SessionId::new(1);
+        let worker_session = SessionId::new(1);
+        let controller_session = SessionId::new(2);
+        let worker_endpoint = RouteEndpointId::new(10);
+        let controller_endpoint = RouteEndpointId::new(20);
 
-        record_local_session_registered(store, session).unwrap();
-        record_chat_container_created(store, ChatContainerId::new(1), session).unwrap();
-        record_local_conversation_chat_container_bound(
+        record_local_conversation_worker_bound(store, conversation, worker).unwrap();
+        record_local_session_registered(store, worker_session).unwrap();
+        record_local_session_registered(store, controller_session).unwrap();
+        record_session_endpoint_bound(
             store,
-            conversation,
-            ChatContainerId::new(1),
+            SessionEndpointBinding::new(worker_session, worker_endpoint),
         )
         .unwrap();
-        record_local_conversation_worker_bound(store, conversation, worker).unwrap();
-        record_worker_session_bound(store, WorkerSessionBinding::new(worker, session)).unwrap();
+        record_session_endpoint_bound(
+            store,
+            SessionEndpointBinding::new(controller_session, controller_endpoint),
+        )
+        .unwrap();
+        record_worker_session_bound(
+            store,
+            WorkerSessionBinding::new(worker, worker_session),
+        )
+        .unwrap();
+        record_controller_session_designated(
+            store,
+            ControllerDesignation::new(controller_session),
+        )
+        .unwrap();
+        record_controller_worker_bound(
+            store,
+            ControllerWorkerBinding::new(controller_session, worker_session).unwrap(),
+        )
+        .unwrap();
         record_worker_goal_assigned(store, worker, goal).unwrap();
         match phase {
             WorkerPhase::Ready => {}
@@ -610,22 +642,39 @@ mod tests {
             _ => panic!("test helper only supports mutating controls"),
         };
         record_worker_control_admitted(store, &admitted).unwrap();
+        record_worker_control_issuer_bound(
+            store,
+            ControlProvenance::new(
+                control,
+                ControlIssuer::ControllerSession(controller_session),
+            ),
+        )
+        .unwrap();
 
-        let dispatch_sequence = store.events().last().unwrap().sequence + 1;
-        store
-            .append(
-                EventKind::RouteDispatched,
-                serde_json::json!({"placeholder": true}).to_string(),
-            )
-            .unwrap();
+        let request = RouteRequest {
+            id: route,
+            source: controller_endpoint,
+            destination: worker_endpoint,
+            class: RouteClass::OrchestrationControl,
+        };
+        record_route_proposed(store, request, RoutePolicy::Allow).unwrap();
+        record_control_route_bound(
+            store,
+            ControlRouteBinding::new(control, &request).unwrap(),
+        )
+        .unwrap();
+        let mut gate = RouteGate::new(request, RoutePolicy::Allow);
+        let permit = gate.authorize_dispatch(route).unwrap();
+        let dispatch_sequence = record_route_dispatched(store, permit).unwrap();
+
         record_worker_control_delivered(
             store,
             control,
             route,
             worker,
             conversation,
-            session,
-            SessionId::new(99),
+            worker_session,
+            controller_session,
             dispatch_sequence,
         )
         .unwrap();
