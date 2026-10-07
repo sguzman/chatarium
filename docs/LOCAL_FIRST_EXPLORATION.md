@@ -246,7 +246,15 @@ result. Recording that result snapshots the already-existing WorkerLifecycle
 goal/phase; it does not mutate lifecycle. The worker control inbox exposes the
 recorded phase and result-event provenance.
 
-The next safe boundary is explicit worker-side application of mutating
-Start/Resume and Stop controls after acknowledgement, with crash-safe separation
-between action intent, durable WorkerLifecycle transition evidence, and the
-control-correlated result.
+Explicit worker-side application of acknowledged Start/Resume and Stop controls is
+now landed. Application is crash-recoverable and split into separate durable
+facts for action intent, the control-correlated normal WorkerLifecycle
+transition, and the final action result. Acknowledgement alone never implies
+execution, and an unrelated lifecycle transition cannot satisfy a control
+action.
+
+The next safe boundary is bounded Continue execution. Continue is intentionally
+not modeled as a WorkerLifecycle phase transition: its authority already comes
+from a finite ContinuationLease and one consumed ContinuationPermit. Desktop
+integration must preserve that authority chain and give worker-side continuation
+execution/result its own durable provenance.
