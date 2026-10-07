@@ -1060,6 +1060,86 @@ mod tests {
     }
 
     #[test]
+    fn controller_coordination_result_is_user_level_with_explicit_provenance() {
+        let result = TranscriptMessage::controller_coordination_result(
+            "coordination-turn",
+            50,
+            60,
+            "completed",
+            "synthesis",
+        );
+        assert_eq!(result.role, TranscriptRole::User);
+        assert_eq!(result.order_sequence(), 60);
+
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [result]);
+        assert_eq!(plan.controller_coordination_result_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("controller coordination result")
+        );
+        assert!(plan.messages[0].content.contains("not user-authored"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("coordination_turn_id: coordination-turn")
+        );
+        assert!(plan.messages[0].content.contains("outcome: completed"));
+        assert!(plan.messages[0].content.contains("result_event: #50"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("context_admitted_event: #60")
+        );
+        assert!(plan.messages[0].content.contains("synthesis"));
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::ControllerCoordinationResult {
+                result_sequence: 50,
+                admitted_sequence: 60,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn controller_coordination_result_can_be_excluded_by_context_policy() {
+        let policy = ContextPolicy {
+            include_controller_coordination_results: false,
+            ..ContextPolicy::dispatch()
+        };
+        let result = TranscriptMessage::controller_coordination_result(
+            "turn",
+            2,
+            3,
+            "completed",
+            "output",
+        );
+        let plan = ContextPlan::compose(policy, "", "", [result]);
+
+        assert_eq!(plan.controller_coordination_result_count(), 0);
+        assert!(plan.messages.is_empty());
+        let item = plan
+            .inventory
+            .iter()
+            .find(|item| {
+                matches!(
+                    item.source,
+                    ContextSource::ControllerCoordinationResult { .. }
+                )
+            })
+            .unwrap();
+        assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
+    }
+
+    #[test]
     fn controller_worker_result_can_be_excluded_by_context_policy() {
         let policy = ContextPolicy {
             include_controller_worker_results: false,
