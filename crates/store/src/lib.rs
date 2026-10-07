@@ -20,6 +20,7 @@ pub mod control_result_audit;
 pub mod control_route_audit;
 pub mod controller_coordination_audit;
 pub mod controller_coordination_context_audit;
+pub mod controller_coordination_suggestion_audit;
 pub mod controller_result_context_audit;
 pub mod controller_result_inbox;
 pub mod historical_conversation_audit;
