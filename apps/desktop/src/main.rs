@@ -11,6 +11,9 @@ mod offline_reader;
 mod siwc_bridge;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
+use chatarium_core::control::{ControlId, WorkerControl, WorkerControlKind};
+use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
+use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::orchestration::{
     WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
 };
@@ -36,6 +39,16 @@ use chatarium_store::authored::{
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
 };
+use chatarium_store::control_audit::{
+    record_worker_control_admitted, replay_control_audit,
+};
+use chatarium_store::control_dispatch_audit::replay_validated_control_dispatches;
+use chatarium_store::control_provenance_audit::{
+    record_worker_control_issuer_bound, replay_control_provenance_audit,
+};
+use chatarium_store::control_route_audit::{
+    record_control_route_bound, replay_control_route_audit,
+};
 use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
@@ -60,6 +73,7 @@ use chatarium_store::local_route_payload_audit::{
 };
 use chatarium_store::local_routed_inbox::replay_local_routed_inbox_for_conversation;
 use chatarium_store::local_routing_directory::replay_local_routing_directory;
+use chatarium_store::orchestration_route_audit::replay_validated_orchestration_routes;
 use chatarium_store::remote_health::{
     MirrorIntent, RemoteHealthController, RemoteHealthSignal, record_remote_health_intent,
     record_remote_health_signal,
@@ -106,6 +120,23 @@ fn unix_now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControllerControlAction {
+    StartOrResume,
+    Stop,
+    StatusRequest,
+}
+
+impl ControllerControlAction {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::StartOrResume => "start/resume",
+            Self::Stop => "stop",
+            Self::StatusRequest => "status request",
+        }
+    }
 }
 
 enum PersistCommand {
@@ -161,6 +192,18 @@ enum PersistCommand {
     BindControllerToLocalWorker {
         controller_conversation_id: LocalConversationId,
         worker_conversation_id: LocalConversationId,
+    },
+    ProposeControllerWorkerControl {
+        controller_conversation_id: LocalConversationId,
+        worker_conversation_id: LocalConversationId,
+        action: ControllerControlAction,
+    },
+    DecideControllerWorkerControlRoute {
+        route_id: RouteId,
+        decision: RouteUserDecision,
+    },
+    DispatchControllerWorkerControlRoute {
+        route_id: RouteId,
     },
     AssignWorkerGoal {
         worker_id: WorkerId,
@@ -323,6 +366,19 @@ enum PersistNotice {
         event: EventEnvelope,
     },
     SupervisionEventAppended {
+        event: EventEnvelope,
+    },
+    ControllerControlProposed {
+        control_id: ControlId,
+        route_id: RouteId,
+        appended_events: Vec<EventEnvelope>,
+    },
+    ControllerControlRoutePolicyUpdated {
+        route_id: RouteId,
+        event: EventEnvelope,
+    },
+    ControllerControlDispatched {
+        route_id: RouteId,
         event: EventEnvelope,
     },
     Failed {
@@ -567,6 +623,7 @@ struct ChatariumApp {
     route_context_command_pending: bool,
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
+    controller_control_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
     archive_backup_path: String,
@@ -820,6 +877,7 @@ impl ChatariumApp {
                         route_context_command_pending: false,
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
+                        controller_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
                         archive_backup_path: String::new(),
@@ -990,6 +1048,7 @@ impl ChatariumApp {
             route_context_command_pending: false,
             lifecycle_command_pending: false,
             supervision_command_pending: false,
+            controller_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
             archive_backup_path: String::new(),
