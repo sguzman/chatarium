@@ -14090,6 +14090,249 @@ mod tests {
     }
 
     #[test]
+    fn worker_control_application_is_crash_recoverable_and_correlation_safe() {
+        fn acknowledged_stop(
+            store: &mut chatarium_store::MemoryEventStore,
+        ) -> (
+            LocalConversationId,
+            WorkerId,
+            WorkerGoalId,
+            ControlId,
+            RouteId,
+            u64,
+        ) {
+            let controller_conversation = LocalConversationId::new();
+            let worker_conversation = LocalConversationId::new();
+            let worker_id = WorkerId::new(1);
+            let goal_id = WorkerGoalId::new(1);
+
+            append_local_orchestration_topology_checked(
+                store,
+                controller_conversation,
+                ChatContainerId::new(1),
+                SessionId::new(1),
+            )
+            .unwrap();
+            append_current_session_route_endpoint_checked(
+                store,
+                controller_conversation,
+                SessionId::new(1),
+                RouteEndpointId::new(1),
+            )
+            .unwrap();
+            append_local_orchestration_topology_checked(
+                store,
+                worker_conversation,
+                ChatContainerId::new(2),
+                SessionId::new(2),
+            )
+            .unwrap();
+            append_current_session_route_endpoint_checked(
+                store,
+                worker_conversation,
+                SessionId::new(2),
+                RouteEndpointId::new(2),
+            )
+            .unwrap();
+            append_local_worker_binding_checked(store, worker_conversation, worker_id).unwrap();
+            append_current_session_worker_binding_checked(store, worker_conversation, worker_id)
+                .unwrap();
+            append_current_session_controller_designation_checked(store, controller_conversation)
+                .unwrap();
+            append_local_controller_worker_binding_checked(
+                store,
+                controller_conversation,
+                worker_conversation,
+            )
+            .unwrap();
+            append_worker_goal_checked(store, worker_id, goal_id).unwrap();
+            append_worker_transition_checked(
+                store,
+                worker_id,
+                goal_id,
+                WorkerAction::StartOrResume,
+            )
+            .unwrap();
+
+            let (control_id, route_id, _) = append_controller_worker_control_proposal_checked(
+                store,
+                controller_conversation,
+                worker_conversation,
+                ControllerControlAction::Stop,
+            )
+            .unwrap();
+            append_controller_control_route_decision_checked(
+                store,
+                route_id,
+                RouteUserDecision::Allow,
+            )
+            .unwrap();
+            append_controller_control_dispatch_checked(store, route_id).unwrap();
+            let acknowledgement =
+                append_worker_control_acknowledgement_checked(store, worker_conversation, route_id)
+                    .unwrap();
+
+            (
+                worker_conversation,
+                worker_id,
+                goal_id,
+                control_id,
+                route_id,
+                acknowledgement.sequence,
+            )
+        }
+
+        let mut full = chatarium_store::MemoryEventStore::default();
+        let (conversation, worker, goal, _, route, _) = acknowledged_stop(&mut full);
+        let applied =
+            append_worker_control_action_checked(&mut full, conversation, route).unwrap();
+        assert_eq!(applied.len(), 3);
+        assert_eq!(applied[0].kind, EventKind::WorkerControlActionStarted);
+        assert_eq!(
+            applied[1].kind,
+            EventKind::WorkerLifecycleTransitionRecorded
+        );
+        assert_eq!(
+            applied[2].kind,
+            EventKind::WorkerControlActionResultRecorded
+        );
+        assert_eq!(
+            worker_record(full.events(), worker)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::Stopped
+        );
+        let completed = replay_worker_control_action_audit(full.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.route_id == route)
+            .unwrap();
+        assert!(completed.is_complete());
+        assert_eq!(completed.goal_id, goal);
+        assert_eq!(completed.resulting_phase, Some(WorkerPhase::Stopped));
+        assert!(
+            append_worker_control_action_checked(&mut full, conversation, route)
+                .unwrap_err()
+                .contains("already has a complete action result")
+        );
+
+        let mut after_start = chatarium_store::MemoryEventStore::default();
+        let (conversation, worker, goal, control, route, ack) =
+            acknowledged_stop(&mut after_start);
+        let started = record_worker_control_action_started(
+            &mut after_start,
+            control,
+            route,
+            worker,
+            conversation,
+            goal,
+            WorkerControlKind::Stop,
+            ack,
+            WorkerPhase::Working,
+        )
+        .unwrap();
+        let recovered =
+            append_worker_control_action_checked(&mut after_start, conversation, route).unwrap();
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(
+            recovered[0].kind,
+            EventKind::WorkerLifecycleTransitionRecorded
+        );
+        assert_eq!(
+            recovered[1].kind,
+            EventKind::WorkerControlActionResultRecorded
+        );
+        assert_eq!(
+            replay_worker_control_action_audit(after_start.events()).unwrap()[0].started_sequence,
+            started
+        );
+
+        let mut after_transition = chatarium_store::MemoryEventStore::default();
+        let (conversation, worker, goal, control, route, ack) =
+            acknowledged_stop(&mut after_transition);
+        let started = record_worker_control_action_started(
+            &mut after_transition,
+            control,
+            route,
+            worker,
+            conversation,
+            goal,
+            WorkerControlKind::Stop,
+            ack,
+            WorkerPhase::Working,
+        )
+        .unwrap();
+        let lifecycle_sequence = record_worker_control_transition(
+            &mut after_transition,
+            worker,
+            goal,
+            WorkerAction::Stop,
+            WorkerControlTransitionProvenance {
+                control_id: control,
+                route_id: route,
+                action_started_sequence: started,
+            },
+        )
+        .unwrap();
+        let recovered = append_worker_control_action_checked(
+            &mut after_transition,
+            conversation,
+            route,
+        )
+        .unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(
+            recovered[0].kind,
+            EventKind::WorkerControlActionResultRecorded
+        );
+        let record = replay_worker_control_action_audit(after_transition.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.route_id == route)
+            .unwrap();
+        assert_eq!(record.lifecycle_sequence, Some(lifecycle_sequence));
+        assert!(record.is_complete());
+
+        let mut conflict = chatarium_store::MemoryEventStore::default();
+        let (conversation, worker, goal, control, route, ack) =
+            acknowledged_stop(&mut conflict);
+        record_worker_control_action_started(
+            &mut conflict,
+            control,
+            route,
+            worker,
+            conversation,
+            goal,
+            WorkerControlKind::Stop,
+            ack,
+            WorkerPhase::Working,
+        )
+        .unwrap();
+        append_worker_transition_checked(
+            &mut conflict,
+            worker,
+            goal,
+            WorkerAction::RequestInput,
+        )
+        .unwrap();
+        let before = conflict.events().len();
+        let error =
+            append_worker_control_action_checked(&mut conflict, conversation, route).unwrap_err();
+        assert!(error.contains("without matching control correlation"));
+        assert_eq!(conflict.events().len(), before);
+        assert_eq!(
+            worker_record(conflict.events(), worker)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::NeedsInput
+        );
+    }
+
+    #[test]
     fn checked_local_worker_lifecycle_is_durable_and_rejects_illegal_transition() {
         let conversation_id = LocalConversationId::new();
         let worker_id = WorkerId::new(1);
