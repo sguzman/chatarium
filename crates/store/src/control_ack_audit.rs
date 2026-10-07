@@ -4,12 +4,12 @@
 //! the delivered command. It is not execution, lifecycle mutation, status
 //! evidence, or inference-context admission.
 
-use crate::{EventEnvelope, EventStore};
 use crate::control_delivery_audit::replay_worker_control_delivery_audit;
-use chatarium_core::{EventKind, LocalConversationId};
+use crate::{EventEnvelope, EventStore};
 use chatarium_core::control::ControlId;
 use chatarium_core::orchestration::WorkerId;
 use chatarium_core::routing::RouteId;
+use chatarium_core::{EventKind, LocalConversationId};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -77,12 +77,7 @@ pub fn replay_worker_control_acknowledgement_audit(
                     )
                 })?;
         let delivered_sequence = required_u64(&value, "delivered_sequence")?;
-        validate_scope(
-            event,
-            worker_conversation_id,
-            route_id,
-            control_id,
-        )?;
+        validate_scope(event, worker_conversation_id, route_id, control_id)?;
 
         if let Some(existing) = by_route.get(&route_id) {
             return Err(format!(
@@ -205,17 +200,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed worker control acknowledgement is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed worker control acknowledgement is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed worker control acknowledgement is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed worker control acknowledgement is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
