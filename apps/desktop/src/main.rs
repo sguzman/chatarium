@@ -21474,6 +21474,8 @@ mod tests {
             .send(PersistCommand::CommitMessage {
                 request_id: 1,
                 message: message.clone(),
+                one_shot_memory_ids: Vec::new(),
+                one_shot_memory_snapshot_after_sequence: None,
             })
             .unwrap();
 
