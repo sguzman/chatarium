@@ -12305,6 +12305,20 @@ fn next_available_local_orchestration_ids(
     ))
 }
 
+fn next_available_continuation_lease_id(
+    events: &[EventEnvelope],
+) -> Result<ContinuationLeaseId, String> {
+    let highest = replay_continuation_audit(events)?
+        .into_iter()
+        .map(|record| record.lease_id.get())
+        .max()
+        .unwrap_or(0);
+    let next = highest
+        .checked_add(1)
+        .ok_or_else(|| "continuation lease identity space exhausted".to_owned())?;
+    Ok(ContinuationLeaseId::new(next))
+}
+
 fn next_available_control_id(events: &[EventEnvelope]) -> Result<ControlId, String> {
     let highest = replay_control_audit(events)?
         .into_iter()
