@@ -327,6 +327,12 @@ Read-only local memory discovery/search is now landed. It is a pure projection:
 searching creates no memory, context admission, lifecycle change, route, or
 control.
 
-The next memory boundary is optional explicit organization metadata such as
-user-authored labels. Lifecycle semantics remain unchanged by memory recording,
-admission, supersession, discovery, or labeling.
+User-authored local memory labels and read-only label/source facets are now
+landed as organization metadata. Label mutation never changes artifact text or
+context admission, and discovery facets grant no lifecycle or orchestration
+authority.
+
+The next memory boundary is explicit next-request-only manual memory selection,
+kept separate from persistent Admit/Exclude. Lifecycle semantics remain
+unchanged by memory recording, admission, supersession, discovery, labeling, or
+future request-scoped selection.
