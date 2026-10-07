@@ -487,9 +487,7 @@ impl EventKind {
             Self::ControllerSessionDesignated => "controller_session_designated",
             Self::ControllerWorkerBound => "controller_worker_bound",
             Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
-            Self::WorkerContinuationExecutionStarted => {
-                "worker_continuation_execution_started"
-            }
+            Self::WorkerContinuationExecutionStarted => "worker_continuation_execution_started",
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
