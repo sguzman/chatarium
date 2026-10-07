@@ -149,8 +149,7 @@ mod tests {
         let worker = WorkerId::new(11);
         let predecessor = SessionId::new(7);
         let successor = SessionId::new(8);
-        let binding =
-            WorkerSessionSuccessorBinding::new(worker, predecessor, successor).unwrap();
+        let binding = WorkerSessionSuccessorBinding::new(worker, predecessor, successor).unwrap();
 
         assert_eq!(binding.worker_id(), worker);
         assert_eq!(binding.predecessor_session_id(), predecessor);
