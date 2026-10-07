@@ -54,14 +54,16 @@ pub fn replay_local_memory_audit(
         }
         let value = typed_payload(event)?;
         let memory_id = LocalMemoryId::new(required_u64(&value, "memory_id")?);
-        let source_conversation_id =
-            LocalConversationId::from_str(required_string(&value, "source_conversation_id")?)
-                .map_err(|error| {
-                    format!(
-                        "local memory artifact at sequence {} has invalid source conversation id: {error}",
-                        event.sequence
-                    )
-                })?;
+        let source_conversation_id = LocalConversationId::from_str(required_string(
+            &value,
+            "source_conversation_id",
+        )?)
+        .map_err(|error| {
+            format!(
+                "local memory artifact at sequence {} has invalid source conversation id: {error}",
+                event.sequence
+            )
+        })?;
         let text = required_string(&value, "text")?.to_owned();
         validate_scope(event, memory_id)?;
 
@@ -197,13 +199,8 @@ mod tests {
         let source = LocalConversationId::new();
         let mut duplicate = MemoryEventStore::default();
         for text in ["one", "two"] {
-            record_local_memory_artifact(
-                &mut duplicate,
-                LocalMemoryId::new(1),
-                source,
-                text,
-            )
-            .unwrap();
+            record_local_memory_artifact(&mut duplicate, LocalMemoryId::new(1), source, text)
+                .unwrap();
         }
         assert!(
             replay_local_memory_audit(duplicate.events())
@@ -212,13 +209,7 @@ mod tests {
         );
 
         let mut empty = MemoryEventStore::default();
-        record_local_memory_artifact(
-            &mut empty,
-            LocalMemoryId::new(1),
-            source,
-            "   ",
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut empty, LocalMemoryId::new(1), source, "   ").unwrap();
         assert!(
             replay_local_memory_audit(empty.events())
                 .unwrap_err()
