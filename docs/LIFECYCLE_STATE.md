@@ -149,5 +149,14 @@ while active execution moves between SessionId leaves only through a durable
 `WorkerSessionSuccessorBound` handoff. Historical predecessor bindings remain
 available for point-in-time control provenance.
 
-The next lifecycle/orchestration boundary is local controller→worker supervision
-using the already-existing typed session/supervision/control machinery.
+Local controller→worker supervision is now desktop-integrated. A local WorkerId
+must first be explicitly bound or handed off to its conversation's current
+SessionId. Another conversation's current non-worker session may be explicitly
+controller-designated and durably bound to that active worker session.
+
+Supervision remains provenance only: it does not itself authorize lifecycle
+mutation, continuation, routing, dispatch, or hidden prompts.
+
+The next lifecycle/orchestration boundary is controller-issued typed
+`WorkerControl` actions through the existing admission, issuer-provenance,
+control-route, freshness, and one-shot dispatch machinery.
