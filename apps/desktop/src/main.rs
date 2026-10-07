@@ -12,7 +12,7 @@ mod siwc_bridge;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::control::{
-    validate_control_admission, ControlId, WorkerControl, WorkerControlKind,
+    ControlId, WorkerControl, WorkerControlKind, validate_control_admission,
 };
 use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
 use chatarium_core::control_route::ControlRouteBinding;
@@ -10113,14 +10113,13 @@ fn append_worker_control_action_checked(
                     item.worker_id.get()
                 )
             })?;
-        let from_phase =
-            validate_control_admission(item.goal_id, item.kind, &worker.lifecycle)
-                .map_err(|error| {
-                    format!(
-                        "worker control route {} is stale before action start: {error}",
-                        route_id.get()
-                    )
-                })?;
+        let from_phase = validate_control_admission(item.goal_id, item.kind, &worker.lifecycle)
+            .map_err(|error| {
+                format!(
+                    "worker control route {} is stale before action start: {error}",
+                    route_id.get()
+                )
+            })?;
 
         record_worker_control_action_started(
             store,
@@ -10165,14 +10164,13 @@ fn append_worker_control_action_checked(
             ));
         }
 
-        let replayed_from =
-            validate_control_admission(item.goal_id, item.kind, &worker.lifecycle)
-                .map_err(|error| {
-                    format!(
-                        "worker control route {} became stale before lifecycle mutation: {error}",
-                        route_id.get()
-                    )
-                })?;
+        let replayed_from = validate_control_admission(item.goal_id, item.kind, &worker.lifecycle)
+            .map_err(|error| {
+                format!(
+                    "worker control route {} became stale before lifecycle mutation: {error}",
+                    route_id.get()
+                )
+            })?;
         if replayed_from != action_record.from_phase {
             return Err(format!(
                 "worker control route {} source phase changed after action start",
@@ -13237,9 +13235,7 @@ mod tests {
             PersistNotice::WorkerControlStatusResultRecorded { .. } => {
                 "worker_control_status_result_recorded"
             }
-            PersistNotice::WorkerControlActionAdvanced { .. } => {
-                "worker_control_action_advanced"
-            }
+            PersistNotice::WorkerControlActionAdvanced { .. } => "worker_control_action_advanced",
             PersistNotice::Failed { .. } => "failed",
         }
     }
