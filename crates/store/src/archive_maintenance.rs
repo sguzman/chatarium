@@ -5,6 +5,7 @@
 //! titles, message text, or raw response bodies.
 
 use crate::control_ack_audit::replay_worker_control_acknowledgement_audit;
+use crate::continuation_execution_audit::replay_worker_continuation_execution_audit;
 use crate::control_action_audit::replay_worker_control_action_audit;
 use crate::control_admission_audit::replay_validated_control_admissions;
 use crate::control_delivery_audit::replay_worker_control_delivery_audit;
@@ -172,6 +173,7 @@ pub fn check_archive(
     replay_worker_control_inbox(&events).map_err(err)?;
     replay_worker_control_acknowledgement_audit(&events).map_err(err)?;
     replay_worker_control_action_audit(&events).map_err(err)?;
+    replay_worker_continuation_execution_audit(&events).map_err(err)?;
     replay_worker_control_status_results(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
     replay_local_route_payload_audit(&events).map_err(err)?;
