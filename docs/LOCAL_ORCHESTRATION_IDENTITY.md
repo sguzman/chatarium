@@ -362,14 +362,50 @@ worker is unbound, stale after rollover, or already supervised elsewhere.
 This slice grants no route policy, dispatch, continuation, lifecycle mutation,
 or inference authority.
 
+## Landed controller-issued typed controls
+
+A designated local controller can now construct typed worker controls against a
+durably supervised worker. The checked path records the existing control
+admission, explicit controller issuer provenance, an `OrchestrationControl`
+route, and control↔route correlation as separate durable facts.
+
+Every controller control route starts under `RequireApproval`. Allow/Deny is
+explicit user policy, and dispatch revalidates control freshness immediately
+before consuming the one-shot route permit.
+
+## Landed worker control delivery
+
+Controller-control dispatch now has a destination-side durable boundary.
+
+A successful dispatch records `RouteDispatched` and then a separate
+`WorkerControlDelivered` fact containing the control/route/worker identity,
+the durable local worker conversation owner, the worker SessionId targeted at
+dispatch, the controller SessionId, and dispatch sequence.
+
+If Chatarium crashes after `RouteDispatched` but before delivery, retry finishes
+only `WorkerControlDelivered`; dispatch authority is not consumed twice.
+
+Delivered controls project into a read-only **Worker control inbox** on the
+worker conversation. The projection joins delivery provenance to the immutable
+admitted control so the worker side can inspect action kind and goal identity.
+
+Delivery does **not**:
+
+- append an ordinary transcript message;
+- enter inference context;
+- mutate WorkerLifecycle;
+- acknowledge that the worker acted on the command.
+
 ## Next implementation boundary
 
-Basic manual local conversation routing, WorkerId rollover semantics, and local
-controller→worker supervision metadata are now landed.
+The next safe boundary is worker-side control acknowledgement/action.
 
-The next safe permission boundary is **controller-issued typed worker controls**:
-constructing one of the existing WorkerControl actions with explicit controller
-issuer provenance, freshness validation, route correlation, and the existing
-one-shot route-policy gate.
+That boundary must preserve the distinction between:
 
-Do not treat supervision itself as permission to dispatch or mutate a worker.
+1. command admission;
+2. user-approved route dispatch;
+3. durable delivery;
+4. worker acknowledgement/action;
+5. separately observed lifecycle change or status result.
+
+Do not infer lifecycle mutation merely from delivery.
