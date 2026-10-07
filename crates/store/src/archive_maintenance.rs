@@ -22,6 +22,7 @@ use crate::controller_result_inbox::replay_controller_worker_results;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::local_memory_audit::replay_local_memory_audit;
 use crate::local_memory_context_audit::replay_local_memory_context_audit;
+use crate::local_memory_supersession_audit::replay_local_memory_supersession_audit;
 use crate::local_route_context_audit::replay_local_route_context_audit;
 use crate::local_route_delivery_audit::replay_local_route_delivery_audit;
 use crate::local_route_payload_audit::replay_local_route_payload_audit;
@@ -193,6 +194,7 @@ pub fn check_archive(
     replay_local_routed_inbox(&events).map_err(err)?;
     replay_local_route_context_audit(&events).map_err(err)?;
     replay_local_memory_audit(&events).map_err(err)?;
+    replay_local_memory_supersession_audit(&events).map_err(err)?;
     replay_local_memory_context_audit(&events).map_err(err)?;
     replay_remote_mirror_selection_audit(&events).map_err(err)?;
     replay_remote_read_audit(&events).map_err(err)?;
