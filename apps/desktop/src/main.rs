@@ -15456,6 +15456,128 @@ mod tests {
             before_duplicate_execution
         );
 
+        let continuation_scope = local_turn_scope(execution_record.execution_turn_id);
+        assert!(!continuation_store.events().iter().any(|event| {
+            event.scope.as_deref() == Some(continuation_scope.as_str())
+                && event.kind == EventKind::UserMessageCommitted
+        }));
+
+        let request_id = execution_record.execution_turn_id.to_string();
+        continuation_store
+            .append_scoped(
+                Some(continuation_scope.clone()),
+                EventKind::DispatchAttempted,
+                remote_turn_payload(
+                    execution_record.execution_turn_id,
+                    &request_id,
+                    Some("gpt-test"),
+                    None,
+                    Some("test bounded continuation dispatch"),
+                ),
+            )
+            .unwrap();
+        let dispatch_sequence = continuation_store.events().last().unwrap().sequence;
+        continuation_store
+            .append_scoped(
+                Some(continuation_scope.clone()),
+                EventKind::RemoteAcceptanceObserved,
+                remote_turn_payload(
+                    execution_record.execution_turn_id,
+                    &request_id,
+                    None,
+                    None,
+                    Some("test bounded continuation accepted"),
+                ),
+            )
+            .unwrap();
+        continuation_store
+            .append_scoped(
+                Some(continuation_scope.clone()),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(
+                    execution_record.execution_turn_id,
+                    &request_id,
+                    None,
+                    Some("continued worker output"),
+                    Some("test bounded continuation completed"),
+                ),
+            )
+            .unwrap();
+        let completion_sequence = continuation_store.events().last().unwrap().sequence;
+
+        let transport = continuation_execution_transport_state(
+            continuation_store.events(),
+            execution_record.execution_turn_id,
+        )
+        .unwrap();
+        assert_eq!(transport.dispatch_sequence, Some(dispatch_sequence));
+        assert_eq!(transport.completion_sequence, Some(completion_sequence));
+        assert!(transport.is_terminal());
+
+        let (result_route, result_event) =
+            append_worker_continuation_result_if_terminal(
+                &mut continuation_store,
+                execution_record.execution_turn_id,
+            )
+            .unwrap()
+            .expect("terminal continuation must produce a result");
+        assert_eq!(result_route, continue_route);
+        assert_eq!(
+            result_event.kind,
+            EventKind::WorkerContinuationExecutionResultRecorded
+        );
+
+        let completed_execution =
+            replay_worker_continuation_execution_audit(continuation_store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.route_id == continue_route)
+                .unwrap();
+        assert_eq!(
+            completed_execution
+                .outcome
+                .expect("terminal result has outcome")
+                .stable_name(),
+            "completed"
+        );
+        assert_eq!(
+            completed_execution.terminal_sequence,
+            Some(completion_sequence)
+        );
+        assert_eq!(
+            completed_execution.result_sequence,
+            Some(result_event.sequence)
+        );
+        assert!(
+            append_worker_continuation_result_if_terminal(
+                &mut continuation_store,
+                execution_record.execution_turn_id,
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        assert!(!continuation_store.events().iter().any(|event| {
+            event.scope.as_deref() == Some(continuation_scope.as_str())
+                && event.kind == EventKind::UserMessageCommitted
+        }));
+        assert!(
+            projected_local_display_messages(
+                continuation_store.events(),
+                continuation_worker_conversation,
+            )
+            .iter()
+            .all(|message| message.text != "continued worker output")
+        );
+        let worker_after_result =
+            worker_record(continuation_store.events(), continuation_worker_id)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            worker_after_result.lifecycle.phase(),
+            worker_before_execution.lifecycle.phase()
+        );
+
         let mut stranded_store = chatarium_store::MemoryEventStore::default();
         let (
             stranded_controller,
