@@ -17830,6 +17830,92 @@ mod tests {
         );
         assert_eq!(status_store.events().len(), before_duplicate_suggestion);
 
+        let before_promotion = status_store.events().len();
+        let (promoted_control_id, promoted_route_id, promotion_events) =
+            append_controller_coordination_suggestion_promotion_checked(
+                &mut status_store,
+                status_controller,
+                suggestion_id,
+            )
+            .unwrap();
+        assert!(!promotion_events.is_empty());
+        assert_eq!(
+            promotion_events.last().unwrap().kind,
+            EventKind::ControllerCoordinationSuggestionPromoted
+        );
+        assert!(promotion_events.iter().any(|event| {
+            event.kind == EventKind::WorkerControlAdmitted
+        }));
+        assert!(promotion_events.iter().any(|event| {
+            event.kind == EventKind::RouteProposed
+        }));
+        assert!(promotion_events.iter().any(|event| {
+            event.kind == EventKind::ControlRouteBound
+        }));
+        assert!(!promotion_events.iter().any(|event| {
+            matches!(
+                event.kind,
+                EventKind::RouteUserDecisionRecorded
+                    | EventKind::RouteDispatched
+                    | EventKind::WorkerControlDelivered
+            )
+        }));
+        assert!(status_store.events().len() > before_promotion);
+
+        let promoted_control = replay_control_audit(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.control_id == promoted_control_id)
+            .unwrap();
+        assert_eq!(promoted_control.worker_id, status_worker_id);
+        assert_eq!(
+            promoted_control.kind,
+            WorkerControlKind::StatusRequest
+        );
+
+        let promoted_route = replay_routing_audit(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.request.id == promoted_route_id)
+            .unwrap();
+        assert_eq!(
+            promoted_route.gate_state,
+            RouteGateState::PendingApproval
+        );
+        assert_eq!(promoted_route.latest_user_decision, None);
+        assert_eq!(promoted_route.dispatch_sequence, None);
+
+        let promoted_suggestion =
+            replay_controller_coordination_suggestion_audit(status_store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.suggestion.id() == suggestion_id)
+                .unwrap();
+        assert_eq!(
+            promoted_suggestion.promoted_control_id,
+            Some(promoted_control_id)
+        );
+        assert_eq!(
+            promoted_suggestion.promoted_route_id,
+            Some(promoted_route_id)
+        );
+        assert!(promoted_suggestion.promoted_sequence.is_some());
+
+        let before_second_promotion = status_store.events().len();
+        assert!(
+            append_controller_coordination_suggestion_promotion_checked(
+                &mut status_store,
+                status_controller,
+                suggestion_id,
+            )
+            .unwrap_err()
+            .contains("already promoted")
+        );
+        assert_eq!(
+            status_store.events().len(),
+            before_second_promotion
+        );
+
         let coordination_admit = append_controller_coordination_result_context_decision_checked(
             &mut status_store,
             coordination_turn_id,
