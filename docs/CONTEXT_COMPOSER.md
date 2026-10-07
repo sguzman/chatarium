@@ -122,6 +122,26 @@ Dispatch and preview use separate typed policies. Preview may include the
 current draft, while dispatch mechanically excludes `CurrentDraft` even if a
 future caller accidentally supplies one before the durability gate.
 
+## Explicit local memory source
+
+Context Composer now has a first-class `LocalMemory` source distinct from
+transcript, routed peer messages, and orchestration context.
+
+A memory artifact enters a conversation request only when that destination
+conversation currently has a durable Admit decision for the exact
+`LocalMemoryId`. The memory source serializes at **user-level trust** inside an
+explicit envelope containing memory identity, source conversation identity,
+artifact sequence, admission sequence, and exact immutable memory text.
+
+Memory is never serialized as developer/system instruction content and never
+becomes human-authored transcript history.
+
+The admitted memory set is snapshotted when Send is clicked, so later
+Admit/Exclude changes cannot mutate an already-committed request.
+
+See [LOCAL_MEMORY.md](LOCAL_MEMORY.md) for the durable artifact/admission
+ontology.
+
 ## Controller orchestration sources
 
 Context Composer now has four explicit orchestration source types in addition
@@ -180,9 +200,10 @@ Context Composer does **not** silently introduce:
 - token-budget trimming;
 - automatic summarization;
 - retrieval;
-- automatic shared memory;
-- automatic cross-conversation context outside explicit routed delivery +
-  admission;
+- automatic memory extraction, retrieval, or sharing beyond explicitly recorded
+  and admitted `LocalMemory` artifacts;
+- automatic cross-conversation context outside explicit routed delivery,
+  admitted local memory, and their separate admission boundaries;
 - lifecycle state injection;
 - automatic routing;
 - master/worker inheritance;
