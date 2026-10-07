@@ -8638,7 +8638,241 @@ impl eframe::App for ChatariumApp {
                                                 }
                                             }
 
-                                            if self.controller_control_command_pending {
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                egui::RichText::new("Controller coordination")
+                                                    .strong()
+                                                    .size(10.0),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Deliberate non-authored controller reasoning over the exact worker-result set admitted when the coordination turn starts. Starting and dispatching are separate user actions; coordination cannot itself issue controls, mutate lifecycle, or consume continuation authority.",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                                            );
+
+                                            let admitted_result_count =
+                                                match replay_admitted_controller_worker_result_context(
+                                                    &self.events,
+                                                    self.local_conversation_id,
+                                                ) {
+                                                    Ok(records) => Some(records.len()),
+                                                    Err(error) => {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "coordination context projection blocked: {error}"
+                                                            ))
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            )),
+                                                        );
+                                                        None
+                                                    }
+                                                };
+
+                                            match replay_controller_coordination_audit(&self.events) {
+                                                Err(error) => {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "controller coordination projection blocked: {error}"
+                                                        ))
+                                                        .size(9.0)
+                                                        .color(egui::Color32::from_rgb(
+                                                            186, 108, 108,
+                                                        )),
+                                                    );
+                                                }
+                                                Ok(records) => {
+                                                    let owned = records
+                                                        .into_iter()
+                                                        .filter(|record| {
+                                                            record.controller_conversation_id
+                                                                == self.local_conversation_id
+                                                        })
+                                                        .collect::<Vec<_>>();
+                                                    let latest = owned.last();
+                                                    if let Some(record) = latest {
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "turn {} · controller session {} · {} admitted result{} · started #{}",
+                                                                    record.coordination_turn_id,
+                                                                    record.controller_session_id.get(),
+                                                                    record.admitted_result_routes.len(),
+                                                                    if record.admitted_result_routes.len() == 1 { "" } else { "s" },
+                                                                    record.started_sequence,
+                                                                ))
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+
+                                                            match controller_coordination_transport_state(
+                                                                &self.events,
+                                                                record.coordination_turn_id,
+                                                            ) {
+                                                                Err(error) => {
+                                                                    ui.label(
+                                                                        egui::RichText::new(format!(
+                                                                            "transport blocked: {error}"
+                                                                        ))
+                                                                        .size(9.0)
+                                                                        .color(egui::Color32::from_rgb(
+                                                                            186, 108, 108,
+                                                                        )),
+                                                                    );
+                                                                }
+                                                                Ok(transport) => {
+                                                                    if !transport.was_dispatched()
+                                                                        && record
+                                                                            .result_sequence
+                                                                            .is_none()
+                                                                    {
+                                                                        let can_dispatch =
+                                                                            self.persist_tx.is_some()
+                                                                                && self
+                                                                                    .pending_remote_turn
+                                                                                    .is_none()
+                                                                                && self
+                                                                                    .active_remote_turn
+                                                                                    .is_none()
+                                                                                && self
+                                                                                    .remote_connected()
+                                                                                && self
+                                                                                    .selected_model
+                                                                                    .is_some()
+                                                                                && !self
+                                                                                    .capability_probe
+                                                                                    .running();
+                                                                        if ui
+                                                                            .add_enabled(
+                                                                                can_dispatch,
+                                                                                egui::Button::new(
+                                                                                    "Dispatch coordination",
+                                                                                ),
+                                                                            )
+                                                                            .clicked()
+                                                                        {
+                                                                            self.dispatch_controller_coordination(
+                                                                                record.coordination_turn_id,
+                                                                            );
+                                                                        }
+                                                                    } else if transport.was_dispatched()
+                                                                        && !transport.is_terminal()
+                                                                    {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                "IN FLIGHT",
+                                                                            )
+                                                                            .monospace()
+                                                                            .size(9.0),
+                                                                        );
+                                                                    }
+                                                                }
+                                                            }
+                                                        });
+
+                                                        if let Some(outcome) = record.outcome {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "COORDINATION RESULT · {} · terminal #{} · result #{}",
+                                                                    outcome.stable_name(),
+                                                                    record
+                                                                        .terminal_sequence
+                                                                        .unwrap_or_default(),
+                                                                    record
+                                                                        .result_sequence
+                                                                        .unwrap_or_default(),
+                                                                ))
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                            match controller_coordination_output_text(
+                                                                &self.events,
+                                                                record.coordination_turn_id,
+                                                            ) {
+                                                                Ok(Some(output)) => {
+                                                                    ui.collapsing(
+                                                                        "Coordination output",
+                                                                        |ui| {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    output,
+                                                                                )
+                                                                                .size(10.0),
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                }
+                                                                Ok(None) => {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            "no durable coordination output text",
+                                                                        )
+                                                                        .size(9.0)
+                                                                        .color(
+                                                                            egui::Color32::from_rgb(
+                                                                                139, 143, 153,
+                                                                            ),
+                                                                        ),
+                                                                    );
+                                                                }
+                                                                Err(error) => {
+                                                                    ui.label(
+                                                                        egui::RichText::new(format!(
+                                                                            "coordination output blocked: {error}"
+                                                                        ))
+                                                                        .size(9.0)
+                                                                        .color(egui::Color32::from_rgb(
+                                                                            186, 108, 108,
+                                                                        )),
+                                                                    );
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    let unfinished = latest
+                                                        .is_some_and(|record| {
+                                                            record.result_sequence.is_none()
+                                                        });
+                                                    let count =
+                                                        admitted_result_count.unwrap_or_default();
+                                                    let can_start = count > 0
+                                                        && !unfinished
+                                                        && !self
+                                                            .controller_coordination_command_pending
+                                                        && self.persist_tx.is_some();
+                                                    if ui
+                                                        .add_enabled(
+                                                            can_start,
+                                                            egui::Button::new(if latest.is_some() {
+                                                                "Start another coordination turn"
+                                                            } else {
+                                                                "Start coordination turn"
+                                                            }),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        self.start_controller_coordination();
+                                                    }
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "{count} worker result{} currently admitted; a new start freezes exactly this set",
+                                                            if count == 1 { "" } else { "s" },
+                                                        ))
+                                                        .size(9.0)
+                                                        .color(egui::Color32::from_rgb(
+                                                            139, 143, 153,
+                                                        )),
+                                                    );
+                                                }
+                                            }
+
+                                            if self.controller_coordination_command_pending
+                                                || self.controller_control_command_pending
+                                            {
                                                 ui.spinner();
                                             }
                                         }
