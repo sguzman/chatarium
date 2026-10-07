@@ -52,6 +52,9 @@ use chatarium_store::control_inbox::replay_worker_control_inbox_for_conversation
 use chatarium_store::control_provenance_audit::{
     record_worker_control_issuer_bound, replay_control_provenance_audit,
 };
+use chatarium_store::control_result_audit::{
+    record_worker_control_status_result, replay_worker_control_status_results,
+};
 use chatarium_store::control_route_audit::{
     record_control_route_bound, replay_control_route_audit,
 };
@@ -212,6 +215,10 @@ enum PersistCommand {
         route_id: RouteId,
     },
     AcknowledgeWorkerControl {
+        worker_conversation_id: LocalConversationId,
+        route_id: RouteId,
+    },
+    RecordWorkerControlStatusResult {
         worker_conversation_id: LocalConversationId,
         route_id: RouteId,
     },
@@ -392,6 +399,10 @@ enum PersistNotice {
         appended_events: Vec<EventEnvelope>,
     },
     WorkerControlAcknowledged {
+        route_id: RouteId,
+        event: EventEnvelope,
+    },
+    WorkerControlStatusResultRecorded {
         route_id: RouteId,
         event: EventEnvelope,
     },
@@ -2883,6 +2894,14 @@ impl ChatariumApp {
                         route_id.get()
                     );
                 }
+                PersistNotice::WorkerControlStatusResultRecorded { route_id, event } => {
+                    self.events.push(event);
+                    self.worker_control_command_pending = false;
+                    self.status = format!(
+                        "worker control route {} status result durably recorded",
+                        route_id.get()
+                    );
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2914,7 +2933,9 @@ impl ChatariumApp {
                     if operation.starts_with("controller control ") {
                         self.controller_control_command_pending = false;
                     }
-                    if operation.starts_with("worker control acknowledgement") {
+                    if operation.starts_with("worker control acknowledgement")
+                        || operation.starts_with("worker control status result")
+                    {
                         self.worker_control_command_pending = false;
                     }
                     if request_id.is_some() && request_id == self.commit_in_flight {
@@ -3926,6 +3947,32 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue worker control acknowledgement: {error}");
+            }
+        }
+    }
+
+    fn record_worker_control_status_result(&mut self, route_id: RouteId) {
+        if self.worker_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot record worker control status result: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::RecordWorkerControlStatusResult {
+            worker_conversation_id: self.local_conversation_id,
+            route_id,
+        }) {
+            Ok(()) => {
+                self.worker_control_command_pending = true;
+                self.status = format!(
+                    "recording durable status result for worker control route {}…",
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue worker control status result: {error}");
             }
         }
     }
@@ -10138,6 +10185,32 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::RecordWorkerControlStatusResult {
+                worker_conversation_id,
+                route_id,
+            } => {
+                match append_worker_control_status_result_checked(
+                    &mut store,
+                    worker_conversation_id,
+                    route_id,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::WorkerControlStatusResultRecorded {
+                            route_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "worker control status result",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AssignWorkerGoal { worker_id, goal_id } => {
                 match append_worker_goal_checked(&mut store, worker_id, goal_id) {
                     Ok(event) => {
@@ -12580,6 +12653,9 @@ mod tests {
             }
             PersistNotice::ControllerControlDispatched { .. } => "controller_control_dispatched",
             PersistNotice::WorkerControlAcknowledged { .. } => "worker_control_acknowledged",
+            PersistNotice::WorkerControlStatusResultRecorded { .. } => {
+                "worker_control_status_result_recorded"
+            }
             PersistNotice::Failed { .. } => "failed",
         }
     }
