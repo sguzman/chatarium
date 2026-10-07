@@ -1,6 +1,6 @@
 # Local Memory
 
-Status: **ACTIVE**, first explicit durable artifact/admission slice landed 2026-10-07.
+Status: **ACTIVE**, explicit durable artifact/admission/supersession slice landed 2026-10-07.
 
 Chatarium local memory is a distinct local data domain. It is not transcript
 history, routed peer content, worker lifecycle state, controller coordination
@@ -75,20 +75,23 @@ authored-message durability gate.
 - **Record memory**;
 - all immutable memory artifacts with source-conversation provenance;
 - **Admit memory** for the active destination conversation;
-- **Exclude memory** for an admitted artifact.
+- **Exclude memory** for an admitted artifact;
+- visible supersession state for stale predecessors;
+- **Supersede with…** choices limited to compatible newer same-source artifacts.
 
 The UI never auto-records a memory from conversation text.
 
-It never auto-admits newly recorded memory.
+It never auto-admits newly recorded memory or a supersession successor.
 
 ## Archive integrity
 
-Both memory audits are authoritative journal projections and participate in
-archive integrity checking.
+The artifact, context-decision, and supersession audits are authoritative
+journal projections and participate in archive integrity checking. Archive
+validation also exercises the effective admitted-memory projection.
 
 Malformed memory artifacts, duplicate memory identities, context decisions
-before artifact creation, scope mismatches, and malformed typed payloads fail
-closed.
+before artifact creation, invalid supersession lineages, scope mismatches, and
+malformed typed payloads fail closed.
 
 ## Deliberate non-features
 
@@ -104,15 +107,49 @@ The first memory slice does **not** implement:
 - in-place editing of immutable artifacts;
 - deletion that rewrites journal history.
 
-## Next memory boundary: explicit supersession
+## Landed supersession policy
 
-Immutable artifacts need a correction path.
+Immutable memory artifacts now have an explicit correction path through
+`LocalMemoryArtifactSuperseded`.
 
-The next safe memory operation is explicit supersession: one memory artifact may
-be durably marked as replaced by a newer artifact while preserving both
-historical records.
+Supersession is a forward-only lineage edge between two already-recorded
+artifacts. Replay requires:
 
-Supersession must not silently mutate old context decisions. Context projection
-must define whether an admitted superseded artifact is excluded, remains visible
-with a stale marker, or requires explicit migration to the successor. That
-policy must be explicit before automatic retrieval is introduced.
+- predecessor and successor are distinct;
+- both artifacts already exist;
+- both share the same source-conversation provenance;
+- the successor artifact was recorded later;
+- one predecessor has at most one successor;
+- one successor has at most one predecessor.
+
+Chains are allowed. Branching, merging, backward replacement, cross-source
+replacement, and self-supersession fail closed.
+
+Supersession does **not** rewrite old context decisions. A predecessor may still
+have a historical Admit decision in the raw audit, but the effective admitted
+projection mechanically excludes every superseded artifact. A new Admit attempt
+for a superseded predecessor is rejected.
+
+The successor starts with no inherited context authority. It must be explicitly
+Admitted to each destination conversation where the user wants it used.
+
+The desktop therefore keeps stale predecessors visible, marks them
+`CONTEXT: EXCLUDED · SUPERSEDED`, shows the successor identity, and offers
+explicit compatible **Supersede with…** choices.
+
+## Next memory boundary: read-only discovery
+
+The next safe memory feature is deterministic local discovery/search over the
+artifact corpus.
+
+Discovery must remain separate from context admission:
+
+- search results create no journal mutation;
+- finding a memory does not Admit it;
+- superseded artifacts are excluded from the default current-memory view but
+  remain inspectable as history;
+- no embedding service, model-authored query rewrite, or automatic retrieval is
+  implied by the first search slice.
+
+Only after deterministic discovery is visible and inspectable should semantic or
+automatic retrieval policy be considered.
