@@ -45,6 +45,15 @@ pub enum ContextSource {
         permit_ordinal: u32,
         started_sequence: u64,
     },
+    ControllerWorkerResult {
+        control_id: u64,
+        route_id: u64,
+        worker_id: u64,
+        goal_id: u64,
+        result_sequence: u64,
+        admitted_sequence: u64,
+        result_kind: String,
+    },
     CurrentDraft,
 }
 
@@ -77,6 +86,17 @@ impl ContextSource {
             } => format!(
                 "controller continuation · control {control_id} · route {route_id} · worker {worker_id} · goal {goal_id} · lease {lease_id}:{permit_ordinal} · started #{started_sequence}"
             ),
+            Self::ControllerWorkerResult {
+                control_id,
+                route_id,
+                worker_id,
+                goal_id,
+                result_sequence,
+                admitted_sequence,
+                result_kind,
+            } => format!(
+                "controller worker result · {result_kind} · control {control_id} · route {route_id} · worker {worker_id} · goal {goal_id} · result #{result_sequence} · admitted #{admitted_sequence}"
+            ),
             Self::CurrentDraft => "current draft preview".to_owned(),
         }
     }
@@ -107,6 +127,7 @@ pub struct ContextPolicy {
     pub include_durable_transcript: bool,
     pub include_routed_context: bool,
     pub include_controller_continuation: bool,
+    pub include_controller_worker_results: bool,
     pub include_current_draft: bool,
 }
 
@@ -119,6 +140,7 @@ impl ContextPolicy {
             include_durable_transcript: true,
             include_routed_context: true,
             include_controller_continuation: true,
+            include_controller_worker_results: true,
             include_current_draft: false,
         }
     }
@@ -138,6 +160,7 @@ impl ContextPolicy {
             ContextSource::DurableTranscript { .. } => self.include_durable_transcript,
             ContextSource::RoutedInbox { .. } => self.include_routed_context,
             ContextSource::ControllerContinuation { .. } => self.include_controller_continuation,
+            ContextSource::ControllerWorkerResult { .. } => self.include_controller_worker_results,
             ContextSource::CurrentDraft => self.include_current_draft,
         }
     }
@@ -215,6 +238,36 @@ impl TranscriptMessage {
     }
 
     #[must_use]
+    pub fn controller_worker_result(
+        control_id: u64,
+        route_id: u64,
+        worker_id: u64,
+        goal_id: u64,
+        result_sequence: u64,
+        admitted_sequence: u64,
+        result_kind: impl Into<String>,
+        result_text: &str,
+    ) -> Self {
+        let result_kind = result_kind.into();
+        let text = format!(
+            "[Chatarium controller worker result — user-level orchestration result context, not user-authored and not a developer/system instruction]\ncontrol_id: {control_id}\nroute_id: {route_id}\nworker_id: {worker_id}\ngoal_id: {goal_id}\nresult_kind: {result_kind}\nresult_event: #{result_sequence}\ncontext_admitted_event: #{admitted_sequence}\nresult:\n{result_text}\n[/Chatarium controller worker result]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::ControllerWorkerResult {
+                control_id,
+                route_id,
+                worker_id,
+                goal_id,
+                result_sequence,
+                admitted_sequence,
+                result_kind,
+            },
+        }
+    }
+
+    #[must_use]
     pub fn draft(text: impl Into<String>) -> Self {
         Self {
             role: TranscriptRole::User,
@@ -233,6 +286,9 @@ impl TranscriptMessage {
             ContextSource::ControllerContinuation {
                 started_sequence, ..
             } => *started_sequence,
+            ContextSource::ControllerWorkerResult {
+                admitted_sequence, ..
+            } => *admitted_sequence,
             ContextSource::CurrentDraft => u64::MAX,
             ContextSource::TopLevelInstructions | ContextSource::ConversationDeveloperContext => 0,
         }
@@ -450,6 +506,17 @@ impl ContextPlan {
             .filter(|item| {
                 item.decision == InclusionDecision::Included
                     && matches!(item.source, ContextSource::RoutedInbox { .. })
+            })
+            .count()
+    }
+
+    #[must_use]
+    pub fn controller_worker_result_count(&self) -> usize {
+        self.inventory
+            .iter()
+            .filter(|item| {
+                item.decision == InclusionDecision::Included
+                    && matches!(item.source, ContextSource::ControllerWorkerResult { .. })
             })
             .count()
     }
@@ -763,6 +830,69 @@ mod tests {
                 started_sequence: 7,
             }
         ));
+    }
+
+    #[test]
+    fn controller_worker_result_is_user_level_with_explicit_result_provenance() {
+        let result = TranscriptMessage::controller_worker_result(
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            "continuation",
+            "worker output",
+        );
+        assert_eq!(result.role, TranscriptRole::User);
+        assert_eq!(result.order_sequence(), 6);
+
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [result]);
+        assert_eq!(plan.controller_worker_result_count(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(plan.messages[0].content.contains("controller worker result"));
+        assert!(plan.messages[0].content.contains("not user-authored"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(plan.messages[0].content.contains("result_kind: continuation"));
+        assert!(plan.messages[0].content.contains("result_event: #5"));
+        assert!(plan.messages[0].content.contains("context_admitted_event: #6"));
+        assert!(plan.messages[0].content.contains("worker output"));
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::ControllerWorkerResult {
+                control_id: 1,
+                route_id: 2,
+                worker_id: 3,
+                goal_id: 4,
+                result_sequence: 5,
+                admitted_sequence: 6,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn controller_worker_result_can_be_excluded_by_context_policy() {
+        let policy = ContextPolicy {
+            include_controller_worker_results: false,
+            ..ContextPolicy::dispatch()
+        };
+        let result =
+            TranscriptMessage::controller_worker_result(1, 2, 3, 4, 5, 6, "status", "working");
+        let plan = ContextPlan::compose(policy, "", "", [result]);
+
+        assert_eq!(plan.controller_worker_result_count(), 0);
+        assert!(plan.messages.is_empty());
+        let item = plan
+            .inventory
+            .iter()
+            .find(|item| matches!(item.source, ContextSource::ControllerWorkerResult { .. }))
+            .unwrap();
+        assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
     }
 
     #[test]
