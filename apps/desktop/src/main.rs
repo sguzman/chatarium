@@ -3235,8 +3235,7 @@ impl ChatariumApp {
                     if registered {
                         self.tool_provider_name_draft.clear();
                     }
-                    self.status =
-                        format!("tool provider {} durably updated", provider_id.get());
+                    self.status = format!("tool provider {} durably updated", provider_id.get());
                 }
                 PersistNotice::ToolCallProposed {
                     call_id,
@@ -3256,8 +3255,7 @@ impl ChatariumApp {
                 PersistNotice::ToolCallRoutePolicyUpdated { route_id, event } => {
                     self.events.push(event);
                     self.tool_command_pending = false;
-                    self.status =
-                        format!("tool route {} policy durably updated", route_id.get());
+                    self.status = format!("tool route {} policy durably updated", route_id.get());
                 }
                 PersistNotice::LocalMemoryArtifactRecorded { memory_id, event } => {
                     self.events.push(event);
@@ -4389,8 +4387,7 @@ impl ChatariumApp {
             }
         };
         let Some(sender) = &self.persist_tx else {
-            self.status =
-                "cannot bind tool provider endpoint: persistence unavailable".to_owned();
+            self.status = "cannot bind tool provider endpoint: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::BindToolProviderEndpoint {
@@ -13108,8 +13105,7 @@ fn append_tool_call_proposal_checked(
     };
     record_route_proposed(store, request, RoutePolicy::RequireApproval)
         .map_err(|error| error.to_string())?;
-    record_tool_call_route_bound(store, call_id, route_id)
-        .map_err(|error| error.to_string())?;
+    record_tool_call_route_bound(store, call_id, route_id).map_err(|error| error.to_string())?;
 
     let replayed = replay_tool_call_audit(store.events())?
         .into_iter()
@@ -15979,10 +15975,8 @@ fn persistence_worker(
             PersistCommand::RegisterToolProvider { provider_id, name } => {
                 match append_tool_provider_registration_checked(&mut store, provider_id, name) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::ToolProviderUpdated {
-                            provider_id,
-                            event,
-                        });
+                        let _ =
+                            notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -16053,16 +16047,10 @@ fn persistence_worker(
                 }
             }
             PersistCommand::DecideToolCallRoute { route_id, decision } => {
-                match append_tool_call_route_user_decision_checked(
-                    &mut store,
-                    route_id,
-                    decision,
-                ) {
+                match append_tool_call_route_user_decision_checked(&mut store, route_id, decision) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::ToolCallRoutePolicyUpdated {
-                            route_id,
-                            event,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::ToolCallRoutePolicyUpdated { route_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
