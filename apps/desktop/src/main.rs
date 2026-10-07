@@ -2635,8 +2635,7 @@ impl ChatariumApp {
                     ) {
                         Ok(snapshot) => snapshot,
                         Err(error) => {
-                            self.status =
-                                format!("cannot snapshot one-shot local memory: {error}");
+                            self.status = format!("cannot snapshot one-shot local memory: {error}");
                             return;
                         }
                     };
@@ -12321,11 +12320,9 @@ fn commit_message_with_one_shot_memory_checked(
         )
         .map_err(|error| error.to_string())?;
 
-        let event = store
-            .events()
-            .last()
-            .cloned()
-            .ok_or_else(|| "one-shot local memory selection produced no durable event".to_owned())?;
+        let event = store.events().last().cloned().ok_or_else(|| {
+            "one-shot local memory selection produced no durable event".to_owned()
+        })?;
 
         let replayed = replay_local_memory_turn_selection_audit(store.events())?
             .into_iter()
@@ -19073,8 +19070,8 @@ mod tests {
                 .is_empty()
         );
 
-        let one_shot = one_shot_local_memory_messages_for_turn(store.events(), first.turn_id)
-            .unwrap();
+        let one_shot =
+            one_shot_local_memory_messages_for_turn(store.events(), first.turn_id).unwrap();
         assert_eq!(one_shot.len(), 1);
         assert_eq!(one_shot[0].role, context_composer::TranscriptRole::User);
         assert!(one_shot[0].text.contains("NEXT REQUEST ONLY"));
