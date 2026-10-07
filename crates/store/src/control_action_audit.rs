@@ -312,12 +312,7 @@ pub fn replay_worker_control_action_audit(
                 let action_started_sequence = required_u64(&value, "action_started_sequence")?;
                 let lifecycle_sequence = required_u64(&value, "lifecycle_sequence")?;
                 let resulting_phase = parse_phase(required_string(&value, "resulting_phase")?)?;
-                validate_scope(
-                    event,
-                    worker_conversation_id,
-                    route_id,
-                    control_id,
-                )?;
+                validate_scope(event, worker_conversation_id, route_id, control_id)?;
 
                 let record = records.get_mut(&route_id).ok_or_else(|| {
                     format!(
