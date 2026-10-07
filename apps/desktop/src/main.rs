@@ -11788,6 +11788,89 @@ fn append_controller_coordination_result_if_terminal(
     Ok(store.events().last().cloned())
 }
 
+fn append_controller_coordination_result_context_decision_checked(
+    store: &mut impl EventStore,
+    coordination_turn_id: LocalTurnId,
+    controller_conversation_id: LocalConversationId,
+    decision: ControllerCoordinationResultContextDecision,
+) -> Result<EventEnvelope, String> {
+    let coordination = replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .find(|record| record.coordination_turn_id == coordination_turn_id)
+        .ok_or_else(|| {
+            format!(
+                "controller coordination turn {} does not exist",
+                coordination_turn_id
+            )
+        })?;
+    if coordination.controller_conversation_id != controller_conversation_id {
+        return Err(format!(
+            "controller coordination turn {} belongs to conversation {}, not {}",
+            coordination_turn_id,
+            coordination.controller_conversation_id,
+            controller_conversation_id,
+        ));
+    }
+    let result_sequence = coordination.result_sequence.ok_or_else(|| {
+        format!(
+            "controller coordination turn {} has no terminal result to admit",
+            coordination_turn_id
+        )
+    })?;
+
+    if let Some(existing) =
+        replay_controller_coordination_result_context_audit(store.events())?
+            .into_iter()
+            .find(|record| record.coordination_turn_id == coordination_turn_id)
+    {
+        if existing.controller_conversation_id != controller_conversation_id
+            || existing.result_sequence != result_sequence
+        {
+            return Err(format!(
+                "controller coordination turn {} result context provenance conflicts with terminal result",
+                coordination_turn_id
+            ));
+        }
+        if existing.decision == decision {
+            return Err(format!(
+                "controller coordination turn {} already has result context decision {}",
+                coordination_turn_id,
+                controller_coordination_result_context_decision_label(decision),
+            ));
+        }
+    }
+
+    record_controller_coordination_result_context_decision(
+        store,
+        controller_conversation_id,
+        coordination_turn_id,
+        result_sequence,
+        decision,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_controller_coordination_result_context_audit(store.events())?
+        .into_iter()
+        .find(|record| record.coordination_turn_id == coordination_turn_id)
+        .ok_or_else(|| {
+            "controller coordination result context decision append did not replay".to_owned()
+        })?;
+    if replayed.controller_conversation_id != controller_conversation_id
+        || replayed.result_sequence != result_sequence
+        || replayed.decision != decision
+    {
+        return Err(
+            "controller coordination result context replay disagrees with appended decision"
+                .to_owned(),
+        );
+    }
+
+    store.events().last().cloned().ok_or_else(|| {
+        "controller coordination result context decision append produced no durable event"
+            .to_owned()
+    })
+}
+
 fn append_worker_control_acknowledgement_checked(
     store: &mut impl EventStore,
     worker_conversation_id: LocalConversationId,
