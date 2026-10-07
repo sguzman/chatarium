@@ -460,10 +460,10 @@ missing correlated lifecycle transition; restart after that transition can add
 only the missing result. An unrelated lifecycle transition after action start
 causes recovery to fail closed rather than being misidentified as execution.
 
-## Landed worker-side continuation execution start
+## Landed worker-side continuation execution and terminal result
 
 The bounded `ContinuationLease → ContinuationPermit → Continue control` chain
-is now exposed through the desktop and preserved durably.
+is exposed through the desktop and preserved durably.
 
 After delivery and acknowledgement, the worker conversation may explicitly
 **Start continuation execution**. The persistence worker revalidates:
@@ -476,13 +476,45 @@ After delivery and acknowledgement, the worker conversation may explicitly
 
 A successful start records `WorkerContinuationExecutionStarted` and allocates
 a fresh non-authored `LocalTurnId`. It does not mutate WorkerLifecycle, append
-a user message, enter authored-turn history, or dispatch remote inference.
+a user message, or enter authored-turn history.
+
+The worker may then explicitly dispatch that execution through the existing
+ChatGPT Responses transport. Context Composer supplies a typed bounded
+controller-continuation source at user trust level with explicit
+control/route/worker/goal/lease provenance. The request never fabricates an
+`AuthoredUserMessage` such as "Continue".
+
+Remote dispatch, acceptance, assistant output, completion, definitive failure,
+and interruption remain durable turn-scoped evidence. Restart recovery records
+an interruption for stranded continuation turns and backfills a terminal result
+when terminal transport evidence exists.
+
+`WorkerContinuationExecutionResultRecorded` correlates the terminal outcome
+back to the original control, route, worker, goal, lease/permit, non-authored
+turn, and terminal transport event. It does not mutate WorkerLifecycle.
+
+## Landed controller worker result inbox
+
+A read-only controller result projection now unifies terminal results for:
+
+- StatusRequest phase snapshots;
+- completed Start/Resume and Stop applications;
+- bounded Continue executions, including the latest durable worker output.
+
+The projection joins each result to the validated controller-issued route and
+maps historical controller SessionId provenance back to the owning local
+controller conversation lineage when available. Controller session rollover
+therefore does not erase earlier results.
+
+User-issued controls are excluded from this controller inbox. Viewing a result
+does not create a route, acknowledgement, lifecycle transition, transcript
+message, or inference-context item.
 
 ## Next implementation boundary
 
-The next safe boundary is transport and terminal result evidence for the
-non-authored continuation execution turn.
+The next safe boundary is explicit controller-context admission of selected
+worker results.
 
-The execution turn may reuse durable remote observation kinds, but it must have
-its own replay semantics. It must never be introduced into `AuthoredTurnRow`
-or represented as if the user typed a synthetic "Continue" message.
+Controller result visibility must remain separate from model-context use.
+Nothing in result replay should silently inject worker output into a controller
+request or elevate it to developer/system authority.
