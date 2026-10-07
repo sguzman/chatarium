@@ -3208,9 +3208,7 @@ impl ChatariumApp {
                         self.controller_coordination_result_context_command_pending = false;
                     } else if operation.starts_with("controller coordination suggestion") {
                         self.controller_coordination_suggestion_command_pending = false;
-                        if operation.starts_with(
-                            "controller coordination suggestion promotion",
-                        ) {
+                        if operation.starts_with("controller coordination suggestion promotion") {
                             self.controller_control_command_pending = false;
                         }
                     } else if operation.starts_with("controller coordination") {
@@ -12623,12 +12621,10 @@ fn coordination_suggestion_matches_control_kind(
         (
             CoordinationSuggestionAction::StartOrResume,
             WorkerControlKind::StartOrResume
-        )
-            | (
-                CoordinationSuggestionAction::Continue,
-                WorkerControlKind::Continue { .. }
-            )
-            | (CoordinationSuggestionAction::Stop, WorkerControlKind::Stop)
+        ) | (
+            CoordinationSuggestionAction::Continue,
+            WorkerControlKind::Continue { .. }
+        ) | (CoordinationSuggestionAction::Stop, WorkerControlKind::Stop)
             | (
                 CoordinationSuggestionAction::StatusRequest,
                 WorkerControlKind::StatusRequest
@@ -13847,14 +13843,13 @@ fn persistence_worker(
                     suggestion_id,
                 ) {
                     Ok((control_id, route_id, appended_events)) => {
-                        let _ = notices.send(
-                            PersistNotice::ControllerCoordinationSuggestionPromoted {
+                        let _ =
+                            notices.send(PersistNotice::ControllerCoordinationSuggestionPromoted {
                                 suggestion_id,
                                 control_id,
                                 route_id,
                                 appended_events,
-                            },
-                        );
+                            });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -17849,15 +17844,21 @@ mod tests {
             promotion_events.last().unwrap().kind,
             EventKind::ControllerCoordinationSuggestionPromoted
         );
-        assert!(promotion_events.iter().any(|event| {
-            event.kind == EventKind::WorkerControlAdmitted
-        }));
-        assert!(promotion_events.iter().any(|event| {
-            event.kind == EventKind::RouteProposed
-        }));
-        assert!(promotion_events.iter().any(|event| {
-            event.kind == EventKind::ControlRouteBound
-        }));
+        assert!(
+            promotion_events
+                .iter()
+                .any(|event| { event.kind == EventKind::WorkerControlAdmitted })
+        );
+        assert!(
+            promotion_events
+                .iter()
+                .any(|event| { event.kind == EventKind::RouteProposed })
+        );
+        assert!(
+            promotion_events
+                .iter()
+                .any(|event| { event.kind == EventKind::ControlRouteBound })
+        );
         assert!(!promotion_events.iter().any(|event| {
             matches!(
                 event.kind,
@@ -17874,20 +17875,14 @@ mod tests {
             .find(|record| record.control_id == promoted_control_id)
             .unwrap();
         assert_eq!(promoted_control.worker_id, status_worker_id);
-        assert_eq!(
-            promoted_control.kind,
-            WorkerControlKind::StatusRequest
-        );
+        assert_eq!(promoted_control.kind, WorkerControlKind::StatusRequest);
 
         let promoted_route = replay_routing_audit(status_store.events())
             .unwrap()
             .into_iter()
             .find(|record| record.request.id == promoted_route_id)
             .unwrap();
-        assert_eq!(
-            promoted_route.gate_state,
-            RouteGateState::PendingApproval
-        );
+        assert_eq!(promoted_route.gate_state, RouteGateState::PendingApproval);
         assert_eq!(promoted_route.latest_user_decision, None);
         assert_eq!(promoted_route.dispatch_sequence, None);
 
@@ -17917,10 +17912,7 @@ mod tests {
             .unwrap_err()
             .contains("already promoted")
         );
-        assert_eq!(
-            status_store.events().len(),
-            before_second_promotion
-        );
+        assert_eq!(status_store.events().len(), before_second_promotion);
 
         let coordination_admit = append_controller_coordination_result_context_decision_checked(
             &mut status_store,
