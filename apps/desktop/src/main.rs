@@ -129,7 +129,9 @@ use chatarium_store::local_memory_label_audit::{
     record_local_memory_label_added, record_local_memory_label_removed,
     replay_local_memory_label_audit,
 };
-use chatarium_store::local_memory_search::search_local_memory;
+use chatarium_store::local_memory_search::{
+    local_memory_label_facets, search_local_memory_filtered,
+};
 use chatarium_store::local_memory_supersession_audit::{
     record_local_memory_superseded, replay_local_memory_supersession_audit,
 };
@@ -835,6 +837,7 @@ struct ChatariumApp {
     local_memory_command_pending: bool,
     local_memory_draft: String,
     local_memory_search_query: String,
+    local_memory_label_filter: Option<LocalMemoryLabel>,
     show_superseded_local_memory: bool,
     local_memory_label_drafts: BTreeMap<LocalMemoryId, String>,
     lifecycle_command_pending: bool,
@@ -1100,6 +1103,7 @@ impl ChatariumApp {
                         local_memory_command_pending: false,
                         local_memory_draft: String::new(),
                         local_memory_search_query: String::new(),
+                        local_memory_label_filter: None,
                         show_superseded_local_memory: false,
                         local_memory_label_drafts: BTreeMap::new(),
                         lifecycle_command_pending: false,
@@ -1282,6 +1286,7 @@ impl ChatariumApp {
             local_memory_command_pending: false,
             local_memory_draft: String::new(),
             local_memory_search_query: String::new(),
+            local_memory_label_filter: None,
             show_superseded_local_memory: false,
             local_memory_label_drafts: BTreeMap::new(),
             lifecycle_command_pending: false,
@@ -7425,10 +7430,71 @@ impl eframe::App for ChatariumApp {
                                                 None
                                             }
                                         };
-                                    let search_items = match search_local_memory(
+                                    let label_facets = match local_memory_label_facets(
+                                        &self.events,
+                                        self.show_superseded_local_memory,
+                                    ) {
+                                        Ok(facets) => Some(facets),
+                                        Err(error) => {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "local memory label facets blocked: {error}"
+                                                ))
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    186, 108, 108,
+                                                )),
+                                            );
+                                            None
+                                        }
+                                    };
+
+                                    if let Some(facets) = label_facets.as_ref() {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                egui::RichText::new("Label facet")
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        139, 143, 153,
+                                                    )),
+                                            );
+                                            if ui
+                                                .selectable_label(
+                                                    self.local_memory_label_filter.is_none(),
+                                                    "All",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.local_memory_label_filter = None;
+                                            }
+                                            for facet in facets {
+                                                let selected = self
+                                                    .local_memory_label_filter
+                                                    .as_ref()
+                                                    == Some(&facet.label);
+                                                if ui
+                                                    .selectable_label(
+                                                        selected,
+                                                        format!(
+                                                            "{} ({})",
+                                                            facet.label,
+                                                            facet.artifact_count,
+                                                        ),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    self.local_memory_label_filter =
+                                                        Some(facet.label.clone());
+                                                }
+                                            }
+                                        });
+                                    }
+
+                                    let search_items = match search_local_memory_filtered(
                                         &self.events,
                                         self.local_memory_search_query.as_str(),
                                         self.show_superseded_local_memory,
+                                        self.local_memory_label_filter.as_ref(),
                                     ) {
                                         Ok(items) => Some(items),
                                         Err(error) => {
@@ -7563,6 +7629,83 @@ impl eframe::App for ChatariumApp {
                                                         )
                                                         .size(10.0),
                                                     );
+
+                                                    if !artifact.labels.is_empty() {
+                                                        let mut remove_label = None;
+                                                        ui.horizontal_wrapped(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new("Labels")
+                                                                    .size(9.0)
+                                                                    .color(
+                                                                        egui::Color32::from_rgb(
+                                                                            139, 143, 153,
+                                                                        ),
+                                                                    ),
+                                                            );
+                                                            for label in &artifact.labels {
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        label.as_str(),
+                                                                    )
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        !self
+                                                                            .local_memory_command_pending
+                                                                            && self
+                                                                                .persist_tx
+                                                                                .is_some(),
+                                                                        egui::Button::new("×"),
+                                                                    )
+                                                                    .on_hover_text(format!(
+                                                                        "Remove label '{}'",
+                                                                        label
+                                                                    ))
+                                                                    .clicked()
+                                                                {
+                                                                    remove_label =
+                                                                        Some(label.clone());
+                                                                }
+                                                            }
+                                                        });
+                                                        if let Some(label) = remove_label {
+                                                            self.remove_local_memory_label(
+                                                                artifact.memory_id,
+                                                                label,
+                                                            );
+                                                        }
+                                                    }
+
+                                                    let mut add_label_clicked = false;
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        let draft = self
+                                                            .local_memory_label_drafts
+                                                            .entry(artifact.memory_id)
+                                                            .or_default();
+                                                        ui.add(
+                                                            egui::TextEdit::singleline(draft)
+                                                                .desired_width(180.0)
+                                                                .hint_text("Add exact label"),
+                                                        );
+                                                        if ui
+                                                            .add_enabled(
+                                                                !self.local_memory_command_pending
+                                                                    && !draft.is_empty()
+                                                                    && self.persist_tx.is_some(),
+                                                                egui::Button::new("Add label"),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            add_label_clicked = true;
+                                                        }
+                                                    });
+                                                    if add_label_clicked {
+                                                        self.add_local_memory_label(
+                                                            artifact.memory_id,
+                                                        );
+                                                    }
 
                                                     ui.horizontal_wrapped(|ui| {
                                                         let can_change =
