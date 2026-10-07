@@ -8,13 +8,19 @@ use crate::controller_coordination_audit::{
     ControllerCoordinationOutcome, controller_coordination_output_text,
     replay_controller_coordination_audit,
 };
+use crate::control_audit::replay_control_audit;
 use crate::controller_result_inbox::replay_controller_worker_results_for_conversation;
+use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
+use crate::orchestration_route_audit::replay_validated_orchestration_routes;
+use crate::routing_audit::replay_routing_audit;
 use crate::{EventEnvelope, EventStore};
+use chatarium_core::control::{ControlId, WorkerControlKind};
+use chatarium_core::control_provenance::ControlIssuer;
 use chatarium_core::coordination_suggestion::{
     CoordinationSuggestion, CoordinationSuggestionAction, CoordinationSuggestionId,
 };
 use chatarium_core::orchestration::{WorkerGoalId, WorkerId};
-use chatarium_core::routing::RouteId;
+use chatarium_core::routing::{RouteGateState, RouteId, RoutePolicy};
 use chatarium_core::{EventKind, LocalConversationId, LocalTurnId};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +38,9 @@ pub struct ControllerCoordinationSuggestionRecord {
     pub basis_result_route_id: RouteId,
     pub worker_conversation_id: LocalConversationId,
     pub recorded_sequence: u64,
+    pub promoted_control_id: Option<ControlId>,
+    pub promoted_route_id: Option<RouteId>,
+    pub promoted_sequence: Option<u64>,
 }
 
 /// Record one powerless typed suggestion against an already-completed coordination result.
@@ -60,6 +69,34 @@ pub fn record_controller_coordination_suggestion(
     )
 }
 
+/// Record explicit user promotion of one suggestion into an already-created real control proposal.
+///
+/// This event grants no authority itself. Replay requires the referenced control
+/// and route to have been durably admitted/bound under the ordinary controller
+/// control path before this correlation is accepted.
+pub fn record_controller_coordination_suggestion_promoted(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+    suggestion_id: CoordinationSuggestionId,
+    control_id: ControlId,
+    route_id: RouteId,
+) -> std::io::Result<u64> {
+    append_typed(
+        store,
+        promotion_scope(controller_conversation_id, suggestion_id),
+        EventKind::ControllerCoordinationSuggestionPromoted,
+        json!({
+            "schema": SCHEMA,
+            "version": VERSION,
+            "record": "controller_coordination_suggestion_promoted",
+            "suggestion_id": suggestion_id.get(),
+            "controller_conversation_id": controller_conversation_id.to_string(),
+            "control_id": control_id.get(),
+            "route_id": route_id.get(),
+        }),
+    )
+}
+
 /// Replay all durable coordination suggestions.
 ///
 /// Replay validates each suggestion against the journal prefix immediately before
@@ -74,11 +111,151 @@ pub fn replay_controller_coordination_suggestion_audit(
         BTreeSet::<(LocalTurnId, RouteId, WorkerId, WorkerGoalId, &'static str)>::new();
 
     for (index, event) in events.iter().enumerate() {
-        if event.kind != EventKind::ControllerCoordinationSuggestionRecorded {
+        if !matches!(
+            event.kind,
+            EventKind::ControllerCoordinationSuggestionRecorded
+                | EventKind::ControllerCoordinationSuggestionPromoted
+        ) {
             continue;
         }
 
-        let value = typed_payload(event)?;
+        if event.kind == EventKind::ControllerCoordinationSuggestionPromoted {
+            let value = typed_payload(event, "controller_coordination_suggestion_promoted")?;
+            let suggestion_id =
+                CoordinationSuggestionId::new(required_u64(&value, "suggestion_id")?);
+            let controller_conversation_id =
+                parse_conversation_id(&value, "controller_conversation_id", event.sequence)?;
+            let control_id = ControlId::new(required_u64(&value, "control_id")?);
+            let route_id = RouteId::new(required_u64(&value, "route_id")?);
+            validate_promotion_scope(event, controller_conversation_id, suggestion_id)?;
+
+            let record = by_id.get_mut(&suggestion_id).ok_or_else(|| {
+                format!(
+                    "coordination suggestion promotion at sequence {} references suggestion {} before it was recorded",
+                    event.sequence,
+                    suggestion_id.get()
+                )
+            })?;
+            if record.controller_conversation_id != controller_conversation_id {
+                return Err(format!(
+                    "coordination suggestion {} promotion controller conversation disagrees with suggestion provenance",
+                    suggestion_id.get()
+                ));
+            }
+            if record.promoted_sequence.is_some() {
+                return Err(format!(
+                    "coordination suggestion {} is promoted more than once",
+                    suggestion_id.get()
+                ));
+            }
+            if event.sequence <= record.recorded_sequence {
+                return Err(format!(
+                    "coordination suggestion {} promotion does not follow suggestion record",
+                    suggestion_id.get()
+                ));
+            }
+
+            let prior = &events[..index];
+            let control = replay_control_audit(prior)?
+                .into_iter()
+                .find(|control| control.control_id == control_id)
+                .ok_or_else(|| {
+                    format!(
+                        "coordination suggestion {} promotion references missing control {}",
+                        suggestion_id.get(),
+                        control_id.get()
+                    )
+                })?;
+            if control.worker_id != record.suggestion.worker_id()
+                || control.goal_id != record.suggestion.goal_id()
+                || !suggestion_action_matches_control(record.suggestion.action(), control.kind)
+            {
+                return Err(format!(
+                    "coordination suggestion {} promotion control {} disagrees with suggested worker/goal/action",
+                    suggestion_id.get(),
+                    control_id.get()
+                ));
+            }
+            if control.admitted_sequence <= record.recorded_sequence
+                || control.admitted_sequence >= event.sequence
+            {
+                return Err(format!(
+                    "coordination suggestion {} promotion control admission is outside the promotion interval",
+                    suggestion_id.get()
+                ));
+            }
+
+            let validated = replay_validated_orchestration_routes(prior)?
+                .into_iter()
+                .find(|route| route.control_id == control_id && route.route.id == route_id)
+                .ok_or_else(|| {
+                    format!(
+                        "coordination suggestion {} promotion has no validated control/route correlation for control {} route {}",
+                        suggestion_id.get(),
+                        control_id.get(),
+                        route_id.get()
+                    )
+                })?;
+            if validated.worker_id != record.suggestion.worker_id() {
+                return Err(format!(
+                    "coordination suggestion {} promoted route targets wrong worker",
+                    suggestion_id.get()
+                ));
+            }
+            let controller_session_id = match validated.issuer {
+                ControlIssuer::ControllerSession(session_id) => session_id,
+                ControlIssuer::User => {
+                    return Err(format!(
+                        "coordination suggestion {} cannot be promoted through a user-issued control",
+                        suggestion_id.get()
+                    ));
+                }
+            };
+            let topology = replay_local_conversation_topologies(prior)?
+                .into_iter()
+                .find(|topology| topology.conversation_id == controller_conversation_id)
+                .ok_or_else(|| {
+                    format!(
+                        "coordination suggestion {} controller conversation has no topology at promotion",
+                        suggestion_id.get()
+                    )
+                })?;
+            if topology.current_session_id != controller_session_id {
+                return Err(format!(
+                    "coordination suggestion {} promoted control issuer session {} is not controller conversation current session {}",
+                    suggestion_id.get(),
+                    controller_session_id.get(),
+                    topology.current_session_id.get()
+                ));
+            }
+
+            let route = replay_routing_audit(prior)?
+                .into_iter()
+                .find(|route| route.request.id == route_id)
+                .ok_or_else(|| {
+                    format!(
+                        "coordination suggestion {} promoted route {} disappeared",
+                        suggestion_id.get(),
+                        route_id.get()
+                    )
+                })?;
+            if route.initial_policy != RoutePolicy::RequireApproval
+                || route.gate_state != RouteGateState::PendingApproval
+            {
+                return Err(format!(
+                    "coordination suggestion {} promotion route {} must still await explicit approval",
+                    suggestion_id.get(),
+                    route_id.get()
+                ));
+            }
+
+            record.promoted_control_id = Some(control_id);
+            record.promoted_route_id = Some(route_id);
+            record.promoted_sequence = Some(event.sequence);
+            continue;
+        }
+
+        let value = typed_payload(event, "controller_coordination_suggestion")?;
         let suggestion_id = CoordinationSuggestionId::new(required_u64(&value, "suggestion_id")?);
         let controller_conversation_id =
             parse_conversation_id(&value, "controller_conversation_id", event.sequence)?;
@@ -205,6 +382,9 @@ pub fn replay_controller_coordination_suggestion_audit(
                 basis_result_route_id,
                 worker_conversation_id,
                 recorded_sequence: event.sequence,
+                promoted_control_id: None,
+                promoted_route_id: None,
+                promoted_sequence: None,
             },
         );
     }
@@ -222,6 +402,39 @@ pub fn suggestion_scope(
     format!(
         "controller-coordination-suggestion:{controller_conversation_id}:{}",
         suggestion_id.get()
+    )
+}
+
+#[must_use]
+pub fn promotion_scope(
+    controller_conversation_id: LocalConversationId,
+    suggestion_id: CoordinationSuggestionId,
+) -> String {
+    format!(
+        "controller-coordination-suggestion-promotion:{controller_conversation_id}:{}",
+        suggestion_id.get()
+    )
+}
+
+fn suggestion_action_matches_control(
+    action: CoordinationSuggestionAction,
+    control: WorkerControlKind,
+) -> bool {
+    matches!(
+        (action, control),
+        (
+            CoordinationSuggestionAction::StartOrResume,
+            WorkerControlKind::StartOrResume
+        )
+            | (
+                CoordinationSuggestionAction::Continue,
+                WorkerControlKind::Continue { .. }
+            )
+            | (CoordinationSuggestionAction::Stop, WorkerControlKind::Stop)
+            | (
+                CoordinationSuggestionAction::StatusRequest,
+                WorkerControlKind::StatusRequest
+            )
     )
 }
 
@@ -247,7 +460,7 @@ fn append_typed(
     store.append_scoped(Some(scope), kind, encoded)
 }
 
-fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
+fn typed_payload(event: &EventEnvelope, expected_record: &str) -> Result<Value, String> {
     let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
         format!(
             "malformed coordination suggestion payload at sequence {}: {error}",
@@ -266,10 +479,12 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
             event.sequence
         ));
     }
-    if value.get("record").and_then(Value::as_str) != Some("controller_coordination_suggestion") {
+    if value.get("record").and_then(Value::as_str) != Some(expected_record) {
         return Err(format!(
-            "coordination suggestion event at sequence {} has unexpected record",
-            event.sequence
+            "coordination suggestion event at sequence {} has record {:?}, expected {:?}",
+            event.sequence,
+            value.get("record").and_then(Value::as_str),
+            expected_record
         ));
     }
     Ok(value)
@@ -284,6 +499,21 @@ fn validate_scope(
     if event.scope.as_deref() != Some(expected.as_str()) {
         return Err(format!(
             "coordination suggestion event at sequence {} has scope {:?}, expected {:?}",
+            event.sequence, event.scope, expected
+        ));
+    }
+    Ok(())
+}
+
+fn validate_promotion_scope(
+    event: &EventEnvelope,
+    controller_conversation_id: LocalConversationId,
+    suggestion_id: CoordinationSuggestionId,
+) -> Result<(), String> {
+    let expected = promotion_scope(controller_conversation_id, suggestion_id);
+    if event.scope.as_deref() != Some(expected.as_str()) {
+        return Err(format!(
+            "coordination suggestion promotion at sequence {} has scope {:?}, expected {:?}",
             event.sequence, event.scope, expected
         ));
     }
@@ -350,6 +580,9 @@ mod tests {
             basis_result_route_id: RouteId::new(5),
             worker_conversation_id: worker,
             recorded_sequence: 0,
+            promoted_control_id: None,
+            promoted_route_id: None,
+            promoted_sequence: None,
         };
         record_controller_coordination_suggestion(&mut store, &record).unwrap();
 
