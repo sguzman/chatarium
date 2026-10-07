@@ -18,7 +18,10 @@ use chatarium_core::routing::{
     DecisionAuthority, RouteClass, RouteEndpointId, RouteGate, RouteGateState, RouteId,
     RoutePayloadId, RoutePolicy, RouteRequest,
 };
-use chatarium_core::session::{SessionEndpointBinding, SessionId};
+use chatarium_core::session::{
+    SessionEndpointBinding, SessionId, WorkerSessionBinding, WorkerSessionSuccessorBinding,
+};
+use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
@@ -80,7 +83,11 @@ use chatarium_store::routing_audit::{
     record_route_user_decision, replay_routing_audit,
 };
 use chatarium_store::session_audit::{
-    record_local_session_registered, record_session_endpoint_bound, replay_session_audit,
+    active_worker_session, record_local_session_registered, record_session_endpoint_bound,
+    record_worker_session_bound, record_worker_session_successor_bound, replay_session_audit,
+};
+use chatarium_store::supervision_audit::{
+    record_controller_session_designated, record_controller_worker_bound, replay_supervision_audit,
 };
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
@@ -143,6 +150,17 @@ enum PersistCommand {
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
         worker_id: WorkerId,
+    },
+    BindCurrentSessionWorker {
+        conversation_id: LocalConversationId,
+        worker_id: WorkerId,
+    },
+    DesignateCurrentSessionController {
+        conversation_id: LocalConversationId,
+    },
+    BindControllerToLocalWorker {
+        controller_conversation_id: LocalConversationId,
+        worker_conversation_id: LocalConversationId,
     },
     AssignWorkerGoal {
         worker_id: WorkerId,
@@ -302,6 +320,9 @@ enum PersistNotice {
         event: EventEnvelope,
     },
     LifecycleEventAppended {
+        event: EventEnvelope,
+    },
+    SupervisionEventAppended {
         event: EventEnvelope,
     },
     Failed {
@@ -545,6 +566,7 @@ struct ChatariumApp {
     route_dispatch_command_pending: bool,
     route_context_command_pending: bool,
     lifecycle_command_pending: bool,
+    supervision_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
     archive_backup_path: String,
@@ -797,6 +819,7 @@ impl ChatariumApp {
                         route_dispatch_command_pending: false,
                         route_context_command_pending: false,
                         lifecycle_command_pending: false,
+                        supervision_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
                         archive_backup_path: String::new(),
@@ -966,6 +989,7 @@ impl ChatariumApp {
             route_dispatch_command_pending: false,
             route_context_command_pending: false,
             lifecycle_command_pending: false,
+            supervision_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
             archive_backup_path: String::new(),
