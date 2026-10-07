@@ -416,10 +416,34 @@ Acknowledgement does **not**:
 - append transcript content;
 - enter inference context.
 
+## Landed non-mutating StatusRequest results
+
+Acknowledged `StatusRequest` controls can now produce a durable
+`WorkerControlStatusResultRecorded` fact.
+
+The result is destination-conversation-scoped and records:
+
+- control and route identity;
+- WorkerId and worker conversation identity;
+- current WorkerGoalId;
+- current WorkerPhase;
+- acknowledgement sequence;
+- result sequence.
+
+The result is accepted only when the delivered inbox item is a StatusRequest,
+has already been durably acknowledged, belongs to the worker conversation, and
+the reported goal/phase exactly match replayed WorkerLifecycle state.
+
+The worker control inbox exposes **Record status result** only after
+acknowledgement and displays the resulting durable phase snapshot.
+
+Status reporting does not mutate WorkerLifecycle, transcript, routing, or
+inference context.
+
 ## Next implementation boundary
 
-The next safe boundary is explicit worker-side **action/result** after
-acknowledgement.
+The next safe boundary is explicit worker-side application of the mutating
+`StartOrResume` and `Stop` controls.
 
 That boundary must preserve the distinction between:
 
@@ -427,7 +451,9 @@ That boundary must preserve the distinction between:
 2. user-approved route dispatch;
 3. durable delivery;
 4. worker acknowledgement;
-5. explicit worker action/result;
-6. separately durable lifecycle change or status evidence.
+5. explicit worker-side action intent;
+6. the normal durable WorkerLifecycle transition;
+7. a separately replayable control-correlated action result.
 
-Do not infer execution merely from acknowledgement.
+Crash recovery must not infer execution merely from acknowledgement or from an
+unrelated lifecycle transition.
