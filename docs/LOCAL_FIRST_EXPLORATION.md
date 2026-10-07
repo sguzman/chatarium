@@ -353,11 +353,25 @@ label facets, and exact source-conversation facets are now landed. Superseded
 predecessors remain historically visible but mechanically excluded from
 effective context; labels and facets never grant context authority.
 
-The active next architectural boundary is **next-request-only manual memory
-selection**. A discovered memory should be usable for one authored request
-without converting that choice into persistent Admit state. The exact one-shot
-set must be visible and frozen at Send, then consumed without leaking into later
-requests.
+Next-request-only manual memory selection is now landed.
 
-Automatic semantic retrieval and embedding search remain later. Do not reopen
-browser/history work as part of this phase.
+A discovered eligible memory can be selected for exactly one authored request
+without changing persistent Admit/Exclude state. The exact sorted memory set and
+journal high-water are frozen at Send, validated before the authored message
+commit, durably correlated to that LocalTurnId after commit, exposed in the
+exact-request inspector, and reconstructed as typed user-level one-shot memory
+context. The pre-send selection is then cleared and does not leak into later
+turns.
+
+Superseded artifacts and already-persistently-admitted artifacts are ineligible
+for redundant one-shot selection.
+
+The explicit manual memory stack is therefore complete enough for dogfooding.
+Automatic semantic retrieval and embedding search remain later.
+
+The active next architectural boundary is the first **MCP/tool integration
+substrate**: typed tool/provider identity, immutable call provenance, routing and
+permission correlation, and durable result/error state before live tool
+execution is enabled. Reuse the existing `RouteClass::ToolCall` gate and recover
+the user's existing XML-oriented MCP envelope before inventing a competing wire
+language. Do not reopen browser/history work as part of this phase.
