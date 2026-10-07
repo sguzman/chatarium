@@ -3905,6 +3905,29 @@ impl ChatariumApp {
         }
     }
 
+    fn acknowledge_worker_control(&mut self, route_id: RouteId) {
+        if self.worker_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot acknowledge worker control: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::AcknowledgeWorkerControl {
+            worker_conversation_id: self.local_conversation_id,
+            route_id,
+        }) {
+            Ok(()) => {
+                self.worker_control_command_pending = true;
+                self.status =
+                    format!("acknowledging delivered worker control route {}…", route_id.get());
+            }
+            Err(error) => {
+                self.status = format!("failed to queue worker control acknowledgement: {error}");
+            }
+        }
+    }
+
     fn assign_next_worker_goal(&mut self, worker_id: WorkerId) {
         if self.lifecycle_command_pending {
             return;
@@ -9541,6 +9564,79 @@ fn append_controller_control_dispatch_checked(
     }
 
     Ok(store.events()[before..].to_vec())
+}
+
+fn append_worker_control_acknowledgement_checked(
+    store: &mut impl EventStore,
+    worker_conversation_id: LocalConversationId,
+    route_id: RouteId,
+) -> Result<EventEnvelope, String> {
+    let item = replay_worker_control_inbox_for_conversation(
+        store.events(),
+        worker_conversation_id,
+    )?
+    .into_iter()
+    .find(|item| item.route_id == route_id)
+    .ok_or_else(|| {
+        format!(
+            "worker control route {} is not a delivered inbox item for conversation {}",
+            route_id.get(),
+            worker_conversation_id,
+        )
+    })?;
+
+    if item.acknowledged_sequence.is_some() {
+        return Err(format!(
+            "worker control route {} is already acknowledged",
+            route_id.get()
+        ));
+    }
+
+    let owner = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "worker conversation {} has no durable WorkerId binding",
+                worker_conversation_id
+            )
+        })?;
+    if owner.worker_id != item.worker_id {
+        return Err(format!(
+            "worker control route {} inbox worker disagrees with durable conversation ownership",
+            route_id.get()
+        ));
+    }
+
+    record_worker_control_acknowledged(
+        store,
+        item.control_id,
+        item.route_id,
+        item.worker_id,
+        worker_conversation_id,
+        item.delivered_sequence,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_worker_control_acknowledgement_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+        .ok_or_else(|| "worker control acknowledgement append did not replay".to_owned())?;
+    if replayed.control_id != item.control_id
+        || replayed.worker_id != item.worker_id
+        || replayed.worker_conversation_id != worker_conversation_id
+        || replayed.delivered_sequence != item.delivered_sequence
+    {
+        return Err(
+            "worker control acknowledgement replay disagrees with delivered inbox item".to_owned(),
+        );
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker control acknowledgement append produced no durable event".to_owned())
 }
 
 fn append_worker_goal_checked(
