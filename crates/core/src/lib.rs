@@ -3,9 +3,9 @@
 pub mod authenticated_session;
 pub mod chat_container;
 pub mod control;
-pub mod coordination_suggestion;
 pub mod control_provenance;
 pub mod control_route;
+pub mod coordination_suggestion;
 pub mod orchestration;
 pub mod remote;
 pub mod routing;
