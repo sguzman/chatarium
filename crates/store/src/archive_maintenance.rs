@@ -25,6 +25,7 @@ use crate::local_memory_context_audit::{
     replay_admitted_local_memory_context, replay_local_memory_context_audit,
 };
 use crate::local_memory_label_audit::replay_local_memory_label_audit;
+use crate::local_memory_search::{local_memory_label_facets, search_local_memory};
 use crate::local_memory_supersession_audit::replay_local_memory_supersession_audit;
 use crate::local_route_context_audit::replay_local_route_context_audit;
 use crate::local_route_delivery_audit::replay_local_route_delivery_audit;
@@ -199,6 +200,8 @@ pub fn check_archive(
     replay_local_memory_audit(&events).map_err(err)?;
     replay_local_memory_supersession_audit(&events).map_err(err)?;
     replay_local_memory_label_audit(&events).map_err(err)?;
+    search_local_memory(&events, "", true).map_err(err)?;
+    local_memory_label_facets(&events, true).map_err(err)?;
     let memory_context = replay_local_memory_context_audit(&events).map_err(err)?;
     let memory_destinations = memory_context
         .iter()
