@@ -284,6 +284,7 @@ impl TurnEvidence {
             | EventKind::WorkerControlIssuerBound
             | EventKind::WorkerContinuationExecutionStarted
             | EventKind::WorkerContinuationExecutionResultRecorded
+            | EventKind::ControllerWorkerResultContextDecisionRecorded
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
@@ -408,6 +409,8 @@ pub enum EventKind {
     WorkerContinuationExecutionStarted,
     /// Terminal remote outcome for one worker continuation execution was recorded.
     WorkerContinuationExecutionResultRecorded,
+    /// An explicit include/exclude decision for one controller-visible worker result was recorded.
+    ControllerWorkerResultContextDecisionRecorded,
     /// A bounded continuation lease was durably created.
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
@@ -494,6 +497,9 @@ impl EventKind {
             Self::WorkerContinuationExecutionResultRecorded => {
                 "worker_continuation_execution_result_recorded"
             }
+            Self::ControllerWorkerResultContextDecisionRecorded => {
+                "controller_worker_result_context_decision_recorded"
+            }
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
@@ -576,6 +582,9 @@ impl EventKind {
             }
             "worker_continuation_execution_result_recorded" => {
                 Some(Self::WorkerContinuationExecutionResultRecorded)
+            }
+            "controller_worker_result_context_decision_recorded" => {
+                Some(Self::ControllerWorkerResultContextDecisionRecorded)
             }
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
