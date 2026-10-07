@@ -74,14 +74,16 @@ pub fn replay_worker_control_status_results(
         let control_id = ControlId::new(required_u64(&value, "control_id")?);
         let route_id = RouteId::new(required_u64(&value, "route_id")?);
         let worker_id = WorkerId::new(required_u64(&value, "worker_id")?);
-        let worker_conversation_id =
-            LocalConversationId::from_str(required_string(&value, "worker_conversation_id")?)
-                .map_err(|error| {
-                    format!(
-                        "worker control status result at sequence {} has invalid conversation id: {error}",
-                        event.sequence
-                    )
-                })?;
+        let worker_conversation_id = LocalConversationId::from_str(required_string(
+            &value,
+            "worker_conversation_id",
+        )?)
+        .map_err(|error| {
+            format!(
+                "worker control status result at sequence {} has invalid conversation id: {error}",
+                event.sequence
+            )
+        })?;
         let goal_id = WorkerGoalId::new(required_u64(&value, "goal_id")?);
         let phase = parse_phase(required_string(&value, "phase")?)?;
         let acknowledged_sequence = required_u64(&value, "acknowledged_sequence")?;
@@ -280,17 +282,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed worker control status result is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed worker control status result is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed worker control status result is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed worker control status result is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
