@@ -15837,6 +15837,67 @@ mod tests {
                 ..
             }
         ));
+        assert!(
+            admitted_controller_worker_result_messages(
+                status_store.events(),
+                status_controller,
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        let admitted_event = append_controller_worker_result_context_decision_checked(
+            &mut status_store,
+            status_route,
+            status_controller,
+            ControllerWorkerResultContextDecision::Admit,
+        )
+        .unwrap();
+        assert_eq!(
+            admitted_event.kind,
+            EventKind::ControllerWorkerResultContextDecisionRecorded
+        );
+        let admitted_context =
+            admitted_controller_worker_result_messages(status_store.events(), status_controller)
+                .unwrap();
+        assert_eq!(admitted_context.len(), 1);
+        assert_eq!(admitted_context[0].role, context_composer::TranscriptRole::User);
+        assert_eq!(admitted_context[0].order_sequence(), admitted_event.sequence);
+        assert!(admitted_context[0].text.contains("result_kind: status"));
+        assert!(admitted_context[0].text.contains("phase: COMPLETED"));
+
+        let context_plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            admitted_context,
+        );
+        assert_eq!(context_plan.controller_worker_result_count(), 1);
+
+        append_controller_worker_result_context_decision_checked(
+            &mut status_store,
+            status_route,
+            status_controller,
+            ControllerWorkerResultContextDecision::Exclude,
+        )
+        .unwrap();
+        assert!(
+            admitted_controller_worker_result_messages(
+                status_store.events(),
+                status_controller,
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            replay_controller_worker_results_for_conversation(
+                status_store.events(),
+                status_controller,
+            )
+            .unwrap()
+            .len(),
+            1
+        );
 
         assert_eq!(
             worker_record(status_store.events(), status_worker_id)
@@ -16210,6 +16271,23 @@ mod tests {
             }
             other => panic!("expected continuation controller result, got {other:?}"),
         }
+
+        let admitted_event = append_controller_worker_result_context_decision_checked(
+            &mut continuation_store,
+            continue_route,
+            continuation_controller,
+            ControllerWorkerResultContextDecision::Admit,
+        )
+        .unwrap();
+        let admitted_context = admitted_controller_worker_result_messages(
+            continuation_store.events(),
+            continuation_controller,
+        )
+        .unwrap();
+        assert_eq!(admitted_context.len(), 1);
+        assert_eq!(admitted_context[0].order_sequence(), admitted_event.sequence);
+        assert!(admitted_context[0].text.contains("result_kind: continuation"));
+        assert!(admitted_context[0].text.contains("continued worker output"));
 
         assert!(
             append_worker_continuation_result_if_terminal(
