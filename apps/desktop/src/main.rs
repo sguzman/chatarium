@@ -8848,6 +8848,24 @@ impl eframe::App for ChatariumApp {
                                                                 None
                                                             }
                                                         };
+                                                    let coordination_suggestions =
+                                                        match replay_controller_coordination_suggestion_audit(
+                                                            &self.events,
+                                                        ) {
+                                                            Ok(records) => Some(records),
+                                                            Err(error) => {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "coordination suggestion projection blocked: {error}"
+                                                                    ))
+                                                                    .size(9.0)
+                                                                    .color(egui::Color32::from_rgb(
+                                                                        186, 108, 108,
+                                                                    )),
+                                                                );
+                                                                None
+                                                            }
+                                                        };
                                                     let owned = records
                                                         .into_iter()
                                                         .filter(|record| {
@@ -8994,6 +9012,159 @@ impl eframe::App for ChatariumApp {
                                                                 }
                                                             }
 
+                                                            if outcome
+                                                                == ControllerCoordinationOutcome::Completed
+                                                            {
+                                                                ui.collapsing(
+                                                                    "Typed suggestions · NO AUTHORITY",
+                                                                    |ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                "Suggestions are durable proposal data only. Recording one does not create a WorkerControl, route, approval, lifecycle transition, continuation permit, or dispatch.",
+                                                                            )
+                                                                            .size(9.0)
+                                                                            .color(egui::Color32::from_rgb(
+                                                                                139, 143, 153,
+                                                                            )),
+                                                                        );
+
+                                                                        match replay_controller_worker_results_for_conversation(
+                                                                            &self.events,
+                                                                            self.local_conversation_id,
+                                                                        ) {
+                                                                            Err(error) => {
+                                                                                ui.label(
+                                                                                    egui::RichText::new(format!(
+                                                                                        "suggestion basis projection blocked: {error}"
+                                                                                    ))
+                                                                                    .size(9.0)
+                                                                                    .color(egui::Color32::from_rgb(
+                                                                                        186, 108, 108,
+                                                                                    )),
+                                                                                );
+                                                                            }
+                                                                            Ok(results) => {
+                                                                                for route_id in
+                                                                                    &record.admitted_result_routes
+                                                                                {
+                                                                                    let Some(basis) = results
+                                                                                        .iter()
+                                                                                        .find(|item| {
+                                                                                            item.route_id
+                                                                                                == *route_id
+                                                                                        })
+                                                                                    else {
+                                                                                        ui.label(
+                                                                                            egui::RichText::new(format!(
+                                                                                                "basis route {} missing from controller result inbox",
+                                                                                                route_id.get()
+                                                                                            ))
+                                                                                            .size(9.0)
+                                                                                            .color(egui::Color32::from_rgb(
+                                                                                                186, 108, 108,
+                                                                                            )),
+                                                                                        );
+                                                                                        continue;
+                                                                                    };
+                                                                                    let worker_title =
+                                                                                        local_conversation_display_title(
+                                                                                            &self.local_conversation_catalog,
+                                                                                            basis.worker_conversation_id,
+                                                                                            &self.events,
+                                                                                        );
+                                                                                    ui.group(|ui| {
+                                                                                        ui.label(
+                                                                                            egui::RichText::new(format!(
+                                                                                                "{worker_title} · worker {} · goal {} · basis route {}",
+                                                                                                basis.worker_id.get(),
+                                                                                                basis.goal_id.get(),
+                                                                                                route_id.get(),
+                                                                                            ))
+                                                                                            .monospace()
+                                                                                            .size(9.0),
+                                                                                        );
+
+                                                                                        let existing = coordination_suggestions
+                                                                                            .as_ref()
+                                                                                            .map(|records| {
+                                                                                                records
+                                                                                                    .iter()
+                                                                                                    .filter(|suggestion| {
+                                                                                                        suggestion.coordination_turn_id
+                                                                                                            == record.coordination_turn_id
+                                                                                                            && suggestion.basis_result_route_id
+                                                                                                                == *route_id
+                                                                                                    })
+                                                                                                    .collect::<Vec<_>>()
+                                                                                            })
+                                                                                            .unwrap_or_default();
+                                                                                        for suggestion in &existing {
+                                                                                            ui.label(
+                                                                                                egui::RichText::new(format!(
+                                                                                                    "SUGGESTION {} · {} · NO AUTHORITY · event #{}",
+                                                                                                    suggestion.suggestion.id().get(),
+                                                                                                    coordination_suggestion_action_label(
+                                                                                                        suggestion.suggestion.action()
+                                                                                                    ),
+                                                                                                    suggestion.recorded_sequence,
+                                                                                                ))
+                                                                                                .monospace()
+                                                                                                .size(9.0),
+                                                                                            );
+                                                                                        }
+
+                                                                                        ui.horizontal_wrapped(|ui| {
+                                                                                            for action in [
+                                                                                                CoordinationSuggestionAction::StatusRequest,
+                                                                                                CoordinationSuggestionAction::StartOrResume,
+                                                                                                CoordinationSuggestionAction::Continue,
+                                                                                                CoordinationSuggestionAction::Stop,
+                                                                                            ] {
+                                                                                                let already_exists = existing.iter().any(
+                                                                                                    |suggestion| {
+                                                                                                        suggestion.suggestion.action()
+                                                                                                            == action
+                                                                                                    },
+                                                                                                );
+                                                                                                let enabled = coordination_suggestions
+                                                                                                    .is_some()
+                                                                                                    && !already_exists
+                                                                                                    && !self
+                                                                                                        .controller_coordination_suggestion_command_pending
+                                                                                                    && self.persist_tx.is_some();
+                                                                                                if ui
+                                                                                                    .add_enabled(
+                                                                                                        enabled,
+                                                                                                        egui::Button::new(format!(
+                                                                                                            "Suggest {}",
+                                                                                                            coordination_suggestion_action_label(
+                                                                                                                action
+                                                                                                            )
+                                                                                                        )),
+                                                                                                    )
+                                                                                                    .clicked()
+                                                                                                {
+                                                                                                    self.record_controller_coordination_suggestion(
+                                                                                                        record.coordination_turn_id,
+                                                                                                        *route_id,
+                                                                                                        action,
+                                                                                                    );
+                                                                                                }
+                                                                                            }
+                                                                                            if self
+                                                                                                .controller_coordination_suggestion_command_pending
+                                                                                            {
+                                                                                                ui.spinner();
+                                                                                            }
+                                                                                        });
+                                                                                    });
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                );
+                                                            }
+
                                                             let current_decision =
                                                                 coordination_context_records
                                                                     .as_ref()
@@ -9116,6 +9287,7 @@ impl eframe::App for ChatariumApp {
                                             }
 
                                             if self.controller_coordination_command_pending
+                                                || self.controller_coordination_suggestion_command_pending
                                                 || self.controller_control_command_pending
                                             {
                                                 ui.spinner();
