@@ -212,12 +212,25 @@ durably interrupted, and terminal completion/failure/interruption is projected
 into a separate WorkerContinuationExecutionResultRecorded fact. Terminal
 continuation results do not mutate WorkerLifecycle.
 
-Controller-side result visibility is now unified through a read-only result
-inbox over StatusRequest results, completed Start/Resume/Stop applications, and
-terminal Continue executions. Continue results include the latest durable worker
-output text. The controller result inbox is provenance only and does not enter
-controller inference context automatically.
+Controller-side result visibility is unified through a result inbox over
+StatusRequest results, completed Start/Resume/Stop applications, and terminal
+Continue executions. Continue results include the latest durable worker output
+text.
 
-The next boundary is explicit controller-context admission of selected worker
-results. Result visibility and result use by the controller model must remain
-separate durable/policy decisions rather than hidden context injection.
+Controller result visibility and model-context use are now separate durable
+layers. Every result is context-excluded by default. The controller conversation
+may explicitly Admit or Exclude an individual terminal result, and that
+reversible decision is validated against the exact control/route/result
+provenance.
+
+Currently admitted results enter Context Composer only as user-level
+orchestration-result context wrapped in an explicit Chatarium provenance
+envelope. The envelope states that the result is not user-authored and is not a
+developer/system instruction. The admitted set is snapshotted when Send is
+clicked so a later context decision cannot mutate an in-flight authored turn.
+
+The next boundary is an explicit **non-authored controller coordination turn**
+that can reason over already-admitted worker results without fabricating a
+human message. Starting or dispatching such a turn must remain a deliberate user
+action and must not automatically issue worker controls, alter lifecycle, or
+consume continuation authority.
