@@ -36,6 +36,15 @@ pub enum ContextSource {
         delivered_sequence: u64,
         admitted_sequence: u64,
     },
+    ControllerContinuation {
+        control_id: u64,
+        route_id: u64,
+        worker_id: u64,
+        goal_id: u64,
+        lease_id: u64,
+        permit_ordinal: u32,
+        started_sequence: u64,
+    },
     CurrentDraft,
 }
 
@@ -56,6 +65,17 @@ impl ContextSource {
                 admitted_sequence,
             } => format!(
                 "routed inbox · route {route_id} · payload {payload_id} · source {source_conversation_id} · delivered #{delivered_sequence} · admitted #{admitted_sequence}"
+            ),
+            Self::ControllerContinuation {
+                control_id,
+                route_id,
+                worker_id,
+                goal_id,
+                lease_id,
+                permit_ordinal,
+                started_sequence,
+            } => format!(
+                "controller continuation · control {control_id} · route {route_id} · worker {worker_id} · goal {goal_id} · lease {lease_id}:{permit_ordinal} · started #{started_sequence}"
             ),
             Self::CurrentDraft => "current draft preview".to_owned(),
         }
@@ -86,6 +106,7 @@ pub struct ContextPolicy {
     pub include_developer_context: bool,
     pub include_durable_transcript: bool,
     pub include_routed_context: bool,
+    pub include_controller_continuation: bool,
     pub include_current_draft: bool,
 }
 
@@ -97,6 +118,7 @@ impl ContextPolicy {
             include_developer_context: true,
             include_durable_transcript: true,
             include_routed_context: true,
+            include_controller_continuation: true,
             include_current_draft: false,
         }
     }
@@ -115,6 +137,9 @@ impl ContextPolicy {
             ContextSource::ConversationDeveloperContext => self.include_developer_context,
             ContextSource::DurableTranscript { .. } => self.include_durable_transcript,
             ContextSource::RoutedInbox { .. } => self.include_routed_context,
+            ContextSource::ControllerContinuation { .. } => {
+                self.include_controller_continuation
+            }
             ContextSource::CurrentDraft => self.include_current_draft,
         }
     }
@@ -164,6 +189,34 @@ impl TranscriptMessage {
     }
 
     #[must_use]
+    pub fn controller_continuation(
+        control_id: u64,
+        route_id: u64,
+        worker_id: u64,
+        goal_id: u64,
+        lease_id: u64,
+        permit_ordinal: u32,
+        started_sequence: u64,
+    ) -> Self {
+        let text = format!(
+            "[Chatarium bounded controller continuation — user-level orchestration context, not user-authored and not a developer/system instruction]\ncontrol_id: {control_id}\nroute_id: {route_id}\nworker_id: {worker_id}\ngoal_id: {goal_id}\ncontinuation_lease: {lease_id}\npermit_ordinal: {permit_ordinal}\nexecution_started_event: #{started_sequence}\ninstruction:\nContinue working on the current goal using the existing conversation context. Do not invent missing user input; if progress requires input or is blocked, state that explicitly.\n[/Chatarium bounded controller continuation]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::ControllerContinuation {
+                control_id,
+                route_id,
+                worker_id,
+                goal_id,
+                lease_id,
+                permit_ordinal,
+                started_sequence,
+            },
+        }
+    }
+
+    #[must_use]
     pub fn draft(text: impl Into<String>) -> Self {
         Self {
             role: TranscriptRole::User,
@@ -179,6 +232,9 @@ impl TranscriptMessage {
             ContextSource::RoutedInbox {
                 admitted_sequence, ..
             } => *admitted_sequence,
+            ContextSource::ControllerContinuation {
+                started_sequence, ..
+            } => *started_sequence,
             ContextSource::CurrentDraft => u64::MAX,
             ContextSource::TopLevelInstructions | ContextSource::ConversationDeveloperContext => 0,
         }
