@@ -17276,6 +17276,45 @@ fn snapshot_one_shot_local_memory(
     Ok((pending, Some(snapshot_after_sequence)))
 }
 
+fn one_shot_local_memory_messages_for_turn(
+    events: &[EventEnvelope],
+    turn_id: LocalTurnId,
+) -> Result<Vec<context_composer::TranscriptMessage>, String> {
+    let Some(selection) = replay_local_memory_turn_selection_audit(events)?
+        .into_iter()
+        .find(|record| record.turn_id == turn_id)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let artifacts = replay_local_memory_audit(events)?
+        .into_iter()
+        .map(|artifact| (artifact.memory_id, artifact))
+        .collect::<BTreeMap<_, _>>();
+    let mut messages = Vec::with_capacity(selection.memory_ids.len());
+
+    for memory_id in &selection.memory_ids {
+        let artifact = artifacts.get(memory_id).ok_or_else(|| {
+            format!(
+                "one-shot local memory turn {} references missing immutable memory {}",
+                turn_id,
+                memory_id.get()
+            )
+        })?;
+        messages.push(context_composer::TranscriptMessage::local_memory_one_shot(
+            artifact.text.as_str(),
+            artifact.memory_id.get(),
+            artifact.source_conversation_id.to_string(),
+            artifact.recorded_sequence,
+            selection.selection_snapshot_after_sequence,
+            Some(selection.recorded_sequence),
+        ));
+    }
+
+    messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+    Ok(messages)
+}
+
 fn admitted_local_memory_messages(
     events: &[EventEnvelope],
     destination_conversation_id: LocalConversationId,
