@@ -616,7 +616,7 @@ mod tests {
         );
 
         let error = replay_validated_orchestration_routes(store.events()).unwrap_err();
-        assert!(error.contains("before any worker-session binding"));
+        assert!(error.contains("no active session binding before sequence"));
     }
 
     #[test]
