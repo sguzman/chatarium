@@ -7131,6 +7131,176 @@ impl eframe::App for ChatariumApp {
                                                                         .controller_control_command_pending
                                                                         && self.persist_tx.is_some();
 
+                                                                if let Some(goal_id) =
+                                                                    worker.lifecycle.goal_id()
+                                                                {
+                                                                    match replay_continuation_audit(
+                                                                        &self.events,
+                                                                    ) {
+                                                                        Err(error) => {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "continuation authority projection blocked: {error}"
+                                                                                    ),
+                                                                                )
+                                                                                .size(9.0)
+                                                                                .color(
+                                                                                    egui::Color32::from_rgb(
+                                                                                        186, 108, 108,
+                                                                                    ),
+                                                                                ),
+                                                                            );
+                                                                        }
+                                                                        Ok(leases) => {
+                                                                            let matching = leases
+                                                                                .iter()
+                                                                                .filter(|record| {
+                                                                                    record.worker_id
+                                                                                        == worker_binding
+                                                                                            .worker_id
+                                                                                        && record
+                                                                                            .goal_id
+                                                                                            == goal_id
+                                                                                })
+                                                                                .collect::<Vec<_>>();
+                                                                            let unconsumed = matching
+                                                                                .iter()
+                                                                                .flat_map(
+                                                                                    |record| {
+                                                                                        record
+                                                                                            .permits
+                                                                                            .iter()
+                                                                                            .filter(
+                                                                                                |permit| {
+                                                                                                    permit
+                                                                                                        .consumed_by
+                                                                                                        .is_none()
+                                                                                                },
+                                                                                            )
+                                                                                    },
+                                                                                )
+                                                                                .count();
+                                                                            let live_leases = matching
+                                                                                .iter()
+                                                                                .filter(|record| {
+                                                                                    record.remaining
+                                                                                        > 0
+                                                                                })
+                                                                                .count();
+                                                                            let live_authority = matching
+                                                                                .iter()
+                                                                                .filter(|record| {
+                                                                                    record.remaining
+                                                                                        > 0
+                                                                                        || record
+                                                                                            .permits
+                                                                                            .iter()
+                                                                                            .any(
+                                                                                                |permit| {
+                                                                                                    permit
+                                                                                                        .consumed_by
+                                                                                                        .is_none()
+                                                                                                },
+                                                                                            )
+                                                                                })
+                                                                                .count();
+                                                                            let issued = matching
+                                                                                .iter()
+                                                                                .map(|record| {
+                                                                                    record.issued
+                                                                                })
+                                                                                .sum::<u32>();
+                                                                            let remaining = matching
+                                                                                .iter()
+                                                                                .map(|record| {
+                                                                                    record.remaining
+                                                                                })
+                                                                                .sum::<u32>();
+
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "CONTINUE AUTH · {} lease{} · {} issued · {} remaining · {} unconsumed",
+                                                                                        matching.len(),
+                                                                                        if matching.len() == 1 { "" } else { "s" },
+                                                                                        issued,
+                                                                                        remaining,
+                                                                                        unconsumed,
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+
+                                                                            let allowance = self
+                                                                                .continuation_allowance_drafts
+                                                                                .entry(
+                                                                                    topology
+                                                                                        .conversation_id,
+                                                                                )
+                                                                                .or_insert(1);
+                                                                            *allowance =
+                                                                                (*allowance)
+                                                                                    .clamp(1, 100);
+                                                                            ui.add(
+                                                                                egui::DragValue::new(
+                                                                                    allowance,
+                                                                                )
+                                                                                .range(1..=100)
+                                                                                .prefix(
+                                                                                    "lease allowance ",
+                                                                                ),
+                                                                            );
+                                                                            if ui
+                                                                                .add_enabled(
+                                                                                    controls_enabled
+                                                                                        && !phase
+                                                                                            .is_terminal()
+                                                                                        && live_authority
+                                                                                            == 0,
+                                                                                    egui::Button::new(
+                                                                                        "Create continue lease",
+                                                                                    ),
+                                                                                )
+                                                                                .clicked()
+                                                                            {
+                                                                                self.create_controller_continuation_lease(
+                                                                                    topology
+                                                                                        .conversation_id,
+                                                                                    *allowance,
+                                                                                );
+                                                                            }
+
+                                                                            let can_continue =
+                                                                                controls_enabled
+                                                                                    && phase
+                                                                                        == WorkerPhase::Working
+                                                                                    && (unconsumed
+                                                                                        == 1
+                                                                                        || (unconsumed
+                                                                                            == 0
+                                                                                            && live_leases
+                                                                                                == 1));
+                                                                            if ui
+                                                                                .add_enabled(
+                                                                                    can_continue,
+                                                                                    egui::Button::new(
+                                                                                        "Controller continue",
+                                                                                    ),
+                                                                                )
+                                                                                .clicked()
+                                                                            {
+                                                                                self.propose_controller_worker_control(
+                                                                                    topology
+                                                                                        .conversation_id,
+                                                                                    ControllerControlAction::Continue,
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+
                                                                 if matches!(
                                                                     phase,
                                                                     WorkerPhase::Ready
