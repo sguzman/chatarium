@@ -4,6 +4,9 @@
 //! context-excluded until a destination conversation explicitly admits it.
 
 use crate::local_memory_audit::replay_local_memory_audit;
+use crate::local_memory_supersession_audit::{
+    replay_local_memory_supersession_audit, superseded_memory_ids,
+};
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::local_memory::LocalMemoryId;
 use chatarium_core::{EventKind, LocalConversationId};
@@ -133,11 +136,14 @@ pub fn replay_admitted_local_memory_context(
     events: &[EventEnvelope],
     destination_conversation_id: LocalConversationId,
 ) -> Result<Vec<LocalMemoryContextRecord>, String> {
+    let supersessions = replay_local_memory_supersession_audit(events)?;
+    let superseded = superseded_memory_ids(&supersessions);
     Ok(replay_local_memory_context_audit(events)?
         .into_iter()
         .filter(|record| {
             record.destination_conversation_id == destination_conversation_id
                 && record.is_admitted()
+                && !superseded.contains(&record.memory_id)
         })
         .collect())
 }
@@ -280,6 +286,41 @@ mod tests {
             LocalMemoryContextDecision::Exclude,
         )
         .unwrap();
+        assert!(
+            replay_admitted_local_memory_context(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn superseded_admission_remains_auditable_but_is_not_effective_context() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let predecessor = LocalMemoryId::new(1);
+        let successor = LocalMemoryId::new(2);
+        let mut store = MemoryEventStore::default();
+
+        record_local_memory_artifact(&mut store, predecessor, source, "old").unwrap();
+        record_local_memory_artifact(&mut store, successor, source, "new").unwrap();
+        record_local_memory_context_decision(
+            &mut store,
+            predecessor,
+            destination,
+            LocalMemoryContextDecision::Admit,
+        )
+        .unwrap();
+        crate::local_memory_supersession_audit::record_local_memory_superseded(
+            &mut store,
+            predecessor,
+            successor,
+        )
+        .unwrap();
+
+        let raw = replay_local_memory_context_audit(store.events()).unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].memory_id, predecessor);
+        assert_eq!(raw[0].decision, LocalMemoryContextDecision::Admit);
         assert!(
             replay_admitted_local_memory_context(store.events(), destination)
                 .unwrap()
