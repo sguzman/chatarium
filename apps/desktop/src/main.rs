@@ -9106,6 +9106,21 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                             }
+                            match admitted_controller_coordination_result_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Ok(coordination_results) => transcript.extend(coordination_results),
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "coordination result context composition blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
                             transcript.sort_by_key(
                                 context_composer::TranscriptMessage::order_sequence,
                             );
@@ -9122,13 +9137,15 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted controller result{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     context_plan.routed_context_count(),
                                     if context_plan.routed_context_count() == 1 { "" } else { "s" },
                                     context_plan.controller_worker_result_count(),
                                     if context_plan.controller_worker_result_count() == 1 { "" } else { "s" },
+                                    context_plan.controller_coordination_result_count(),
+                                    if context_plan.controller_coordination_result_count() == 1 { "" } else { "s" },
                                     if context_plan.has_developer_context() { "included" } else { "omitted" },
                                     if context_plan.has_current_draft() { "included (preview only; dispatch policy forbids draft)" } else { "omitted" },
                                 ))
