@@ -323,6 +323,10 @@ Memory supersession is now explicit and forward-only. Superseded artifacts remai
 historically visible, are mechanically excluded from effective context, and do
 not transfer admission to their successors.
 
-The next memory boundary is read-only local discovery/search. Lifecycle
-semantics remain unchanged by memory recording, admission, supersession, or
-discovery.
+Read-only local memory discovery/search is now landed. It is a pure projection:
+searching creates no memory, context admission, lifecycle change, route, or
+control.
+
+The next memory boundary is optional explicit organization metadata such as
+user-authored labels. Lifecycle semantics remain unchanged by memory recording,
+admission, supersession, discovery, or labeling.
