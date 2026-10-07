@@ -938,6 +938,73 @@ mod tests {
     }
 
     #[test]
+    fn controller_coordination_is_user_level_without_control_authority() {
+        let coordination =
+            TranscriptMessage::controller_coordination(11, "coordination-turn", 42);
+        assert_eq!(coordination.role, TranscriptRole::User);
+        assert_eq!(coordination.order_sequence(), 42);
+
+        let plan = ContextPlan::compose(
+            ContextPolicy::dispatch(),
+            "",
+            "",
+            [coordination],
+        );
+        assert_eq!(plan.controller_coordination_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("controller coordination turn")
+        );
+        assert!(plan.messages[0].content.contains("not user-authored"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("Do not issue or execute worker controls")
+        );
+        assert!(plan.messages[0].content.contains("do not mutate lifecycle"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("do not assume continuation authority")
+        );
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::ControllerCoordination {
+                controller_session_id: 11,
+                started_sequence: 42,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn controller_coordination_can_be_excluded_by_context_policy() {
+        let policy = ContextPolicy {
+            include_controller_coordination: false,
+            ..ContextPolicy::dispatch()
+        };
+        let coordination = TranscriptMessage::controller_coordination(1, "turn", 2);
+        let plan = ContextPlan::compose(policy, "", "", [coordination]);
+
+        assert_eq!(plan.controller_coordination_count(), 0);
+        assert!(plan.messages.is_empty());
+        let item = plan
+            .inventory
+            .iter()
+            .find(|item| matches!(item.source, ContextSource::ControllerCoordination { .. }))
+            .unwrap();
+        assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
+    }
+
+    #[test]
     fn controller_worker_result_can_be_excluded_by_context_policy() {
         let policy = ContextPolicy {
             include_controller_worker_results: false,
