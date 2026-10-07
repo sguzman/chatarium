@@ -75,6 +75,11 @@ use chatarium_store::control_result_audit::{
 use chatarium_store::control_route_audit::{
     record_control_route_bound, replay_control_route_audit,
 };
+use chatarium_store::controller_result_context_audit::{
+    ControllerWorkerResultContextDecision, record_controller_worker_result_context_decision,
+    replay_admitted_controller_worker_result_context,
+    replay_controller_worker_result_context_audit,
+};
 use chatarium_store::controller_result_inbox::{
     ControllerWorkerResultDetail, replay_controller_worker_results,
     replay_controller_worker_results_for_conversation,
@@ -242,6 +247,11 @@ enum PersistCommand {
     },
     DispatchControllerWorkerControlRoute {
         route_id: RouteId,
+    },
+    DecideControllerWorkerResultContext {
+        route_id: RouteId,
+        controller_conversation_id: LocalConversationId,
+        decision: ControllerWorkerResultContextDecision,
     },
     AcknowledgeWorkerControl {
         worker_conversation_id: LocalConversationId,
@@ -438,6 +448,10 @@ enum PersistNotice {
     ControllerControlDispatched {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    ControllerWorkerResultContextDecisionUpdated {
+        route_id: RouteId,
+        event: EventEnvelope,
     },
     WorkerControlAcknowledged {
         route_id: RouteId,
@@ -702,6 +716,7 @@ struct ChatariumApp {
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
+    controller_result_context_command_pending: bool,
     continuation_allowance_drafts: BTreeMap<LocalConversationId, u32>,
     worker_control_command_pending: bool,
     conversation_instructions: String,
@@ -958,6 +973,7 @@ impl ChatariumApp {
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
+                        controller_result_context_command_pending: false,
                         continuation_allowance_drafts: BTreeMap::new(),
                         worker_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
@@ -1131,6 +1147,7 @@ impl ChatariumApp {
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
+            controller_result_context_command_pending: false,
             continuation_allowance_drafts: BTreeMap::new(),
             worker_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
@@ -2950,6 +2967,17 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
+                PersistNotice::ControllerWorkerResultContextDecisionUpdated {
+                    route_id,
+                    event,
+                } => {
+                    self.events.push(event);
+                    self.controller_result_context_command_pending = false;
+                    self.status = format!(
+                        "controller worker result route {} context eligibility durably updated",
+                        route_id.get()
+                    );
+                }
                 PersistNotice::WorkerControlAcknowledged { route_id, event } => {
                     self.events.push(event);
                     self.worker_control_command_pending = false;
@@ -3025,6 +3053,9 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("controller control ") {
                         self.controller_control_command_pending = false;
+                    }
+                    if operation.starts_with("controller result context") {
+                        self.controller_result_context_command_pending = false;
                     }
                     if operation.starts_with("worker control acknowledgement")
                         || operation.starts_with("worker control status result")
