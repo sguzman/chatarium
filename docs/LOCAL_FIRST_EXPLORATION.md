@@ -253,8 +253,12 @@ transition, and the final action result. Acknowledgement alone never implies
 execution, and an unrelated lifecycle transition cannot satisfy a control
 action.
 
-The next safe boundary is bounded Continue execution. Continue is intentionally
-not modeled as a WorkerLifecycle phase transition: its authority already comes
-from a finite ContinuationLease and one consumed ContinuationPermit. Desktop
-integration must preserve that authority chain and give worker-side continuation
-execution/result its own durable provenance.
+Bounded Continue authority is now explicit through a finite
+ContinuationLease and one consumed ContinuationPermit per Continue control.
+Worker acknowledgement can now advance to a durable worker-side continuation
+execution start with its own non-authored LocalTurnId. Starting that execution
+does not alter WorkerLifecycle, transcript authorship, or remote state.
+
+The next safe boundary is continuation transport/result evidence scoped to that
+non-authored execution turn. Chatarium must not fabricate an AuthoredUserMessage
+such as "Continue" merely to reuse the ordinary send pipeline.
