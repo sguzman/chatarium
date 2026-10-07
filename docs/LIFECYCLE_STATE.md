@@ -166,6 +166,10 @@ worker conversation exposes a read-only control inbox. Delivery is intentionally
 not lifecycle evidence: Start/Resume, Stop, and Status Request commands do not
 change WorkerLifecycle merely because they arrived.
 
-The next lifecycle/orchestration boundary is explicit worker-side
-acknowledgement/action, followed by separately durable lifecycle/status evidence
+Worker-side acknowledgement is now explicit and durable. A delivered control may
+be acknowledged from the worker conversation without changing lifecycle,
+transcript, or inference context.
+
+The next lifecycle/orchestration boundary is explicit worker-side action/result
+after acknowledgement, followed by separately durable lifecycle/status evidence
 appropriate to the specific control kind.
