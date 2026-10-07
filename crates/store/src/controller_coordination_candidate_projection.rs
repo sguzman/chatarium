@@ -60,7 +60,8 @@ pub fn project_controller_coordination_suggestion_candidates(
             )
         })?;
 
-    if coordination.output_contract != ControllerCoordinationOutputContract::SuggestionCandidatesV1 {
+    if coordination.output_contract != ControllerCoordinationOutputContract::SuggestionCandidatesV1
+    {
         return Err(format!(
             "coordination turn {} uses legacy freeform output and has no suggestion-candidate contract",
             coordination_turn_id
@@ -79,12 +80,13 @@ pub fn project_controller_coordination_suggestion_candidates(
         )
     })?;
 
-    let output = controller_coordination_output_text(events, coordination_turn_id)?.ok_or_else(|| {
-        format!(
-            "coordination turn {} has no durable output text",
-            coordination_turn_id
-        )
-    })?;
+    let output =
+        controller_coordination_output_text(events, coordination_turn_id)?.ok_or_else(|| {
+            format!(
+                "coordination turn {} has no durable output text",
+                coordination_turn_id
+            )
+        })?;
     let parsed = parse_candidate_document(output.as_str())?;
 
     let start_index = events
@@ -180,7 +182,11 @@ fn parse_candidate_document(text: &str) -> Result<ParsedCandidateDocument, Strin
     let object = value.as_object().ok_or_else(|| {
         "coordination suggestion candidate output must be exactly one JSON object".to_owned()
     })?;
-    require_exact_keys(object, &["summary", "suggestion_candidates"], "top-level output")?;
+    require_exact_keys(
+        object,
+        &["summary", "suggestion_candidates"],
+        "top-level output",
+    )?;
 
     let summary = object
         .get("summary")
@@ -236,13 +242,14 @@ fn parse_candidate_document(text: &str) -> Result<ParsedCandidateDocument, Strin
                     index + 1
                 )
             })?;
-        let action = CoordinationSuggestionAction::from_stable_name(action_name).ok_or_else(|| {
-            format!(
-                "coordination suggestion candidate {} has unsupported action '{}'",
-                index + 1,
-                action_name
-            )
-        })?;
+        let action =
+            CoordinationSuggestionAction::from_stable_name(action_name).ok_or_else(|| {
+                format!(
+                    "coordination suggestion candidate {} has unsupported action '{}'",
+                    index + 1,
+                    action_name
+                )
+            })?;
 
         candidates.push(ParsedCandidate {
             basis_result_route_id: route_id,
@@ -261,9 +268,7 @@ fn require_exact_keys(
     expected: &[&str],
     label: &str,
 ) -> Result<(), String> {
-    if object.len() != expected.len()
-        || expected.iter().any(|key| !object.contains_key(*key))
-    {
+    if object.len() != expected.len() || expected.iter().any(|key| !object.contains_key(*key)) {
         let actual = object.keys().cloned().collect::<Vec<_>>().join(", ");
         return Err(format!(
             "coordination suggestion {label} must contain exactly [{}]; observed [{}]",
