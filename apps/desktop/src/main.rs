@@ -7142,6 +7142,153 @@ impl eframe::App for ChatariumApp {
                                                                     .monospace()
                                                                     .size(9.0),
                                                                 );
+
+                                                                match continuation_execution_transport_state(
+                                                                    &self.events,
+                                                                    execution.execution_turn_id,
+                                                                ) {
+                                                                    Err(error) => {
+                                                                        ui.label(
+                                                                            egui::RichText::new(format!(
+                                                                                "continuation transport blocked: {error}"
+                                                                            ))
+                                                                            .size(9.0)
+                                                                            .color(
+                                                                                egui::Color32::from_rgb(
+                                                                                    186, 108, 108,
+                                                                                ),
+                                                                            ),
+                                                                        );
+                                                                    }
+                                                                    Ok(transport) => {
+                                                                        if let Some(sequence) =
+                                                                            transport
+                                                                                .completion_sequence
+                                                                        {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "CONTINUATION COMPLETED · event #{sequence}"
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                        } else if let Some(
+                                                                            sequence,
+                                                                        ) = transport
+                                                                            .failure_sequence
+                                                                        {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "CONTINUATION FAILED · event #{sequence}"
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                        } else if let Some(
+                                                                            sequence,
+                                                                        ) = transport
+                                                                            .interruption_sequence
+                                                                        {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "CONTINUATION INTERRUPTED · event #{sequence}"
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                        } else if let Some(
+                                                                            sequence,
+                                                                        ) = transport
+                                                                            .dispatch_sequence
+                                                                        {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "CONTINUATION DISPATCHED · event #{sequence}"
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                        } else if ui
+                                                                            .add_enabled(
+                                                                                self.remote_connected()
+                                                                                    && self
+                                                                                        .selected_model
+                                                                                        .is_some()
+                                                                                    && self
+                                                                                        .pending_remote_turn
+                                                                                        .is_none()
+                                                                                    && self
+                                                                                        .active_remote_turn
+                                                                                        .is_none()
+                                                                                    && !self
+                                                                                        .capability_probe
+                                                                                        .running(),
+                                                                                egui::Button::new(
+                                                                                    "Dispatch continuation inference",
+                                                                                ),
+                                                                            )
+                                                                            .clicked()
+                                                                        {
+                                                                            self.dispatch_worker_continuation_execution(
+                                                                                item.route_id,
+                                                                            );
+                                                                        }
+
+                                                                        let scope = local_turn_scope(
+                                                                            execution
+                                                                                .execution_turn_id,
+                                                                        );
+                                                                        if let Some(output) = self
+                                                                            .events
+                                                                            .iter()
+                                                                            .rev()
+                                                                            .find(|event| {
+                                                                                event
+                                                                                    .scope
+                                                                                    .as_deref()
+                                                                                    == Some(
+                                                                                        scope
+                                                                                            .as_str(),
+                                                                                    )
+                                                                                    && matches!(
+                                                                                        event.kind,
+                                                                                        EventKind::AssistantSnapshotObserved
+                                                                                            | EventKind::AssistantCompletionObserved
+                                                                                    )
+                                                                            })
+                                                                            .map(|event| {
+                                                                                event_text(
+                                                                                    &event.payload,
+                                                                                )
+                                                                            })
+                                                                            .filter(|text| {
+                                                                                !text
+                                                                                    .trim()
+                                                                                    .is_empty()
+                                                                            })
+                                                                        {
+                                                                            ui.collapsing(
+                                                                                "Continuation output",
+                                                                                |ui| {
+                                                                                    ui.label(
+                                                                                        egui::RichText::new(
+                                                                                            output,
+                                                                                        )
+                                                                                        .size(10.0),
+                                                                                    );
+                                                                                },
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                }
                                                             } else if ui
                                                                 .add_enabled(
                                                                     continuation_executions
