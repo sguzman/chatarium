@@ -137,19 +137,40 @@ The desktop therefore keeps stale predecessors visible, marks them
 `CONTEXT: EXCLUDED · SUPERSEDED`, shows the successor identity, and offers
 explicit compatible **Supersede with…** choices.
 
-## Next memory boundary: read-only discovery
+## Landed read-only discovery
 
-The next safe memory feature is deterministic local discovery/search over the
-artifact corpus.
+Deterministic local memory discovery is now implemented as a pure projection.
 
-Discovery must remain separate from context admission:
+The first search slice:
 
-- search results create no journal mutation;
-- finding a memory does not Admit it;
-- superseded artifacts are excluded from the default current-memory view but
-  remain inspectable as history;
-- no embedding service, model-authored query rewrite, or automatic retrieval is
-  implied by the first search slice.
+- uses local case-insensitive literal substring matching over exact artifact
+  text;
+- treats an empty query as a browse operation;
+- returns newest artifacts first;
+- excludes superseded predecessors from the default current-memory view;
+- can explicitly include superseded history;
+- exposes immediate successor identity for stale results;
+- performs no journal write and changes no context decision.
 
-Only after deterministic discovery is visible and inspectable should semantic or
-automatic retrieval policy be considered.
+The desktop exposes a search field and **Show superseded history** toggle inside
+the Local memory panel. Search results continue to use the same explicit
+Admit/Exclude and Supersede controls. Finding a memory never admits it.
+
+No embedding service, model-authored query rewrite, semantic ranking, or
+automatic retrieval is implied by this search projection.
+
+## Next memory boundary: explicit organization metadata
+
+The next safe memory layer is optional user-authored organization metadata
+(labels/tags) stored separately from immutable artifact text.
+
+That layer must preserve the same authority boundary:
+
+- labels do not change artifact text;
+- labels do not Admit memory to context;
+- removing or changing a label does not rewrite history;
+- retrieval/search may use labels only as explicit local metadata;
+- model-generated labels must not become authoritative without a separate user
+  acceptance boundary.
+
+Automatic semantic retrieval remains later.
