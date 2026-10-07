@@ -9712,6 +9712,127 @@ fn append_worker_control_acknowledgement_checked(
         .ok_or_else(|| "worker control acknowledgement append produced no durable event".to_owned())
 }
 
+fn append_worker_control_status_result_checked(
+    store: &mut impl EventStore,
+    worker_conversation_id: LocalConversationId,
+    route_id: RouteId,
+) -> Result<EventEnvelope, String> {
+    let item =
+        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation_id)?
+            .into_iter()
+            .find(|item| item.route_id == route_id)
+            .ok_or_else(|| {
+                format!(
+                    "worker control route {} is not a delivered inbox item for conversation {}",
+                    route_id.get(),
+                    worker_conversation_id,
+                )
+            })?;
+
+    if item.kind != WorkerControlKind::StatusRequest {
+        return Err(format!(
+            "worker control route {} is {}, not a StatusRequest",
+            route_id.get(),
+            worker_control_kind_label(item.kind),
+        ));
+    }
+
+    let acknowledged_sequence = item.acknowledged_sequence.ok_or_else(|| {
+        format!(
+            "worker control route {} must be acknowledged before recording a status result",
+            route_id.get()
+        )
+    })?;
+
+    if replay_worker_control_status_results(store.events())?
+        .into_iter()
+        .any(|record| record.route_id == route_id || record.control_id == item.control_id)
+    {
+        return Err(format!(
+            "worker control route {} already has a durable status result",
+            route_id.get()
+        ));
+    }
+
+    let owner = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "worker conversation {} has no durable WorkerId binding",
+                worker_conversation_id
+            )
+        })?;
+    if owner.worker_id != item.worker_id {
+        return Err(format!(
+            "worker control route {} inbox worker disagrees with durable conversation ownership",
+            route_id.get()
+        ));
+    }
+
+    let worker = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == item.worker_id)
+        .ok_or_else(|| {
+            format!(
+                "worker control route {} references worker {} without lifecycle state",
+                route_id.get(),
+                item.worker_id.get()
+            )
+        })?;
+    let goal_id = worker.lifecycle.goal_id().ok_or_else(|| {
+        format!(
+            "worker {} has no active goal to report for status route {}",
+            item.worker_id.get(),
+            route_id.get()
+        )
+    })?;
+    if goal_id != item.goal_id {
+        return Err(format!(
+            "worker control route {} targets goal {}, but worker {} current goal is {}",
+            route_id.get(),
+            item.goal_id.get(),
+            item.worker_id.get(),
+            goal_id.get()
+        ));
+    }
+    let phase = worker.lifecycle.phase();
+
+    record_worker_control_status_result(
+        store,
+        item.control_id,
+        item.route_id,
+        item.worker_id,
+        worker_conversation_id,
+        goal_id,
+        phase,
+        acknowledged_sequence,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_worker_control_status_results(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+        .ok_or_else(|| "worker control status result append did not replay".to_owned())?;
+    if replayed.control_id != item.control_id
+        || replayed.worker_id != item.worker_id
+        || replayed.worker_conversation_id != worker_conversation_id
+        || replayed.goal_id != goal_id
+        || replayed.phase != phase
+        || replayed.acknowledged_sequence != acknowledged_sequence
+    {
+        return Err(
+            "worker control status result replay disagrees with acknowledged inbox item".to_owned(),
+        );
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker control status result append produced no durable event".to_owned())
+}
+
 fn append_worker_goal_checked(
     store: &mut impl EventStore,
     worker_id: WorkerId,
