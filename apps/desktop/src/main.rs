@@ -8127,7 +8127,7 @@ impl eframe::App for ChatariumApp {
                                             );
                                             ui.label(
                                                 egui::RichText::new(
-                                                    "Read-only durable results from controls issued by this controller conversation. Results do not mutate lifecycle or enter inference context automatically.",
+                                                    "Durable results from controls issued by this controller conversation. Result visibility is separate from context use: every result is excluded by default until explicitly admitted.",
                                                 )
                                                 .size(9.0)
                                                 .color(egui::Color32::from_rgb(
@@ -8165,6 +8165,26 @@ impl eframe::App for ChatariumApp {
                                                     );
                                                 }
                                                 Ok(results) => {
+                                                    let context_records =
+                                                        match replay_controller_worker_result_context_audit(
+                                                            &self.events,
+                                                        ) {
+                                                            Ok(records) => Some(records),
+                                                            Err(error) => {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "controller result context projection blocked: {error}"
+                                                                    ))
+                                                                    .size(9.0)
+                                                                    .color(
+                                                                        egui::Color32::from_rgb(
+                                                                            186, 108, 108,
+                                                                        ),
+                                                                    ),
+                                                                );
+                                                                None
+                                                            }
+                                                        };
                                                     egui::ScrollArea::vertical()
                                                         .id_salt("controller-result-inbox")
                                                         .max_height(220.0)
@@ -8312,6 +8332,88 @@ impl eframe::App for ChatariumApp {
                                                                             }
                                                                         }
                                                                     }
+
+                                                                    let current_decision =
+                                                                        context_records
+                                                                            .as_ref()
+                                                                            .and_then(|records| {
+                                                                                records.iter().find(
+                                                                                    |record| {
+                                                                                        record.route_id
+                                                                                            == result
+                                                                                                .route_id
+                                                                                    },
+                                                                                )
+                                                                            })
+                                                                            .map(|record| {
+                                                                                record.decision
+                                                                            });
+                                                                    ui.horizontal_wrapped(|ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                match current_decision {
+                                                                                    Some(
+                                                                                        ControllerWorkerResultContextDecision::Admit,
+                                                                                    ) => "CONTEXT: ADMITTED",
+                                                                                    Some(
+                                                                                        ControllerWorkerResultContextDecision::Exclude,
+                                                                                    ) => "CONTEXT: EXCLUDED",
+                                                                                    None => "CONTEXT: EXCLUDED · DEFAULT",
+                                                                                },
+                                                                            )
+                                                                            .monospace()
+                                                                            .size(9.0),
+                                                                        );
+
+                                                                        let can_change =
+                                                                            context_records
+                                                                                .is_some()
+                                                                                && !self
+                                                                                    .controller_result_context_command_pending
+                                                                                && self.persist_tx
+                                                                                    .is_some();
+                                                                        if ui
+                                                                            .add_enabled(
+                                                                                can_change
+                                                                                    && current_decision
+                                                                                        != Some(
+                                                                                            ControllerWorkerResultContextDecision::Admit,
+                                                                                        ),
+                                                                                egui::Button::new(
+                                                                                    "Admit to context",
+                                                                                ),
+                                                                            )
+                                                                            .clicked()
+                                                                        {
+                                                                            self.decide_controller_worker_result_context(
+                                                                                result.route_id,
+                                                                                ControllerWorkerResultContextDecision::Admit,
+                                                                            );
+                                                                        }
+                                                                        if ui
+                                                                            .add_enabled(
+                                                                                can_change
+                                                                                    && current_decision
+                                                                                        == Some(
+                                                                                            ControllerWorkerResultContextDecision::Admit,
+                                                                                        ),
+                                                                                egui::Button::new(
+                                                                                    "Exclude from context",
+                                                                                ),
+                                                                            )
+                                                                            .clicked()
+                                                                        {
+                                                                            self.decide_controller_worker_result_context(
+                                                                                result.route_id,
+                                                                                ControllerWorkerResultContextDecision::Exclude,
+                                                                            );
+                                                                        }
+                                                                        if self
+                                                                            .controller_result_context_command_pending
+                                                                        {
+                                                                            ui.spinner();
+                                                                        }
+                                                                    });
                                                                 });
                                                             }
                                                         });
