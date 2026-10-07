@@ -14,6 +14,7 @@ use crate::control_inbox::replay_worker_control_inbox;
 use crate::control_provenance_audit::replay_control_provenance_audit;
 use crate::control_result_audit::replay_worker_control_status_results;
 use crate::control_route_audit::replay_control_route_audit;
+use crate::controller_result_inbox::replay_controller_worker_results;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::local_route_context_audit::replay_local_route_context_audit;
 use crate::local_route_delivery_audit::replay_local_route_delivery_audit;
@@ -174,6 +175,7 @@ pub fn check_archive(
     replay_worker_control_acknowledgement_audit(&events).map_err(err)?;
     replay_worker_control_action_audit(&events).map_err(err)?;
     replay_worker_continuation_execution_audit(&events).map_err(err)?;
+    replay_controller_worker_results(&events).map_err(err)?;
     replay_worker_control_status_results(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
     replay_local_route_payload_audit(&events).map_err(err)?;
