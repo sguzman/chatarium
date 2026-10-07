@@ -311,6 +311,13 @@ approval/dispatch remain separate after promotion.
 The controller reasoning/control loop is therefore end-to-end while preserving
 human authority at every state-changing boundary.
 
-The next safe higher-level substrate is durable local memory as a distinct
-provenance/admission domain, not an implicit side effect of lifecycle,
-coordination, routing, or transcript history.
+Durable local memory is now a distinct provenance/admission domain; see
+[LOCAL_MEMORY.md](LOCAL_MEMORY.md).
+
+It remains deliberately separate from WorkerLifecycle, routing, supervision,
+coordination, and transcript history. A lifecycle transition never writes
+memory, and a memory artifact never changes lifecycle merely because it is
+recorded or admitted.
+
+The next memory boundary is explicit immutable-artifact supersession. Lifecycle
+semantics remain unchanged by that work.
