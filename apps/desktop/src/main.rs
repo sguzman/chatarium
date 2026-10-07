@@ -6479,6 +6479,76 @@ impl eframe::App for ChatariumApp {
                             }
                         }
 
+                        ui.collapsing("Worker control inbox", |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Delivered controller controls are durable command provenance only. They do not mutate worker lifecycle, ordinary transcript, or inference context.",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            match replay_worker_control_inbox_for_conversation(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "worker control inbox projection blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                                Ok(items) if items.is_empty() => {
+                                    ui.label(
+                                        egui::RichText::new("no delivered worker controls")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                }
+                                Ok(items) => {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("worker-control-inbox")
+                                        .max_height(180.0)
+                                        .show(ui, |ui| {
+                                            for item in items {
+                                                ui.group(|ui| {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "{} · control {} · goal {}",
+                                                                worker_control_kind_label(item.kind),
+                                                                item.control_id.get(),
+                                                                item.goal_id.get(),
+                                                            ))
+                                                            .strong()
+                                                            .size(10.0),
+                                                        );
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "worker {} · worker session {} · controller session {} · route {} · dispatched #{} · delivered #{}",
+                                                                item.worker_id.get(),
+                                                                item.worker_session_id.get(),
+                                                                item.controller_session_id.get(),
+                                                                item.route_id.get(),
+                                                                item.dispatch_sequence,
+                                                                item.delivered_sequence,
+                                                            ))
+                                                            .monospace()
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                139, 143, 153,
+                                                            )),
+                                                        );
+                                                    });
+                                                });
+                                            }
+                                        });
+                                }
+                            }
+                        });
+
                         ui.add_space(10.0);
                         ui.separator();
                         ui.add_space(6.0);
