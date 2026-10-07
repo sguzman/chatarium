@@ -55,6 +55,7 @@ pub mod remote_read_audit;
 pub mod routing_audit;
 pub mod session_audit;
 pub mod supervision_audit;
+pub mod tool_provider_audit;
 mod turn_projection;
 pub mod worker_audit;
 
