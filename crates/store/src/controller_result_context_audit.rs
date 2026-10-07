@@ -36,10 +36,7 @@ pub struct ControllerWorkerResultContextRecord {
 impl ControllerWorkerResultContextRecord {
     #[must_use]
     pub const fn is_admitted(self) -> bool {
-        matches!(
-            self.decision,
-            ControllerWorkerResultContextDecision::Admit
-        )
+        matches!(self.decision, ControllerWorkerResultContextDecision::Admit)
     }
 }
 
@@ -182,17 +179,13 @@ pub fn replay_admitted_controller_worker_result_context(
     Ok(replay_controller_worker_result_context_audit(events)?
         .into_iter()
         .filter(|record| {
-            record.controller_conversation_id == controller_conversation_id
-                && record.is_admitted()
+            record.controller_conversation_id == controller_conversation_id && record.is_admitted()
         })
         .collect())
 }
 
 #[must_use]
-pub fn context_scope(
-    controller_conversation_id: LocalConversationId,
-    route_id: RouteId,
-) -> String {
+pub fn context_scope(controller_conversation_id: LocalConversationId, route_id: RouteId) -> String {
     format!(
         "controller-worker-result-context:{controller_conversation_id}:{}",
         route_id.get()
@@ -263,7 +256,9 @@ fn validate_scope(
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
     value.get(field).and_then(Value::as_u64).ok_or_else(|| {
-        format!("typed controller worker result context decision is missing integer field '{field}'")
+        format!(
+            "typed controller worker result context decision is missing integer field '{field}'"
+        )
     })
 }
 
