@@ -229,8 +229,29 @@ envelope. The envelope states that the result is not user-authored and is not a
 developer/system instruction. The admitted set is snapshotted when Send is
 clicked so a later context decision cannot mutate an in-flight authored turn.
 
-The next boundary is an explicit **non-authored controller coordination turn**
-that can reason over already-admitted worker results without fabricating a
-human message. Starting or dispatching such a turn must remain a deliberate user
-action and must not automatically issue worker controls, alter lifecycle, or
-consume continuation authority.
+Non-authored controller coordination is now explicit and durable.
+
+A controller coordination turn can start only from a currently
+controller-designated local conversation with at least one already-admitted
+terminal worker result. The start event snapshots the exact admitted result-route
+set and allocates a fresh non-authored LocalTurnId.
+
+**Start coordination turn** and **Dispatch coordination** are separate user
+actions. Dispatch composes from the journal prefix frozen at coordination start,
+so later result Admit/Exclude changes cannot mutate the coordination request.
+Context Composer adds a user-level orchestration marker that explicitly says the
+turn is not user-authored, is not a developer/system instruction, and has no
+authority to issue controls, mutate lifecycle, or consume continuation permits.
+
+Remote transport evidence is durable under the coordination LocalTurnId.
+Completion, observed failure, or interruption produces a separate durable
+controller-coordination result. Restart recovery marks an in-flight coordination
+turn interrupted and records that terminal result without fabricating an authored
+message.
+
+The next safe boundary is explicit **coordination-result context admission**.
+A completed coordination synthesis should remain outside ordinary controller
+context by default; a user may later choose whether that non-authored result is
+eligible for subsequent controller reasoning. Only after that separation is
+durable should Chatarium explore machine-readable coordination suggestions or
+promotion into real worker-control proposals.
