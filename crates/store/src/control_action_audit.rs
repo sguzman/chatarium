@@ -651,12 +651,33 @@ mod tests {
             destination: worker_endpoint,
             class: RouteClass::OrchestrationControl,
         };
-        record_route_proposed(store, request, RoutePolicy::Allow).unwrap();
+        let proposed_sequence =
+            record_route_proposed(store, request, RoutePolicy::Allow).unwrap();
         record_control_route_bound(store, ControlRouteBinding::new(control, &request).unwrap())
             .unwrap();
         let mut gate = RouteGate::new(request, RoutePolicy::Allow);
         let permit = gate.authorize_dispatch(route).unwrap();
         let dispatch_sequence = record_route_dispatched(store, permit).unwrap();
+
+        let routing_sequences = store
+            .events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind,
+                    EventKind::RouteProposed
+                        | EventKind::RouteUserDecisionRecorded
+                        | EventKind::RouteDispatched
+                        | EventKind::RouteResultObserved
+                )
+            })
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            routing_sequences,
+            vec![proposed_sequence, dispatch_sequence],
+            "fixture created an unexpected routing event"
+        );
 
         record_worker_control_delivered(
             store,
