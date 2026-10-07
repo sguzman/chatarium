@@ -6509,12 +6509,14 @@ impl eframe::App for ChatariumApp {
                                     replay_supervision_audit(&self.events),
                                     replay_local_conversation_topologies(&self.events),
                                     replay_local_conversation_worker_bindings(&self.events),
+                                    replay_worker_audit(&self.events),
                                 ) {
                                     (
                                         Ok(sessions),
                                         Ok(supervision),
                                         Ok(topologies),
                                         Ok(worker_bindings),
+                                        Ok(workers),
                                     ) => {
                                         let current_session = sessions.iter().find(|record| {
                                             record.session_id
@@ -6647,6 +6649,81 @@ impl eframe::App for ChatariumApp {
                                                                     .monospace()
                                                                     .size(9.0),
                                                             );
+
+                                                            if let Some(worker) = workers
+                                                                .iter()
+                                                                .find(|record| {
+                                                                    record.worker_id
+                                                                        == worker_binding.worker_id
+                                                                })
+                                                            {
+                                                                let phase =
+                                                                    worker.lifecycle.phase();
+                                                                let has_goal =
+                                                                    worker.lifecycle.goal_id().is_some();
+                                                                let controls_enabled =
+                                                                    !self
+                                                                        .controller_control_command_pending
+                                                                        && self.persist_tx.is_some();
+
+                                                                if matches!(
+                                                                    phase,
+                                                                    WorkerPhase::Ready
+                                                                        | WorkerPhase::NeedsInput
+                                                                        | WorkerPhase::Blocked
+                                                                ) && ui
+                                                                    .add_enabled(
+                                                                        controls_enabled && has_goal,
+                                                                        egui::Button::new(
+                                                                            "Controller start/resume",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.propose_controller_worker_control(
+                                                                        topology.conversation_id,
+                                                                        ControllerControlAction::StartOrResume,
+                                                                    );
+                                                                }
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        controls_enabled
+                                                                            && has_goal
+                                                                            && !phase.is_terminal(),
+                                                                        egui::Button::new(
+                                                                            "Controller stop",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.propose_controller_worker_control(
+                                                                        topology.conversation_id,
+                                                                        ControllerControlAction::Stop,
+                                                                    );
+                                                                }
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        controls_enabled && has_goal,
+                                                                        egui::Button::new(
+                                                                            "Request status",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.propose_controller_worker_control(
+                                                                        topology.conversation_id,
+                                                                        ControllerControlAction::StatusRequest,
+                                                                    );
+                                                                }
+                                                            } else {
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        "NO DURABLE WORKER LIFECYCLE",
+                                                                    )
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                            }
                                                         } else {
                                                             ui.label(
                                                                 egui::RichText::new(format!(
@@ -6687,12 +6764,234 @@ impl eframe::App for ChatariumApp {
                                                     )),
                                                 );
                                             }
+
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Controller control routes",
+                                                )
+                                                .strong()
+                                                .size(10.0),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Typed controls are inert until explicitly approved and one-shot dispatched. Dispatch does not itself mutate worker lifecycle.",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    139, 143, 153,
+                                                )),
+                                            );
+
+                                            match (
+                                                replay_control_audit(&self.events),
+                                                replay_control_provenance_audit(&self.events),
+                                                replay_control_route_audit(&self.events),
+                                                replay_routing_audit(&self.events),
+                                            ) {
+                                                (
+                                                    Ok(controls),
+                                                    Ok(provenance),
+                                                    Ok(bindings),
+                                                    Ok(routes),
+                                                ) => {
+                                                    let mut shown_controls = 0_usize;
+                                                    for provenance_record in provenance {
+                                                        if provenance_record
+                                                            .provenance
+                                                            .issuer()
+                                                            != ControlIssuer::ControllerSession(
+                                                                controller_topology
+                                                                    .current_session_id,
+                                                            )
+                                                        {
+                                                            continue;
+                                                        }
+                                                        let control_id = provenance_record
+                                                            .provenance
+                                                            .control_id();
+                                                        let Some(control) = controls.iter().find(
+                                                            |record| {
+                                                                record.control_id == control_id
+                                                            },
+                                                        ) else {
+                                                            continue;
+                                                        };
+                                                        let Some(binding) = bindings.iter().find(
+                                                            |record| {
+                                                                record.binding.control_id()
+                                                                    == control_id
+                                                            },
+                                                        ) else {
+                                                            continue;
+                                                        };
+                                                        let Some(route) = routes.iter().find(
+                                                            |record| {
+                                                                record.request.id
+                                                                    == binding.binding.route_id()
+                                                            },
+                                                        ) else {
+                                                            continue;
+                                                        };
+                                                        shown_controls =
+                                                            shown_controls.saturating_add(1);
+
+                                                        let next_sequence = self
+                                                            .events
+                                                            .last()
+                                                            .map_or(1, |event| {
+                                                                event.sequence.saturating_add(1)
+                                                            });
+                                                        let fresh =
+                                                            validate_control_freshness_before(
+                                                                &self.events,
+                                                                control,
+                                                                next_sequence,
+                                                            )
+                                                            .is_ok();
+
+                                                        ui.group(|ui| {
+                                                            ui.horizontal_wrapped(|ui| {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "control {} · {} · worker {} · goal {} · route {} · {}",
+                                                                        control.control_id.get(),
+                                                                        worker_control_kind_label(
+                                                                            control.kind,
+                                                                        ),
+                                                                        control.worker_id.get(),
+                                                                        control.goal_id.get(),
+                                                                        route.request.id.get(),
+                                                                        route_gate_state_label(
+                                                                            route.gate_state,
+                                                                        ),
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        if fresh {
+                                                                            "FRESH"
+                                                                        } else {
+                                                                            "STALE"
+                                                                        },
+                                                                    )
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+
+                                                                let can_update =
+                                                                    fresh
+                                                                        && !self
+                                                                            .controller_control_command_pending
+                                                                        && self.persist_tx.is_some()
+                                                                        && !route
+                                                                            .gate_state
+                                                                            .is_dispatched();
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_update
+                                                                            && route
+                                                                                .latest_user_decision
+                                                                                != Some(
+                                                                                    RouteUserDecision::Allow,
+                                                                                ),
+                                                                        egui::Button::new("Allow"),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.decide_controller_worker_control_route(
+                                                                        route.request.id,
+                                                                        RouteUserDecision::Allow,
+                                                                    );
+                                                                }
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_update
+                                                                            && route
+                                                                                .latest_user_decision
+                                                                                != Some(
+                                                                                    RouteUserDecision::Deny,
+                                                                                ),
+                                                                        egui::Button::new("Deny"),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.decide_controller_worker_control_route(
+                                                                        route.request.id,
+                                                                        RouteUserDecision::Deny,
+                                                                    );
+                                                                }
+
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        fresh
+                                                                            && matches!(
+                                                                                route.gate_state,
+                                                                                RouteGateState::Allowed {
+                                                                                    by: DecisionAuthority::User
+                                                                                }
+                                                                            )
+                                                                            && !self
+                                                                                .controller_control_command_pending
+                                                                            && self.persist_tx.is_some(),
+                                                                        egui::Button::new(
+                                                                            "Dispatch control",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.dispatch_controller_worker_control_route(
+                                                                        route.request.id,
+                                                                    );
+                                                                }
+                                                            });
+                                                        });
+                                                    }
+
+                                                    if shown_controls == 0 {
+                                                        ui.label(
+                                                            egui::RichText::new(
+                                                                "no controller-issued controls yet",
+                                                            )
+                                                            .size(9.0)
+                                                            .color(
+                                                                egui::Color32::from_rgb(
+                                                                    139, 143, 153,
+                                                                ),
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                                (Err(error), _, _, _)
+                                                | (_, Err(error), _, _)
+                                                | (_, _, Err(error), _)
+                                                | (_, _, _, Err(error)) => {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "controller control projection blocked: {error}"
+                                                        ))
+                                                        .size(9.0)
+                                                        .color(
+                                                            egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            ),
+                                                        ),
+                                                    );
+                                                }
+                                            }
+
+                                            if self.controller_control_command_pending {
+                                                ui.spinner();
+                                            }
                                         }
                                     }
-                                    (Err(error), _, _, _)
-                                    | (_, Err(error), _, _)
-                                    | (_, _, Err(error), _)
-                                    | (_, _, _, Err(error)) => {
+                                    (Err(error), _, _, _, _)
+                                    | (_, Err(error), _, _, _)
+                                    | (_, _, Err(error), _, _)
+                                    | (_, _, _, Err(error), _)
+                                    | (_, _, _, _, Err(error)) => {
                                         ui.label(
                                             egui::RichText::new(format!(
                                                 "supervision projection blocked: {error}"
@@ -10767,6 +11066,15 @@ fn local_route_context_decision_label(decision: LocalRouteContextDecision) -> &'
     match decision {
         LocalRouteContextDecision::Admit => "admit",
         LocalRouteContextDecision::Exclude => "exclude",
+    }
+}
+
+fn worker_control_kind_label(kind: WorkerControlKind) -> &'static str {
+    match kind {
+        WorkerControlKind::StartOrResume => "START/RESUME",
+        WorkerControlKind::Continue { .. } => "CONTINUE",
+        WorkerControlKind::Stop => "STOP",
+        WorkerControlKind::StatusRequest => "STATUS",
     }
 }
 
