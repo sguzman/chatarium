@@ -283,6 +283,7 @@ impl TurnEvidence {
             | EventKind::ControllerWorkerBound
             | EventKind::WorkerControlIssuerBound
             | EventKind::WorkerContinuationExecutionStarted
+            | EventKind::WorkerContinuationExecutionResultRecorded
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
@@ -405,6 +406,8 @@ pub enum EventKind {
     WorkerControlIssuerBound,
     /// Worker-side execution of one acknowledged Continue control began.
     WorkerContinuationExecutionStarted,
+    /// Terminal remote outcome for one worker continuation execution was recorded.
+    WorkerContinuationExecutionResultRecorded,
     /// A bounded continuation lease was durably created.
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
@@ -488,6 +491,9 @@ impl EventKind {
             Self::ControllerWorkerBound => "controller_worker_bound",
             Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
             Self::WorkerContinuationExecutionStarted => "worker_continuation_execution_started",
+            Self::WorkerContinuationExecutionResultRecorded => {
+                "worker_continuation_execution_result_recorded"
+            }
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
@@ -567,6 +573,9 @@ impl EventKind {
             "worker_control_issuer_bound" => Some(Self::WorkerControlIssuerBound),
             "worker_continuation_execution_started" => {
                 Some(Self::WorkerContinuationExecutionStarted)
+            }
+            "worker_continuation_execution_result_recorded" => {
+                Some(Self::WorkerContinuationExecutionResultRecorded)
             }
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
