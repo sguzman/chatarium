@@ -13586,6 +13586,14 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
             })?;
     }
 
+    let continuation_turn_ids = replay_worker_continuation_execution_audit(store.events())?
+        .into_iter()
+        .map(|record| record.execution_turn_id)
+        .collect::<Vec<_>>();
+    for turn_id in continuation_turn_ids {
+        append_worker_continuation_result_if_terminal(store, turn_id)?;
+    }
+
     Ok(interrupted.len() + continuation_interrupted.len())
 }
 
