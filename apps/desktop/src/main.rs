@@ -4113,8 +4113,7 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status =
-                "cannot start continuation execution: persistence unavailable".to_owned();
+            self.status = "cannot start continuation execution: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::StartWorkerContinuationExecution {
@@ -4129,8 +4128,7 @@ impl ChatariumApp {
                 );
             }
             Err(error) => {
-                self.status =
-                    format!("failed to queue continuation execution start: {error}");
+                self.status = format!("failed to queue continuation execution start: {error}");
             }
         }
     }
@@ -11534,12 +11532,10 @@ fn persistence_worker(
                     route_id,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(
-                            PersistNotice::WorkerContinuationExecutionStarted {
-                                route_id,
-                                event,
-                            },
-                        );
+                        let _ = notices.send(PersistNotice::WorkerContinuationExecutionStarted {
+                            route_id,
+                            event,
+                        });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -14987,12 +14983,10 @@ mod tests {
         .unwrap();
         assert_eq!(acknowledgement.kind, EventKind::WorkerControlAcknowledged);
 
-        let worker_before_execution = worker_record(
-            continuation_store.events(),
-            continuation_worker_id,
-        )
-        .unwrap()
-        .unwrap();
+        let worker_before_execution =
+            worker_record(continuation_store.events(), continuation_worker_id)
+                .unwrap()
+                .unwrap();
         let execution = append_worker_continuation_execution_start_checked(
             &mut continuation_store,
             continuation_worker_conversation,
@@ -15019,12 +15013,10 @@ mod tests {
             acknowledgement.sequence
         );
         assert_eq!(execution_record.started_sequence, execution.sequence);
-        let worker_after_execution = worker_record(
-            continuation_store.events(),
-            continuation_worker_id,
-        )
-        .unwrap()
-        .unwrap();
+        let worker_after_execution =
+            worker_record(continuation_store.events(), continuation_worker_id)
+                .unwrap()
+                .unwrap();
         assert_eq!(
             worker_after_execution.lifecycle.phase(),
             worker_before_execution.lifecycle.phase()
