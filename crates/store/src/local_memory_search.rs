@@ -6,11 +6,12 @@
 
 use crate::EventEnvelope;
 use crate::local_memory_audit::replay_local_memory_audit;
+use crate::local_memory_label_audit::replay_active_local_memory_labels;
 use crate::local_memory_supersession_audit::{
     current_memory_successor, replay_local_memory_supersession_audit,
 };
 use chatarium_core::LocalConversationId;
-use chatarium_core::local_memory::LocalMemoryId;
+use chatarium_core::local_memory::{LocalMemoryId, LocalMemoryLabel};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMemorySearchItem {
@@ -18,6 +19,7 @@ pub struct LocalMemorySearchItem {
     pub source_conversation_id: LocalConversationId,
     pub text: String,
     pub recorded_sequence: u64,
+    pub labels: Vec<LocalMemoryLabel>,
     pub superseded_by: Option<LocalMemoryId>,
 }
 
@@ -37,12 +39,22 @@ pub fn search_local_memory(
 
     let mut items = artifacts
         .into_iter()
-        .filter_map(|artifact| {
+        .map(|artifact| {
+            let labels = replay_active_local_memory_labels(events, artifact.memory_id)?;
+            Ok((artifact, labels))
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .into_iter()
+        .filter_map(|(artifact, labels)| {
             let superseded_by = current_memory_successor(&supersessions, artifact.memory_id);
             if superseded_by.is_some() && !include_superseded {
                 return None;
             }
-            if !needle.is_empty() && !artifact.text.to_lowercase().contains(&needle) {
+            let text_matches = artifact.text.to_lowercase().contains(&needle);
+            let label_matches = labels
+                .iter()
+                .any(|label| label.as_str().to_lowercase().contains(&needle));
+            if !needle.is_empty() && !text_matches && !label_matches {
                 return None;
             }
             Some(LocalMemorySearchItem {
@@ -50,6 +62,7 @@ pub fn search_local_memory(
                 source_conversation_id: artifact.source_conversation_id,
                 text: artifact.text,
                 recorded_sequence: artifact.recorded_sequence,
+                labels,
                 superseded_by,
             })
         })
@@ -64,6 +77,9 @@ mod tests {
     use super::*;
     use crate::MemoryEventStore;
     use crate::local_memory_audit::record_local_memory_artifact;
+    use crate::local_memory_label_audit::{
+        record_local_memory_label_added, record_local_memory_label_removed,
+    };
     use crate::local_memory_supersession_audit::record_local_memory_superseded;
 
     #[test]
@@ -113,6 +129,27 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].memory_id, LocalMemoryId::new(1));
         assert_eq!(results[0].text, "Alpha BETA gamma");
+    }
+
+    #[test]
+    fn active_labels_participate_in_search_but_removed_labels_do_not() {
+        let source = LocalConversationId::new();
+        let memory_id = LocalMemoryId::new(1);
+        let label = LocalMemoryLabel::new("project:chatarium").unwrap();
+        let mut store = MemoryEventStore::default();
+        record_local_memory_artifact(&mut store, memory_id, source, "unrelated text").unwrap();
+        record_local_memory_label_added(&mut store, memory_id, &label).unwrap();
+
+        let by_label = search_local_memory(store.events(), "CHATARIUM", false).unwrap();
+        assert_eq!(by_label.len(), 1);
+        assert_eq!(by_label[0].labels, vec![label.clone()]);
+
+        record_local_memory_label_removed(&mut store, memory_id, &label).unwrap();
+        assert!(
+            search_local_memory(store.events(), "chatarium", false)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
