@@ -6400,12 +6400,14 @@ impl eframe::App for ChatariumApp {
 
                                         if designated {
                                             let mut shown = 0_usize;
-                                            for topology in topologies.into_iter().filter(
-                                                |topology| {
-                                                    topology.conversation_id
-                                                        != self.local_conversation_id
-                                                },
-                                            ) {
+                                            let controller_conversation_id =
+                                                self.local_conversation_id;
+                                            for topology in topologies {
+                                                if topology.conversation_id
+                                                    == controller_conversation_id
+                                                {
+                                                    continue;
+                                                }
                                                 let Some(worker_binding) = worker_bindings
                                                     .iter()
                                                     .find(|binding| {
@@ -8245,8 +8247,10 @@ fn append_current_session_worker_binding_checked(
         ));
     }
 
-    let topology = local_conversation_topology(store.events(), conversation_id)?
-        .ok_or_else(|| format!("local conversation {conversation_id} has no orchestration topology"))?;
+    let topology =
+        local_conversation_topology(store.events(), conversation_id)?.ok_or_else(|| {
+            format!("local conversation {conversation_id} has no orchestration topology")
+        })?;
     let sessions = replay_session_audit(store.events())?;
     let current = sessions
         .iter()
@@ -8361,8 +8365,10 @@ fn append_current_session_controller_designation_checked(
     store: &mut impl EventStore,
     conversation_id: LocalConversationId,
 ) -> Result<EventEnvelope, String> {
-    let topology = local_conversation_topology(store.events(), conversation_id)?
-        .ok_or_else(|| format!("local conversation {conversation_id} has no orchestration topology"))?;
+    let topology =
+        local_conversation_topology(store.events(), conversation_id)?.ok_or_else(|| {
+            format!("local conversation {conversation_id} has no orchestration topology")
+        })?;
     let session = replay_session_audit(store.events())?
         .into_iter()
         .find(|record| record.session_id == topology.current_session_id)
@@ -8423,14 +8429,17 @@ fn append_local_controller_worker_binding_checked(
         return Err("a local conversation cannot supervise itself".to_owned());
     }
 
-    let controller_topology =
-        local_conversation_topology(store.events(), controller_conversation_id)?.ok_or_else(|| {
-            format!(
-                "controller conversation {controller_conversation_id} has no orchestration topology"
-            )
-        })?;
-    let worker_topology =
-        local_conversation_topology(store.events(), worker_conversation_id)?.ok_or_else(|| {
+    let controller_topology = local_conversation_topology(
+        store.events(),
+        controller_conversation_id,
+    )?
+    .ok_or_else(|| {
+        format!(
+            "controller conversation {controller_conversation_id} has no orchestration topology"
+        )
+    })?;
+    let worker_topology = local_conversation_topology(store.events(), worker_conversation_id)?
+        .ok_or_else(|| {
             format!("worker conversation {worker_conversation_id} has no orchestration topology")
         })?;
     let worker_binding = replay_local_conversation_worker_bindings(store.events())?
@@ -8441,13 +8450,14 @@ fn append_local_controller_worker_binding_checked(
         })?;
 
     let sessions = replay_session_audit(store.events())?;
-    let active_worker = active_worker_session(&sessions, worker_binding.worker_id).ok_or_else(|| {
-        format!(
-            "worker {} for local conversation {} has no active session binding",
-            worker_binding.worker_id.get(),
-            worker_conversation_id
-        )
-    })?;
+    let active_worker =
+        active_worker_session(&sessions, worker_binding.worker_id).ok_or_else(|| {
+            format!(
+                "worker {} for local conversation {} has no active session binding",
+                worker_binding.worker_id.get(),
+                worker_conversation_id
+            )
+        })?;
     if active_worker.session_id != worker_topology.current_session_id {
         return Err(format!(
             "worker {} is active on session {}, but local conversation {} current session is {}; advance the worker session first",
@@ -8490,7 +8500,11 @@ fn append_local_controller_worker_binding_checked(
     record_controller_worker_bound(store, binding).map_err(|error| error.to_string())?;
 
     let replayed = replay_supervision_audit(store.events())?;
-    if !replayed.bindings.iter().any(|record| record.binding == binding) {
+    if !replayed
+        .bindings
+        .iter()
+        .any(|record| record.binding == binding)
+    {
         return Err("controller-worker binding append did not replay".to_owned());
     }
 
@@ -8826,8 +8840,7 @@ fn persistence_worker(
                     worker_id,
                 ) {
                     Ok(event) => {
-                        let _ =
-                            notices.send(PersistNotice::SupervisionEventAppended { event });
+                        let _ = notices.send(PersistNotice::SupervisionEventAppended { event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -8846,8 +8859,7 @@ fn persistence_worker(
                     conversation_id,
                 ) {
                     Ok(event) => {
-                        let _ =
-                            notices.send(PersistNotice::SupervisionEventAppended { event });
+                        let _ = notices.send(PersistNotice::SupervisionEventAppended { event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -8870,8 +8882,7 @@ fn persistence_worker(
                     worker_conversation_id,
                 ) {
                     Ok(event) => {
-                        let _ =
-                            notices.send(PersistNotice::SupervisionEventAppended { event });
+                        let _ = notices.send(PersistNotice::SupervisionEventAppended { event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -10276,8 +10287,9 @@ fn local_worker_session_alignment(
     conversation_id: LocalConversationId,
     worker_id: WorkerId,
 ) -> Result<(SessionId, Option<SessionId>), String> {
-    let topology = local_conversation_topology(events, conversation_id)?
-        .ok_or_else(|| format!("local conversation {conversation_id} has no orchestration topology"))?;
+    let topology = local_conversation_topology(events, conversation_id)?.ok_or_else(|| {
+        format!("local conversation {conversation_id} has no orchestration topology")
+    })?;
     let sessions = replay_session_audit(events)?;
     let active = active_worker_session(&sessions, worker_id).map(|record| record.session_id);
     Ok((topology.current_session_id, active))
@@ -11730,12 +11742,9 @@ mod tests {
 
         let before_role_conflict = store.events().len();
         assert!(
-            append_current_session_controller_designation_checked(
-                &mut store,
-                worker_conversation,
-            )
-            .unwrap_err()
-            .contains("worker-bound")
+            append_current_session_controller_designation_checked(&mut store, worker_conversation,)
+                .unwrap_err()
+                .contains("worker-bound")
         );
         assert_eq!(store.events().len(), before_role_conflict);
 
