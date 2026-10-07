@@ -939,17 +939,11 @@ mod tests {
 
     #[test]
     fn controller_coordination_is_user_level_without_control_authority() {
-        let coordination =
-            TranscriptMessage::controller_coordination(11, "coordination-turn", 42);
+        let coordination = TranscriptMessage::controller_coordination(11, "coordination-turn", 42);
         assert_eq!(coordination.role, TranscriptRole::User);
         assert_eq!(coordination.order_sequence(), 42);
 
-        let plan = ContextPlan::compose(
-            ContextPolicy::dispatch(),
-            "",
-            "",
-            [coordination],
-        );
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [coordination]);
         assert_eq!(plan.controller_coordination_count(), 1);
         assert_eq!(plan.messages.len(), 1);
         assert_eq!(plan.messages[0].role, "user");
