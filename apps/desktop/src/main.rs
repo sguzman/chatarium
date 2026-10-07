@@ -2823,6 +2823,33 @@ impl ChatariumApp {
                     self.supervision_command_pending = false;
                     self.status = format!("local supervision durably updated · {kind}");
                 }
+                PersistNotice::ControllerControlProposed {
+                    control_id,
+                    route_id,
+                    appended_events,
+                } => {
+                    self.events.extend(appended_events);
+                    self.controller_control_command_pending = false;
+                    self.status = format!(
+                        "controller control {} durably proposed on route {} · awaiting explicit approval",
+                        control_id.get(),
+                        route_id.get()
+                    );
+                }
+                PersistNotice::ControllerControlRoutePolicyUpdated { route_id, event } => {
+                    self.events.push(event);
+                    self.controller_control_command_pending = false;
+                    self.status = format!(
+                        "controller control route {} policy durably updated",
+                        route_id.get()
+                    );
+                }
+                PersistNotice::ControllerControlDispatched { route_id, event } => {
+                    self.events.push(event);
+                    self.controller_control_command_pending = false;
+                    self.status =
+                        format!("controller control route {} durably dispatched", route_id.get());
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2850,6 +2877,9 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("supervision ") {
                         self.supervision_command_pending = false;
+                    }
+                    if operation.starts_with("controller control ") {
+                        self.controller_control_command_pending = false;
                     }
                     if request_id.is_some() && request_id == self.commit_in_flight {
                         if let Some(request_id) = request_id {
@@ -3756,6 +3786,85 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue controller-worker binding: {error}");
+            }
+        }
+    }
+
+    fn propose_controller_worker_control(
+        &mut self,
+        worker_conversation_id: LocalConversationId,
+        action: ControllerControlAction,
+    ) {
+        if self.controller_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot propose controller control: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::ProposeControllerWorkerControl {
+            controller_conversation_id: self.local_conversation_id,
+            worker_conversation_id,
+            action,
+        }) {
+            Ok(()) => {
+                self.controller_control_command_pending = true;
+                self.status = format!("proposing controller {} control…", action.label());
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller control proposal: {error}");
+            }
+        }
+    }
+
+    fn decide_controller_worker_control_route(
+        &mut self,
+        route_id: RouteId,
+        decision: RouteUserDecision,
+    ) {
+        if self.controller_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot decide controller control route: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideControllerWorkerControlRoute {
+            route_id,
+            decision,
+        }) {
+            Ok(()) => {
+                self.controller_control_command_pending = true;
+                self.status = format!(
+                    "recording explicit {} decision for controller control route {}…",
+                    route_user_decision_label(decision),
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller control decision: {error}");
+            }
+        }
+    }
+
+    fn dispatch_controller_worker_control_route(&mut self, route_id: RouteId) {
+        if self.controller_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot dispatch controller control route: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DispatchControllerWorkerControlRoute { route_id }) {
+            Ok(()) => {
+                self.controller_control_command_pending = true;
+                self.status = format!(
+                    "revalidating and dispatching controller control route {}…",
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller control dispatch: {error}");
             }
         }
     }
@@ -8954,6 +9063,76 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::ProposeControllerWorkerControl {
+                controller_conversation_id,
+                worker_conversation_id,
+                action,
+            } => {
+                match append_controller_worker_control_proposal_checked(
+                    &mut store,
+                    controller_conversation_id,
+                    worker_conversation_id,
+                    action,
+                ) {
+                    Ok((control_id, route_id, appended_events)) => {
+                        let _ = notices.send(PersistNotice::ControllerControlProposed {
+                            control_id,
+                            route_id,
+                            appended_events,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller control proposal",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DecideControllerWorkerControlRoute { route_id, decision } => {
+                match append_controller_control_route_decision_checked(
+                    &mut store,
+                    route_id,
+                    decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(
+                            PersistNotice::ControllerControlRoutePolicyUpdated { route_id, event },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller control route decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DispatchControllerWorkerControlRoute { route_id } => {
+                match append_controller_control_dispatch_checked(&mut store, route_id) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ControllerControlDispatched {
+                            route_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller control dispatch",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AssignWorkerGoal { worker_id, goal_id } => {
                 match append_worker_goal_checked(&mut store, worker_id, goal_id) {
                     Ok(event) => {
@@ -11369,6 +11548,13 @@ mod tests {
             }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::SupervisionEventAppended { .. } => "supervision_event_appended",
+            PersistNotice::ControllerControlProposed { .. } => "controller_control_proposed",
+            PersistNotice::ControllerControlRoutePolicyUpdated { .. } => {
+                "controller_control_route_policy_updated"
+            }
+            PersistNotice::ControllerControlDispatched { .. } => {
+                "controller_control_dispatched"
+            }
             PersistNotice::Failed { .. } => "failed",
         }
     }
