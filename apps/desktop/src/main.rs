@@ -9510,7 +9510,8 @@ fn append_controller_control_dispatch_checked(
         || delivery.dispatch_sequence != dispatch_sequence
     {
         return Err(
-            "worker control delivery replay disagrees with dispatched control provenance".to_owned(),
+            "worker control delivery replay disagrees with dispatched control provenance"
+                .to_owned(),
         );
     }
 
@@ -13107,8 +13108,7 @@ mod tests {
         assert_eq!(status_dispatch.dispatched_phase, WorkerPhase::Completed);
 
         let mut recovery_store = chatarium_store::MemoryEventStore::default();
-        let (controller, worker_conversation, _, _) =
-            ready_supervised_pair(&mut recovery_store);
+        let (controller, worker_conversation, _, _) = ready_supervised_pair(&mut recovery_store);
         let (recovery_control, recovery_route, _) =
             append_controller_worker_control_proposal_checked(
                 &mut recovery_store,
@@ -13149,12 +13149,11 @@ mod tests {
             recovered_dispatch.dispatch_sequence,
             original_dispatch_sequence
         );
-        let recovered_delivery =
-            replay_worker_control_delivery_audit(recovery_store.events())
-                .unwrap()
-                .into_iter()
-                .find(|record| record.control_id == recovery_control)
-                .unwrap();
+        let recovered_delivery = replay_worker_control_delivery_audit(recovery_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.control_id == recovery_control)
+            .unwrap();
         assert_eq!(
             recovered_delivery.dispatch_sequence,
             original_dispatch_sequence
