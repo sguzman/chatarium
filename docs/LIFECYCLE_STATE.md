@@ -319,5 +319,10 @@ coordination, and transcript history. A lifecycle transition never writes
 memory, and a memory artifact never changes lifecycle merely because it is
 recorded or admitted.
 
-The next memory boundary is explicit immutable-artifact supersession. Lifecycle
-semantics remain unchanged by that work.
+Memory supersession is now explicit and forward-only. Superseded artifacts remain
+historically visible, are mechanically excluded from effective context, and do
+not transfer admission to their successors.
+
+The next memory boundary is read-only local discovery/search. Lifecycle
+semantics remain unchanged by memory recording, admission, supersession, or
+discovery.
