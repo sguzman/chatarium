@@ -168,7 +168,7 @@ pub fn local_memory_source_facets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MemoryEventStore;
+    use crate::{EventStore, MemoryEventStore};
     use crate::local_memory_audit::record_local_memory_artifact;
     use crate::local_memory_label_audit::{
         record_local_memory_label_added, record_local_memory_label_removed,
