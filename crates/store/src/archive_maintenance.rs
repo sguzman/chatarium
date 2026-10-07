@@ -17,6 +17,7 @@ use crate::remote_mirror_selection_audit::replay_remote_mirror_selection_audit;
 use crate::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use crate::remote_mirror_transcript::project_remote_active_transcript;
 use crate::remote_read_audit::replay_remote_read_audit;
+use crate::supervision_audit::replay_supervision_audit;
 use crate::{EventEnvelope, inspect_jsonl_journal};
 use chatarium_protocol::conversation_list::ConversationListItem;
 use serde_json::{Value, json};
@@ -151,6 +152,7 @@ pub fn check_archive(
         .collect::<Vec<_>>();
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
     replay_local_conversation_topologies(&events).map_err(err)?;
+    replay_supervision_audit(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
     replay_local_route_payload_audit(&events).map_err(err)?;
     replay_local_route_delivery_audit(&events).map_err(err)?;
