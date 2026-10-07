@@ -141,23 +141,23 @@ pub fn replay_local_memory_turn_selection_audit(
             continue;
         }
         let value = typed_payload(event)?;
-        let conversation_id =
-            LocalConversationId::from_str(required_string(&value, "conversation_id")?).map_err(
-                |error| {
-                    format!(
-                        "local memory turn selection at sequence {} has invalid conversation id: {error}",
-                        event.sequence
-                    )
-                },
-            )?;
-        let turn_id = LocalTurnId::from_str(required_string(&value, "turn_id")?).map_err(
-            |error| {
+        let conversation_id = LocalConversationId::from_str(required_string(
+            &value,
+            "conversation_id",
+        )?)
+        .map_err(|error| {
+            format!(
+                "local memory turn selection at sequence {} has invalid conversation id: {error}",
+                event.sequence
+            )
+        })?;
+        let turn_id =
+            LocalTurnId::from_str(required_string(&value, "turn_id")?).map_err(|error| {
                 format!(
                     "local memory turn selection at sequence {} has invalid turn id: {error}",
                     event.sequence
                 )
-            },
-        )?;
+            })?;
         let selection_snapshot_after_sequence =
             required_u64(&value, "selection_snapshot_after_sequence")?;
         let memory_ids = required_memory_ids(&value)?;
@@ -241,12 +241,9 @@ fn required_memory_ids(value: &Value) -> Result<Vec<LocalMemoryId>, String> {
         .ok_or_else(|| "typed local memory turn selection is missing array field 'memory_ids'")?
         .iter()
         .map(|value| {
-            value
-                .as_u64()
-                .map(LocalMemoryId::new)
-                .ok_or_else(|| {
-                    "typed local memory turn selection has non-integer memory id".to_owned()
-                })
+            value.as_u64().map(LocalMemoryId::new).ok_or_else(|| {
+                "typed local memory turn selection has non-integer memory id".to_owned()
+            })
         })
         .collect()
 }
@@ -301,17 +298,15 @@ fn validate_scope(event: &EventEnvelope, turn_id: LocalTurnId) -> Result<(), Str
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed local memory turn selection is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed local memory turn selection is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed local memory turn selection is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed local memory turn selection is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -331,12 +326,7 @@ mod tests {
     use chatarium_core::{AuthoredUserMessage, LocalMessageId};
 
     fn message(conversation_id: LocalConversationId, turn_id: LocalTurnId) -> AuthoredUserMessage {
-        AuthoredUserMessage::new(
-            conversation_id,
-            turn_id,
-            LocalMessageId::new(),
-            "send",
-        )
+        AuthoredUserMessage::new(conversation_id, turn_id, LocalMessageId::new(), "send")
     }
 
     #[test]
@@ -398,12 +388,8 @@ mod tests {
             high_water,
         )
         .unwrap();
-        record_local_memory_superseded(
-            &mut store,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut store, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
 
         assert_eq!(
             replay_local_memory_turn_selection_audit(store.events())
@@ -418,20 +404,10 @@ mod tests {
         let conversation = LocalConversationId::new();
 
         let mut superseded = MemoryEventStore::default();
-        record_local_memory_artifact(
-            &mut superseded,
-            LocalMemoryId::new(1),
-            conversation,
-            "old",
-        )
-        .unwrap();
-        record_local_memory_artifact(
-            &mut superseded,
-            LocalMemoryId::new(2),
-            conversation,
-            "new",
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut superseded, LocalMemoryId::new(1), conversation, "old")
+            .unwrap();
+        record_local_memory_artifact(&mut superseded, LocalMemoryId::new(2), conversation, "new")
+            .unwrap();
         record_local_memory_superseded(
             &mut superseded,
             LocalMemoryId::new(1),
@@ -456,13 +432,8 @@ mod tests {
         );
 
         let mut admitted = MemoryEventStore::default();
-        record_local_memory_artifact(
-            &mut admitted,
-            LocalMemoryId::new(1),
-            conversation,
-            "always",
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut admitted, LocalMemoryId::new(1), conversation, "always")
+            .unwrap();
         record_local_memory_context_decision(
             &mut admitted,
             LocalMemoryId::new(1),
@@ -511,13 +482,8 @@ mod tests {
         );
 
         let mut duplicate = MemoryEventStore::default();
-        record_local_memory_artifact(
-            &mut duplicate,
-            LocalMemoryId::new(1),
-            conversation,
-            "one",
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut duplicate, LocalMemoryId::new(1), conversation, "one")
+            .unwrap();
         let high_water = duplicate.events().last().unwrap().sequence;
         let turn_id = LocalTurnId::new();
         commit_user_message(&mut duplicate, &message(conversation, turn_id)).unwrap();
