@@ -694,3 +694,58 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }
+
+
+#[cfg(test)]
+mod output_contract_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_v1_start_defaults_to_freeform() {
+        let value = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "record": "controller_coordination_started",
+        });
+        assert_eq!(
+            parse_output_contract(&value, 1, 7).unwrap(),
+            ControllerCoordinationOutputContract::LegacyFreeform
+        );
+    }
+
+    #[test]
+    fn v2_start_requires_candidate_contract() {
+        let value = json!({
+            "schema": SCHEMA,
+            "version": VERSION,
+            "record": "controller_coordination_started",
+            "output_contract": "suggestion_candidates_v1",
+        });
+        assert_eq!(
+            parse_output_contract(&value, VERSION, 8).unwrap(),
+            ControllerCoordinationOutputContract::SuggestionCandidatesV1
+        );
+
+        let missing = json!({
+            "schema": SCHEMA,
+            "version": VERSION,
+            "record": "controller_coordination_started",
+        });
+        assert!(parse_output_contract(&missing, VERSION, 9).is_err());
+    }
+
+    #[test]
+    fn legacy_v1_cannot_smuggle_new_output_contract() {
+        let value = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "record": "controller_coordination_started",
+            "output_contract": "suggestion_candidates_v1",
+        });
+        assert!(
+            parse_output_contract(&value, 1, 10)
+                .unwrap_err()
+                .contains("must not carry output_contract")
+        );
+    }
+}
