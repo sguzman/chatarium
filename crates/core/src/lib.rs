@@ -6,6 +6,7 @@ pub mod control;
 pub mod control_provenance;
 pub mod control_route;
 pub mod coordination_suggestion;
+pub mod local_memory;
 pub mod orchestration;
 pub mod remote;
 pub mod routing;
@@ -264,6 +265,8 @@ impl TurnEvidence {
             | EventKind::RouteDispatched
             | EventKind::LocalRouteDelivered
             | EventKind::LocalRouteContextDecisionRecorded
+            | EventKind::LocalMemoryArtifactRecorded
+            | EventKind::LocalMemoryContextDecisionRecorded
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
@@ -373,6 +376,10 @@ pub enum EventKind {
     LocalRouteDelivered,
     /// An explicit include/exclude decision for delivered routed context was recorded.
     LocalRouteContextDecisionRecorded,
+    /// One immutable explicit local memory artifact was recorded.
+    LocalMemoryArtifactRecorded,
+    /// An explicit include/exclude decision for one local memory artifact was recorded.
+    LocalMemoryContextDecisionRecorded,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
@@ -490,6 +497,8 @@ impl EventKind {
             Self::RouteDispatched => "route_dispatched",
             Self::LocalRouteDelivered => "local_route_delivered",
             Self::LocalRouteContextDecisionRecorded => "local_route_context_decision_recorded",
+            Self::LocalMemoryArtifactRecorded => "local_memory_artifact_recorded",
+            Self::LocalMemoryContextDecisionRecorded => "local_memory_context_decision_recorded",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
@@ -580,6 +589,10 @@ impl EventKind {
             "local_route_delivered" => Some(Self::LocalRouteDelivered),
             "local_route_context_decision_recorded" => {
                 Some(Self::LocalRouteContextDecisionRecorded)
+            }
+            "local_memory_artifact_recorded" => Some(Self::LocalMemoryArtifactRecorded),
+            "local_memory_context_decision_recorded" => {
+                Some(Self::LocalMemoryContextDecisionRecorded)
             }
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
