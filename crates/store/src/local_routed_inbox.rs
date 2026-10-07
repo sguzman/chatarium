@@ -110,7 +110,7 @@ pub fn replay_local_routed_inbox_for_conversation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MemoryEventStore;
+    use crate::{EventStore, MemoryEventStore};
     use crate::chat_container_audit::record_chat_container_created;
     use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
     use crate::local_route_delivery_audit::record_local_route_delivered;
