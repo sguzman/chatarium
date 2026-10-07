@@ -249,9 +249,24 @@ controller-coordination result. Restart recovery marks an in-flight coordination
 turn interrupted and records that terminal result without fabricating an authored
 message.
 
-The next safe boundary is explicit **coordination-result context admission**.
-A completed coordination synthesis should remain outside ordinary controller
-context by default; a user may later choose whether that non-authored result is
-eligible for subsequent controller reasoning. Only after that separation is
-durable should Chatarium explore machine-readable coordination suggestions or
-promotion into real worker-control proposals.
+Coordination-result context admission is now explicit and reversible.
+
+A completed coordination synthesis remains visible but context-excluded by
+default. The controller conversation may explicitly Admit or Exclude the exact
+terminal coordination result. Admission references the durable coordination turn
+and terminal-result sequence; it does not duplicate output text.
+
+Currently admitted coordination results enter **ordinary future controller
+inference** as user-level orchestration-result context with turn/outcome/result/
+admission provenance. They never become authored transcript messages. The
+admitted set is snapshotted at authored Send. Special non-authored coordination
+dispatch deliberately does not recursively ingest prior coordination results;
+that would require a separate explicit policy rather than emerging from ordinary
+context admission.
+
+The next safe boundary is a **typed, non-authoritative coordination suggestion
+layer**. A coordination result may propose a possible next worker action in a
+machine-readable form, but the suggestion itself must grant no control,
+lifecycle, route, dispatch, or continuation authority. Promotion of a suggestion
+into a real WorkerControl must remain an explicit user action and still traverse
+the existing control admission, route approval, and dispatch gates.
