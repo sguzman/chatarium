@@ -13439,6 +13439,15 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
         }
     }
 
+    let mut continuation_interrupted = Vec::new();
+    for execution in replay_worker_continuation_execution_audit(store.events())? {
+        let transport =
+            continuation_execution_transport_state(store.events(), execution.execution_turn_id)?;
+        if transport.was_dispatched() && !transport.is_terminal() {
+            continuation_interrupted.push(execution.execution_turn_id);
+        }
+    }
+
     for turn_id in &interrupted {
         let request_id = turn_id.to_string();
         store
@@ -13460,7 +13469,30 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
             })?;
     }
 
-    Ok(interrupted.len())
+    for turn_id in &continuation_interrupted {
+        let request_id = turn_id.to_string();
+        store
+            .append_scoped(
+                Some(local_turn_scope(*turn_id)),
+                EventKind::TransportInterrupted,
+                remote_turn_payload(
+                    *turn_id,
+                    &request_id,
+                    None,
+                    None,
+                    Some(
+                        "Chatarium restarted without a durable terminal outcome for this bounded continuation turn",
+                    ),
+                ),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to persist restart interruption for continuation turn {turn_id}: {error}"
+                )
+            })?;
+    }
+
+    Ok(interrupted.len() + continuation_interrupted.len())
 }
 
 fn projected_local_conversation_id(
