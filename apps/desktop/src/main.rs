@@ -10595,6 +10595,39 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                             }
+                            let selected_one_shot = self
+                                .local_memory_one_shot_selections
+                                .get(&self.local_conversation_id)
+                                .cloned()
+                                .unwrap_or_default();
+                            match snapshot_one_shot_local_memory(
+                                &self.events,
+                                self.local_conversation_id,
+                                &selected_one_shot,
+                            ) {
+                                Ok((one_shot, Some(snapshot_after_sequence))) => {
+                                    transcript.extend(one_shot.into_iter().map(|memory| {
+                                        context_composer::TranscriptMessage::local_memory_one_shot(
+                                            memory.text.as_str(),
+                                            memory.memory_id.get(),
+                                            memory.source_conversation_id.to_string(),
+                                            memory.artifact_sequence,
+                                            snapshot_after_sequence,
+                                            None,
+                                        )
+                                    }));
+                                }
+                                Ok((_, None)) => {}
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "one-shot local memory composition blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
                             match admitted_controller_worker_result_messages(
                                 &self.events,
                                 self.local_conversation_id,
@@ -10641,13 +10674,15 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted local memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted local memor{} · {} next-request-only memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     context_plan.routed_context_count(),
                                     if context_plan.routed_context_count() == 1 { "" } else { "s" },
                                     context_plan.local_memory_count(),
                                     if context_plan.local_memory_count() == 1 { "y" } else { "ies" },
+                                    context_plan.local_memory_one_shot_count(),
+                                    if context_plan.local_memory_one_shot_count() == 1 { "y" } else { "ies" },
                                     context_plan.controller_worker_result_count(),
                                     if context_plan.controller_worker_result_count() == 1 { "" } else { "s" },
                                     context_plan.controller_coordination_result_count(),
