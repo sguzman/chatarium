@@ -253,12 +253,24 @@ transition, and the final action result. Acknowledgement alone never implies
 execution, and an unrelated lifecycle transition cannot satisfy a control
 action.
 
-Bounded Continue authority is now explicit through a finite
+Bounded Continue authority is explicit through a finite
 ContinuationLease and one consumed ContinuationPermit per Continue control.
-Worker acknowledgement can now advance to a durable worker-side continuation
-execution start with its own non-authored LocalTurnId. Starting that execution
-does not alter WorkerLifecycle, transcript authorship, or remote state.
+Worker acknowledgement can advance to a durable worker-side continuation
+execution with its own non-authored LocalTurnId.
 
-The next safe boundary is continuation transport/result evidence scoped to that
-non-authored execution turn. Chatarium must not fabricate an AuthoredUserMessage
-such as "Continue" merely to reuse the ordinary send pipeline.
+Continuation transport is now end to end: a typed controller-continuation
+Context Composer source feeds the worker request without fabricating user
+authorship, remote transport evidence is durable under the execution turn,
+restart recovery preserves interrupted execution, and terminal outcomes are
+recorded in a separate continuation-result audit without mutating
+WorkerLifecycle.
+
+Controller conversations now have a read-only worker result inbox that unifies
+StatusRequest snapshots, Start/Resume/Stop action results, and terminal Continue
+results including durable worker output. Results remain outside controller
+inference context by default.
+
+The next safe boundary is explicit controller-context admission of selected
+worker results, with visible provenance and user-level trust. Chatarium must not
+silently inject worker output into the controller model simply because the
+result is visible.
