@@ -4,7 +4,7 @@
 //! from a designated controller session. It grants no additional authority.
 
 use crate::control_audit::replay_control_audit;
-use crate::session_audit::replay_session_audit;
+use crate::session_audit::{replay_session_audit, worker_session_before};
 use crate::supervision_audit::replay_supervision_audit;
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::EventKind;
@@ -604,11 +604,8 @@ mod tests {
             WorkerSessionSuccessorBinding::new(W1, S1, S2).unwrap(),
         )
         .unwrap();
-        record_controller_worker_bound(
-            &mut store,
-            ControllerWorkerBinding::new(C1, S2).unwrap(),
-        )
-        .unwrap();
+        record_controller_worker_bound(&mut store, ControllerWorkerBinding::new(C1, S2).unwrap())
+            .unwrap();
 
         let second = record_control(&mut store, 2);
         record_worker_control_issuer_bound(
