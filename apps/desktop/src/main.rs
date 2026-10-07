@@ -14184,8 +14184,7 @@ mod tests {
 
         let mut full = chatarium_store::MemoryEventStore::default();
         let (conversation, worker, goal, _, route, _) = acknowledged_stop(&mut full);
-        let applied =
-            append_worker_control_action_checked(&mut full, conversation, route).unwrap();
+        let applied = append_worker_control_action_checked(&mut full, conversation, route).unwrap();
         assert_eq!(applied.len(), 3);
         assert_eq!(applied[0].kind, EventKind::WorkerControlActionStarted);
         assert_eq!(
@@ -14219,8 +14218,7 @@ mod tests {
         );
 
         let mut after_start = chatarium_store::MemoryEventStore::default();
-        let (conversation, worker, goal, control, route, ack) =
-            acknowledged_stop(&mut after_start);
+        let (conversation, worker, goal, control, route, ack) = acknowledged_stop(&mut after_start);
         let started = record_worker_control_action_started(
             &mut after_start,
             control,
@@ -14276,12 +14274,9 @@ mod tests {
             },
         )
         .unwrap();
-        let recovered = append_worker_control_action_checked(
-            &mut after_transition,
-            conversation,
-            route,
-        )
-        .unwrap();
+        let recovered =
+            append_worker_control_action_checked(&mut after_transition, conversation, route)
+                .unwrap();
         assert_eq!(recovered.len(), 1);
         assert_eq!(
             recovered[0].kind,
@@ -14296,8 +14291,7 @@ mod tests {
         assert!(record.is_complete());
 
         let mut conflict = chatarium_store::MemoryEventStore::default();
-        let (conversation, worker, goal, control, route, ack) =
-            acknowledged_stop(&mut conflict);
+        let (conversation, worker, goal, control, route, ack) = acknowledged_stop(&mut conflict);
         record_worker_control_action_started(
             &mut conflict,
             control,
@@ -14310,13 +14304,8 @@ mod tests {
             WorkerPhase::Working,
         )
         .unwrap();
-        append_worker_transition_checked(
-            &mut conflict,
-            worker,
-            goal,
-            WorkerAction::RequestInput,
-        )
-        .unwrap();
+        append_worker_transition_checked(&mut conflict, worker, goal, WorkerAction::RequestInput)
+            .unwrap();
         let before = conflict.events().len();
         let error =
             append_worker_control_action_checked(&mut conflict, conversation, route).unwrap_err();
