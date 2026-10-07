@@ -14,21 +14,17 @@ use crate::continuation_execution_audit::{
 };
 use crate::control_action_audit::replay_worker_control_action_audit;
 use crate::control_result_audit::replay_worker_control_status_results;
-use crate::local_conversation_chat_container_audit::{
-    replay_local_conversation_chat_container_bindings,
-};
+use crate::local_conversation_chat_container_audit::replay_local_conversation_chat_container_bindings;
 use crate::orchestration_route_audit::{
     ValidatedOrchestrationRoute, replay_validated_orchestration_routes,
 };
 use chatarium_core::LocalConversationId;
+use chatarium_core::LocalTurnId;
 use chatarium_core::control::{ControlId, WorkerControlKind};
 use chatarium_core::control_provenance::ControlIssuer;
-use chatarium_core::orchestration::{
-    ContinuationLeaseId, WorkerGoalId, WorkerId, WorkerPhase,
-};
+use chatarium_core::orchestration::{ContinuationLeaseId, WorkerGoalId, WorkerId, WorkerPhase};
 use chatarium_core::routing::RouteId;
 use chatarium_core::session::SessionId;
-use chatarium_core::LocalTurnId;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,8 +90,12 @@ pub fn replay_controller_worker_results(
     let mut items = Vec::new();
 
     for result in replay_worker_control_status_results(events)? {
-        let Some((route, controller_session_id)) =
-            controller_route(&routes_by_id, result.route_id, result.control_id, result.worker_id)?
+        let Some((route, controller_session_id)) = controller_route(
+            &routes_by_id,
+            result.route_id,
+            result.control_id,
+            result.worker_id,
+        )?
         else {
             continue;
         };
@@ -135,8 +135,12 @@ pub fn replay_controller_worker_results(
                 action.route_id.get()
             )
         })?;
-        let Some((route, controller_session_id)) =
-            controller_route(&routes_by_id, action.route_id, action.control_id, action.worker_id)?
+        let Some((route, controller_session_id)) = controller_route(
+            &routes_by_id,
+            action.route_id,
+            action.control_id,
+            action.worker_id,
+        )?
         else {
             continue;
         };
