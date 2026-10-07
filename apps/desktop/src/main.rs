@@ -39,6 +39,9 @@ use chatarium_store::authored::{
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
 };
+use chatarium_store::control_ack_audit::{
+    record_worker_control_acknowledged, replay_worker_control_acknowledgement_audit,
+};
 use chatarium_store::control_admission_audit::validate_control_freshness_before;
 use chatarium_store::control_audit::{record_worker_control_admitted, replay_control_audit};
 use chatarium_store::control_delivery_audit::{
@@ -206,6 +209,10 @@ enum PersistCommand {
         decision: RouteUserDecision,
     },
     DispatchControllerWorkerControlRoute {
+        route_id: RouteId,
+    },
+    AcknowledgeWorkerControl {
+        worker_conversation_id: LocalConversationId,
         route_id: RouteId,
     },
     AssignWorkerGoal {
@@ -383,6 +390,10 @@ enum PersistNotice {
     ControllerControlDispatched {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    WorkerControlAcknowledged {
+        route_id: RouteId,
+        event: EventEnvelope,
     },
     Failed {
         operation: &'static str,
@@ -627,6 +638,7 @@ struct ChatariumApp {
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
+    worker_control_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
     archive_backup_path: String,
@@ -881,6 +893,7 @@ impl ChatariumApp {
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
+                        worker_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
                         archive_backup_path: String::new(),
@@ -1052,6 +1065,7 @@ impl ChatariumApp {
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
+            worker_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
             archive_backup_path: String::new(),
@@ -2861,6 +2875,14 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
+                PersistNotice::WorkerControlAcknowledged { route_id, event } => {
+                    self.events.push(event);
+                    self.worker_control_command_pending = false;
+                    self.status = format!(
+                        "worker control route {} durably acknowledged",
+                        route_id.get()
+                    );
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2891,6 +2913,9 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("controller control ") {
                         self.controller_control_command_pending = false;
+                    }
+                    if operation.starts_with("worker control acknowledgement") {
+                        self.worker_control_command_pending = false;
                     }
                     if request_id.is_some() && request_id == self.commit_in_flight {
                         if let Some(request_id) = request_id {
