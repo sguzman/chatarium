@@ -13928,8 +13928,8 @@ mod tests {
         .unwrap();
         append_worker_transition_checked(
             &mut stale_store,
-            worker_id,
-            goal_id,
+            status_worker_id,
+            status_goal_id,
             WorkerAction::Complete,
         )
         .unwrap();
@@ -13941,12 +13941,12 @@ mod tests {
         assert_eq!(stale_store.events().len(), before_stale_dispatch);
 
         let mut status_store = chatarium_store::MemoryEventStore::default();
-        let (controller, worker_conversation, worker_id, goal_id) =
+        let (status_controller, status_worker_conversation, status_worker_id, status_goal_id) =
             ready_supervised_pair(&mut status_store);
         let (_, status_route, _) = append_controller_worker_control_proposal_checked(
             &mut status_store,
-            controller,
-            worker_conversation,
+            status_controller,
+            status_worker_conversation,
             ControllerControlAction::StatusRequest,
         )
         .unwrap();
@@ -13976,7 +13976,7 @@ mod tests {
 
         let status_acknowledgement = append_worker_control_acknowledgement_checked(
             &mut status_store,
-            worker_conversation,
+            status_worker_conversation,
             status_route,
         )
         .unwrap();
@@ -13995,9 +13995,12 @@ mod tests {
             .into_iter()
             .find(|record| record.route_id == status_route)
             .unwrap();
-        assert_eq!(replayed_status.worker_id, worker_id);
-        assert_eq!(replayed_status.worker_conversation_id, worker_conversation);
-        assert_eq!(replayed_status.goal_id, goal_id);
+        assert_eq!(replayed_status.worker_id, status_worker_id);
+        assert_eq!(
+            replayed_status.worker_conversation_id,
+            status_worker_conversation
+        );
+        assert_eq!(replayed_status.goal_id, status_goal_id);
         assert_eq!(replayed_status.phase, WorkerPhase::Completed);
         assert_eq!(
             replayed_status.acknowledged_sequence,
@@ -14005,7 +14008,7 @@ mod tests {
         );
         assert_eq!(replayed_status.recorded_sequence, status_result.sequence);
         assert_eq!(
-            worker_record(status_store.events(), worker_id)
+            worker_record(status_store.events(), status_worker_id)
                 .unwrap()
                 .unwrap()
                 .lifecycle
@@ -14017,7 +14020,7 @@ mod tests {
         assert!(
             append_worker_control_status_result_checked(
                 &mut status_store,
-                worker_conversation,
+                status_worker_conversation,
                 status_route,
             )
             .unwrap_err()
