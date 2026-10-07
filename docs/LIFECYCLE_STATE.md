@@ -170,6 +170,17 @@ Worker-side acknowledgement is now explicit and durable. A delivered control may
 be acknowledged from the worker conversation without changing lifecycle,
 transcript, or inference context.
 
-The next lifecycle/orchestration boundary is explicit worker-side action/result
-after acknowledgement, followed by separately durable lifecycle/status evidence
-appropriate to the specific control kind.
+Acknowledged `StatusRequest` controls now have a separate durable,
+non-mutating status-result path. The worker conversation explicitly records a
+snapshot of its already-replayed current goal and WorkerPhase. Result replay
+requires the delivered control to be a StatusRequest, durably acknowledged,
+owned by the destination worker conversation, and exactly consistent with the
+authoritative WorkerLifecycle state at result time.
+
+Status reporting therefore does not fabricate lifecycle evidence: it reports
+existing durable state and cannot change that state.
+
+The next lifecycle/orchestration boundary is explicit worker-side application
+of the mutating Start/Resume and Stop controls after acknowledgement, with
+crash-safe correlation between the control action, the normal durable
+WorkerLifecycle transition, and a separately replayable action result.
