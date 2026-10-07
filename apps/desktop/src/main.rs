@@ -7768,6 +7768,12 @@ impl eframe::App for ChatariumApp {
                                                     .map(|record| record.decision);
                                                 let superseded_by =
                                                     artifact.superseded_by;
+                                                let one_shot_selected = self
+                                                    .local_memory_one_shot_selections
+                                                    .get(&self.local_conversation_id)
+                                                    .is_some_and(|selected| {
+                                                        selected.contains(&artifact.memory_id)
+                                                    });
                                                 let successor_candidates = supersessions
                                                     .as_ref()
                                                     .map(|records| {
@@ -7825,6 +7831,15 @@ impl eframe::App for ChatariumApp {
                                                             .monospace()
                                                             .size(9.0),
                                                         );
+                                                        if one_shot_selected {
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    "NEXT REQUEST: SELECTED",
+                                                                )
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                        }
                                                         if let Some(successor_memory_id) =
                                                             superseded_by
                                                         {
@@ -7963,6 +7978,44 @@ impl eframe::App for ChatariumApp {
                                                             self.decide_local_memory_context(
                                                                 artifact.memory_id,
                                                                 LocalMemoryContextDecision::Exclude,
+                                                            );
+                                                        }
+
+                                                        let selection_mutable =
+                                                            self.commit_in_flight.is_none();
+                                                        if one_shot_selected {
+                                                            if ui
+                                                                .add_enabled(
+                                                                    selection_mutable,
+                                                                    egui::Button::new(
+                                                                        "Remove one-shot",
+                                                                    ),
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                self.deselect_local_memory_for_next_request(
+                                                                    artifact.memory_id,
+                                                                );
+                                                            }
+                                                        } else if ui
+                                                            .add_enabled(
+                                                                selection_mutable
+                                                                    && superseded_by.is_none()
+                                                                    && current_decision
+                                                                        != Some(
+                                                                            LocalMemoryContextDecision::Admit,
+                                                                        ),
+                                                                egui::Button::new(
+                                                                    "Use once next request",
+                                                                ),
+                                                            )
+                                                            .on_hover_text(
+                                                                "Include this memory in the next authored request only; does not change persistent Admit state.",
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.select_local_memory_for_next_request(
+                                                                artifact.memory_id,
                                                             );
                                                         }
                                                     });
