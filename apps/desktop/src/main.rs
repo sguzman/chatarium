@@ -17833,6 +17833,10 @@ mod tests {
                 ),
             )
             .unwrap();
+        let coordination_output = format!(
+            "{{\"summary\":\"coordination synthesis\",\"suggestion_candidates\":[{{\"basis_result_route_id\":{},\"action\":\"status_request\"}}]}}",
+            status_route.get()
+        );
         status_store
             .append_scoped(
                 Some(local_turn_scope(coordination_turn_id)),
@@ -17841,7 +17845,7 @@ mod tests {
                     coordination_turn_id,
                     &request_id,
                     None,
-                    Some("coordination synthesis"),
+                    Some(coordination_output.as_str()),
                     Some("coordination test completion"),
                 ),
             )
@@ -17870,7 +17874,7 @@ mod tests {
             controller_coordination_output_text(status_store.events(), coordination_turn_id)
                 .unwrap()
                 .as_deref(),
-            Some("coordination synthesis")
+            Some(coordination_output.as_str())
         );
         assert!(
             admitted_controller_coordination_result_messages(
@@ -17880,6 +17884,42 @@ mod tests {
             .unwrap()
             .is_empty()
         );
+
+        let before_candidate_projection = status_store.events().len();
+        assert!(
+            replay_controller_coordination_suggestion_audit(status_store.events())
+                .unwrap()
+                .is_empty()
+        );
+        let candidate_projection =
+            project_controller_coordination_suggestion_candidates(
+                status_store.events(),
+                coordination_turn_id,
+            )
+            .unwrap();
+        assert_eq!(candidate_projection.summary, "coordination synthesis");
+        assert_eq!(candidate_projection.candidates.len(), 1);
+        assert_eq!(
+            candidate_projection.candidates[0].basis_result_route_id,
+            status_route
+        );
+        assert_eq!(
+            candidate_projection.candidates[0].action,
+            CoordinationSuggestionAction::StatusRequest
+        );
+        assert_eq!(
+            candidate_projection.candidates[0].worker_conversation_id,
+            status_worker_conversation
+        );
+        assert_eq!(
+            candidate_projection.candidates[0].worker_id,
+            status_worker_id
+        );
+        assert_eq!(
+            candidate_projection.candidates[0].goal_id,
+            status_goal_id
+        );
+        assert_eq!(status_store.events().len(), before_candidate_projection);
 
         let before_bad_suggestion = status_store.events().len();
         assert!(
