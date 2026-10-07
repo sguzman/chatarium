@@ -5,14 +5,14 @@
 
 use crate::control_inbox::replay_worker_control_inbox_for_conversation;
 use crate::worker_audit::{
-    decode_worker_transition_event, replay_worker_audit, WorkerControlTransitionProvenance,
+    WorkerControlTransitionProvenance, decode_worker_transition_event, replay_worker_audit,
 };
 use crate::{EventEnvelope, EventStore};
-use chatarium_core::control::{validate_control_admission, ControlId, WorkerControlKind};
+use chatarium_core::control::{ControlId, WorkerControlKind, validate_control_admission};
 use chatarium_core::orchestration::{WorkerAction, WorkerGoalId, WorkerId, WorkerPhase};
 use chatarium_core::routing::RouteId;
 use chatarium_core::{EventKind, LocalConversationId};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
@@ -125,12 +125,7 @@ pub fn replay_worker_control_action_audit(
                 let kind = parse_mutating_kind(required_string(&value, "kind")?)?;
                 let acknowledged_sequence = required_u64(&value, "acknowledged_sequence")?;
                 let from_phase = parse_phase(required_string(&value, "from_phase")?)?;
-                validate_scope(
-                    event,
-                    worker_conversation_id,
-                    route_id,
-                    control_id,
-                )?;
+                validate_scope(event, worker_conversation_id, route_id, control_id)?;
 
                 if records.contains_key(&route_id) {
                     return Err(format!(
@@ -150,17 +145,19 @@ pub fn replay_worker_control_action_audit(
                 }
 
                 let prior = &events[..index];
-                let item =
-                    replay_worker_control_inbox_for_conversation(prior, worker_conversation_id)?
-                        .into_iter()
-                        .find(|item| item.route_id == route_id)
-                        .ok_or_else(|| {
-                            format!(
-                                "worker control action at sequence {} references route {} before delivery",
-                                event.sequence,
-                                route_id.get()
-                            )
-                        })?;
+                let item = replay_worker_control_inbox_for_conversation(
+                    prior,
+                    worker_conversation_id,
+                )?
+                .into_iter()
+                .find(|item| item.route_id == route_id)
+                .ok_or_else(|| {
+                    format!(
+                        "worker control action at sequence {} references route {} before delivery",
+                        event.sequence,
+                        route_id.get()
+                    )
+                })?;
                 if item.control_id != control_id
                     || item.worker_id != worker_id
                     || item.goal_id != goal_id
@@ -187,8 +184,7 @@ pub fn replay_worker_control_action_audit(
                 if acknowledged_sequence >= event.sequence {
                     return Err(format!(
                         "worker control action at sequence {} does not follow acknowledgement sequence {}",
-                        event.sequence,
-                        acknowledged_sequence
+                        event.sequence, acknowledged_sequence
                     ));
                 }
 
@@ -353,8 +349,7 @@ pub fn replay_worker_control_action_audit(
                 if lifecycle_sequence >= event.sequence {
                     return Err(format!(
                         "worker control action result at sequence {} does not follow lifecycle transition {}",
-                        event.sequence,
-                        lifecycle_sequence
+                        event.sequence, lifecycle_sequence
                     ));
                 }
                 record.result_sequence = Some(event.sequence);
@@ -414,7 +409,9 @@ fn mutating_kind_name(kind: WorkerControlKind) -> Result<&'static str, String> {
         WorkerControlKind::Continue { .. } => {
             Err("Continue control action audit is not implemented".to_owned())
         }
-        WorkerControlKind::StatusRequest => Err("StatusRequest is not a mutating action".to_owned()),
+        WorkerControlKind::StatusRequest => {
+            Err("StatusRequest is not a mutating action".to_owned())
+        }
     }
 }
 
@@ -497,10 +494,7 @@ fn validate_scope(
     Ok(())
 }
 
-fn parse_conversation_id(
-    value: &Value,
-    sequence: u64,
-) -> Result<LocalConversationId, String> {
+fn parse_conversation_id(value: &Value, sequence: u64) -> Result<LocalConversationId, String> {
     LocalConversationId::from_str(required_string(value, "worker_conversation_id")?).map_err(
         |error| {
             format!(
@@ -541,19 +535,17 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MemoryEventStore;
     use crate::chat_container_audit::record_chat_container_created;
     use crate::control_ack_audit::record_worker_control_acknowledged;
     use crate::control_audit::record_worker_control_admitted;
     use crate::control_delivery_audit::record_worker_control_delivered;
     use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
     use crate::local_conversation_worker_audit::record_local_conversation_worker_bound;
-    use crate::session_audit::{
-        record_local_session_registered, record_worker_session_bound,
-    };
+    use crate::session_audit::{record_local_session_registered, record_worker_session_bound};
     use crate::worker_audit::{
         record_worker_control_transition, record_worker_goal_assigned, record_worker_transition,
     };
-    use crate::MemoryEventStore;
     use chatarium_core::chat_container::ChatContainerId;
     use chatarium_core::session::{SessionId, WorkerSessionBinding};
 
