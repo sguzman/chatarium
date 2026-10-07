@@ -139,6 +139,12 @@ becomes human-authored transcript history.
 The admitted memory set is snapshotted when Send is clicked, so later
 Admit/Exclude changes cannot mutate an already-committed request.
 
+Supersession is also part of effective admission. A raw historical Admit for a
+superseded predecessor remains auditable, but the effective admitted-memory
+projection excludes it. Successor artifacts receive no inherited context
+authority and enter Context Composer only after their own explicit Admit
+decision.
+
 See [LOCAL_MEMORY.md](LOCAL_MEMORY.md) for the durable artifact/admission
 ontology.
 
@@ -222,7 +228,8 @@ build on it.
 Future composer work should be driven by concrete downstream needs, especially:
 
 - lifecycle-provided local context;
-- durable memory sources distinct from routed peer messages;
+- read-only memory discovery/retrieval sources that remain distinct from
+  context admission;
 - controller/worker-provided context with explicit provenance;
 - attachment sources;
 - structured-output requirements;
