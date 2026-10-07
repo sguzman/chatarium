@@ -582,6 +582,53 @@ pub fn continuation_execution_transport_state(
     Ok(state)
 }
 
+/// Reconstruct the latest durable continuation assistant output.
+///
+/// Continuation transport stores cumulative assistant snapshots and a terminal
+/// completion snapshot in the same turn-scoped response-observation envelope as
+/// ordinary inference. This projection intentionally ignores authored
+/// transcript rows and reads only the non-authored continuation turn scope.
+pub fn continuation_execution_output_text(
+    events: &[EventEnvelope],
+    execution_turn_id: LocalTurnId,
+) -> Result<Option<String>, String> {
+    continuation_execution_transport_state(events, execution_turn_id)?;
+
+    let scope = local_turn_scope(execution_turn_id);
+    let mut latest = None;
+    for event in events
+        .iter()
+        .filter(|event| event.scope.as_deref() == Some(scope.as_str()))
+        .filter(|event| {
+            matches!(
+                event.kind,
+                EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved
+            )
+        })
+    {
+        let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
+            format!(
+                "continuation turn {} has malformed assistant output payload at sequence {}: {error}",
+                execution_turn_id, event.sequence
+            )
+        })?;
+        match value.get("text") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(text)) => {
+                latest = Some(text.clone());
+            }
+            Some(_) => {
+                return Err(format!(
+                    "continuation turn {} assistant output at sequence {} has non-string text",
+                    execution_turn_id, event.sequence
+                ));
+            }
+        }
+    }
+
+    Ok(latest.filter(|text| !text.trim().is_empty()))
+}
+
 pub fn transport_terminal_outcome(
     state: ContinuationExecutionTransportState,
 ) -> Option<(ContinuationExecutionOutcome, u64)> {
