@@ -10,9 +10,9 @@
 
 use crate::EventEnvelope;
 use crate::EventStore;
+use crate::authored::local_turn_scope;
 use crate::continuation_audit::replay_continuation_audit;
 use crate::control_audit::replay_control_audit;
-use crate::authored::local_turn_scope;
 use crate::control_inbox::replay_worker_control_inbox_for_conversation;
 use crate::worker_audit::replay_worker_audit;
 use chatarium_core::control::{ControlId, WorkerControlKind};
@@ -510,7 +510,11 @@ pub fn continuation_execution_transport_state(
             }
             EventKind::AssistantStreamStarted => {
                 require_dispatch(state, execution_turn_id, event.sequence)?;
-                if state.stream_started_sequence.replace(event.sequence).is_some() {
+                if state
+                    .stream_started_sequence
+                    .replace(event.sequence)
+                    .is_some()
+                {
                     return Err(format!(
                         "continuation turn {} has multiple assistant-stream starts",
                         execution_turn_id
@@ -554,7 +558,11 @@ pub fn continuation_execution_transport_state(
             }
             EventKind::TransportInterrupted => {
                 require_dispatch(state, execution_turn_id, event.sequence)?;
-                if state.interruption_sequence.replace(event.sequence).is_some() {
+                if state
+                    .interruption_sequence
+                    .replace(event.sequence)
+                    .is_some()
+                {
                     return Err(format!(
                         "continuation turn {} has multiple interruption observations",
                         execution_turn_id
