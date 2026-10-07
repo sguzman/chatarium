@@ -6,10 +6,12 @@
 
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::EventKind;
+use chatarium_core::control::ControlId;
 use chatarium_core::orchestration::{
     TransitionOutcome, WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
     WorkerTransitionError,
 };
+use chatarium_core::routing::RouteId;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -79,6 +81,102 @@ pub fn record_worker_transition(
             "action": worker_action_name(action),
         }),
     )
+}
+
+/// Explicit control provenance carried by a normal durable worker lifecycle transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerControlTransitionProvenance {
+    pub control_id: ControlId,
+    pub route_id: RouteId,
+    pub action_started_sequence: u64,
+}
+
+/// Decoded worker lifecycle transition event for cross-audit validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodedWorkerTransition {
+    pub worker_id: WorkerId,
+    pub goal_id: WorkerGoalId,
+    pub action: WorkerAction,
+    pub control_provenance: Option<WorkerControlTransitionProvenance>,
+}
+
+/// Append a worker lifecycle transition explicitly caused by one acknowledged control action.
+///
+/// The event remains an ordinary `WorkerLifecycleTransitionRecorded` fact, so
+/// WorkerLifecycle replay stays authoritative. Extra correlation fields let the
+/// control-action audit prove causation and recover safely after a crash.
+pub fn record_worker_control_transition(
+    store: &mut impl EventStore,
+    worker_id: WorkerId,
+    goal_id: WorkerGoalId,
+    action: WorkerAction,
+    provenance: WorkerControlTransitionProvenance,
+) -> std::io::Result<u64> {
+    if action == WorkerAction::AssignGoal {
+        return Err(invalid_data(
+            "AssignGoal must use record_worker_goal_assigned rather than a transition record",
+        ));
+    }
+
+    append_typed(
+        store,
+        worker_id,
+        EventKind::WorkerLifecycleTransitionRecorded,
+        json!({
+            "schema": WORKER_AUDIT_SCHEMA,
+            "version": WORKER_AUDIT_VERSION,
+            "record": "transition",
+            "worker_id": worker_id.get(),
+            "goal_id": goal_id.get(),
+            "action": worker_action_name(action),
+            "control_id": provenance.control_id.get(),
+            "route_id": provenance.route_id.get(),
+            "action_started_sequence": provenance.action_started_sequence,
+        }),
+    )
+}
+
+/// Decode one worker lifecycle transition, including optional control correlation.
+///
+/// Returns `Ok(None)` for non-transition events.
+pub fn decode_worker_transition_event(
+    event: &EventEnvelope,
+) -> Result<Option<DecodedWorkerTransition>, String> {
+    if event.kind != EventKind::WorkerLifecycleTransitionRecorded {
+        return Ok(None);
+    }
+    let payload = typed_payload(event, "transition")?;
+    let worker_id = worker_id(&payload)?;
+    let goal_id = goal_id(&payload)?;
+    validate_scope(event, worker_id)?;
+    let action = parse_worker_action(required_string(&payload, "action")?)?;
+
+    let control_id = payload.get("control_id").and_then(Value::as_u64);
+    let route_id = payload.get("route_id").and_then(Value::as_u64);
+    let action_started_sequence = payload.get("action_started_sequence").and_then(Value::as_u64);
+    let control_provenance = match (control_id, route_id, action_started_sequence) {
+        (None, None, None) => None,
+        (Some(control_id), Some(route_id), Some(action_started_sequence)) => {
+            Some(WorkerControlTransitionProvenance {
+                control_id: ControlId::new(control_id),
+                route_id: RouteId::new(route_id),
+                action_started_sequence,
+            })
+        }
+        _ => {
+            return Err(format!(
+                "worker transition at sequence {} has partial control provenance",
+                event.sequence
+            ));
+        }
+    };
+
+    Ok(Some(DecodedWorkerTransition {
+        worker_id,
+        goal_id,
+        action,
+        control_provenance,
+    }))
 }
 
 /// Reconstruct every typed worker lifecycle from authoritative journal events.
