@@ -282,6 +282,7 @@ impl TurnEvidence {
             | EventKind::ControllerSessionDesignated
             | EventKind::ControllerWorkerBound
             | EventKind::WorkerControlIssuerBound
+            | EventKind::WorkerContinuationExecutionStarted
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
@@ -402,6 +403,8 @@ pub enum EventKind {
     ControllerWorkerBound,
     /// Explicit issuer provenance was correlated to one admitted worker control.
     WorkerControlIssuerBound,
+    /// Worker-side execution of one acknowledged Continue control began.
+    WorkerContinuationExecutionStarted,
     /// A bounded continuation lease was durably created.
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
@@ -484,6 +487,9 @@ impl EventKind {
             Self::ControllerSessionDesignated => "controller_session_designated",
             Self::ControllerWorkerBound => "controller_worker_bound",
             Self::WorkerControlIssuerBound => "worker_control_issuer_bound",
+            Self::WorkerContinuationExecutionStarted => {
+                "worker_continuation_execution_started"
+            }
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
@@ -561,6 +567,9 @@ impl EventKind {
             "controller_session_designated" => Some(Self::ControllerSessionDesignated),
             "controller_worker_bound" => Some(Self::ControllerWorkerBound),
             "worker_control_issuer_bound" => Some(Self::WorkerControlIssuerBound),
+            "worker_continuation_execution_started" => {
+                Some(Self::WorkerContinuationExecutionStarted)
+            }
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
             "remote_conversation_bound" => Some(Self::RemoteConversationBound),
