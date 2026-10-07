@@ -763,8 +763,7 @@ mod tests {
         let _ = issue(&mut store, &mut lease, &lifecycle);
         record_worker_transition(&mut store, W1, G1, WorkerAction::RequestInput).unwrap();
 
-        let error =
-            reconstruct_continuation_lease_for_next_issue(store.events(), L1).unwrap_err();
+        let error = reconstruct_continuation_lease_for_next_issue(store.events(), L1).unwrap_err();
         assert!(error.contains("cannot reconstruct issued ordinal"));
     }
 
@@ -777,8 +776,7 @@ mod tests {
         let issued = issue(&mut store, &mut lease, &lifecycle);
         assert_eq!(issued.ordinal(), 1);
 
-        let recovered =
-            reconstruct_unconsumed_continuation_permit(store.events(), L1, 1).unwrap();
+        let recovered = reconstruct_unconsumed_continuation_permit(store.events(), L1, 1).unwrap();
         assert_eq!(recovered.lease_id(), L1);
         assert_eq!(recovered.worker_id(), W1);
         assert_eq!(recovered.goal_id(), G1);
@@ -801,8 +799,7 @@ mod tests {
             WorkerControl::continue_work(ControlId::new(77), W1, &lifecycle, permit).unwrap();
         record_worker_control_admitted(&mut store, &control).unwrap();
 
-        let error =
-            reconstruct_unconsumed_continuation_permit(store.events(), L1, 1).unwrap_err();
+        let error = reconstruct_unconsumed_continuation_permit(store.events(), L1, 1).unwrap_err();
         assert!(error.contains("already consumed"));
     }
 
