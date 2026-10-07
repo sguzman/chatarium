@@ -245,6 +245,16 @@ enum PersistCommand {
         destination_conversation_id: LocalConversationId,
         decision: LocalRouteContextDecision,
     },
+    RecordLocalMemory {
+        memory_id: LocalMemoryId,
+        source_conversation_id: LocalConversationId,
+        text: String,
+    },
+    DecideLocalMemoryContext {
+        memory_id: LocalMemoryId,
+        destination_conversation_id: LocalConversationId,
+        decision: LocalMemoryContextDecision,
+    },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
         worker_id: WorkerId,
@@ -471,6 +481,14 @@ enum PersistNotice {
     },
     LocalRouteContextDecisionUpdated {
         route_id: RouteId,
+        event: EventEnvelope,
+    },
+    LocalMemoryArtifactRecorded {
+        memory_id: LocalMemoryId,
+        event: EventEnvelope,
+    },
+    LocalMemoryContextDecisionUpdated {
+        memory_id: LocalMemoryId,
         event: EventEnvelope,
     },
     LifecycleEventAppended {
@@ -785,6 +803,8 @@ struct ChatariumApp {
     route_payload_drafts: BTreeMap<RouteId, String>,
     route_dispatch_command_pending: bool,
     route_context_command_pending: bool,
+    local_memory_command_pending: bool,
+    local_memory_draft: String,
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
@@ -1045,6 +1065,8 @@ impl ChatariumApp {
                         route_payload_drafts: BTreeMap::new(),
                         route_dispatch_command_pending: false,
                         route_context_command_pending: false,
+                        local_memory_command_pending: false,
+                        local_memory_draft: String::new(),
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
@@ -1222,6 +1244,8 @@ impl ChatariumApp {
             route_payload_drafts: BTreeMap::new(),
             route_dispatch_command_pending: false,
             route_context_command_pending: false,
+            local_memory_command_pending: false,
+            local_memory_draft: String::new(),
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
@@ -3033,6 +3057,21 @@ impl ChatariumApp {
                         route_id.get()
                     );
                 }
+                PersistNotice::LocalMemoryArtifactRecorded { memory_id, event } => {
+                    self.events.push(event);
+                    self.local_memory_command_pending = false;
+                    self.local_memory_draft.clear();
+                    self.status =
+                        format!("local memory {} durably recorded", memory_id.get());
+                }
+                PersistNotice::LocalMemoryContextDecisionUpdated { memory_id, event } => {
+                    self.events.push(event);
+                    self.local_memory_command_pending = false;
+                    self.status = format!(
+                        "local memory {} context eligibility durably updated",
+                        memory_id.get()
+                    );
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -4051,6 +4090,71 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue routed context decision: {error}");
+            }
+        }
+    }
+
+    fn record_local_memory(&mut self) {
+        if self.local_memory_command_pending || self.local_memory_draft.trim().is_empty() {
+            return;
+        }
+        let memory_id = match next_available_local_memory_id(&self.events) {
+            Ok(memory_id) => memory_id,
+            Err(error) => {
+                self.status = format!("cannot allocate local memory identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot record local memory: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::RecordLocalMemory {
+            memory_id,
+            source_conversation_id: self.local_conversation_id,
+            text: self.local_memory_draft.clone(),
+        }) {
+            Ok(()) => {
+                self.local_memory_command_pending = true;
+                self.status = format!(
+                    "recording immutable local memory {}…",
+                    memory_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local memory: {error}");
+            }
+        }
+    }
+
+    fn decide_local_memory_context(
+        &mut self,
+        memory_id: LocalMemoryId,
+        decision: LocalMemoryContextDecision,
+    ) {
+        if self.local_memory_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot update local memory context eligibility: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideLocalMemoryContext {
+            memory_id,
+            destination_conversation_id: self.local_conversation_id,
+            decision,
+        }) {
+            Ok(()) => {
+                self.local_memory_command_pending = true;
+                self.status = format!(
+                    "recording local memory {} context {} decision…",
+                    memory_id.get(),
+                    local_memory_context_decision_label(decision),
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local memory context decision: {error}");
             }
         }
     }
@@ -13706,6 +13810,62 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::RecordLocalMemory {
+                memory_id,
+                source_conversation_id,
+                text,
+            } => {
+                match append_local_memory_artifact_checked(
+                    &mut store,
+                    memory_id,
+                    source_conversation_id,
+                    text,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalMemoryArtifactRecorded {
+                            memory_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local memory artifact",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DecideLocalMemoryContext {
+                memory_id,
+                destination_conversation_id,
+                decision,
+            } => {
+                match append_local_memory_context_decision_checked(
+                    &mut store,
+                    memory_id,
+                    destination_conversation_id,
+                    decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalMemoryContextDecisionUpdated {
+                            memory_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local memory context decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -16955,6 +17115,10 @@ mod tests {
             PersistNotice::LocalRouteDispatchUpdated { .. } => "local_route_dispatch_updated",
             PersistNotice::LocalRouteContextDecisionUpdated { .. } => {
                 "local_route_context_decision_updated"
+            }
+            PersistNotice::LocalMemoryArtifactRecorded { .. } => "local_memory_artifact_recorded",
+            PersistNotice::LocalMemoryContextDecisionUpdated { .. } => {
+                "local_memory_context_decision_updated"
             }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::SupervisionEventAppended { .. } => "supervision_event_appended",
