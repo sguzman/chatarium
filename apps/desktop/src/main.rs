@@ -6634,7 +6634,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Worker control inbox", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command. An acknowledged STATUS request may snapshot existing durable lifecycle state; delivery, acknowledgement, and status reporting do not mutate lifecycle, ordinary transcript, or inference context.",
+                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command. STATUS snapshots existing lifecycle without mutation. START/RESUME and STOP mutate lifecycle only through an explicit crash-recoverable Apply control action.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6676,9 +6676,25 @@ impl eframe::App for ChatariumApp {
                                                 None
                                             }
                                         };
+                                    let action_records =
+                                        match replay_worker_control_action_audit(&self.events) {
+                                            Ok(records) => Some(records),
+                                            Err(error) => {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "worker control action projection blocked: {error}"
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        186, 108, 108,
+                                                    )),
+                                                );
+                                                None
+                                            }
+                                        };
                                     egui::ScrollArea::vertical()
                                         .id_salt("worker-control-inbox")
-                                        .max_height(220.0)
+                                        .max_height(260.0)
                                         .show(ui, |ui| {
                                             for item in items {
                                                 ui.group(|ui| {
@@ -6776,6 +6792,77 @@ impl eframe::App for ChatariumApp {
                                                                     .record_worker_control_status_result(
                                                                         item.route_id,
                                                                     );
+                                                            }
+                                                        }
+
+                                                        if matches!(
+                                                            item.kind,
+                                                            WorkerControlKind::StartOrResume
+                                                                | WorkerControlKind::Stop
+                                                        ) && item.acknowledged_sequence.is_some()
+                                                        {
+                                                            let action_record = action_records
+                                                                .as_ref()
+                                                                .and_then(|records| {
+                                                                    records.iter().find(
+                                                                        |record| {
+                                                                            record.route_id
+                                                                                == item.route_id
+                                                                        },
+                                                                    )
+                                                                });
+                                                            if let Some(record) = action_record
+                                                                .filter(|record| {
+                                                                    record.is_complete()
+                                                                })
+                                                            {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "ACTION RESULT · {} · lifecycle #{} · event #{}",
+                                                                        worker_phase_label(
+                                                                            record
+                                                                                .resulting_phase
+                                                                                .expect(
+                                                                                    "complete action has resulting phase",
+                                                                                ),
+                                                                        ),
+                                                                        record
+                                                                            .lifecycle_sequence
+                                                                            .expect(
+                                                                                "complete action has lifecycle sequence",
+                                                                            ),
+                                                                        record
+                                                                            .result_sequence
+                                                                            .expect(
+                                                                                "complete action has result sequence",
+                                                                            ),
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                            } else {
+                                                                let label = if action_record.is_some()
+                                                                {
+                                                                    "Resume apply control"
+                                                                } else {
+                                                                    "Apply control"
+                                                                };
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        action_records.is_some()
+                                                                            && !self
+                                                                                .worker_control_command_pending
+                                                                            && self
+                                                                                .persist_tx
+                                                                                .is_some(),
+                                                                        egui::Button::new(label),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.apply_worker_control(
+                                                                        item.route_id,
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                         if self.worker_control_command_pending {
