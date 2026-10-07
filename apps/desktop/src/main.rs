@@ -135,6 +135,10 @@ use chatarium_store::local_memory_search::{
 use chatarium_store::local_memory_supersession_audit::{
     record_local_memory_superseded, replay_local_memory_supersession_audit,
 };
+use chatarium_store::local_memory_turn_selection_audit::{
+    MAX_ONE_SHOT_MEMORIES_PER_TURN, record_local_memory_turn_selection,
+    replay_local_memory_turn_selection_audit,
+};
 use chatarium_store::local_route_context_audit::{
     LocalRouteContextDecision, record_local_route_context_decision,
     replay_admitted_local_route_context, replay_local_route_context_audit,
@@ -184,7 +188,7 @@ use chatarium_store::worker_audit::{
 use chatarium_store::{EventEnvelope, EventStore, JsonlEventStore};
 use eframe::egui;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -368,6 +372,8 @@ enum PersistCommand {
     CommitMessage {
         request_id: u64,
         message: AuthoredUserMessage,
+        one_shot_memory_ids: Vec<LocalMemoryId>,
+        one_shot_memory_snapshot_after_sequence: Option<u64>,
     },
     AppendTurnEvent {
         turn_id: LocalTurnId,
@@ -427,6 +433,7 @@ enum PersistNotice {
         request_id: u64,
         message: AuthoredUserMessage,
         event: EventEnvelope,
+        one_shot_memory_event: Option<EventEnvelope>,
     },
     TurnEventAppended {
         turn_id: LocalTurnId,
@@ -731,12 +738,22 @@ struct DisplayMessage {
 }
 
 #[derive(Debug, Clone)]
+struct PendingOneShotMemory {
+    memory_id: LocalMemoryId,
+    source_conversation_id: LocalConversationId,
+    text: String,
+    artifact_sequence: u64,
+}
+
+#[derive(Debug, Clone)]
 struct PendingInferenceIntent {
     model: String,
     instructions: Option<String>,
     developer_context: String,
     routed_context: Vec<context_composer::TranscriptMessage>,
     local_memory_context: Vec<context_composer::TranscriptMessage>,
+    local_memory_one_shot: Vec<PendingOneShotMemory>,
+    local_memory_one_shot_snapshot_after_sequence: Option<u64>,
     controller_result_context: Vec<context_composer::TranscriptMessage>,
     controller_coordination_result_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
@@ -841,6 +858,7 @@ struct ChatariumApp {
     local_memory_source_filter: Option<LocalConversationId>,
     show_superseded_local_memory: bool,
     local_memory_label_drafts: BTreeMap<LocalMemoryId, String>,
+    local_memory_one_shot_selections: BTreeMap<LocalConversationId, BTreeSet<LocalMemoryId>>,
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
@@ -1108,6 +1126,7 @@ impl ChatariumApp {
                         local_memory_source_filter: None,
                         show_superseded_local_memory: false,
                         local_memory_label_drafts: BTreeMap::new(),
+                        local_memory_one_shot_selections: BTreeMap::new(),
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
@@ -1292,6 +1311,7 @@ impl ChatariumApp {
             local_memory_source_filter: None,
             show_superseded_local_memory: false,
             local_memory_label_drafts: BTreeMap::new(),
+            local_memory_one_shot_selections: BTreeMap::new(),
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
