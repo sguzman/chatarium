@@ -14967,6 +14967,88 @@ mod tests {
             RouteGateState::PendingApproval
         );
 
+        append_controller_control_route_decision_checked(
+            &mut continuation_store,
+            continue_route,
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        let delivered =
+            append_controller_control_dispatch_checked(&mut continuation_store, continue_route)
+                .unwrap();
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered[0].kind, EventKind::RouteDispatched);
+        assert_eq!(delivered[1].kind, EventKind::WorkerControlDelivered);
+        let acknowledgement = append_worker_control_acknowledgement_checked(
+            &mut continuation_store,
+            continuation_worker_conversation,
+            continue_route,
+        )
+        .unwrap();
+        assert_eq!(acknowledgement.kind, EventKind::WorkerControlAcknowledged);
+
+        let worker_before_execution = worker_record(
+            continuation_store.events(),
+            continuation_worker_id,
+        )
+        .unwrap()
+        .unwrap();
+        let execution = append_worker_continuation_execution_start_checked(
+            &mut continuation_store,
+            continuation_worker_conversation,
+            continue_route,
+        )
+        .unwrap();
+        assert_eq!(
+            execution.kind,
+            EventKind::WorkerContinuationExecutionStarted
+        );
+        let execution_record =
+            replay_worker_continuation_execution_audit(continuation_store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.route_id == continue_route)
+                .unwrap();
+        assert_eq!(execution_record.control_id, continue_control);
+        assert_eq!(execution_record.worker_id, continuation_worker_id);
+        assert_eq!(execution_record.goal_id, continuation_goal_id);
+        assert_eq!(execution_record.lease_id, lease_id);
+        assert_eq!(execution_record.permit_ordinal, 1);
+        assert_eq!(
+            execution_record.acknowledged_sequence,
+            acknowledgement.sequence
+        );
+        assert_eq!(execution_record.started_sequence, execution.sequence);
+        let worker_after_execution = worker_record(
+            continuation_store.events(),
+            continuation_worker_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            worker_after_execution.lifecycle.phase(),
+            worker_before_execution.lifecycle.phase()
+        );
+        assert_eq!(
+            worker_after_execution.last_sequence,
+            worker_before_execution.last_sequence
+        );
+
+        let before_duplicate_execution = continuation_store.events().len();
+        assert!(
+            append_worker_continuation_execution_start_checked(
+                &mut continuation_store,
+                continuation_worker_conversation,
+                continue_route,
+            )
+            .unwrap_err()
+            .contains("already has a continuation execution start")
+        );
+        assert_eq!(
+            continuation_store.events().len(),
+            before_duplicate_execution
+        );
+
         let mut stranded_store = chatarium_store::MemoryEventStore::default();
         let (
             stranded_controller,
