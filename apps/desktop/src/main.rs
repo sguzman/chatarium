@@ -12068,6 +12068,128 @@ fn append_controller_coordination_result_context_decision_checked(
     })
 }
 
+fn append_controller_coordination_suggestion_checked(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+    coordination_turn_id: LocalTurnId,
+    basis_result_route_id: RouteId,
+    action: CoordinationSuggestionAction,
+) -> Result<(CoordinationSuggestionId, EventEnvelope), String> {
+    let coordination = replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .find(|record| record.coordination_turn_id == coordination_turn_id)
+        .ok_or_else(|| {
+            format!(
+                "controller coordination turn {} does not exist",
+                coordination_turn_id
+            )
+        })?;
+    if coordination.controller_conversation_id != controller_conversation_id {
+        return Err(format!(
+            "controller coordination turn {} belongs to conversation {}, not {}",
+            coordination_turn_id,
+            coordination.controller_conversation_id,
+            controller_conversation_id,
+        ));
+    }
+    if coordination.outcome != Some(ControllerCoordinationOutcome::Completed) {
+        return Err(format!(
+            "controller coordination turn {} is not completed and cannot produce suggestions",
+            coordination_turn_id
+        ));
+    }
+    let result_sequence = coordination.result_sequence.ok_or_else(|| {
+        format!(
+            "controller coordination turn {} has no terminal result",
+            coordination_turn_id
+        )
+    })?;
+    if !coordination
+        .admitted_result_routes
+        .contains(&basis_result_route_id)
+    {
+        return Err(format!(
+            "worker result route {} was not frozen into coordination turn {}",
+            basis_result_route_id.get(),
+            coordination_turn_id
+        ));
+    }
+
+    let basis = replay_controller_worker_results_for_conversation(
+        store.events(),
+        controller_conversation_id,
+    )?
+    .into_iter()
+    .find(|item| item.route_id == basis_result_route_id)
+    .ok_or_else(|| {
+        format!(
+            "worker result route {} is not visible to controller conversation {}",
+            basis_result_route_id.get(),
+            controller_conversation_id
+        )
+    })?;
+
+    if replay_controller_coordination_suggestion_audit(store.events())?
+        .into_iter()
+        .any(|record| {
+            record.coordination_turn_id == coordination_turn_id
+                && record.basis_result_route_id == basis_result_route_id
+                && record.suggestion.action() == action
+        })
+    {
+        return Err(format!(
+            "coordination turn {} already has {} suggestion for basis route {}",
+            coordination_turn_id,
+            coordination_suggestion_action_label(action),
+            basis_result_route_id.get()
+        ));
+    }
+
+    let suggestion_id = next_available_coordination_suggestion_id(store.events())?;
+    let record = ControllerCoordinationSuggestionRecord {
+        suggestion: CoordinationSuggestion::new(
+            suggestion_id,
+            basis.worker_id,
+            basis.goal_id,
+            action,
+        ),
+        controller_conversation_id,
+        coordination_turn_id,
+        coordination_result_sequence: result_sequence,
+        basis_result_route_id,
+        worker_conversation_id: basis.worker_conversation_id,
+        recorded_sequence: 0,
+    };
+    record_controller_coordination_suggestion(store, &record)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_controller_coordination_suggestion_audit(store.events())?
+        .into_iter()
+        .find(|candidate| candidate.suggestion.id() == suggestion_id)
+        .ok_or_else(|| "coordination suggestion append did not replay".to_owned())?;
+    if replayed.controller_conversation_id != controller_conversation_id
+        || replayed.coordination_turn_id != coordination_turn_id
+        || replayed.coordination_result_sequence != result_sequence
+        || replayed.basis_result_route_id != basis_result_route_id
+        || replayed.worker_conversation_id != basis.worker_conversation_id
+        || replayed.suggestion.worker_id() != basis.worker_id
+        || replayed.suggestion.goal_id() != basis.goal_id
+        || replayed.suggestion.action() != action
+    {
+        return Err(
+            "coordination suggestion replay disagrees with authoritative result provenance"
+                .to_owned(),
+        );
+    }
+
+    let event = store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "coordination suggestion append produced no durable event".to_owned())?;
+    Ok((suggestion_id, event))
+}
+
 fn append_worker_control_acknowledgement_checked(
     store: &mut impl EventStore,
     worker_conversation_id: LocalConversationId,
@@ -14720,6 +14842,20 @@ fn next_available_continuation_lease_id(
         .checked_add(1)
         .ok_or_else(|| "continuation lease identity space exhausted".to_owned())?;
     Ok(ContinuationLeaseId::new(next))
+}
+
+fn next_available_coordination_suggestion_id(
+    events: &[EventEnvelope],
+) -> Result<CoordinationSuggestionId, String> {
+    let highest = replay_controller_coordination_suggestion_audit(events)?
+        .into_iter()
+        .map(|record| record.suggestion.id().get())
+        .max()
+        .unwrap_or(0);
+    let next = highest
+        .checked_add(1)
+        .ok_or_else(|| "coordination suggestion identity space exhausted".to_owned())?;
+    Ok(CoordinationSuggestionId::new(next))
 }
 
 fn next_available_control_id(events: &[EventEnvelope]) -> Result<ControlId, String> {
