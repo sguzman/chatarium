@@ -187,7 +187,19 @@ action result. Restart can finish a partially applied action without repeating a
 completed transition, while conflicting unrelated lifecycle changes fail
 closed.
 
-Continue remains deliberately outside that lifecycle-action audit. Its next
-boundary is bounded continuation execution under the existing
-ContinuationLease/ContinuationPermit authority model, with separate durable
-execution/result provenance rather than a fabricated lifecycle phase change.
+Continue remains deliberately outside that lifecycle-action audit.
+
+Bounded Continue authority is now desktop-integrated end to end on the
+controller side: explicit ContinuationLease creation, durable permit issuance,
+permit consumption into one Continue control, approval, dispatch, delivery, and
+worker acknowledgement all remain distinct.
+
+The worker side can now explicitly start continuation execution. That durable
+start validates the acknowledged delivered Continue control, the exact consumed
+lease/permit, current WorkerId/goal ownership, and a continuation-eligible
+Working phase. It allocates a fresh non-authored LocalTurnId for the execution
+and does not mutate WorkerLifecycle or append transcript content.
+
+The next boundary is remote transport/result evidence for that non-authored
+execution turn. It must not be forced through AuthoredUserMessage or
+AuthoredTurnRow merely to reuse the ordinary send path.
