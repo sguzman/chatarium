@@ -28,6 +28,8 @@ pub mod historical_conversation_audit;
 pub mod historical_transcript;
 pub mod local_conversation_chat_container_audit;
 pub mod local_conversation_worker_audit;
+pub mod local_memory_audit;
+pub mod local_memory_context_audit;
 pub mod local_route_context_audit;
 pub mod local_route_delivery_audit;
 pub mod local_route_payload_audit;
