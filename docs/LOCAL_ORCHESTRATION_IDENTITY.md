@@ -333,17 +333,43 @@ authored message is crossing its local durability gate.
 Routed peer text never becomes a user-authored transcript event and is never
 elevated to developer/system instructions.
 
+## Landed local controller supervision
+
+The desktop can now bridge a local conversation's durable WorkerId to its
+current SessionId explicitly.
+
+For the initial leaf this records `WorkerSessionBound`. After chat-container
+rollover, the UI shows that the WorkerId is still active on its predecessor and
+offers **Advance worker to current session**. Persistence accepts that handoff
+only when the new current leaf is the predecessor's direct chat-container
+successor, then records `WorkerSessionSuccessorBound`.
+
+A separate local conversation current session may be explicitly designated as a
+controller through `ControllerSessionDesignated`. A worker-bound current
+session cannot be designated as a controller.
+
+A designated controller may then supervise another local conversation only
+when that conversation:
+
+- has a durable LocalConversationId→WorkerId binding;
+- has orchestration topology;
+- has that WorkerId actively bound to its current SessionId leaf.
+
+The resulting `ControllerWorkerBound` fact is coordination provenance only.
+The desktop shows current role and supervision state and fails closed when a
+worker is unbound, stale after rollover, or already supervised elsewhere.
+
+This slice grants no route policy, dispatch, continuation, lifecycle mutation,
+or inference authority.
+
 ## Next implementation boundary
 
-Basic manual local conversation routing is now vertically complete from
-addressability through payload, approval, one-shot delivery, inbox visibility,
-and explicit context admission.
+Basic manual local conversation routing, WorkerId rollover semantics, and local
+controller→worker supervision metadata are now landed.
 
-WorkerId/session-rollover semantics are now frozen and replay-safe.
+The next safe permission boundary is **controller-issued typed worker controls**:
+constructing one of the existing WorkerControl actions with explicit controller
+issuer provenance, freshness validation, route correlation, and the existing
+one-shot route-policy gate.
 
-The next safe orchestration boundary is explicit local controller→worker
-supervision over the already-existing typed session, supervision, control, and
-routing primitives.
-
-No controller authority should be inferred merely because two local
-conversations can route messages to each other.
+Do not treat supervision itself as permission to dispatch or mutate a worker.
