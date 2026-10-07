@@ -9950,6 +9950,236 @@ fn append_worker_control_status_result_checked(
         .ok_or_else(|| "worker control status result append produced no durable event".to_owned())
 }
 
+fn append_worker_control_action_checked(
+    store: &mut impl EventStore,
+    worker_conversation_id: LocalConversationId,
+    route_id: RouteId,
+) -> Result<Vec<EventEnvelope>, String> {
+    let before = store.events().len();
+    let item =
+        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation_id)?
+            .into_iter()
+            .find(|item| item.route_id == route_id)
+            .ok_or_else(|| {
+                format!(
+                    "worker control route {} is not a delivered inbox item for conversation {}",
+                    route_id.get(),
+                    worker_conversation_id,
+                )
+            })?;
+
+    let acknowledged_sequence = item.acknowledged_sequence.ok_or_else(|| {
+        format!(
+            "worker control route {} must be acknowledged before applying the control",
+            route_id.get()
+        )
+    })?;
+    let action = action_for_kind(item.kind)?;
+
+    let owner = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "worker conversation {} has no durable WorkerId binding",
+                worker_conversation_id
+            )
+        })?;
+    if owner.worker_id != item.worker_id {
+        return Err(format!(
+            "worker control route {} inbox worker disagrees with durable conversation ownership",
+            route_id.get()
+        ));
+    }
+
+    let mut action_record = replay_worker_control_action_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id);
+
+    if let Some(existing) = action_record {
+        if existing.control_id != item.control_id
+            || existing.worker_id != item.worker_id
+            || existing.worker_conversation_id != worker_conversation_id
+            || existing.goal_id != item.goal_id
+            || existing.kind != item.kind
+            || existing.acknowledged_sequence != acknowledged_sequence
+        {
+            return Err(format!(
+                "worker control route {} action provenance disagrees with delivered inbox item",
+                route_id.get()
+            ));
+        }
+        if existing.is_complete() {
+            return Err(format!(
+                "worker control route {} already has a complete action result",
+                route_id.get()
+            ));
+        }
+    } else {
+        let worker = replay_worker_audit(store.events())?
+            .into_iter()
+            .find(|record| record.worker_id == item.worker_id)
+            .ok_or_else(|| {
+                format!(
+                    "worker control route {} references worker {} without lifecycle state",
+                    route_id.get(),
+                    item.worker_id.get()
+                )
+            })?;
+        let from_phase =
+            validate_control_admission(item.goal_id, item.kind, &worker.lifecycle)
+                .map_err(|error| {
+                    format!(
+                        "worker control route {} is stale before action start: {error}",
+                        route_id.get()
+                    )
+                })?;
+
+        record_worker_control_action_started(
+            store,
+            item.control_id,
+            item.route_id,
+            item.worker_id,
+            worker_conversation_id,
+            item.goal_id,
+            item.kind,
+            acknowledged_sequence,
+            from_phase,
+        )
+        .map_err(|error| error.to_string())?;
+
+        action_record = replay_worker_control_action_audit(store.events())?
+            .into_iter()
+            .find(|record| record.route_id == route_id);
+    }
+
+    let mut action_record =
+        action_record.ok_or_else(|| "worker control action start did not replay".to_owned())?;
+
+    if action_record.lifecycle_sequence.is_none() {
+        let worker = replay_worker_audit(store.events())?
+            .into_iter()
+            .find(|record| record.worker_id == item.worker_id)
+            .ok_or_else(|| {
+                format!(
+                    "worker control route {} lost worker {} lifecycle state",
+                    route_id.get(),
+                    item.worker_id.get()
+                )
+            })?;
+
+        if worker.last_sequence > action_record.started_sequence {
+            return Err(format!(
+                "worker {} lifecycle changed at event #{} after control route {} action started at event #{} without matching control correlation",
+                item.worker_id.get(),
+                worker.last_sequence,
+                route_id.get(),
+                action_record.started_sequence,
+            ));
+        }
+
+        let replayed_from =
+            validate_control_admission(item.goal_id, item.kind, &worker.lifecycle)
+                .map_err(|error| {
+                    format!(
+                        "worker control route {} became stale before lifecycle mutation: {error}",
+                        route_id.get()
+                    )
+                })?;
+        if replayed_from != action_record.from_phase {
+            return Err(format!(
+                "worker control route {} source phase changed after action start",
+                route_id.get()
+            ));
+        }
+
+        let mut lifecycle = worker.lifecycle;
+        match action {
+            WorkerAction::StartOrResume => {
+                lifecycle
+                    .start_or_resume(item.goal_id)
+                    .map_err(|error| error.to_string())?;
+            }
+            WorkerAction::Stop => {
+                lifecycle
+                    .stop(item.goal_id)
+                    .map_err(|error| error.to_string())?;
+            }
+            _ => {
+                return Err(format!(
+                    "worker control route {} action {:?} is not implemented by the mutating control path",
+                    route_id.get(),
+                    action
+                ));
+            }
+        }
+
+        record_worker_control_transition(
+            store,
+            item.worker_id,
+            item.goal_id,
+            action,
+            WorkerControlTransitionProvenance {
+                control_id: item.control_id,
+                route_id: item.route_id,
+                action_started_sequence: action_record.started_sequence,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+
+        action_record = replay_worker_control_action_audit(store.events())?
+            .into_iter()
+            .find(|record| record.route_id == route_id)
+            .ok_or_else(|| "worker control lifecycle transition did not replay".to_owned())?;
+
+        if action_record.resulting_phase != Some(lifecycle.phase()) {
+            return Err(format!(
+                "worker control route {} replayed result phase disagrees with core transition",
+                route_id.get()
+            ));
+        }
+    }
+
+    if action_record.result_sequence.is_none() {
+        let lifecycle_sequence = action_record.lifecycle_sequence.ok_or_else(|| {
+            format!(
+                "worker control route {} has no correlated lifecycle transition",
+                route_id.get()
+            )
+        })?;
+        let resulting_phase = action_record.resulting_phase.ok_or_else(|| {
+            format!(
+                "worker control route {} has no correlated resulting phase",
+                route_id.get()
+            )
+        })?;
+
+        record_worker_control_action_result(
+            store,
+            action_record,
+            lifecycle_sequence,
+            resulting_phase,
+        )
+        .map_err(|error| error.to_string())?;
+
+        let replayed = replay_worker_control_action_audit(store.events())?
+            .into_iter()
+            .find(|record| record.route_id == route_id)
+            .ok_or_else(|| "worker control action result did not replay".to_owned())?;
+        if !replayed.is_complete()
+            || replayed.lifecycle_sequence != Some(lifecycle_sequence)
+            || replayed.resulting_phase != Some(resulting_phase)
+        {
+            return Err(
+                "worker control action result replay disagrees with correlated lifecycle transition"
+                    .to_owned(),
+            );
+        }
+    }
+
+    Ok(store.events()[before..].to_vec())
+}
+
 fn append_worker_goal_checked(
     store: &mut impl EventStore,
     worker_id: WorkerId,
