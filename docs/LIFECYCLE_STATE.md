@@ -194,12 +194,30 @@ controller side: explicit ContinuationLease creation, durable permit issuance,
 permit consumption into one Continue control, approval, dispatch, delivery, and
 worker acknowledgement all remain distinct.
 
-The worker side can now explicitly start continuation execution. That durable
-start validates the acknowledged delivered Continue control, the exact consumed
+The worker side can explicitly start continuation execution. That durable start
+validates the acknowledged delivered Continue control, the exact consumed
 lease/permit, current WorkerId/goal ownership, and a continuation-eligible
 Working phase. It allocates a fresh non-authored LocalTurnId for the execution
 and does not mutate WorkerLifecycle or append transcript content.
 
-The next boundary is remote transport/result evidence for that non-authored
-execution turn. It must not be forced through AuthoredUserMessage or
-AuthoredTurnRow merely to reuse the ordinary send path.
+Non-authored continuation transport is now landed as well. Context Composer
+adds a typed, user-level bounded-controller-continuation source that explicitly
+states it is orchestration context rather than user authorship or a
+developer/system instruction. The execution turn then uses the normal durable
+remote observation kinds under its own LocalTurnId without ever creating a
+UserMessageCommitted event.
+
+Restart recovery preserves this distinction: an in-flight continuation turn is
+durably interrupted, and terminal completion/failure/interruption is projected
+into a separate WorkerContinuationExecutionResultRecorded fact. Terminal
+continuation results do not mutate WorkerLifecycle.
+
+Controller-side result visibility is now unified through a read-only result
+inbox over StatusRequest results, completed Start/Resume/Stop applications, and
+terminal Continue executions. Continue results include the latest durable worker
+output text. The controller result inbox is provenance only and does not enter
+controller inference context automatically.
+
+The next boundary is explicit controller-context admission of selected worker
+results. Result visibility and result use by the controller model must remain
+separate durable/policy decisions rather than hidden context injection.
