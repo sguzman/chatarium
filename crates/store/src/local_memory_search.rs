@@ -168,12 +168,12 @@ pub fn local_memory_source_facets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EventStore, MemoryEventStore};
     use crate::local_memory_audit::record_local_memory_artifact;
     use crate::local_memory_label_audit::{
         record_local_memory_label_added, record_local_memory_label_removed,
     };
     use crate::local_memory_supersession_audit::record_local_memory_superseded;
+    use crate::{EventStore, MemoryEventStore};
 
     #[test]
     fn current_view_hides_superseded_history_and_preserves_exact_text() {
