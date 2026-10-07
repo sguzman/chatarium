@@ -122,6 +122,27 @@ Dispatch and preview use separate typed policies. Preview may include the
 current draft, while dispatch mechanically excludes `CurrentDraft` even if a
 future caller accidentally supplies one before the durability gate.
 
+## Controller orchestration sources
+
+Context Composer now has three explicit orchestration source types in addition
+to ordinary transcript and routed peer context:
+
+- bounded controller continuation on the worker side;
+- explicitly admitted terminal worker results on the controller side;
+- a non-authored controller coordination marker.
+
+All three serialize at **user-level trust**, never as developer/system
+instructions and never as human-authored transcript messages.
+
+For controller coordination, the worker-result set is frozen by the durable
+coordination-start event. Dispatch recomposes from that historical prefix and
+appends the coordination marker last. The marker tells the model to synthesize
+the admitted results while explicitly denying authority to issue or execute
+worker controls, mutate lifecycle, or assume continuation authority.
+
+Coordination output is durable remote-turn evidence plus a separate terminal
+coordination result. It is not automatically fed into later context.
+
 ## Capability admissions
 
 Context Composer also projects the active Local Inference Contract into typed
