@@ -303,30 +303,21 @@ fn replay_worker_successor_binding(
 ) -> Result<(), String> {
     let payload = typed_payload(event, "worker_session_successor_bound")?;
     let worker_id = WorkerId::new(required_u64(&payload, "worker_id")?);
-    let predecessor_session_id =
-        SessionId::new(required_u64(&payload, "predecessor_session_id")?);
-    let successor_session_id =
-        SessionId::new(required_u64(&payload, "successor_session_id")?);
+    let predecessor_session_id = SessionId::new(required_u64(&payload, "predecessor_session_id")?);
+    let successor_session_id = SessionId::new(required_u64(&payload, "successor_session_id")?);
     validate_scope(
         event,
-        &worker_session_successor_scope(
-            worker_id,
-            predecessor_session_id,
-            successor_session_id,
-        ),
+        &worker_session_successor_scope(worker_id, predecessor_session_id, successor_session_id),
     )?;
 
-    let binding = WorkerSessionSuccessorBinding::new(
-        worker_id,
-        predecessor_session_id,
-        successor_session_id,
-    )
-    .map_err(|error| {
-        format!(
-            "invalid worker-session successor binding at sequence {}: {error:?}",
-            event.sequence
-        )
-    })?;
+    let binding =
+        WorkerSessionSuccessorBinding::new(worker_id, predecessor_session_id, successor_session_id)
+            .map_err(|error| {
+                format!(
+                    "invalid worker-session successor binding at sequence {}: {error:?}",
+                    event.sequence
+                )
+            })?;
 
     let active_session = worker_owner.get(&worker_id).copied().ok_or_else(|| {
         format!(
@@ -710,7 +701,10 @@ mod tests {
             predecessor.worker_binding,
             Some(WorkerSessionBinding::new(W1, S1))
         );
-        assert_eq!(predecessor.worker_bound_sequence, Some(first_binding_sequence));
+        assert_eq!(
+            predecessor.worker_bound_sequence,
+            Some(first_binding_sequence)
+        );
         assert_eq!(
             successor.worker_binding,
             Some(WorkerSessionBinding::new(W1, S2))
