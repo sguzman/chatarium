@@ -309,9 +309,33 @@ separate suggestion→control/route correlation only after the real control path
 validates. The promoted route still waits for explicit Allow/Deny and one-shot
 dispatch.
 
-The active next architectural boundary is machine-readable suggestion
-**candidates produced by the coordination model itself**. Those candidates must
-remain untrusted output: no automatic WorkerControl creation and no automatic
-durable suggestion admission. User acceptance into the durable suggestion layer
-remains mandatory. Durable local memory remains a separate later source. Do not
-reopen browser/history work as part of this phase.
+Machine-readable coordination suggestion candidates are now landed.
+
+New coordination turns durably declare the versioned
+`suggestion_candidates_v1` output contract. Context Composer asks the model for
+exactly one JSON object containing a human-readable summary plus candidate
+`basis_result_route_id`/action pairs. Model output is parsed as a **read-only,
+untrusted projection**:
+
+- only routes frozen into the coordination turn are accepted;
+- action names must be one of the four typed suggestion actions;
+- WorkerId, WorkerGoalId, and worker-conversation identity are re-derived from
+  authoritative frozen worker-result provenance rather than trusted from model
+  output;
+- extra fields, unknown actions/routes, duplicate route/action candidates,
+  wrappers, malformed JSON, and oversized candidate sets fail closed;
+- parsing creates no journal event, suggestion identity, control, route,
+  lifecycle transition, continuation authority, or dispatch.
+
+The controller UI exposes those rows as **UNTRUSTED** candidates. **Accept
+candidate** is the explicit user boundary that records the existing powerless
+durable suggestion. Promotion remains a second explicit action, and the promoted
+control route still requires ordinary Allow/Deny plus one-shot dispatch.
+
+This completes the first controller reasoning loop without giving model output
+authority over workers.
+
+The active next architectural boundary is a separate **durable local memory
+source** with explicit provenance/admission semantics. Memory must not emerge
+implicitly from transcript sharing, routed inboxes, coordination summaries, or
+controller state. Do not reopen browser/history work as part of this phase.
