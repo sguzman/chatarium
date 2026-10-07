@@ -4183,6 +4183,153 @@ impl ChatariumApp {
         }
     }
 
+    fn dispatch_controller_coordination(&mut self, turn_id: LocalTurnId) {
+        if self.pending_remote_turn.is_some() || self.active_remote_turn.is_some() {
+            self.status =
+                "cannot dispatch controller coordination while another remote turn is active"
+                    .to_owned();
+            return;
+        }
+        if !self.remote_connected() {
+            self.status = "cannot dispatch controller coordination: ChatGPT is not connected"
+                .to_owned();
+            return;
+        }
+        if self.capability_probe.running() {
+            self.status =
+                "cannot dispatch controller coordination while capability probes are running"
+                    .to_owned();
+            return;
+        }
+        let Some(model) = self.selected_model.clone() else {
+            self.status = "cannot dispatch controller coordination: no model selected".to_owned();
+            return;
+        };
+
+        let coordination = match replay_controller_coordination_audit(&self.events) {
+            Ok(records) => records.into_iter().find(|record| {
+                record.coordination_turn_id == turn_id
+                    && record.controller_conversation_id == self.local_conversation_id
+            }),
+            Err(error) => {
+                self.status = format!("cannot replay controller coordination: {error}");
+                return;
+            }
+        };
+        let Some(coordination) = coordination else {
+            self.status = format!(
+                "controller coordination turn {} does not belong to this conversation",
+                turn_id
+            );
+            return;
+        };
+        if coordination.result_sequence.is_some() {
+            self.status =
+                format!("controller coordination turn {} is already terminal", turn_id);
+            return;
+        }
+
+        let transport =
+            match controller_coordination_transport_state(&self.events, turn_id) {
+                Ok(state) => state,
+                Err(error) => {
+                    self.status = format!("cannot replay controller coordination transport: {error}");
+                    return;
+                }
+            };
+        if transport.was_dispatched() {
+            self.status = format!(
+                "controller coordination turn {} already has durable dispatch evidence",
+                turn_id
+            );
+            return;
+        }
+
+        let request_patch = match self.current_behavior_request_patch() {
+            Ok(patch) => patch,
+            Err(error) => {
+                self.status =
+                    format!("cannot coordinate with current behavior profile: {error}");
+                return;
+            }
+        };
+
+        let coordination_prefix = self
+            .events
+            .iter()
+            .take_while(|event| event.sequence <= coordination.started_sequence)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut transcript = context_transcript(&projected_local_display_messages(
+            &coordination_prefix,
+            self.local_conversation_id,
+        ));
+        match admitted_routed_context_messages(
+            &coordination_prefix,
+            self.local_conversation_id,
+        ) {
+            Ok(routed) => transcript.extend(routed),
+            Err(error) => {
+                self.status =
+                    format!("cannot compose controller coordination routed context: {error}");
+                return;
+            }
+        }
+        match admitted_controller_worker_result_messages(
+            &coordination_prefix,
+            self.local_conversation_id,
+        ) {
+            Ok(results) => transcript.extend(results),
+            Err(error) => {
+                self.status =
+                    format!("cannot compose admitted controller results: {error}");
+                return;
+            }
+        }
+        transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+        transcript.push(context_composer::TranscriptMessage::controller_coordination(
+            coordination.controller_session_id.get(),
+            coordination.coordination_turn_id.to_string(),
+            coordination.started_sequence,
+        ));
+
+        let context_plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            self.conversation_instructions.as_str(),
+            self.conversation_developer_context.as_str(),
+            transcript,
+        );
+        let request_id = coordination.coordination_turn_id.to_string();
+        self.pending_remote_turn = Some(PendingRemoteTurn {
+            turn_id: coordination.coordination_turn_id,
+            request_id: request_id.clone(),
+            model: model.clone(),
+            input: context_plan.input_json(),
+            instructions: context_plan.instructions.clone(),
+            request_patch,
+        });
+
+        let payload = remote_turn_payload(
+            coordination.coordination_turn_id,
+            &request_id,
+            Some(&model),
+            None,
+            Some("non-authored controller coordination remote dispatch"),
+        );
+        if self.queue_turn_event(
+            coordination.coordination_turn_id,
+            EventKind::DispatchAttempted,
+            payload,
+        ) {
+            self.status = format!(
+                "controller coordination turn {} durably dispatching through ChatGPT…",
+                coordination.coordination_turn_id
+            );
+        } else {
+            self.pending_remote_turn = None;
+        }
+    }
+
     fn acknowledge_worker_control(&mut self, route_id: RouteId) {
         if self.worker_control_command_pending {
             return;
