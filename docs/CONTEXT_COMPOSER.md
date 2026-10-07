@@ -206,8 +206,8 @@ Context Composer does **not** silently introduce:
 - token-budget trimming;
 - automatic summarization;
 - retrieval;
-- automatic memory extraction, retrieval, or sharing beyond explicitly recorded
-  and admitted `LocalMemory` artifacts;
+- automatic memory extraction, semantic retrieval, or sharing beyond explicitly
+  recorded and admitted `LocalMemory` artifacts;
 - automatic cross-conversation context outside explicit routed delivery,
   admitted local memory, and their separate admission boundaries;
 - lifecycle state injection;
@@ -228,8 +228,8 @@ build on it.
 Future composer work should be driven by concrete downstream needs, especially:
 
 - lifecycle-provided local context;
-- read-only memory discovery/retrieval sources that remain distinct from
-  context admission;
+- optional explicit memory organization metadata and later semantic retrieval
+  policy that remain distinct from context admission;
 - controller/worker-provided context with explicit provenance;
 - attachment sources;
 - structured-output requirements;
