@@ -50,7 +50,7 @@ impl CoordinationSuggestionAction {
     }
 
     #[must_use]
-    pub const fn from_stable_name(value: &str) -> Option<Self> {
+    pub fn from_stable_name(value: &str) -> Option<Self> {
         match value {
             "start_or_resume" => Some(Self::StartOrResume),
             "continue" => Some(Self::Continue),
