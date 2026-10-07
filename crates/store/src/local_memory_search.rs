@@ -156,10 +156,12 @@ pub fn local_memory_source_facets(
 
     Ok(counts
         .into_iter()
-        .map(|(source_conversation_id, artifact_count)| LocalMemorySourceFacet {
-            source_conversation_id,
-            artifact_count,
-        })
+        .map(
+            |(source_conversation_id, artifact_count)| LocalMemorySourceFacet {
+                source_conversation_id,
+                artifact_count,
+            },
+        )
         .collect())
 }
 
@@ -297,12 +299,8 @@ mod tests {
         record_local_memory_label_added(&mut store, LocalMemoryId::new(2), &project).unwrap();
         record_local_memory_label_added(&mut store, LocalMemoryId::new(3), &project).unwrap();
         record_local_memory_label_removed(&mut store, LocalMemoryId::new(1), &stale).unwrap();
-        record_local_memory_superseded(
-            &mut store,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut store, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
 
         let current = local_memory_label_facets(store.events(), false).unwrap();
         assert_eq!(
@@ -333,16 +331,14 @@ mod tests {
         record_local_memory_artifact(&mut store, LocalMemoryId::new(2), source_a, "two").unwrap();
         record_local_memory_artifact(&mut store, LocalMemoryId::new(3), source_b, "three").unwrap();
 
-        let from_a = search_local_memory_faceted(
-            store.events(),
-            "",
-            false,
-            None,
-            Some(source_a),
-        )
-        .unwrap();
+        let from_a =
+            search_local_memory_faceted(store.events(), "", false, None, Some(source_a)).unwrap();
         assert_eq!(from_a.len(), 2);
-        assert!(from_a.iter().all(|item| item.source_conversation_id == source_a));
+        assert!(
+            from_a
+                .iter()
+                .all(|item| item.source_conversation_id == source_a)
+        );
 
         let facets = local_memory_source_facets(store.events(), false).unwrap();
         assert_eq!(facets.len(), 2);
