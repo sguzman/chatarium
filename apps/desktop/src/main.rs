@@ -13911,12 +13911,12 @@ mod tests {
         );
 
         let mut stale_store = chatarium_store::MemoryEventStore::default();
-        let (controller, worker_conversation, worker_id, goal_id) =
+        let (stale_controller, stale_worker_conversation, stale_worker_id, stale_goal_id) =
             ready_supervised_pair(&mut stale_store);
         let (_, stale_route, _) = append_controller_worker_control_proposal_checked(
             &mut stale_store,
-            controller,
-            worker_conversation,
+            stale_controller,
+            stale_worker_conversation,
             ControllerControlAction::Stop,
         )
         .unwrap();
@@ -13928,8 +13928,8 @@ mod tests {
         .unwrap();
         append_worker_transition_checked(
             &mut stale_store,
-            status_worker_id,
-            status_goal_id,
+            stale_worker_id,
+            stale_goal_id,
             WorkerAction::Complete,
         )
         .unwrap();
@@ -13958,8 +13958,8 @@ mod tests {
         .unwrap();
         append_worker_transition_checked(
             &mut status_store,
-            worker_id,
-            goal_id,
+            status_worker_id,
+            status_goal_id,
             WorkerAction::Complete,
         )
         .unwrap();
@@ -13982,7 +13982,7 @@ mod tests {
         .unwrap();
         let status_result = append_worker_control_status_result_checked(
             &mut status_store,
-            worker_conversation,
+            status_worker_conversation,
             status_route,
         )
         .unwrap();
