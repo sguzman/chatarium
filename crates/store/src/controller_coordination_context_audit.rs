@@ -70,8 +70,7 @@ pub fn record_controller_coordination_result_context_decision(
 pub fn replay_controller_coordination_result_context_audit(
     events: &[EventEnvelope],
 ) -> Result<Vec<ControllerCoordinationResultContextRecord>, String> {
-    let mut by_turn =
-        BTreeMap::<LocalTurnId, ControllerCoordinationResultContextRecord>::new();
+    let mut by_turn = BTreeMap::<LocalTurnId, ControllerCoordinationResultContextRecord>::new();
 
     for (index, event) in events.iter().enumerate() {
         if event.kind != EventKind::ControllerCoordinationResultContextDecisionRecorded {
@@ -128,10 +127,7 @@ pub fn replay_controller_coordination_result_context_audit(
         if terminal_result_sequence != result_sequence {
             return Err(format!(
                 "coordination result context decision at sequence {} references result #{}, turn {} terminal result is #{}",
-                event.sequence,
-                result_sequence,
-                coordination_turn_id,
-                terminal_result_sequence
+                event.sequence, result_sequence, coordination_turn_id, terminal_result_sequence
             ));
         }
         if result_sequence >= event.sequence {
@@ -182,8 +178,7 @@ pub fn replay_admitted_controller_coordination_result_context(
     Ok(replay_controller_coordination_result_context_audit(events)?
         .into_iter()
         .filter(|record| {
-            record.controller_conversation_id == controller_conversation_id
-                && record.is_admitted()
+            record.controller_conversation_id == controller_conversation_id && record.is_admitted()
         })
         .collect())
 }
@@ -279,5 +274,3 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }
-
-
