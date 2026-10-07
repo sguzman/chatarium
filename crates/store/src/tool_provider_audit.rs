@@ -295,9 +295,7 @@ mod tests {
     use super::*;
     use crate::MemoryEventStore;
     use crate::routing_audit::record_route_proposed;
-    use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound,
-    };
+    use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
     use chatarium_core::routing::{RouteClass, RouteId, RoutePolicy, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, SessionId};
 
