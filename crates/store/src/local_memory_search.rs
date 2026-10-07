@@ -31,6 +31,13 @@ pub struct LocalMemoryLabelFacet {
     pub artifact_count: usize,
 }
 
+/// One exact source-conversation facet over the eligible discovery corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalMemorySourceFacet {
+    pub source_conversation_id: LocalConversationId,
+    pub artifact_count: usize,
+}
+
 /// Search immutable local memory text with deterministic case-insensitive
 /// substring matching.
 ///
@@ -55,6 +62,17 @@ pub fn search_local_memory_filtered(
     include_superseded: bool,
     exact_label: Option<&LocalMemoryLabel>,
 ) -> Result<Vec<LocalMemorySearchItem>, String> {
+    search_local_memory_faceted(events, query, include_superseded, exact_label, None)
+}
+
+/// Search with optional exact active-label and source-conversation facets.
+pub fn search_local_memory_faceted(
+    events: &[EventEnvelope],
+    query: &str,
+    include_superseded: bool,
+    exact_label: Option<&LocalMemoryLabel>,
+    exact_source_conversation_id: Option<LocalConversationId>,
+) -> Result<Vec<LocalMemorySearchItem>, String> {
     let artifacts = replay_local_memory_audit(events)?;
     let supersessions = replay_local_memory_supersession_audit(events)?;
     let needle = query.trim().to_lowercase();
@@ -73,6 +91,11 @@ pub fn search_local_memory_filtered(
                 return None;
             }
             if exact_label.is_some_and(|required| !labels.iter().any(|label| label == required)) {
+                return None;
+            }
+            if exact_source_conversation_id
+                .is_some_and(|required| artifact.source_conversation_id != required)
+            {
                 return None;
             }
             let text_matches = artifact.text.to_lowercase().contains(&needle);
@@ -106,7 +129,7 @@ pub fn local_memory_label_facets(
     include_superseded: bool,
 ) -> Result<Vec<LocalMemoryLabelFacet>, String> {
     let mut counts = BTreeMap::<LocalMemoryLabel, usize>::new();
-    for item in search_local_memory_filtered(events, "", include_superseded, None)? {
+    for item in search_local_memory_faceted(events, "", include_superseded, None, None)? {
         for label in item.labels {
             *counts.entry(label).or_default() += 1;
         }
@@ -116,6 +139,25 @@ pub fn local_memory_label_facets(
         .into_iter()
         .map(|(label, artifact_count)| LocalMemoryLabelFacet {
             label,
+            artifact_count,
+        })
+        .collect())
+}
+
+/// Build deterministic source-conversation facets for the eligible corpus.
+pub fn local_memory_source_facets(
+    events: &[EventEnvelope],
+    include_superseded: bool,
+) -> Result<Vec<LocalMemorySourceFacet>, String> {
+    let mut counts = BTreeMap::<LocalConversationId, usize>::new();
+    for item in search_local_memory_faceted(events, "", include_superseded, None, None)? {
+        *counts.entry(item.source_conversation_id).or_default() += 1;
+    }
+
+    Ok(counts
+        .into_iter()
+        .map(|(source_conversation_id, artifact_count)| LocalMemorySourceFacet {
+            source_conversation_id,
             artifact_count,
         })
         .collect())
@@ -278,6 +320,47 @@ mod tests {
                 label: project,
                 artifact_count: 3,
             }]
+        );
+    }
+
+    #[test]
+    fn source_conversation_filter_and_facets_are_exact() {
+        let source_a = LocalConversationId::new();
+        let source_b = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+
+        record_local_memory_artifact(&mut store, LocalMemoryId::new(1), source_a, "one").unwrap();
+        record_local_memory_artifact(&mut store, LocalMemoryId::new(2), source_a, "two").unwrap();
+        record_local_memory_artifact(&mut store, LocalMemoryId::new(3), source_b, "three").unwrap();
+
+        let from_a = search_local_memory_faceted(
+            store.events(),
+            "",
+            false,
+            None,
+            Some(source_a),
+        )
+        .unwrap();
+        assert_eq!(from_a.len(), 2);
+        assert!(from_a.iter().all(|item| item.source_conversation_id == source_a));
+
+        let facets = local_memory_source_facets(store.events(), false).unwrap();
+        assert_eq!(facets.len(), 2);
+        assert_eq!(
+            facets
+                .iter()
+                .find(|facet| facet.source_conversation_id == source_a)
+                .unwrap()
+                .artifact_count,
+            2
+        );
+        assert_eq!(
+            facets
+                .iter()
+                .find(|facet| facet.source_conversation_id == source_b)
+                .unwrap()
+                .artifact_count,
+            1
         );
     }
 
