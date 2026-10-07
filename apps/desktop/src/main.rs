@@ -14566,6 +14566,15 @@ fn controller_worker_result_context_decision_label(
     }
 }
 
+fn controller_coordination_result_context_decision_label(
+    decision: ControllerCoordinationResultContextDecision,
+) -> &'static str {
+    match decision {
+        ControllerCoordinationResultContextDecision::Admit => "admit",
+        ControllerCoordinationResultContextDecision::Exclude => "exclude",
+    }
+}
+
 fn local_route_context_decision_label(decision: LocalRouteContextDecision) -> &'static str {
     match decision {
         LocalRouteContextDecision::Admit => "admit",
@@ -14845,6 +14854,62 @@ fn admitted_controller_worker_result_messages(
                 record.last_decision_sequence,
                 result_kind,
                 result_text.as_str(),
+            ),
+        );
+    }
+
+    messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+    Ok(messages)
+}
+
+fn admitted_controller_coordination_result_messages(
+    events: &[EventEnvelope],
+    controller_conversation_id: LocalConversationId,
+) -> Result<Vec<context_composer::TranscriptMessage>, String> {
+    let admitted = replay_admitted_controller_coordination_result_context(
+        events,
+        controller_conversation_id,
+    )?;
+    let coordinations = replay_controller_coordination_audit(events)?;
+    let mut messages = Vec::with_capacity(admitted.len());
+
+    for record in admitted {
+        let coordination = coordinations
+            .iter()
+            .find(|item| item.coordination_turn_id == record.coordination_turn_id)
+            .ok_or_else(|| {
+                format!(
+                    "admitted controller coordination turn {} has no durable execution",
+                    record.coordination_turn_id
+                )
+            })?;
+        if coordination.controller_conversation_id != controller_conversation_id
+            || coordination.result_sequence != Some(record.result_sequence)
+        {
+            return Err(format!(
+                "admitted controller coordination turn {} disagrees with terminal result provenance",
+                record.coordination_turn_id
+            ));
+        }
+        let outcome = coordination.outcome.ok_or_else(|| {
+            format!(
+                "admitted controller coordination turn {} has no terminal outcome",
+                record.coordination_turn_id
+            )
+        })?;
+        let output = controller_coordination_output_text(
+            events,
+            record.coordination_turn_id,
+        )?
+        .unwrap_or_else(|| "(no durable coordination output)".to_owned());
+
+        messages.push(
+            context_composer::TranscriptMessage::controller_coordination_result(
+                record.coordination_turn_id.to_string(),
+                record.result_sequence,
+                record.last_decision_sequence,
+                outcome.stable_name(),
+                output.as_str(),
             ),
         );
     }
