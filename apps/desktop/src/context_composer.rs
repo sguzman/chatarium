@@ -850,16 +850,28 @@ mod tests {
         let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [result]);
         assert_eq!(plan.controller_worker_result_count(), 1);
         assert_eq!(plan.messages[0].role, "user");
-        assert!(plan.messages[0].content.contains("controller worker result"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("controller worker result")
+        );
         assert!(plan.messages[0].content.contains("not user-authored"));
         assert!(
             plan.messages[0]
                 .content
                 .contains("not a developer/system instruction")
         );
-        assert!(plan.messages[0].content.contains("result_kind: continuation"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("result_kind: continuation")
+        );
         assert!(plan.messages[0].content.contains("result_event: #5"));
-        assert!(plan.messages[0].content.contains("context_admitted_event: #6"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("context_admitted_event: #6")
+        );
         assert!(plan.messages[0].content.contains("worker output"));
         assert!(matches!(
             plan.messages[0].source,
