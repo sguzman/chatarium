@@ -10759,6 +10759,153 @@ fn append_worker_control_action_checked(
     Ok(store.events()[before..].to_vec())
 }
 
+fn append_worker_continuation_execution_start_checked(
+    store: &mut impl EventStore,
+    worker_conversation_id: LocalConversationId,
+    route_id: RouteId,
+) -> Result<EventEnvelope, String> {
+    let item =
+        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation_id)?
+            .into_iter()
+            .find(|item| item.route_id == route_id)
+            .ok_or_else(|| {
+                format!(
+                    "worker control route {} is not a delivered inbox item for conversation {}",
+                    route_id.get(),
+                    worker_conversation_id,
+                )
+            })?;
+
+    let WorkerControlKind::Continue { permit_ordinal } = item.kind else {
+        return Err(format!(
+            "worker control route {} is {}, not CONTINUE",
+            route_id.get(),
+            worker_control_kind_label(item.kind),
+        ));
+    };
+    let acknowledged_sequence = item.acknowledged_sequence.ok_or_else(|| {
+        format!(
+            "worker control route {} must be acknowledged before continuation execution starts",
+            route_id.get()
+        )
+    })?;
+
+    if replay_worker_continuation_execution_audit(store.events())?
+        .into_iter()
+        .any(|record| record.route_id == route_id || record.control_id == item.control_id)
+    {
+        return Err(format!(
+            "worker control route {} already has a continuation execution start",
+            route_id.get()
+        ));
+    }
+
+    let owner = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "worker conversation {} has no durable WorkerId binding",
+                worker_conversation_id
+            )
+        })?;
+    if owner.worker_id != item.worker_id {
+        return Err(format!(
+            "worker control route {} inbox worker disagrees with durable conversation ownership",
+            route_id.get()
+        ));
+    }
+
+    let control = replay_control_audit(store.events())?
+        .into_iter()
+        .find(|record| record.control_id == item.control_id)
+        .ok_or_else(|| {
+            format!(
+                "worker control route {} references missing admitted control {}",
+                route_id.get(),
+                item.control_id.get()
+            )
+        })?;
+    let permit = control.continuation_permit.ok_or_else(|| {
+        format!(
+            "worker Continue control {} has no durable continuation permit provenance",
+            item.control_id.get()
+        )
+    })?;
+    if permit.ordinal != permit_ordinal {
+        return Err(format!(
+            "worker Continue control {} permit ordinal disagrees with inbox",
+            item.control_id.get()
+        ));
+    }
+
+    let worker = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == item.worker_id)
+        .ok_or_else(|| {
+            format!(
+                "worker control route {} references worker {} without lifecycle state",
+                route_id.get(),
+                item.worker_id.get()
+            )
+        })?;
+    if worker.lifecycle.goal_id() != Some(item.goal_id) {
+        return Err(format!(
+            "worker control route {} targets stale goal {}",
+            route_id.get(),
+            item.goal_id.get()
+        ));
+    }
+    if !worker.lifecycle.phase().allows_continuation() {
+        return Err(format!(
+            "worker control route {} cannot continue while worker {} is {}",
+            route_id.get(),
+            item.worker_id.get(),
+            worker_phase_label(worker.lifecycle.phase()),
+        ));
+    }
+
+    let execution_turn_id = LocalTurnId::new();
+    record_worker_continuation_execution_started(
+        store,
+        item.control_id,
+        item.route_id,
+        item.worker_id,
+        worker_conversation_id,
+        item.goal_id,
+        permit.lease_id,
+        permit.ordinal,
+        acknowledged_sequence,
+        execution_turn_id,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_worker_continuation_execution_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == route_id)
+        .ok_or_else(|| "worker continuation execution start did not replay".to_owned())?;
+    if replayed.control_id != item.control_id
+        || replayed.worker_id != item.worker_id
+        || replayed.worker_conversation_id != worker_conversation_id
+        || replayed.goal_id != item.goal_id
+        || replayed.lease_id != permit.lease_id
+        || replayed.permit_ordinal != permit.ordinal
+        || replayed.acknowledged_sequence != acknowledged_sequence
+        || replayed.execution_turn_id != execution_turn_id
+    {
+        return Err(
+            "worker continuation execution replay disagrees with acknowledged Continue provenance"
+                .to_owned(),
+        );
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker continuation execution append produced no durable event".to_owned())
+}
+
 fn append_worker_goal_checked(
     store: &mut impl EventStore,
     worker_id: WorkerId,
