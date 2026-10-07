@@ -62,39 +62,39 @@ chatarium/
 
 ## Current active direction
 
-Remote ChatGPT website mirroring/browser-transport work is **formally paused**. The active exploration is local-first Chatarium conversations using ChatGPT plan-backed Responses inference plus Chatarium-owned durable state. Multiple isolated local conversations, per-conversation model/instructions/developer context, stop-generation, durable drafts, and an exact next-request context inspector are now implemented; the next work is capability completion followed by orchestration, tools, memory/context, and master/worker behavior.
+Remote ChatGPT website mirroring/browser-transport work is **formally paused**.
+Active development is local-first: Chatarium owns conversation durability,
+context composition, explicit cross-conversation routing, controller/worker
+orchestration, and user-controlled local memory while inference runs through the
+plan-backed Sign in with ChatGPT Responses path.
 
-See [`docs/LOCAL_FIRST_EXPLORATION.md`](docs/LOCAL_FIRST_EXPLORATION.md). The exact local inference/control inventory is maintained in [`docs/LOCAL_INFERENCE_CAPABILITY_SURFACE.md`](docs/LOCAL_INFERENCE_CAPABILITY_SURFACE.md). The long-term native transport viability contract remains in force but is not the current work track.
+The governing rule is visible authority: durable local facts and explicit user
+decisions must exist before routed content, orchestration results, or memory can
+affect another request. Model output is never promoted into control authority
+merely because it was generated.
+
+See [`docs/LOCAL_FIRST_EXPLORATION.md`](docs/LOCAL_FIRST_EXPLORATION.md),
+[`docs/LIFECYCLE_STATE.md`](docs/LIFECYCLE_STATE.md), and
+[`docs/LOCAL_MEMORY.md`](docs/LOCAL_MEMORY.md) for the current executable
+boundaries. The native transport viability contract remains in force but is not
+the current work track.
 
 ## Status
 
-Chatarium has completed **P1 protocol observatory** and **P2 durable application core** work and is entering **P3 read-only remote integration**.
+Chatarium's authoritative application state is an append-only local journal with
+rebuildable projections. The desktop has a working local-first inference path
+and an increasingly typed local control plane; remote/browser history work is
+preserved as evidence and migration research rather than the active product
+dependency.
 
-The protocol baseline includes complementary observations from a manual Edge/Linux HAR and a canonical C03 Flight Recorder capture. Snapshot `2026-09-29.002` establishes the observed v1 SSE text-turn grammar, and Flight Recorder v0.6.0 has passed live protocol-backed send/assistant reconciliation without relying on current DOM selectors. The recorder pipeline can ingest private cumulative exports into fail-closed sanitized evidence, validate the committed corpus, classify structural changes, and diff comparable observations.
-
-The durable core now has typed local conversation/turn/message identities, fsync-backed user-message commits, an append-only JSONL authority, rebuildable schema-v2 SQLite projections, replayable evidence state, and a persistent crash-transition matrix. Once a typed local commit succeeds, later torn-tail recovery or stale projection state cannot erase authorship or fabricate remote certainty.
-
-The native desktop shell is also locally runnable now as a deliberately local-only vertical slice. Its current surface uses a real chat-oriented layout rather than the original engineering scaffold, commits new local messages through the typed durable authored-message path, restores the same local conversation identity after restart once a typed message exists, derives a conversation title from durable transcript state, and renders durable user/assistant transcript observations with repeated assistant snapshots collapsed by observed message identity. This does not imply remote transport is finished: the UI still labels itself local-only until the authenticated provider path is evidence-complete.
-
-Raw HAR and Flight Recorder exports remain private evidence. `chatarium-recorder snapshot-flight` remains the active evidence-ingestion path. P3 has successful C02 conversation-fetch evidence and restart-safe durable live-mirror machinery. The operator's 2026-10-03 Edge/Linux HAR established the exact current safe C02 query literals `num_turns=10&include_has_versions=true`, current response-shape drift, and additional first-party request context that earlier recorder evidence did not preserve. Imported private C02 bodies remain local journal state with exact remote identity/read-observation provenance; public protocol fixtures remain sanitized.
-
-The subsequent Tampermonkey account-history bridge experiment is **not considered product-complete** and is retired from the critical runtime path. A purpose-built Edge/Chromium MV3 extension then proved that typed loopback transport and authenticated browser observation are viable, while its 0.1/0.2 strategy of reconstructing or waiting for one frozen ordinary-history request was falsified by live QA. Edge Bridge 0.3 switched to bounded CDP observation of the site's actual current traffic and has now **passed its first live target-browser validation**: one automatic reload produced 85 real conversation summaries/titles in Chatarium. This is live proof of history-surface discovery, not proof that 85 is the account total; the UI now says `85 OBSERVED` and keeps coverage unknown. That same run exposed the next downstream defect: the remaining synthetic exact-conversation fetch timed out. Edge Bridge 0.4 therefore applies the same first-party principle to mirroring: it creates a temporary background ChatGPT tab, attaches CDP before navigation to the selected conversation, captures the exact first-party conversation response, validates its remote identity through the existing C02 parser, persists the local mirror, then detaches and closes the temporary tab. History-discovery and per-conversation mirror status are separate so a failed mirror cannot erase successful discovery evidence. Raw cookies, authorization values, and complete request headers do not cross into Rust. See [the 2026-10-03 browser-history postmortem](docs/postmortems/2026-10-03-chatgpt-history-bridge.md), issue #103, and issue #104.
-
-For the primary **new-conversation/chatting** path, Chatarium now uses OpenAI's documented **Sign in with ChatGPT** DevKit for open-source/local apps rather than an undocumented browser-cookie bridge. The implementation pins the official DevKit at a reviewed commit and runs its trusted local SDK in a narrow Node sidecar: OAuth/OIDC + PKCE, loopback callback, token rotation, model discovery, and Responses streaming remain inside that credential-owning process. The Rust desktop receives only safe session/model state, stream text, completion, and sanitized errors over local NDJSON. On Linux, the DevKit credential file is encrypted with AES-256-GCM using a key held by the OS Secret Service; OAuth material never enters the authoritative conversation journal. Connected sends use the public Responses route with `store:false` and `stream:true`, and Chatarium durably commits the exact user message plus dispatch evidence before the sidecar is allowed to send it. Existing chatgpt.com conversation history is explicitly a separate capability: Sign in with ChatGPT does not grant access to the user's ChatGPT conversations/account context, so C02/#88 remains optional migration/sync research rather than a blocker for the desktop chat alpha.
-
-Automated browser capture remains a longer-term goal rather than a prerequisite for protocol discovery. The existing Windows capture harness is parked; the active protocol workflow is cross-platform and Linux-friendly.
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CAPTURE_HARNESS.md`](docs/CAPTURE_HARNESS.md), [`docs/IMPORT_BRIDGE.md`](docs/IMPORT_BRIDGE.md), [`docs/HUMAN_QA.md`](docs/HUMAN_QA.md), [`docs/postmortems/`](docs/postmortems/README.md), and [`protocol/README.md`](protocol/README.md).
+This README intentionally does not duplicate the implementation chronology.
+Current work state lives in the focused documents linked above; protocol history
+lives under [`protocol/`](protocol/), and incident history lives under
+[`docs/postmortems/`](docs/postmortems/README.md).
 
 ## Non-goals
 
 Chatarium is not a claim that ChatGPT exposes a supported public consumer API. It does not assume undocumented interfaces will remain stable, and it will not treat browser internals as timeless contracts. It also does not aim to bypass authentication, access controls, rate limits, or anti-abuse mechanisms.
-
-## Live alpha status
-
-As of 2026-10-02, the official **Sign in with ChatGPT** path has been exercised successfully on the target Linux desktop: Chatarium completed browser authorization, received a connected ChatGPT-plan session, and discovered the account's available models. This proves the local desktop can authenticate without an API key and can use the user's ChatGPT-plan authorization boundary.
-
-The first real streamed assistant completion has now succeeded on the target Linux desktop through the user's authenticated ChatGPT plan. The earlier model-refresh loop was fixed with transition-gated, single-flight discovery. The remaining alpha durability check is restart replay of the successful local user/assistant transcript.
 
 ## Development
 
