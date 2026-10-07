@@ -41,7 +41,11 @@ use chatarium_store::chat_container_audit::{
 };
 use chatarium_store::control_admission_audit::validate_control_freshness_before;
 use chatarium_store::control_audit::{record_worker_control_admitted, replay_control_audit};
+use chatarium_store::control_delivery_audit::{
+    record_worker_control_delivered, replay_worker_control_delivery_audit,
+};
 use chatarium_store::control_dispatch_audit::replay_validated_control_dispatches;
+use chatarium_store::control_inbox::replay_worker_control_inbox_for_conversation;
 use chatarium_store::control_provenance_audit::{
     record_worker_control_issuer_bound, replay_control_provenance_audit,
 };
@@ -378,7 +382,7 @@ enum PersistNotice {
     },
     ControllerControlDispatched {
         route_id: RouteId,
-        event: EventEnvelope,
+        appended_events: Vec<EventEnvelope>,
     },
     Failed {
         operation: &'static str,
@@ -2843,12 +2847,18 @@ impl ChatariumApp {
                         route_id.get()
                     );
                 }
-                PersistNotice::ControllerControlDispatched { route_id, event } => {
-                    self.events.push(event);
+                PersistNotice::ControllerControlDispatched {
+                    route_id,
+                    appended_events,
+                } => {
+                    let count = appended_events.len();
+                    self.events.extend(appended_events);
                     self.controller_control_command_pending = false;
                     self.status = format!(
-                        "controller control route {} durably dispatched",
-                        route_id.get()
+                        "controller control route {} dispatch/delivery durably advanced · {} event{}",
+                        route_id.get(),
+                        count,
+                        if count == 1 { "" } else { "s" },
                     );
                 }
                 PersistNotice::Failed {
