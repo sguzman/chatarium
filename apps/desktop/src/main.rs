@@ -75,6 +75,10 @@ use chatarium_store::control_result_audit::{
 use chatarium_store::control_route_audit::{
     record_control_route_bound, replay_control_route_audit,
 };
+use chatarium_store::controller_result_inbox::{
+    ControllerWorkerResultDetail, replay_controller_worker_results,
+    replay_controller_worker_results_for_conversation,
+};
 use chatarium_store::historical_transcript::{
     HistoricalConversationCatalogEntry, HistoricalTranscriptMessage, HistoricalTranscriptRole,
     latest_historical_conversation_catalog, load_historical_active_transcript,
@@ -15194,6 +15198,30 @@ mod tests {
             status_acknowledgement.sequence
         );
         assert_eq!(replayed_status.recorded_sequence, status_result.sequence);
+
+        let controller_results = replay_controller_worker_results_for_conversation(
+            status_store.events(),
+            status_controller,
+        )
+        .unwrap();
+        assert_eq!(controller_results.len(), 1);
+        assert_eq!(controller_results[0].route_id, status_route);
+        assert_eq!(
+            controller_results[0].controller_conversation_id,
+            Some(status_controller)
+        );
+        assert_eq!(
+            controller_results[0].worker_conversation_id,
+            status_worker_conversation
+        );
+        assert!(matches!(
+            controller_results[0].detail,
+            ControllerWorkerResultDetail::Status {
+                phase: WorkerPhase::Completed,
+                ..
+            }
+        ));
+
         assert_eq!(
             worker_record(status_store.events(), status_worker_id)
                 .unwrap()
@@ -15541,6 +15569,32 @@ mod tests {
             completed_execution.result_sequence,
             Some(result_event.sequence)
         );
+
+        let controller_results = replay_controller_worker_results_for_conversation(
+            continuation_store.events(),
+            continuation_controller,
+        )
+        .unwrap();
+        assert_eq!(controller_results.len(), 1);
+        assert_eq!(controller_results[0].route_id, continue_route);
+        assert_eq!(
+            controller_results[0].worker_conversation_id,
+            continuation_worker_conversation
+        );
+        match &controller_results[0].detail {
+            ControllerWorkerResultDetail::Continuation {
+                outcome,
+                output_text,
+                terminal_sequence,
+                ..
+            } => {
+                assert_eq!(outcome.stable_name(), "completed");
+                assert_eq!(output_text.as_deref(), Some("continued worker output"));
+                assert_eq!(*terminal_sequence, completion_sequence);
+            }
+            other => panic!("expected continuation controller result, got {other:?}"),
+        }
+
         assert!(
             append_worker_continuation_result_if_terminal(
                 &mut continuation_store,
@@ -15753,6 +15807,21 @@ mod tests {
         assert!(completed.is_complete());
         assert_eq!(completed.goal_id, goal);
         assert_eq!(completed.resulting_phase, Some(WorkerPhase::Stopped));
+
+        let controller_results = replay_controller_worker_results(full.events()).unwrap();
+        assert_eq!(controller_results.len(), 1);
+        assert_eq!(controller_results[0].route_id, route);
+        assert_eq!(controller_results[0].worker_conversation_id, conversation);
+        assert!(controller_results[0].controller_conversation_id.is_some());
+        assert!(matches!(
+            controller_results[0].detail,
+            ControllerWorkerResultDetail::Action {
+                kind: WorkerControlKind::Stop,
+                resulting_phase: WorkerPhase::Stopped,
+                ..
+            }
+        ));
+
         assert!(
             append_worker_control_action_checked(&mut full, conversation, route)
                 .unwrap_err()
