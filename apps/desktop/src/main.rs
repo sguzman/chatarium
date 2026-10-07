@@ -11221,6 +11221,125 @@ fn append_controller_worker_result_context_decision_checked(
     })
 }
 
+fn append_controller_coordination_start_checked(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+) -> Result<(LocalTurnId, EventEnvelope), String> {
+    if replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .any(|record| {
+            record.controller_conversation_id == controller_conversation_id
+                && record.result_sequence.is_none()
+        })
+    {
+        return Err(format!(
+            "controller conversation {} already has an unfinished coordination turn",
+            controller_conversation_id
+        ));
+    }
+
+    let topology =
+        local_conversation_topology(store.events(), controller_conversation_id)?.ok_or_else(|| {
+            format!(
+                "controller conversation {controller_conversation_id} has no orchestration topology"
+            )
+        })?;
+    let supervision = replay_supervision_audit(store.events())?;
+    if !supervision.controllers.iter().any(|record| {
+        record.designation.session_id() == topology.current_session_id
+    }) {
+        return Err(format!(
+            "controller conversation {} current session {} is not controller-designated",
+            controller_conversation_id,
+            topology.current_session_id.get()
+        ));
+    }
+
+    let mut admitted_routes =
+        replay_admitted_controller_worker_result_context(store.events(), controller_conversation_id)?
+            .into_iter()
+            .map(|record| record.route_id)
+            .collect::<Vec<_>>();
+    admitted_routes.sort_by_key(|route_id| route_id.get());
+    if admitted_routes.is_empty() {
+        return Err(
+            "controller coordination requires at least one admitted terminal worker result"
+                .to_owned(),
+        );
+    }
+
+    let turn_id = LocalTurnId::new();
+    record_controller_coordination_started(
+        store,
+        controller_conversation_id,
+        topology.current_session_id,
+        turn_id,
+        &admitted_routes,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .find(|record| record.coordination_turn_id == turn_id)
+        .ok_or_else(|| "controller coordination start append did not replay".to_owned())?;
+    if replayed.controller_conversation_id != controller_conversation_id
+        || replayed.controller_session_id != topology.current_session_id
+        || replayed.admitted_result_routes != admitted_routes
+        || replayed.result_sequence.is_some()
+    {
+        return Err(
+            "controller coordination replay disagrees with durable start provenance".to_owned(),
+        );
+    }
+
+    let event = store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "controller coordination start produced no durable event".to_owned())?;
+    Ok((turn_id, event))
+}
+
+fn append_controller_coordination_result_if_terminal(
+    store: &mut impl EventStore,
+    coordination_turn_id: LocalTurnId,
+) -> Result<Option<EventEnvelope>, String> {
+    let record = replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .find(|record| record.coordination_turn_id == coordination_turn_id);
+    let Some(record) = record else {
+        return Ok(None);
+    };
+    if record.result_sequence.is_some() {
+        return Ok(None);
+    }
+
+    let transport =
+        controller_coordination_transport_state(store.events(), coordination_turn_id)?;
+    let Some((outcome, terminal_sequence)) = coordination_terminal_outcome(transport) else {
+        return Ok(None);
+    };
+
+    record_controller_coordination_result(store, &record, outcome, terminal_sequence)
+        .map_err(|error| error.to_string())?;
+
+    let replayed = replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .find(|candidate| candidate.coordination_turn_id == coordination_turn_id)
+        .ok_or_else(|| "controller coordination terminal result did not replay".to_owned())?;
+    if replayed.outcome != Some(outcome)
+        || replayed.terminal_sequence != Some(terminal_sequence)
+        || replayed.result_sequence != store.events().last().map(|event| event.sequence)
+    {
+        return Err(
+            "controller coordination result replay disagrees with terminal transport evidence"
+                .to_owned(),
+        );
+    }
+
+    Ok(store.events().last().cloned())
+}
+
 fn append_worker_control_acknowledgement_checked(
     store: &mut impl EventStore,
     worker_conversation_id: LocalConversationId,
