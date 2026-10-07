@@ -279,3 +279,209 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MemoryEventStore;
+    use crate::chat_container_audit::record_chat_container_created;
+    use crate::controller_coordination_audit::{
+        record_controller_coordination_result, record_controller_coordination_started,
+        replay_controller_coordination_audit, ControllerCoordinationOutcome,
+    };
+    use crate::controller_result_context_audit::{
+        ControllerWorkerResultContextDecision,
+        record_controller_worker_result_context_decision,
+    };
+    use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
+    use crate::session_audit::record_local_session_registered;
+    use crate::supervision_audit::record_controller_session_designated;
+    use chatarium_core::chat_container::ChatContainerId;
+    use chatarium_core::supervision::ControllerDesignation;
+
+    fn terminal_coordination(
+        store: &mut impl EventStore,
+    ) -> (LocalConversationId, LocalTurnId, u64) {
+        let conversation_id = LocalConversationId::new();
+        let session_id = SessionId::new(1);
+        let turn_id = LocalTurnId::new();
+
+        record_local_session_registered(store, session_id).unwrap();
+        record_chat_container_created(store, ChatContainerId::new(1), session_id).unwrap();
+        record_local_conversation_chat_container_bound(
+            store,
+            conversation_id,
+            ChatContainerId::new(1),
+        )
+        .unwrap();
+        record_controller_session_designated(
+            store,
+            ControllerDesignation::new(session_id),
+        )
+        .unwrap();
+
+        // Coordination replay requires at least one admitted worker-result route.
+        let route_id = chatarium_core::routing::RouteId::new(7);
+        // The coordination audit only consumes the result-context projection; for
+        // this focused test, append the typed context decision directly after
+        // creating a synthetic prior result sequence that remains structurally
+        // valid for the coordination start snapshot.
+        //
+        // Use the public record API here solely to exercise the decision audit's
+        // relation to an already-terminal coordination; broader worker-result
+        // provenance is covered by desktop/store integration tests.
+        store
+            .append_scoped(
+                Some(format!("controller-worker-result-context:{conversation_id}:7")),
+                EventKind::ControllerWorkerResultContextDecisionRecorded,
+                json!({
+                    "schema": "chatarium-controller-worker-result-context-audit",
+                    "version": 1,
+                    "record": "controller_worker_result_context_decision",
+                    "control_id": 1,
+                    "route_id": 7,
+                    "controller_conversation_id": conversation_id.to_string(),
+                    "result_sequence": 4,
+                    "decision": "admit",
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        record_controller_coordination_started(
+            store,
+            conversation_id,
+            session_id,
+            turn_id,
+            &[route_id],
+        )
+        .unwrap();
+
+        let started = replay_controller_coordination_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.coordination_turn_id == turn_id)
+            .unwrap();
+
+        let request_id = turn_id.to_string();
+        store
+            .append_scoped(
+                Some(crate::authored::local_turn_scope(turn_id)),
+                EventKind::DispatchAttempted,
+                json!({"turn_id": turn_id.to_string(), "request_id": request_id}).to_string(),
+            )
+            .unwrap();
+        let terminal_sequence = store
+            .append_scoped(
+                Some(crate::authored::local_turn_scope(turn_id)),
+                EventKind::AssistantCompletionObserved,
+                json!({
+                    "turn_id": turn_id.to_string(),
+                    "request_id": turn_id.to_string(),
+                    "text": "coordination result",
+                })
+                .to_string(),
+            )
+            .unwrap();
+        record_controller_coordination_result(
+            store,
+            &started,
+            ControllerCoordinationOutcome::Completed,
+            terminal_sequence,
+        )
+        .unwrap();
+        let result_sequence = store.events().last().unwrap().sequence;
+        (conversation_id, turn_id, result_sequence)
+    }
+
+    #[test]
+    fn admit_and_exclude_are_reversible_without_changing_terminal_result() {
+        let mut store = MemoryEventStore::default();
+        let (conversation_id, turn_id, result_sequence) =
+            terminal_coordination(&mut store);
+
+        record_controller_coordination_result_context_decision(
+            &mut store,
+            conversation_id,
+            turn_id,
+            result_sequence,
+            ControllerCoordinationResultContextDecision::Admit,
+        )
+        .unwrap();
+        let admitted =
+            replay_admitted_controller_coordination_result_context(
+                store.events(),
+                conversation_id,
+            )
+            .unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].coordination_turn_id, turn_id);
+
+        record_controller_coordination_result_context_decision(
+            &mut store,
+            conversation_id,
+            turn_id,
+            result_sequence,
+            ControllerCoordinationResultContextDecision::Exclude,
+        )
+        .unwrap();
+        assert!(
+            replay_admitted_controller_coordination_result_context(
+                store.events(),
+                conversation_id,
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        let coordination = replay_controller_coordination_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.coordination_turn_id == turn_id)
+            .unwrap();
+        assert_eq!(coordination.result_sequence, Some(result_sequence));
+        assert_eq!(
+            coordination.outcome,
+            Some(ControllerCoordinationOutcome::Completed)
+        );
+    }
+
+    #[test]
+    fn decision_requires_terminal_result_and_correct_conversation() {
+        let mut store = MemoryEventStore::default();
+        let conversation_id = LocalConversationId::new();
+        let turn_id = LocalTurnId::new();
+        record_controller_coordination_result_context_decision(
+            &mut store,
+            conversation_id,
+            turn_id,
+            1,
+            ControllerCoordinationResultContextDecision::Admit,
+        )
+        .unwrap();
+        assert!(
+            replay_controller_coordination_result_context_audit(store.events())
+                .unwrap_err()
+                .contains("before coordination start")
+        );
+
+        let mut store = MemoryEventStore::default();
+        let (actual_conversation, turn_id, result_sequence) =
+            terminal_coordination(&mut store);
+        let wrong_conversation = LocalConversationId::new();
+        record_controller_coordination_result_context_decision(
+            &mut store,
+            wrong_conversation,
+            turn_id,
+            result_sequence,
+            ControllerCoordinationResultContextDecision::Admit,
+        )
+        .unwrap();
+        let error =
+            replay_controller_coordination_result_context_audit(store.events())
+                .unwrap_err();
+        assert!(error.contains("belongs to"));
+        assert_ne!(wrong_conversation, actual_conversation);
+    }
+}
