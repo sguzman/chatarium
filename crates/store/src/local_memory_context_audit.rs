@@ -46,10 +46,7 @@ pub fn record_local_memory_context_decision(
 ) -> std::io::Result<u64> {
     append_typed(
         store,
-        Some(memory_context_scope(
-            destination_conversation_id,
-            memory_id,
-        )),
+        Some(memory_context_scope(destination_conversation_id, memory_id)),
         EventKind::LocalMemoryContextDecisionRecorded,
         json!({
             "schema": SCHEMA,
@@ -167,7 +164,9 @@ fn parse_decision(value: &str) -> Result<LocalMemoryContextDecision, String> {
     match value {
         "admit" => Ok(LocalMemoryContextDecision::Admit),
         "exclude" => Ok(LocalMemoryContextDecision::Exclude),
-        _ => Err(format!("unsupported local memory context decision '{value}'")),
+        _ => Err(format!(
+            "unsupported local memory context decision '{value}'"
+        )),
     }
 }
 
@@ -225,21 +224,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            format!("typed local memory context decision is missing integer field '{field}'")
-        })
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed local memory context decision is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            format!("typed local memory context decision is missing string field '{field}'")
-        })
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed local memory context decision is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
