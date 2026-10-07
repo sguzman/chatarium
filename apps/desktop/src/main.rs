@@ -13630,13 +13630,9 @@ mod tests {
 
         let before_stop_status = store.events().len();
         assert!(
-            append_worker_control_status_result_checked(
-                &mut store,
-                worker_conversation,
-                route_id,
-            )
-            .unwrap_err()
-            .contains("not a StatusRequest")
+            append_worker_control_status_result_checked(&mut store, worker_conversation, route_id,)
+                .unwrap_err()
+                .contains("not a StatusRequest")
         );
         assert_eq!(store.events().len(), before_stop_status);
 
