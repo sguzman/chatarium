@@ -3253,6 +3253,9 @@ impl ChatariumApp {
                     } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
                     }
+                    if operation.starts_with("local memory ") {
+                        self.local_memory_command_pending = false;
+                    }
                     if operation.starts_with("lifecycle ") {
                         self.lifecycle_command_pending = false;
                     }
