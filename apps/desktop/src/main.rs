@@ -47,6 +47,9 @@ use chatarium_store::continuation_audit::{
     record_continuation_lease_created, record_continuation_permit_issued,
     replay_continuation_audit,
 };
+use chatarium_store::continuation_execution_audit::{
+    record_worker_continuation_execution_started, replay_worker_continuation_execution_audit,
+};
 use chatarium_store::control_ack_audit::{
     record_worker_control_acknowledged, replay_worker_control_acknowledgement_audit,
 };
@@ -246,6 +249,10 @@ enum PersistCommand {
         worker_conversation_id: LocalConversationId,
         route_id: RouteId,
     },
+    StartWorkerContinuationExecution {
+        worker_conversation_id: LocalConversationId,
+        route_id: RouteId,
+    },
     AssignWorkerGoal {
         worker_id: WorkerId,
         goal_id: WorkerGoalId,
@@ -437,6 +444,10 @@ enum PersistNotice {
     WorkerControlActionAdvanced {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    WorkerContinuationExecutionStarted {
+        route_id: RouteId,
+        event: EventEnvelope,
     },
     Failed {
         operation: &'static str,
@@ -2959,6 +2970,14 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
+                PersistNotice::WorkerContinuationExecutionStarted { route_id, event } => {
+                    self.events.push(event);
+                    self.worker_control_command_pending = false;
+                    self.status = format!(
+                        "worker control route {} continuation execution durably started",
+                        route_id.get()
+                    );
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2993,6 +3012,7 @@ impl ChatariumApp {
                     if operation.starts_with("worker control acknowledgement")
                         || operation.starts_with("worker control status result")
                         || operation.starts_with("worker control action")
+                        || operation.starts_with("worker continuation execution")
                     {
                         self.worker_control_command_pending = false;
                     }
@@ -4084,6 +4104,33 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue worker control action: {error}");
+            }
+        }
+    }
+
+    fn start_worker_continuation_execution(&mut self, route_id: RouteId) {
+        if self.worker_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot start continuation execution: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::StartWorkerContinuationExecution {
+            worker_conversation_id: self.local_conversation_id,
+            route_id,
+        }) {
+            Ok(()) => {
+                self.worker_control_command_pending = true;
+                self.status = format!(
+                    "starting durable continuation execution for worker control route {}…",
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status =
+                    format!("failed to queue continuation execution start: {error}");
             }
         }
     }
@@ -11265,6 +11312,34 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::StartWorkerContinuationExecution {
+                worker_conversation_id,
+                route_id,
+            } => {
+                match append_worker_continuation_execution_start_checked(
+                    &mut store,
+                    worker_conversation_id,
+                    route_id,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(
+                            PersistNotice::WorkerContinuationExecutionStarted {
+                                route_id,
+                                event,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "worker continuation execution start",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AssignWorkerGoal { worker_id, goal_id } => {
                 match append_worker_goal_checked(&mut store, worker_id, goal_id) {
                     Ok(event) => {
@@ -13728,6 +13803,9 @@ mod tests {
                 "worker_control_status_result_recorded"
             }
             PersistNotice::WorkerControlActionAdvanced { .. } => "worker_control_action_advanced",
+            PersistNotice::WorkerContinuationExecutionStarted { .. } => {
+                "worker_continuation_execution_started"
+            }
             PersistNotice::Failed { .. } => "failed",
         }
     }
