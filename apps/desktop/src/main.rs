@@ -19,7 +19,7 @@ use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::coordination_suggestion::{
     CoordinationSuggestion, CoordinationSuggestionAction, CoordinationSuggestionId,
 };
-use chatarium_core::local_memory::LocalMemoryId;
+use chatarium_core::local_memory::{LocalMemoryId, LocalMemoryLabel};
 use chatarium_core::orchestration::{
     ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle,
     WorkerPhase,
@@ -124,6 +124,10 @@ use chatarium_store::local_memory_audit::{
 use chatarium_store::local_memory_context_audit::{
     LocalMemoryContextDecision, record_local_memory_context_decision,
     replay_admitted_local_memory_context, replay_local_memory_context_audit,
+};
+use chatarium_store::local_memory_label_audit::{
+    record_local_memory_label_added, record_local_memory_label_removed,
+    replay_local_memory_label_audit,
 };
 use chatarium_store::local_memory_search::search_local_memory;
 use chatarium_store::local_memory_supersession_audit::{
@@ -262,6 +266,14 @@ enum PersistCommand {
     SupersedeLocalMemory {
         predecessor_memory_id: LocalMemoryId,
         successor_memory_id: LocalMemoryId,
+    },
+    AddLocalMemoryLabel {
+        memory_id: LocalMemoryId,
+        label: LocalMemoryLabel,
+    },
+    RemoveLocalMemoryLabel {
+        memory_id: LocalMemoryId,
+        label: LocalMemoryLabel,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -502,6 +514,10 @@ enum PersistNotice {
     LocalMemorySupersessionRecorded {
         predecessor_memory_id: LocalMemoryId,
         successor_memory_id: LocalMemoryId,
+        event: EventEnvelope,
+    },
+    LocalMemoryLabelUpdated {
+        memory_id: LocalMemoryId,
         event: EventEnvelope,
     },
     LifecycleEventAppended {
@@ -820,6 +836,7 @@ struct ChatariumApp {
     local_memory_draft: String,
     local_memory_search_query: String,
     show_superseded_local_memory: bool,
+    local_memory_label_drafts: BTreeMap<LocalMemoryId, String>,
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
@@ -1084,6 +1101,7 @@ impl ChatariumApp {
                         local_memory_draft: String::new(),
                         local_memory_search_query: String::new(),
                         show_superseded_local_memory: false,
+                        local_memory_label_drafts: BTreeMap::new(),
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
@@ -1265,6 +1283,7 @@ impl ChatariumApp {
             local_memory_draft: String::new(),
             local_memory_search_query: String::new(),
             show_superseded_local_memory: false,
+            local_memory_label_drafts: BTreeMap::new(),
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
@@ -3103,6 +3122,15 @@ impl ChatariumApp {
                         successor_memory_id.get(),
                     );
                 }
+                PersistNotice::LocalMemoryLabelUpdated { memory_id, event } => {
+                    let added = event.kind == EventKind::LocalMemoryLabelAdded;
+                    self.events.push(event);
+                    self.local_memory_command_pending = false;
+                    if added {
+                        self.local_memory_label_drafts.remove(&memory_id);
+                    }
+                    self.status = format!("local memory {} labels durably updated", memory_id.get());
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -4216,6 +4244,61 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue local memory supersession: {error}");
+            }
+        }
+    }
+
+    fn add_local_memory_label(&mut self, memory_id: LocalMemoryId) {
+        if self.local_memory_command_pending {
+            return;
+        }
+        let Some(draft) = self.local_memory_label_drafts.get(&memory_id) else {
+            return;
+        };
+        let label = match LocalMemoryLabel::new(draft.as_str()) {
+            Ok(label) => label,
+            Err(error) => {
+                self.status = format!(
+                    "cannot add label to local memory {}: {error:?}",
+                    memory_id.get()
+                );
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot add local memory label: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::AddLocalMemoryLabel { memory_id, label }) {
+            Ok(()) => {
+                self.local_memory_command_pending = true;
+                self.status = format!("adding label to local memory {}…", memory_id.get());
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local memory label addition: {error}");
+            }
+        }
+    }
+
+    fn remove_local_memory_label(
+        &mut self,
+        memory_id: LocalMemoryId,
+        label: LocalMemoryLabel,
+    ) {
+        if self.local_memory_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot remove local memory label: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::RemoveLocalMemoryLabel { memory_id, label }) {
+            Ok(()) => {
+                self.local_memory_command_pending = true;
+                self.status = format!("removing label from local memory {}…", memory_id.get());
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local memory label removal: {error}");
             }
         }
     }
@@ -14483,6 +14566,50 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::AddLocalMemoryLabel { memory_id, label } => {
+                match append_local_memory_label_change_checked(
+                    &mut store,
+                    memory_id,
+                    label,
+                    true,
+                ) {
+                    Ok(event) => {
+                        let _ =
+                            notices.send(PersistNotice::LocalMemoryLabelUpdated { memory_id, event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local memory label add",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::RemoveLocalMemoryLabel { memory_id, label } => {
+                match append_local_memory_label_change_checked(
+                    &mut store,
+                    memory_id,
+                    label,
+                    false,
+                ) {
+                    Ok(event) => {
+                        let _ =
+                            notices.send(PersistNotice::LocalMemoryLabelUpdated { memory_id, event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local memory label remove",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -17757,6 +17884,7 @@ mod tests {
             PersistNotice::LocalMemorySupersessionRecorded { .. } => {
                 "local_memory_supersession_recorded"
             }
+            PersistNotice::LocalMemoryLabelUpdated { .. } => "local_memory_label_updated",
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::SupervisionEventAppended { .. } => "supervision_event_appended",
             PersistNotice::ControllerContinuationLeaseCreated { .. } => {
