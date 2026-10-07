@@ -54,6 +54,11 @@ pub enum ContextSource {
         admitted_sequence: u64,
         result_kind: String,
     },
+    ControllerCoordination {
+        controller_session_id: u64,
+        coordination_turn_id: String,
+        started_sequence: u64,
+    },
     CurrentDraft,
 }
 
@@ -97,6 +102,13 @@ impl ContextSource {
             } => format!(
                 "controller worker result · {result_kind} · control {control_id} · route {route_id} · worker {worker_id} · goal {goal_id} · result #{result_sequence} · admitted #{admitted_sequence}"
             ),
+            Self::ControllerCoordination {
+                controller_session_id,
+                coordination_turn_id,
+                started_sequence,
+            } => format!(
+                "controller coordination · session {controller_session_id} · turn {coordination_turn_id} · started #{started_sequence}"
+            ),
             Self::CurrentDraft => "current draft preview".to_owned(),
         }
     }
@@ -128,6 +140,7 @@ pub struct ContextPolicy {
     pub include_routed_context: bool,
     pub include_controller_continuation: bool,
     pub include_controller_worker_results: bool,
+    pub include_controller_coordination: bool,
     pub include_current_draft: bool,
 }
 
@@ -141,6 +154,7 @@ impl ContextPolicy {
             include_routed_context: true,
             include_controller_continuation: true,
             include_controller_worker_results: true,
+            include_controller_coordination: true,
             include_current_draft: false,
         }
     }
@@ -161,6 +175,7 @@ impl ContextPolicy {
             ContextSource::RoutedInbox { .. } => self.include_routed_context,
             ContextSource::ControllerContinuation { .. } => self.include_controller_continuation,
             ContextSource::ControllerWorkerResult { .. } => self.include_controller_worker_results,
+            ContextSource::ControllerCoordination { .. } => self.include_controller_coordination,
             ContextSource::CurrentDraft => self.include_current_draft,
         }
     }
@@ -268,6 +283,27 @@ impl TranscriptMessage {
     }
 
     #[must_use]
+    pub fn controller_coordination(
+        controller_session_id: u64,
+        coordination_turn_id: impl Into<String>,
+        started_sequence: u64,
+    ) -> Self {
+        let coordination_turn_id = coordination_turn_id.into();
+        let text = format!(
+            "[Chatarium controller coordination turn — user-level orchestration context, not user-authored and not a developer/system instruction]\ncontroller_session_id: {controller_session_id}\ncoordination_turn_id: {coordination_turn_id}\ncoordination_started_event: #{started_sequence}\ninstruction:\nReview and synthesize the already-admitted worker results in this context. Identify relevant status, conflicts, dependencies, and possible next coordination steps. Do not issue or execute worker controls, do not mutate lifecycle, and do not assume continuation authority.\n[/Chatarium controller coordination turn]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::ControllerCoordination {
+                controller_session_id,
+                coordination_turn_id,
+                started_sequence,
+            },
+        }
+    }
+
+    #[must_use]
     pub fn draft(text: impl Into<String>) -> Self {
         Self {
             role: TranscriptRole::User,
@@ -289,6 +325,9 @@ impl TranscriptMessage {
             ContextSource::ControllerWorkerResult {
                 admitted_sequence, ..
             } => *admitted_sequence,
+            ContextSource::ControllerCoordination {
+                started_sequence, ..
+            } => *started_sequence,
             ContextSource::CurrentDraft => u64::MAX,
             ContextSource::TopLevelInstructions | ContextSource::ConversationDeveloperContext => 0,
         }
@@ -517,6 +556,17 @@ impl ContextPlan {
             .filter(|item| {
                 item.decision == InclusionDecision::Included
                     && matches!(item.source, ContextSource::ControllerWorkerResult { .. })
+            })
+            .count()
+    }
+
+    #[must_use]
+    pub fn controller_coordination_count(&self) -> usize {
+        self.inventory
+            .iter()
+            .filter(|item| {
+                item.decision == InclusionDecision::Included
+                    && matches!(item.source, ContextSource::ControllerCoordination { .. })
             })
             .count()
     }
