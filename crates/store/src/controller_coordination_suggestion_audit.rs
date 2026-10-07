@@ -4,11 +4,11 @@
 //! admit a WorkerControl, consume continuation authority, mutate lifecycle,
 //! create a route, approve policy, dispatch anything, or enter inference context.
 
+use crate::control_audit::replay_control_audit;
 use crate::controller_coordination_audit::{
     ControllerCoordinationOutcome, controller_coordination_output_text,
     replay_controller_coordination_audit,
 };
-use crate::control_audit::replay_control_audit;
 use crate::controller_result_inbox::replay_controller_worker_results_for_conversation;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::orchestration_route_audit::replay_validated_orchestration_routes;
@@ -425,12 +425,10 @@ fn suggestion_action_matches_control(
         (
             CoordinationSuggestionAction::StartOrResume,
             WorkerControlKind::StartOrResume
-        )
-            | (
-                CoordinationSuggestionAction::Continue,
-                WorkerControlKind::Continue { .. }
-            )
-            | (CoordinationSuggestionAction::Stop, WorkerControlKind::Stop)
+        ) | (
+            CoordinationSuggestionAction::Continue,
+            WorkerControlKind::Continue { .. }
+        ) | (CoordinationSuggestionAction::Stop, WorkerControlKind::Stop)
             | (
                 CoordinationSuggestionAction::StatusRequest,
                 WorkerControlKind::StatusRequest
