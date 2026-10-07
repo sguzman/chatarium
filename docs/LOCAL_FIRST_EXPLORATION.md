@@ -335,7 +335,21 @@ control route still requires ordinary Allow/Deny plus one-shot dispatch.
 This completes the first controller reasoning loop without giving model output
 authority over workers.
 
-The active next architectural boundary is a separate **durable local memory
-source** with explicit provenance/admission semantics. Memory must not emerge
-implicitly from transcript sharing, routed inboxes, coordination summaries, or
-controller state. Do not reopen browser/history work as part of this phase.
+Explicit durable local memory is now landed and documented in
+[LOCAL_MEMORY.md](LOCAL_MEMORY.md).
+
+Memory is its own immutable artifact domain with `LocalMemoryId`, exact text,
+source-conversation provenance, reversible per-destination Admit/Exclude
+decisions, archive-integrity replay, and a typed Context Composer source.
+Recording memory never auto-admits it. Cross-conversation reuse requires an
+explicit Admit decision for the destination conversation, and the admitted set
+is snapshotted at Send.
+
+No transcript sharing, routed-message delivery, coordination result, lifecycle
+state, or model output silently becomes memory.
+
+The active next architectural boundary is **explicit memory supersession** so a
+new immutable artifact can correct/replace an older one without rewriting
+journal history. Supersession must make stale memory context behavior explicit;
+it must not silently migrate old admission to a successor. Do not reopen
+browser/history work as part of this phase.
