@@ -11371,6 +11371,115 @@ fn append_local_route_context_decision_checked(
         .ok_or_else(|| "routed context decision append produced no durable event".to_owned())
 }
 
+fn append_local_memory_artifact_checked(
+    store: &mut impl EventStore,
+    memory_id: LocalMemoryId,
+    source_conversation_id: LocalConversationId,
+    text: String,
+) -> Result<EventEnvelope, String> {
+    if text.trim().is_empty() {
+        return Err("local memory text cannot be empty".to_owned());
+    }
+    if replay_local_memory_audit(store.events())?
+        .iter()
+        .any(|record| record.memory_id == memory_id)
+    {
+        return Err(format!(
+            "local memory {} already exists",
+            memory_id.get()
+        ));
+    }
+
+    record_local_memory_artifact(
+        store,
+        memory_id,
+        source_conversation_id,
+        text.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_local_memory_audit(store.events())?
+        .into_iter()
+        .find(|record| record.memory_id == memory_id)
+        .ok_or_else(|| "local memory append did not replay".to_owned())?;
+    if replayed.source_conversation_id != source_conversation_id || replayed.text != text {
+        return Err("local memory replay disagrees with appended artifact".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local memory append produced no durable event".to_owned())
+}
+
+fn append_local_memory_context_decision_checked(
+    store: &mut impl EventStore,
+    memory_id: LocalMemoryId,
+    destination_conversation_id: LocalConversationId,
+    decision: LocalMemoryContextDecision,
+) -> Result<EventEnvelope, String> {
+    let artifact = replay_local_memory_audit(store.events())?
+        .into_iter()
+        .find(|record| record.memory_id == memory_id)
+        .ok_or_else(|| format!("local memory {} does not exist", memory_id.get()))?;
+
+    if let Some(existing) = replay_local_memory_context_audit(store.events())?
+        .into_iter()
+        .find(|record| {
+            record.memory_id == memory_id
+                && record.destination_conversation_id == destination_conversation_id
+        })
+    {
+        if existing.source_conversation_id != artifact.source_conversation_id
+            || existing.artifact_sequence != artifact.recorded_sequence
+        {
+            return Err(format!(
+                "local memory {} context provenance conflicts with artifact",
+                memory_id.get()
+            ));
+        }
+        if existing.decision == decision {
+            return Err(format!(
+                "local memory {} already has context decision {} for conversation {}",
+                memory_id.get(),
+                local_memory_context_decision_label(decision),
+                destination_conversation_id,
+            ));
+        }
+    }
+
+    record_local_memory_context_decision(
+        store,
+        memory_id,
+        destination_conversation_id,
+        decision,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_local_memory_context_audit(store.events())?
+        .into_iter()
+        .find(|record| {
+            record.memory_id == memory_id
+                && record.destination_conversation_id == destination_conversation_id
+        })
+        .ok_or_else(|| "local memory context decision append did not replay".to_owned())?;
+    if replayed.source_conversation_id != artifact.source_conversation_id
+        || replayed.artifact_sequence != artifact.recorded_sequence
+        || replayed.decision != decision
+    {
+        return Err(
+            "local memory context decision replay disagrees with appended decision".to_owned(),
+        );
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local memory context decision append produced no durable event".to_owned())
+}
+
 fn append_local_worker_binding_checked(
     store: &mut impl EventStore,
     conversation_id: LocalConversationId,
@@ -15670,6 +15779,17 @@ fn next_available_control_id(events: &[EventEnvelope]) -> Result<ControlId, Stri
     Ok(ControlId::new(next))
 }
 
+fn next_available_local_memory_id(events: &[EventEnvelope]) -> Result<LocalMemoryId, String> {
+    let next = replay_local_memory_audit(events)?
+        .into_iter()
+        .map(|record| record.memory_id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "local memory identity space exhausted".to_owned())?;
+    Ok(LocalMemoryId::new(next))
+}
+
 fn next_available_route_payload_id(events: &[EventEnvelope]) -> Result<RoutePayloadId, String> {
     let next = replay_local_route_payload_audit(events)?
         .into_iter()
@@ -15746,6 +15866,15 @@ fn controller_coordination_result_context_decision_label(
     match decision {
         ControllerCoordinationResultContextDecision::Admit => "admit",
         ControllerCoordinationResultContextDecision::Exclude => "exclude",
+    }
+}
+
+fn local_memory_context_decision_label(
+    decision: LocalMemoryContextDecision,
+) -> &'static str {
+    match decision {
+        LocalMemoryContextDecision::Admit => "admit",
+        LocalMemoryContextDecision::Exclude => "exclude",
     }
 }
 
