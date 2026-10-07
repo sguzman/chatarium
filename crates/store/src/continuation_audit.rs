@@ -166,6 +166,87 @@ pub fn reconstruct_continuation_lease_for_next_issue(
     Ok(lease)
 }
 
+/// Reconstitute one already-issued, still-unconsumed continuation permit.
+///
+/// The permit identity and ordinal must already be durable. This function does
+/// not issue additional authority; it replays the lease from ordinal one through
+/// the requested durable ordinal and returns that exact move-only permit.
+pub fn reconstruct_unconsumed_continuation_permit(
+    events: &[EventEnvelope],
+    lease_id: ContinuationLeaseId,
+    ordinal: u32,
+) -> Result<ContinuationPermit, String> {
+    let record = replay_continuation_audit(events)?
+        .into_iter()
+        .find(|record| record.lease_id == lease_id)
+        .ok_or_else(|| format!("continuation lease {} does not exist", lease_id.get()))?;
+    let durable_permit = record
+        .permits
+        .iter()
+        .find(|permit| permit.ordinal == ordinal)
+        .ok_or_else(|| {
+            format!(
+                "continuation lease {} has no durable permit ordinal {}",
+                lease_id.get(),
+                ordinal
+            )
+        })?;
+    if durable_permit.consumed_by.is_some() {
+        return Err(format!(
+            "continuation permit {}:{} is already consumed",
+            lease_id.get(),
+            ordinal
+        ));
+    }
+
+    let worker = replay_worker_audit(events)?
+        .into_iter()
+        .find(|worker| worker.worker_id == record.worker_id)
+        .ok_or_else(|| {
+            format!(
+                "continuation lease {} references worker {} without durable lifecycle state",
+                lease_id.get(),
+                record.worker_id.get()
+            )
+        })?;
+    let mut lease = ContinuationLease::new(
+        record.lease_id,
+        record.worker_id,
+        record.goal_id,
+        record.allowance,
+    );
+    let mut target = None;
+    for expected_ordinal in 1..=ordinal {
+        let permit = lease.authorize(&worker.lifecycle).map_err(|error| {
+            format!(
+                "continuation permit {}:{} cannot be reconstructed against current worker state while replaying ordinal {}: {error:?}",
+                lease_id.get(),
+                ordinal,
+                expected_ordinal
+            )
+        })?;
+        if permit.ordinal() != expected_ordinal {
+            return Err(format!(
+                "continuation lease {} reconstructed ordinal {}, expected {}",
+                lease_id.get(),
+                permit.ordinal(),
+                expected_ordinal
+            ));
+        }
+        if expected_ordinal == ordinal {
+            target = Some(permit);
+        }
+    }
+
+    target.ok_or_else(|| {
+        format!(
+            "continuation permit {}:{} has invalid zero ordinal",
+            lease_id.get(),
+            ordinal
+        )
+    })
+}
+
 /// Replay all continuation leases, issued permits, and Continue consumption.
 pub fn replay_continuation_audit(
     events: &[EventEnvelope],
@@ -685,6 +766,44 @@ mod tests {
         let error =
             reconstruct_continuation_lease_for_next_issue(store.events(), LEASE).unwrap_err();
         assert!(error.contains("cannot reconstruct issued ordinal"));
+    }
+
+    #[test]
+    fn issued_unconsumed_permit_can_be_reconstituted_without_new_ordinal() {
+        let mut store = MemoryEventStore::default();
+        record_working(&mut store, W1, G1);
+        let mut lease = create_lease(&mut store, 2);
+        let lifecycle = working_lifecycle(G1);
+        let issued = issue(&mut store, &mut lease, &lifecycle);
+        assert_eq!(issued.ordinal(), 1);
+
+        let recovered =
+            reconstruct_unconsumed_continuation_permit(store.events(), LEASE, 1).unwrap();
+        assert_eq!(recovered.lease_id(), LEASE);
+        assert_eq!(recovered.worker_id(), W1);
+        assert_eq!(recovered.goal_id(), G1);
+        assert_eq!(recovered.ordinal(), 1);
+
+        let record = replay_continuation_audit(store.events()).unwrap().remove(0);
+        assert_eq!(record.issued, 1);
+        assert_eq!(record.remaining, 1);
+        assert_eq!(record.permits[0].consumed_by, None);
+    }
+
+    #[test]
+    fn consumed_permit_cannot_be_reconstituted() {
+        let mut store = MemoryEventStore::default();
+        record_working(&mut store, W1, G1);
+        let mut lease = create_lease(&mut store, 1);
+        let lifecycle = working_lifecycle(G1);
+        let permit = issue(&mut store, &mut lease, &lifecycle);
+        let control =
+            WorkerControl::continue_work(ControlId::new(77), W1, &lifecycle, permit).unwrap();
+        record_worker_control_admitted(&mut store, &control).unwrap();
+
+        let error =
+            reconstruct_unconsumed_continuation_permit(store.events(), LEASE, 1).unwrap_err();
+        assert!(error.contains("already consumed"));
     }
 
     #[test]
