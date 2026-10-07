@@ -2492,6 +2492,19 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                let controller_coordination_result_context =
+                    match admitted_controller_coordination_result_messages(
+                        &self.events,
+                        self.local_conversation_id,
+                    ) {
+                        Ok(messages) => messages,
+                        Err(error) => {
+                            self.status = format!(
+                                "cannot snapshot admitted controller coordination results: {error}"
+                            );
+                            return;
+                        }
+                    };
                 self.commit_remote_intents.insert(
                     request_id,
                     PendingInferenceIntent {
@@ -2501,6 +2514,7 @@ impl ChatariumApp {
                         developer_context: self.conversation_developer_context.clone(),
                         routed_context,
                         controller_result_context,
+                        controller_coordination_result_context,
                         request_patch,
                     },
                 );
@@ -2583,6 +2597,7 @@ impl ChatariumApp {
                                 ));
                             transcript.extend(intent.routed_context);
                             transcript.extend(intent.controller_result_context);
+                            transcript.extend(intent.controller_coordination_result_context);
                             transcript
                                 .sort_by_key(context_composer::TranscriptMessage::order_sequence);
                             let context_plan = context_composer::ContextPlan::compose(
