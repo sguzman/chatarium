@@ -2886,6 +2886,14 @@ impl ChatariumApp {
                     self.supervision_command_pending = false;
                     self.status = format!("local supervision durably updated · {kind}");
                 }
+                PersistNotice::ControllerContinuationLeaseCreated { worker_id, event } => {
+                    self.events.push(event);
+                    self.controller_control_command_pending = false;
+                    self.status = format!(
+                        "bounded continuation authority created for worker {}",
+                        worker_id.get()
+                    );
+                }
                 PersistNotice::ControllerControlProposed {
                     control_id,
                     route_id,
@@ -3893,6 +3901,36 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue controller-worker binding: {error}");
+            }
+        }
+    }
+
+    fn create_controller_continuation_lease(
+        &mut self,
+        worker_conversation_id: LocalConversationId,
+        allowance: u32,
+    ) {
+        if self.controller_control_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot create continuation lease: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::CreateControllerContinuationLease {
+            controller_conversation_id: self.local_conversation_id,
+            worker_conversation_id,
+            allowance,
+        }) {
+            Ok(()) => {
+                self.controller_control_command_pending = true;
+                self.status = format!(
+                    "creating bounded continuation lease with allowance {allowance}…"
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue continuation lease creation: {error}");
             }
         }
     }
@@ -10665,6 +10703,34 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::CreateControllerContinuationLease {
+                controller_conversation_id,
+                worker_conversation_id,
+                allowance,
+            } => {
+                match append_controller_continuation_lease_checked(
+                    &mut store,
+                    controller_conversation_id,
+                    worker_conversation_id,
+                    allowance,
+                ) {
+                    Ok((worker_id, event)) => {
+                        let _ = notices.send(PersistNotice::ControllerContinuationLeaseCreated {
+                            worker_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller control continuation lease",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::ProposeControllerWorkerControl {
                 controller_conversation_id,
                 worker_conversation_id,
@@ -13246,6 +13312,9 @@ mod tests {
             }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::SupervisionEventAppended { .. } => "supervision_event_appended",
+            PersistNotice::ControllerContinuationLeaseCreated { .. } => {
+                "controller_continuation_lease_created"
+            }
             PersistNotice::ControllerControlProposed { .. } => "controller_control_proposed",
             PersistNotice::ControllerControlRoutePolicyUpdated { .. } => {
                 "controller_control_route_policy_updated"
