@@ -8054,6 +8054,207 @@ impl eframe::App for ChatariumApp {
                                                 }
                                             }
 
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Controller result inbox",
+                                                )
+                                                .strong()
+                                                .size(10.0),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Read-only durable results from controls issued by this controller conversation. Results do not mutate lifecycle or enter inference context automatically.",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    139, 143, 153,
+                                                )),
+                                            );
+                                            match replay_controller_worker_results_for_conversation(
+                                                &self.events,
+                                                self.local_conversation_id,
+                                            ) {
+                                                Err(error) => {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "controller result projection blocked: {error}"
+                                                        ))
+                                                        .size(9.0)
+                                                        .color(
+                                                            egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            ),
+                                                        ),
+                                                    );
+                                                }
+                                                Ok(results) if results.is_empty() => {
+                                                    ui.label(
+                                                        egui::RichText::new(
+                                                            "no terminal worker results yet",
+                                                        )
+                                                        .size(9.0)
+                                                        .color(
+                                                            egui::Color32::from_rgb(
+                                                                139, 143, 153,
+                                                            ),
+                                                        ),
+                                                    );
+                                                }
+                                                Ok(results) => {
+                                                    egui::ScrollArea::vertical()
+                                                        .id_salt("controller-result-inbox")
+                                                        .max_height(220.0)
+                                                        .show(ui, |ui| {
+                                                            for result in results {
+                                                                let worker_title =
+                                                                    local_conversation_display_title(
+                                                                        &self
+                                                                            .local_conversation_catalog,
+                                                                        result
+                                                                            .worker_conversation_id,
+                                                                        &self.events,
+                                                                    );
+                                                                ui.group(|ui| {
+                                                                    ui.horizontal_wrapped(|ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                format!(
+                                                                                    "{worker_title} · control {} · route {} · worker {} · goal {} · result #{}",
+                                                                                    result
+                                                                                        .control_id
+                                                                                        .get(),
+                                                                                    result
+                                                                                        .route_id
+                                                                                        .get(),
+                                                                                    result
+                                                                                        .worker_id
+                                                                                        .get(),
+                                                                                    result
+                                                                                        .goal_id
+                                                                                        .get(),
+                                                                                    result
+                                                                                        .result_sequence,
+                                                                                ),
+                                                                            )
+                                                                            .monospace()
+                                                                            .size(9.0),
+                                                                        );
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                format!(
+                                                                                    "issuer session {}",
+                                                                                    result
+                                                                                        .controller_session_id
+                                                                                        .get(),
+                                                                                ),
+                                                                            )
+                                                                            .monospace()
+                                                                            .size(9.0)
+                                                                            .color(
+                                                                                egui::Color32::from_rgb(
+                                                                                    139, 143, 153,
+                                                                                ),
+                                                                            ),
+                                                                        );
+                                                                    });
+
+                                                                    match &result.detail {
+                                                                        ControllerWorkerResultDetail::Status {
+                                                                            phase,
+                                                                            acknowledged_sequence,
+                                                                        } => {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "STATUS · {} · acknowledged #{}",
+                                                                                        worker_phase_label(
+                                                                                            *phase
+                                                                                        ),
+                                                                                        acknowledged_sequence,
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                        }
+                                                                        ControllerWorkerResultDetail::Action {
+                                                                            kind,
+                                                                            from_phase,
+                                                                            resulting_phase,
+                                                                            started_sequence,
+                                                                            lifecycle_sequence,
+                                                                        } => {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "ACTION · {} · {} → {} · started #{} · lifecycle #{}",
+                                                                                        worker_control_kind_label(
+                                                                                            *kind
+                                                                                        ),
+                                                                                        worker_phase_label(
+                                                                                            *from_phase
+                                                                                        ),
+                                                                                        worker_phase_label(
+                                                                                            *resulting_phase
+                                                                                        ),
+                                                                                        started_sequence,
+                                                                                        lifecycle_sequence,
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                        }
+                                                                        ControllerWorkerResultDetail::Continuation {
+                                                                            outcome,
+                                                                            execution_turn_id,
+                                                                            lease_id,
+                                                                            permit_ordinal,
+                                                                            started_sequence,
+                                                                            terminal_sequence,
+                                                                            output_text,
+                                                                        } => {
+                                                                            ui.label(
+                                                                                egui::RichText::new(
+                                                                                    format!(
+                                                                                        "CONTINUATION · {} · lease {}:{} · turn {} · started #{} · terminal #{}",
+                                                                                        outcome
+                                                                                            .stable_name(),
+                                                                                        lease_id
+                                                                                            .get(),
+                                                                                        permit_ordinal,
+                                                                                        execution_turn_id,
+                                                                                        started_sequence,
+                                                                                        terminal_sequence,
+                                                                                    ),
+                                                                                )
+                                                                                .monospace()
+                                                                                .size(9.0),
+                                                                            );
+                                                                            if let Some(output) =
+                                                                                output_text
+                                                                            {
+                                                                                ui.collapsing(
+                                                                                    "Worker continuation output",
+                                                                                    |ui| {
+                                                                                        ui.label(
+                                                                                            egui::RichText::new(
+                                                                                                output,
+                                                                                            )
+                                                                                            .size(10.0),
+                                                                                        );
+                                                                                    },
+                                                                                );
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                        });
+                                                }
+                                            }
+
                                             if self.controller_control_command_pending {
                                                 ui.spinner();
                                             }
