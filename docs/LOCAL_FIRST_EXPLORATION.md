@@ -283,7 +283,19 @@ itself issue controls, mutate WorkerLifecycle, or consume continuation
 authority. Terminal coordination output is durable and restart-recoverable but
 does not become ordinary transcript content.
 
-The next safe boundary is explicit context admission for completed controller
-coordination results. Only after coordination output has the same visible
-admission boundary should Chatarium explore typed coordination suggestions or
-promotion into real worker-control proposals.
+Completed controller coordination results now have the same visible context-admission
+boundary. A terminal coordination synthesis is excluded by default and can be
+explicitly Admitted or Excluded. Admitted coordination results enter ordinary
+future controller requests at user-level trust with coordination-turn/outcome/
+result/admission provenance, are snapshotted at Send, and never become authored
+transcript content.
+
+This admission does **not** recursively feed old coordination output into the
+special non-authored coordination workflow. That remains intentionally separate.
+
+The active next architectural boundary is typed, non-authoritative coordination
+suggestions. Coordination may surface a machine-readable possible next worker
+action, but no model-produced suggestion may directly create authority or mutate
+state. Any promotion into a real worker control must be a user action and must
+still pass the existing control admission, route approval, and dispatch
+boundaries.
