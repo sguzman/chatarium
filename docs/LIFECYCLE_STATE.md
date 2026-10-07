@@ -332,7 +332,14 @@ landed as organization metadata. Label mutation never changes artifact text or
 context admission, and discovery facets grant no lifecycle or orchestration
 authority.
 
-The next memory boundary is explicit next-request-only manual memory selection,
-kept separate from persistent Admit/Exclude. Lifecycle semantics remain
-unchanged by memory recording, admission, supersession, discovery, labeling, or
-future request-scoped selection.
+Next-request-only manual memory selection is now landed and remains separate
+from persistent Admit/Exclude. Its exact set is frozen at Send, durably
+correlated to the authored turn, and consumed after that request.
+
+Lifecycle semantics remain unchanged by memory recording, admission,
+supersession, discovery, labeling, persistent context use, or one-shot
+request-scoped use.
+
+The active local-first frontier is now the first MCP/tool integration substrate.
+Tool calls must reuse routing/policy authority rather than creating a hidden
+side-channel around lifecycle or supervision.
