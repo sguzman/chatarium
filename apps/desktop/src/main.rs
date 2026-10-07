@@ -11259,6 +11259,56 @@ fn append_worker_continuation_execution_start_checked(
         .ok_or_else(|| "worker continuation execution append produced no durable event".to_owned())
 }
 
+fn append_worker_continuation_result_if_terminal(
+    store: &mut impl EventStore,
+    execution_turn_id: LocalTurnId,
+) -> Result<Option<(RouteId, EventEnvelope)>, String> {
+    let execution = replay_worker_continuation_execution_audit(store.events())?
+        .into_iter()
+        .find(|record| record.execution_turn_id == execution_turn_id);
+    let Some(execution) = execution else {
+        return Ok(None);
+    };
+    if execution.result_sequence.is_some() {
+        return Ok(None);
+    }
+
+    let transport =
+        continuation_execution_transport_state(store.events(), execution.execution_turn_id)?;
+    let Some((outcome, terminal_sequence)) = transport_terminal_outcome(transport) else {
+        return Ok(None);
+    };
+
+    record_worker_continuation_execution_result(
+        store,
+        execution,
+        outcome,
+        terminal_sequence,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_worker_continuation_execution_audit(store.events())?
+        .into_iter()
+        .find(|record| record.route_id == execution.route_id)
+        .ok_or_else(|| "worker continuation execution result did not replay".to_owned())?;
+    if replayed.outcome != Some(outcome)
+        || replayed.terminal_sequence != Some(terminal_sequence)
+        || replayed.result_sequence != store.events().last().map(|event| event.sequence)
+    {
+        return Err(
+            "worker continuation execution result replay disagrees with terminal transport evidence"
+                .to_owned(),
+        );
+    }
+
+    let event = store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "worker continuation result append produced no durable event".to_owned())?;
+    Ok(Some((execution.route_id, event)))
+}
+
 fn append_worker_goal_checked(
     store: &mut impl EventStore,
     worker_id: WorkerId,
