@@ -423,12 +423,14 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 mod tests {
     use super::*;
     use crate::MemoryEventStore;
-    use crate::routing_audit::{record_route_proposed, record_route_user_decision};
+    use crate::routing_audit::{
+        RouteUserDecision, record_route_proposed, record_route_user_decision,
+    };
     use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
     use crate::tool_provider_audit::{
         record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
-    use chatarium_core::routing::{RouteEndpointId, RouteRequest, RouteUserDecision};
+    use chatarium_core::routing::{RouteEndpointId, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, SessionId};
     use chatarium_core::tool::{ToolProviderEndpointBinding, ToolProviderName};
 
