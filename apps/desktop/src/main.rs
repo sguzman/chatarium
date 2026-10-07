@@ -17867,6 +17867,98 @@ mod tests {
     }
 
     #[test]
+    fn local_memory_is_immutable_explicit_and_cross_conversation_admitted() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let memory_id = LocalMemoryId::new(1);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        let artifact = append_local_memory_artifact_checked(
+            &mut store,
+            memory_id,
+            source,
+            " exact remembered fact ".to_owned(),
+        )
+        .unwrap();
+        assert_eq!(artifact.kind, EventKind::LocalMemoryArtifactRecorded);
+        assert_eq!(
+            next_available_local_memory_id(store.events()).unwrap(),
+            LocalMemoryId::new(2)
+        );
+        assert!(
+            projected_local_display_messages(store.events(), destination)
+                .iter()
+                .all(|message| message.text != " exact remembered fact ")
+        );
+        assert!(
+            admitted_local_memory_messages(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+
+        let admit = append_local_memory_context_decision_checked(
+            &mut store,
+            memory_id,
+            destination,
+            LocalMemoryContextDecision::Admit,
+        )
+        .unwrap();
+        assert_eq!(
+            admit.kind,
+            EventKind::LocalMemoryContextDecisionRecorded
+        );
+
+        let memory = admitted_local_memory_messages(store.events(), destination).unwrap();
+        assert_eq!(memory.len(), 1);
+        assert_eq!(memory[0].role, context_composer::TranscriptRole::User);
+        assert_eq!(memory[0].order_sequence(), admit.sequence);
+        assert!(memory[0].text.contains("Chatarium local memory"));
+        assert!(memory[0].text.contains(&source.to_string()));
+        assert!(memory[0].text.contains(" exact remembered fact "));
+
+        let plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            memory,
+        );
+        assert_eq!(plan.local_memory_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+
+        let before_duplicate = store.events().len();
+        assert!(
+            append_local_memory_context_decision_checked(
+                &mut store,
+                memory_id,
+                destination,
+                LocalMemoryContextDecision::Admit,
+            )
+            .unwrap_err()
+            .contains("already has context decision")
+        );
+        assert_eq!(store.events().len(), before_duplicate);
+
+        append_local_memory_context_decision_checked(
+            &mut store,
+            memory_id,
+            destination,
+            LocalMemoryContextDecision::Exclude,
+        )
+        .unwrap();
+        assert!(
+            admitted_local_memory_messages(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+
+        let artifacts = replay_local_memory_audit(store.events()).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].text, " exact remembered fact ");
+        assert_eq!(artifacts[0].source_conversation_id, source);
+    }
+
+    #[test]
     fn checked_local_controller_supervision_requires_explicit_worker_session_role() {
         let controller_conversation = LocalConversationId::new();
         let worker_conversation = LocalConversationId::new();
