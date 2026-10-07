@@ -17,7 +17,8 @@ use chatarium_core::control::{
 use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
 use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::orchestration::{
-    WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle, WorkerPhase,
+    ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerId,
+    WorkerLifecycle, WorkerPhase,
 };
 use chatarium_core::routing::{
     DecisionAuthority, RouteClass, RouteEndpointId, RouteGate, RouteGateState, RouteId,
@@ -40,6 +41,11 @@ use chatarium_store::authored::{
 };
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
+};
+use chatarium_store::continuation_audit::{
+    reconstruct_continuation_lease_for_next_issue,
+    reconstruct_unconsumed_continuation_permit, record_continuation_lease_created,
+    record_continuation_permit_issued, replay_continuation_audit,
 };
 use chatarium_store::control_ack_audit::{
     record_worker_control_acknowledged, replay_worker_control_acknowledgement_audit,
@@ -141,6 +147,7 @@ fn unix_now_ms() -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ControllerControlAction {
     StartOrResume,
+    Continue,
     Stop,
     StatusRequest,
 }
@@ -149,6 +156,7 @@ impl ControllerControlAction {
     const fn label(self) -> &'static str {
         match self {
             Self::StartOrResume => "start/resume",
+            Self::Continue => "continue",
             Self::Stop => "stop",
             Self::StatusRequest => "status request",
         }
@@ -208,6 +216,11 @@ enum PersistCommand {
     BindControllerToLocalWorker {
         controller_conversation_id: LocalConversationId,
         worker_conversation_id: LocalConversationId,
+    },
+    CreateControllerContinuationLease {
+        controller_conversation_id: LocalConversationId,
+        worker_conversation_id: LocalConversationId,
+        allowance: u32,
     },
     ProposeControllerWorkerControl {
         controller_conversation_id: LocalConversationId,
@@ -394,6 +407,10 @@ enum PersistNotice {
         event: EventEnvelope,
     },
     SupervisionEventAppended {
+        event: EventEnvelope,
+    },
+    ControllerContinuationLeaseCreated {
+        worker_id: WorkerId,
         event: EventEnvelope,
     },
     ControllerControlProposed {
@@ -664,6 +681,7 @@ struct ChatariumApp {
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
+    continuation_allowance_drafts: BTreeMap<LocalConversationId, u32>,
     worker_control_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
@@ -919,6 +937,7 @@ impl ChatariumApp {
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
+                        continuation_allowance_drafts: BTreeMap::new(),
                         worker_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
@@ -1091,6 +1110,7 @@ impl ChatariumApp {
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
+            continuation_allowance_drafts: BTreeMap::new(),
             worker_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
