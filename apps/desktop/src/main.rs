@@ -16775,6 +16775,12 @@ mod tests {
             PersistNotice::ControllerCoordinationResultContextDecisionUpdated { .. } => {
                 "controller_coordination_result_context_decision_updated"
             }
+            PersistNotice::ControllerCoordinationSuggestionRecorded { .. } => {
+                "controller_coordination_suggestion_recorded"
+            }
+            PersistNotice::ControllerCoordinationSuggestionPromoted { .. } => {
+                "controller_coordination_suggestion_promoted"
+            }
             PersistNotice::WorkerControlAcknowledged { .. } => "worker_control_acknowledged",
             PersistNotice::WorkerControlStatusResultRecorded { .. } => {
                 "worker_control_status_result_recorded"
