@@ -19032,6 +19032,130 @@ mod tests {
     }
 
     #[test]
+    fn one_shot_local_memory_is_turn_scoped_durable_and_not_persistent_admission() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let memory_id = LocalMemoryId::new(1);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        append_local_memory_artifact_checked(
+            &mut store,
+            memory_id,
+            source,
+            "one shot fact".to_owned(),
+        )
+        .unwrap();
+        let snapshot_after_sequence = store.events().last().unwrap().sequence;
+
+        let first = AuthoredUserMessage::new(
+            destination,
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "use the selected memory",
+        );
+        let (commit_event, selection_event) = commit_message_with_one_shot_memory_checked(
+            &mut store,
+            &first,
+            &[memory_id],
+            Some(snapshot_after_sequence),
+        )
+        .unwrap();
+        let selection_event = selection_event.unwrap();
+        assert_eq!(commit_event.kind, EventKind::UserMessageCommitted);
+        assert_eq!(
+            selection_event.kind,
+            EventKind::LocalMemoryTurnSelectionRecorded
+        );
+        assert!(commit_event.sequence < selection_event.sequence);
+        assert!(
+            replay_admitted_local_memory_context(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+
+        let one_shot = one_shot_local_memory_messages_for_turn(store.events(), first.turn_id)
+            .unwrap();
+        assert_eq!(one_shot.len(), 1);
+        assert_eq!(one_shot[0].role, context_composer::TranscriptRole::User);
+        assert!(one_shot[0].text.contains("NEXT REQUEST ONLY"));
+        assert!(one_shot[0].text.contains("one shot fact"));
+        assert!(one_shot[0].text.contains(&format!(
+            "one_shot_selection_event: #{}",
+            selection_event.sequence
+        )));
+
+        let plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            one_shot,
+        );
+        assert_eq!(plan.local_memory_count(), 0);
+        assert_eq!(plan.local_memory_one_shot_count(), 1);
+
+        let second = AuthoredUserMessage::new(
+            destination,
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "do not reuse it",
+        );
+        commit_message_with_one_shot_memory_checked(&mut store, &second, &[], None).unwrap();
+        assert!(
+            one_shot_local_memory_messages_for_turn(store.events(), second.turn_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            replay_local_memory_turn_selection_audit(store.events())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_one_shot_memory_fails_before_authored_commit() {
+        let conversation = LocalConversationId::new();
+        let memory_id = LocalMemoryId::new(1);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        append_local_memory_artifact_checked(
+            &mut store,
+            memory_id,
+            conversation,
+            "always admitted".to_owned(),
+        )
+        .unwrap();
+        append_local_memory_context_decision_checked(
+            &mut store,
+            memory_id,
+            conversation,
+            LocalMemoryContextDecision::Admit,
+        )
+        .unwrap();
+        let snapshot_after_sequence = store.events().last().unwrap().sequence;
+        let before = store.events().len();
+
+        let message = AuthoredUserMessage::new(
+            conversation,
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "must fail before commit",
+        );
+        assert!(
+            commit_message_with_one_shot_memory_checked(
+                &mut store,
+                &message,
+                &[memory_id],
+                Some(snapshot_after_sequence),
+            )
+            .unwrap_err()
+            .contains("persistently admitted")
+        );
+        assert_eq!(store.events().len(), before);
+    }
+
+    #[test]
     fn local_memory_supersession_preserves_history_and_requires_fresh_successor_admission() {
         let source = LocalConversationId::new();
         let destination = LocalConversationId::new();
