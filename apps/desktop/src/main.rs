@@ -6300,6 +6300,240 @@ impl eframe::App for ChatariumApp {
                             }
                         }
 
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("Controller supervision").strong());
+                        ui.label(
+                            egui::RichText::new(
+                                "Coordination provenance only. Controller designation and supervision do not grant dispatch, route-policy, continuation, or lifecycle authority.",
+                            )
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+
+                        match local_conversation_topology(
+                            &self.events,
+                            self.local_conversation_id,
+                        ) {
+                            Err(error) => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "controller topology projection blocked: {error}"
+                                    ))
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(186, 108, 108)),
+                                );
+                            }
+                            Ok(None) => {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "enable local orchestration topology before controller supervision",
+                                    )
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
+                            }
+                            Ok(Some(controller_topology)) => {
+                                match (
+                                    replay_session_audit(&self.events),
+                                    replay_supervision_audit(&self.events),
+                                    replay_local_conversation_topologies(&self.events),
+                                    replay_local_conversation_worker_bindings(&self.events),
+                                ) {
+                                    (
+                                        Ok(sessions),
+                                        Ok(supervision),
+                                        Ok(topologies),
+                                        Ok(worker_bindings),
+                                    ) => {
+                                        let current_session = sessions.iter().find(|record| {
+                                            record.session_id
+                                                == controller_topology.current_session_id
+                                        });
+                                        let current_is_worker = current_session
+                                            .and_then(|record| record.worker_binding)
+                                            .is_some();
+                                        let designated = supervision.controllers.iter().any(
+                                            |record| {
+                                                record.designation.session_id()
+                                                    == controller_topology.current_session_id
+                                            },
+                                        );
+
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "session {} · {}",
+                                                    controller_topology.current_session_id.get(),
+                                                    if designated {
+                                                        "CONTROLLER"
+                                                    } else if current_is_worker {
+                                                        "WORKER-BOUND"
+                                                    } else {
+                                                        "UNASSIGNED ROLE"
+                                                    },
+                                                ))
+                                                .monospace()
+                                                .size(9.0),
+                                            );
+                                            if !designated {
+                                                if ui
+                                                    .add_enabled(
+                                                        !current_is_worker
+                                                            && !self
+                                                                .supervision_command_pending
+                                                            && self.persist_tx.is_some(),
+                                                        egui::Button::new(
+                                                            "Designate as controller",
+                                                        ),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    self.designate_current_session_controller();
+                                                }
+                                            }
+                                            if self.supervision_command_pending {
+                                                ui.spinner();
+                                            }
+                                        });
+
+                                        if designated {
+                                            let mut shown = 0_usize;
+                                            for topology in topologies.into_iter().filter(
+                                                |topology| {
+                                                    topology.conversation_id
+                                                        != self.local_conversation_id
+                                                },
+                                            ) {
+                                                let Some(worker_binding) = worker_bindings
+                                                    .iter()
+                                                    .find(|binding| {
+                                                        binding.conversation_id
+                                                            == topology.conversation_id
+                                                    })
+                                                else {
+                                                    continue;
+                                                };
+                                                shown = shown.saturating_add(1);
+
+                                                let active = active_worker_session(
+                                                    &sessions,
+                                                    worker_binding.worker_id,
+                                                );
+                                                let active_current = active.is_some_and(
+                                                    |record| {
+                                                        record.session_id
+                                                            == topology.current_session_id
+                                                    },
+                                                );
+                                                let existing = supervision.bindings.iter().find(
+                                                    |record| {
+                                                        record.binding.worker_session_id()
+                                                            == topology.current_session_id
+                                                    },
+                                                );
+                                                let title = local_conversation_display_title(
+                                                    &self.local_conversation_catalog,
+                                                    topology.conversation_id,
+                                                    &self.events,
+                                                );
+
+                                                ui.horizontal_wrapped(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "{title} · worker {} · session {}",
+                                                            worker_binding.worker_id.get(),
+                                                            topology.current_session_id.get(),
+                                                        ))
+                                                        .size(10.0),
+                                                    );
+
+                                                    if !active_current {
+                                                        let active_label = active
+                                                            .map(|record| {
+                                                                record.session_id.get().to_string()
+                                                            })
+                                                            .unwrap_or_else(|| {
+                                                                "unbound".to_owned()
+                                                            });
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "WORKER SESSION {active_label} · CURRENT LEAF NOT READY"
+                                                            ))
+                                                            .monospace()
+                                                            .size(9.0),
+                                                        );
+                                                    } else if let Some(existing) = existing {
+                                                        if existing
+                                                            .binding
+                                                            .controller_session_id()
+                                                            == controller_topology
+                                                                .current_session_id
+                                                        {
+                                                            ui.label(
+                                                                egui::RichText::new("SUPERVISED")
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                            );
+                                                        } else {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "SUPERVISED BY SESSION {}",
+                                                                    existing
+                                                                        .binding
+                                                                        .controller_session_id()
+                                                                        .get(),
+                                                                ))
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                        }
+                                                    } else if ui
+                                                        .add_enabled(
+                                                            !self
+                                                                .supervision_command_pending
+                                                                && self.persist_tx.is_some(),
+                                                            egui::Button::new("Supervise"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        self.supervise_local_conversation(
+                                                            topology.conversation_id,
+                                                        );
+                                                    }
+                                                });
+                                            }
+
+                                            if shown == 0 {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "no other local conversations have WorkerIds yet",
+                                                    )
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        139, 143, 153,
+                                                    )),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    (Err(error), _, _, _)
+                                    | (_, Err(error), _, _)
+                                    | (_, _, Err(error), _)
+                                    | (_, _, _, Err(error)) => {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "supervision projection blocked: {error}"
+                                            ))
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(186, 108, 108)),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         ui.add_space(8.0);
                         ui.collapsing("Exact next-request context", |ui| {
                             let mut transcript = context_transcript(&local_display_messages);
