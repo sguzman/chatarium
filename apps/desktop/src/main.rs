@@ -4344,6 +4344,151 @@ impl ChatariumApp {
         }
     }
 
+    fn register_tool_provider(&mut self) {
+        if self.tool_command_pending {
+            return;
+        }
+        let name = match ToolProviderName::new(self.tool_provider_name_draft.clone()) {
+            Ok(name) => name,
+            Err(error) => {
+                self.status = format!("cannot register tool provider: {error:?}");
+                return;
+            }
+        };
+        let provider_id = match next_available_tool_provider_id(&self.events) {
+            Ok(provider_id) => provider_id,
+            Err(error) => {
+                self.status = format!("cannot allocate tool provider identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot register tool provider: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::RegisterToolProvider { provider_id, name }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!("registering inert tool provider {}…", provider_id.get());
+            }
+            Err(error) => {
+                self.status = format!("failed to queue tool provider registration: {error}");
+            }
+        }
+    }
+
+    fn bind_tool_provider_endpoint(&mut self, provider_id: ToolProviderId) {
+        if self.tool_command_pending {
+            return;
+        }
+        let endpoint_id = match next_available_route_endpoint_id(&self.events) {
+            Ok(endpoint_id) => endpoint_id,
+            Err(error) => {
+                self.status = format!("cannot allocate tool routing endpoint: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status =
+                "cannot bind tool provider endpoint: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::BindToolProviderEndpoint {
+            provider_id,
+            endpoint_id,
+        }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "binding tool provider {} to routing endpoint {}…",
+                    provider_id.get(),
+                    endpoint_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue tool endpoint binding: {error}");
+            }
+        }
+    }
+
+    fn propose_tool_call(&mut self) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(provider_id) = self.tool_selected_provider else {
+            self.status = "cannot propose tool call: select a provider".to_owned();
+            return;
+        };
+        let operation = match ToolOperationName::new(self.tool_operation_draft.clone()) {
+            Ok(operation) => operation,
+            Err(error) => {
+                self.status = format!("cannot propose tool call: invalid operation: {error:?}");
+                return;
+            }
+        };
+        let call_id = match next_available_tool_call_id(&self.events) {
+            Ok(call_id) => call_id,
+            Err(error) => {
+                self.status = format!("cannot allocate tool call identity: {error}");
+                return;
+            }
+        };
+        let route_id = match next_available_route_id(&self.events) {
+            Ok(route_id) => route_id,
+            Err(error) => {
+                self.status = format!("cannot allocate tool route identity: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot propose tool call: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::ProposeToolCall {
+            call_id,
+            route_id,
+            source_conversation_id: self.local_conversation_id,
+            provider_id,
+            operation,
+            arguments_text: self.tool_arguments_draft.clone(),
+        }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "recording immutable tool call {} and pending route {}…",
+                    call_id.get(),
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue tool call proposal: {error}");
+            }
+        }
+    }
+
+    fn decide_tool_call_route(&mut self, route_id: RouteId, decision: RouteUserDecision) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot update tool route policy: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideToolCallRoute { route_id, decision }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "recording explicit {} decision for tool route {}…",
+                    route_user_decision_label(decision),
+                    route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue tool route decision: {error}");
+            }
+        }
+    }
+
     fn record_local_memory(&mut self) {
         if self.local_memory_command_pending || self.local_memory_draft.trim().is_empty() {
             return;
