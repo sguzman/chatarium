@@ -127,8 +127,7 @@ pub fn replay_worker_continuation_execution_audit(
         if !execution_turns.insert(execution_turn_id) {
             return Err(format!(
                 "worker continuation execution turn {} is reused at sequence {}",
-                execution_turn_id,
-                event.sequence
+                execution_turn_id, event.sequence
             ));
         }
 
@@ -146,10 +145,7 @@ pub fn replay_worker_continuation_execution_audit(
                 route_id.get()
             )
         })?;
-        if item.control_id != control_id
-            || item.worker_id != worker_id
-            || item.goal_id != goal_id
-        {
+        if item.control_id != control_id || item.worker_id != worker_id || item.goal_id != goal_id {
             return Err(format!(
                 "worker continuation execution at sequence {} disagrees with delivered control provenance",
                 event.sequence
@@ -346,8 +342,7 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
             event.sequence
         ));
     }
-    if value.get("record").and_then(Value::as_str)
-        != Some("worker_continuation_execution_started")
+    if value.get("record").and_then(Value::as_str) != Some("worker_continuation_execution_started")
     {
         return Err(format!(
             "worker continuation execution at sequence {} has unexpected record",
@@ -373,10 +368,7 @@ fn validate_scope(
     Ok(())
 }
 
-fn parse_conversation_id(
-    value: &Value,
-    sequence: u64,
-) -> Result<LocalConversationId, String> {
+fn parse_conversation_id(value: &Value, sequence: u64) -> Result<LocalConversationId, String> {
     LocalConversationId::from_str(required_string(value, "worker_conversation_id")?).map_err(
         |error| {
             format!(
@@ -395,10 +387,9 @@ fn parse_turn_id(value: &Value, sequence: u64) -> Result<LocalTurnId, String> {
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed worker continuation execution is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed worker continuation execution is missing integer field '{field}'")
+    })
 }
 
 fn required_u32(value: &Value, field: &str) -> Result<u32, String> {
@@ -408,10 +399,9 @@ fn required_u32(value: &Value, field: &str) -> Result<u32, String> {
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed worker continuation execution is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed worker continuation execution is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
