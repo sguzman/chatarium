@@ -12103,6 +12103,85 @@ fn append_local_route_context_decision_checked(
         .ok_or_else(|| "routed context decision append produced no durable event".to_owned())
 }
 
+fn commit_message_with_one_shot_memory_checked(
+    store: &mut impl EventStore,
+    message: &AuthoredUserMessage,
+    one_shot_memory_ids: &[LocalMemoryId],
+    one_shot_memory_snapshot_after_sequence: Option<u64>,
+) -> Result<(EventEnvelope, Option<EventEnvelope>), String> {
+    match (
+        one_shot_memory_ids.is_empty(),
+        one_shot_memory_snapshot_after_sequence,
+    ) {
+        (true, None) => {}
+        (true, Some(_)) => {
+            return Err(
+                "empty one-shot local memory set cannot carry a snapshot high-water".to_owned(),
+            );
+        }
+        (false, None) => {
+            return Err(
+                "non-empty one-shot local memory set requires a snapshot high-water".to_owned(),
+            );
+        }
+        (false, Some(snapshot_after_sequence)) => {
+            validate_local_memory_one_shot_snapshot(
+                store.events(),
+                message.conversation_id,
+                one_shot_memory_ids,
+                snapshot_after_sequence,
+            )?;
+        }
+    }
+
+    commit_user_message(store, message).map_err(|error| error.to_string())?;
+    let commit_event = store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "user-message commit produced no durable event".to_owned())?;
+
+    let one_shot_event = if let Some(snapshot_after_sequence) =
+        one_shot_memory_snapshot_after_sequence
+    {
+        record_local_memory_turn_selection(
+            store,
+            message.conversation_id,
+            message.turn_id,
+            one_shot_memory_ids,
+            snapshot_after_sequence,
+        )
+        .map_err(|error| error.to_string())?;
+
+        let event = store
+            .events()
+            .last()
+            .cloned()
+            .ok_or_else(|| "one-shot local memory selection produced no durable event".to_owned())?;
+
+        let replayed = replay_local_memory_turn_selection_audit(store.events())?
+            .into_iter()
+            .find(|record| record.turn_id == message.turn_id)
+            .ok_or_else(|| "one-shot local memory selection append did not replay".to_owned())?;
+        if replayed.conversation_id != message.conversation_id
+            || replayed.memory_ids != one_shot_memory_ids
+            || replayed.selection_snapshot_after_sequence != snapshot_after_sequence
+            || replayed.user_message_sequence != commit_event.sequence
+            || replayed.recorded_sequence != event.sequence
+        {
+            return Err(
+                "one-shot local memory selection replay disagrees with appended selection"
+                    .to_owned(),
+            );
+        }
+        Some(event)
+    } else {
+        None
+    };
+
+    Ok((commit_event, one_shot_event))
+}
+
 fn append_local_memory_artifact_checked(
     store: &mut impl EventStore,
     memory_id: LocalMemoryId,
