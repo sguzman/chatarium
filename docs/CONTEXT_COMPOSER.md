@@ -137,9 +137,16 @@ instructions and never as human-authored transcript messages.
 
 For controller coordination, the worker-result set is frozen by the durable
 coordination-start event. Dispatch recomposes from that historical prefix and
-appends the coordination marker last. The marker tells the model to synthesize
-the admitted results while explicitly denying authority to issue or execute
-worker controls, mutate lifecycle, or assume continuation authority.
+appends the coordination marker last. The marker explicitly denies authority to
+issue or execute worker controls, mutate lifecycle, or assume continuation
+authority.
+
+New coordination turns also declare `suggestion_candidates_v1`. The marker
+requests exactly one JSON object with a `summary` string and a
+`suggestion_candidates` array. Candidate objects may contain only
+`basis_result_route_id` and one typed action name. WorkerId/goal identity is
+intentionally omitted from model-supplied schema and re-derived locally from the
+frozen route when candidate output is projected.
 
 Coordination output is durable remote-turn evidence plus a separate terminal
 coordination result. It is context-excluded by default. A later explicit
