@@ -12429,6 +12429,166 @@ fn append_controller_coordination_suggestion_checked(
     Ok((suggestion_id, event))
 }
 
+fn append_controller_coordination_suggestion_promotion_checked(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+    suggestion_id: CoordinationSuggestionId,
+) -> Result<(ControlId, RouteId, Vec<EventEnvelope>), String> {
+    let suggestion = replay_controller_coordination_suggestion_audit(store.events())?
+        .into_iter()
+        .find(|record| record.suggestion.id() == suggestion_id)
+        .ok_or_else(|| {
+            format!(
+                "coordination suggestion {} does not exist",
+                suggestion_id.get()
+            )
+        })?;
+    if suggestion.controller_conversation_id != controller_conversation_id {
+        return Err(format!(
+            "coordination suggestion {} belongs to controller conversation {}, not {}",
+            suggestion_id.get(),
+            suggestion.controller_conversation_id,
+            controller_conversation_id,
+        ));
+    }
+    if suggestion.promoted_sequence.is_some() {
+        return Err(format!(
+            "coordination suggestion {} is already promoted to control {} route {}",
+            suggestion_id.get(),
+            suggestion.promoted_control_id.map_or(0, ControlId::get),
+            suggestion.promoted_route_id.map_or(0, RouteId::get),
+        ));
+    }
+
+    let worker_owner = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == suggestion.worker_conversation_id)
+        .ok_or_else(|| {
+            format!(
+                "suggestion {} target conversation {} no longer has a WorkerId binding",
+                suggestion_id.get(),
+                suggestion.worker_conversation_id
+            )
+        })?;
+    if worker_owner.worker_id != suggestion.suggestion.worker_id() {
+        return Err(format!(
+            "suggestion {} target conversation now owns worker {}, expected worker {}",
+            suggestion_id.get(),
+            worker_owner.worker_id.get(),
+            suggestion.suggestion.worker_id().get()
+        ));
+    }
+
+    let worker = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == suggestion.suggestion.worker_id())
+        .ok_or_else(|| {
+            format!(
+                "suggestion {} target worker {} has no lifecycle state",
+                suggestion_id.get(),
+                suggestion.suggestion.worker_id().get()
+            )
+        })?;
+    let current_goal = worker.lifecycle.goal_id().ok_or_else(|| {
+        format!(
+            "suggestion {} target worker {} no longer has an assigned goal",
+            suggestion_id.get(),
+            suggestion.suggestion.worker_id().get()
+        )
+    })?;
+    if current_goal != suggestion.suggestion.goal_id() {
+        return Err(format!(
+            "coordination suggestion {} is stale: worker {} current goal is {}, suggestion observed goal {}",
+            suggestion_id.get(),
+            suggestion.suggestion.worker_id().get(),
+            current_goal.get(),
+            suggestion.suggestion.goal_id().get()
+        ));
+    }
+
+    let action = controller_control_action_from_suggestion(suggestion.suggestion.action());
+    let before = store.events().len();
+    let (control_id, route_id, _) = append_controller_worker_control_proposal_checked(
+        store,
+        controller_conversation_id,
+        suggestion.worker_conversation_id,
+        action,
+    )?;
+
+    let control = replay_control_audit(store.events())?
+        .into_iter()
+        .find(|record| record.control_id == control_id)
+        .ok_or_else(|| "promoted suggestion control disappeared after proposal".to_owned())?;
+    if control.worker_id != suggestion.suggestion.worker_id()
+        || control.goal_id != suggestion.suggestion.goal_id()
+        || !coordination_suggestion_matches_control_kind(
+            suggestion.suggestion.action(),
+            control.kind,
+        )
+    {
+        return Err(
+            "promoted control does not match coordination suggestion provenance".to_owned(),
+        );
+    }
+
+    record_controller_coordination_suggestion_promoted(
+        store,
+        controller_conversation_id,
+        suggestion_id,
+        control_id,
+        route_id,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let replayed = replay_controller_coordination_suggestion_audit(store.events())?
+        .into_iter()
+        .find(|record| record.suggestion.id() == suggestion_id)
+        .ok_or_else(|| "promoted coordination suggestion did not replay".to_owned())?;
+    if replayed.promoted_control_id != Some(control_id)
+        || replayed.promoted_route_id != Some(route_id)
+        || replayed.promoted_sequence != store.events().last().map(|event| event.sequence)
+    {
+        return Err(
+            "coordination suggestion promotion replay disagrees with control proposal".to_owned(),
+        );
+    }
+
+    Ok((control_id, route_id, store.events()[before..].to_vec()))
+}
+
+fn controller_control_action_from_suggestion(
+    action: CoordinationSuggestionAction,
+) -> ControllerControlAction {
+    match action {
+        CoordinationSuggestionAction::StartOrResume => ControllerControlAction::StartOrResume,
+        CoordinationSuggestionAction::Continue => ControllerControlAction::Continue,
+        CoordinationSuggestionAction::Stop => ControllerControlAction::Stop,
+        CoordinationSuggestionAction::StatusRequest => ControllerControlAction::StatusRequest,
+    }
+}
+
+fn coordination_suggestion_matches_control_kind(
+    action: CoordinationSuggestionAction,
+    kind: WorkerControlKind,
+) -> bool {
+    matches!(
+        (action, kind),
+        (
+            CoordinationSuggestionAction::StartOrResume,
+            WorkerControlKind::StartOrResume
+        )
+            | (
+                CoordinationSuggestionAction::Continue,
+                WorkerControlKind::Continue { .. }
+            )
+            | (CoordinationSuggestionAction::Stop, WorkerControlKind::Stop)
+            | (
+                CoordinationSuggestionAction::StatusRequest,
+                WorkerControlKind::StatusRequest
+            )
+    )
+}
+
 fn append_worker_control_acknowledgement_checked(
     store: &mut impl EventStore,
     worker_conversation_id: LocalConversationId,
