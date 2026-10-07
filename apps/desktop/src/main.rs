@@ -9480,6 +9480,156 @@ fn append_local_controller_worker_binding_checked(
         .ok_or_else(|| "controller-worker binding append produced no durable event".to_owned())
 }
 
+fn append_controller_continuation_lease_checked(
+    store: &mut impl EventStore,
+    controller_conversation_id: LocalConversationId,
+    worker_conversation_id: LocalConversationId,
+    allowance: u32,
+) -> Result<(WorkerId, EventEnvelope), String> {
+    if allowance == 0 {
+        return Err("continuation lease allowance must be greater than zero".to_owned());
+    }
+    if controller_conversation_id == worker_conversation_id {
+        return Err("a controller conversation cannot authorize continuation for itself".to_owned());
+    }
+
+    let controller_topology = local_conversation_topology(
+        store.events(),
+        controller_conversation_id,
+    )?
+    .ok_or_else(|| {
+        format!(
+            "controller conversation {controller_conversation_id} has no orchestration topology"
+        )
+    })?;
+    let worker_topology = local_conversation_topology(store.events(), worker_conversation_id)?
+        .ok_or_else(|| {
+            format!("worker conversation {worker_conversation_id} has no orchestration topology")
+        })?;
+    let worker_binding = replay_local_conversation_worker_bindings(store.events())?
+        .into_iter()
+        .find(|binding| binding.conversation_id == worker_conversation_id)
+        .ok_or_else(|| {
+            format!("worker conversation {worker_conversation_id} has no local WorkerId binding")
+        })?;
+
+    let sessions = replay_session_audit(store.events())?;
+    let active_worker =
+        active_worker_session(&sessions, worker_binding.worker_id).ok_or_else(|| {
+            format!(
+                "worker {} for local conversation {} has no active session binding",
+                worker_binding.worker_id.get(),
+                worker_conversation_id
+            )
+        })?;
+    if active_worker.session_id != worker_topology.current_session_id {
+        return Err(format!(
+            "worker {} is active on session {}, but local conversation {} current session is {}; advance the worker session first",
+            worker_binding.worker_id.get(),
+            active_worker.session_id.get(),
+            worker_conversation_id,
+            worker_topology.current_session_id.get()
+        ));
+    }
+
+    let supervision = replay_supervision_audit(store.events())?;
+    if !supervision
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == controller_topology.current_session_id)
+    {
+        return Err(format!(
+            "controller conversation {} current session {} is not controller-designated",
+            controller_conversation_id,
+            controller_topology.current_session_id.get()
+        ));
+    }
+    if !supervision.bindings.iter().any(|record| {
+        record.binding.controller_session_id() == controller_topology.current_session_id
+            && record.binding.worker_session_id() == active_worker.session_id
+    }) {
+        return Err(format!(
+            "controller session {} does not supervise worker {} active session {}",
+            controller_topology.current_session_id.get(),
+            worker_binding.worker_id.get(),
+            active_worker.session_id.get()
+        ));
+    }
+
+    let worker = replay_worker_audit(store.events())?
+        .into_iter()
+        .find(|record| record.worker_id == worker_binding.worker_id)
+        .ok_or_else(|| {
+            format!(
+                "worker {} has no assigned goal",
+                worker_binding.worker_id.get()
+            )
+        })?;
+    let goal_id = worker.lifecycle.goal_id().ok_or_else(|| {
+        format!(
+            "worker {} has no assigned goal",
+            worker_binding.worker_id.get()
+        )
+    })?;
+    if worker.lifecycle.phase().is_terminal() {
+        return Err(format!(
+            "cannot create continuation lease for worker {} terminal phase {}",
+            worker_binding.worker_id.get(),
+            worker_phase_label(worker.lifecycle.phase())
+        ));
+    }
+
+    let existing = replay_continuation_audit(store.events())?
+        .into_iter()
+        .filter(|record| {
+            record.worker_id == worker_binding.worker_id && record.goal_id == goal_id
+        })
+        .filter(|record| {
+            record.remaining > 0
+                || record
+                    .permits
+                    .iter()
+                    .any(|permit| permit.consumed_by.is_none())
+        })
+        .collect::<Vec<_>>();
+    if !existing.is_empty() {
+        return Err(format!(
+            "worker {} goal {} already has live continuation authority",
+            worker_binding.worker_id.get(),
+            goal_id.get()
+        ));
+    }
+
+    let lease_id = next_available_continuation_lease_id(store.events())?;
+    let lease = ContinuationLease::new(
+        lease_id,
+        worker_binding.worker_id,
+        goal_id,
+        allowance,
+    );
+    record_continuation_lease_created(store, &lease).map_err(|error| error.to_string())?;
+
+    let replayed = replay_continuation_audit(store.events())?
+        .into_iter()
+        .find(|record| record.lease_id == lease_id)
+        .ok_or_else(|| "continuation lease append did not replay".to_owned())?;
+    if replayed.worker_id != worker_binding.worker_id
+        || replayed.goal_id != goal_id
+        || replayed.allowance != allowance
+        || replayed.issued != 0
+        || replayed.remaining != allowance
+    {
+        return Err("continuation lease replay disagrees with requested authority".to_owned());
+    }
+
+    let event = store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "continuation lease append produced no durable event".to_owned())?;
+    Ok((worker_binding.worker_id, event))
+}
+
 fn append_controller_worker_control_proposal_checked(
     store: &mut impl EventStore,
     controller_conversation_id: LocalConversationId,
