@@ -48,7 +48,8 @@ use chatarium_store::continuation_audit::{
     replay_continuation_audit,
 };
 use chatarium_store::continuation_execution_audit::{
-    record_worker_continuation_execution_started, replay_worker_continuation_execution_audit,
+    continuation_execution_transport_state, record_worker_continuation_execution_started,
+    replay_worker_continuation_execution_audit,
 };
 use chatarium_store::control_ack_audit::{
     record_worker_control_acknowledged, replay_worker_control_acknowledgement_audit,
@@ -4130,6 +4131,136 @@ impl ChatariumApp {
             Err(error) => {
                 self.status = format!("failed to queue continuation execution start: {error}");
             }
+        }
+    }
+
+    fn dispatch_worker_continuation_execution(&mut self, route_id: RouteId) {
+        if self.pending_remote_turn.is_some() || self.active_remote_turn.is_some() {
+            self.status = "cannot dispatch continuation while another remote turn is active".to_owned();
+            return;
+        }
+        if !self.remote_connected() {
+            self.status = "cannot dispatch continuation: ChatGPT is not connected".to_owned();
+            return;
+        }
+        if self.capability_probe.running() {
+            self.status = "cannot dispatch continuation while capability probes are running".to_owned();
+            return;
+        }
+        let Some(model) = self.selected_model.clone() else {
+            self.status = "cannot dispatch continuation: no model selected".to_owned();
+            return;
+        };
+
+        let execution = match replay_worker_continuation_execution_audit(&self.events) {
+            Ok(records) => records
+                .into_iter()
+                .find(|record| {
+                    record.route_id == route_id
+                        && record.worker_conversation_id == self.local_conversation_id
+                }),
+            Err(error) => {
+                self.status = format!("cannot replay continuation execution: {error}");
+                return;
+            }
+        };
+        let Some(execution) = execution else {
+            self.status = format!(
+                "worker control route {} has no continuation execution start for this conversation",
+                route_id.get()
+            );
+            return;
+        };
+
+        let transport =
+            match continuation_execution_transport_state(&self.events, execution.execution_turn_id) {
+                Ok(state) => state,
+                Err(error) => {
+                    self.status = format!("cannot replay continuation transport: {error}");
+                    return;
+                }
+            };
+        if transport.was_dispatched() {
+            self.status = format!(
+                "continuation execution turn {} already has durable dispatch evidence",
+                execution.execution_turn_id
+            );
+            return;
+        }
+
+        let request_patch = match self.current_behavior_request_patch() {
+            Ok(patch) => patch,
+            Err(error) => {
+                self.status = format!("cannot continue with current behavior profile: {error}");
+                return;
+            }
+        };
+
+        let execution_prefix = self
+            .events
+            .iter()
+            .take_while(|event| event.sequence <= execution.started_sequence)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut transcript = context_transcript(&projected_local_display_messages(
+            &execution_prefix,
+            self.local_conversation_id,
+        ));
+        match admitted_routed_context_messages(
+            &execution_prefix,
+            self.local_conversation_id,
+        ) {
+            Ok(routed) => transcript.extend(routed),
+            Err(error) => {
+                self.status = format!("cannot compose continuation routed context: {error}");
+                return;
+            }
+        }
+        transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+        transcript.push(context_composer::TranscriptMessage::controller_continuation(
+            execution.control_id.get(),
+            execution.route_id.get(),
+            execution.worker_id.get(),
+            execution.goal_id.get(),
+            execution.lease_id.get(),
+            execution.permit_ordinal,
+            execution.started_sequence,
+        ));
+
+        let context_plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            self.conversation_instructions.as_str(),
+            self.conversation_developer_context.as_str(),
+            transcript,
+        );
+        let request_id = execution.execution_turn_id.to_string();
+        self.pending_remote_turn = Some(PendingRemoteTurn {
+            turn_id: execution.execution_turn_id,
+            request_id: request_id.clone(),
+            model: model.clone(),
+            input: context_plan.input_json(),
+            instructions: context_plan.instructions.clone(),
+            request_patch,
+        });
+
+        let payload = remote_turn_payload(
+            execution.execution_turn_id,
+            &request_id,
+            Some(&model),
+            None,
+            Some("bounded controller continuation remote dispatch"),
+        );
+        if self.queue_turn_event(
+            execution.execution_turn_id,
+            EventKind::DispatchAttempted,
+            payload,
+        ) {
+            self.status = format!(
+                "continuation execution turn {} durably dispatching through ChatGPT…",
+                execution.execution_turn_id
+            );
+        } else {
+            self.pending_remote_turn = None;
         }
     }
 
