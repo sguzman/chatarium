@@ -6737,7 +6737,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Worker control inbox", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command. STATUS snapshots existing lifecycle without mutation. START/RESUME and STOP mutate lifecycle only through an explicit crash-recoverable Apply control action.",
+                                    "Delivered controller controls are durable command provenance only. Acknowledge records that this worker conversation saw the command. STATUS snapshots existing lifecycle without mutation. START/RESUME and STOP mutate lifecycle only through an explicit crash-recoverable Apply control action. CONTINUE starts its own non-authored execution turn; remote inference is not dispatched by that start yet.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6786,6 +6786,24 @@ impl eframe::App for ChatariumApp {
                                                 ui.label(
                                                     egui::RichText::new(format!(
                                                         "worker control action projection blocked: {error}"
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        186, 108, 108,
+                                                    )),
+                                                );
+                                                None
+                                            }
+                                        };
+                                    let continuation_executions =
+                                        match replay_worker_continuation_execution_audit(
+                                            &self.events,
+                                        ) {
+                                            Ok(records) => Some(records),
+                                            Err(error) => {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "continuation execution projection blocked: {error}"
                                                     ))
                                                     .size(9.0)
                                                     .color(egui::Color32::from_rgb(
@@ -6968,6 +6986,53 @@ impl eframe::App for ChatariumApp {
                                                                 }
                                                             }
                                                         }
+                                                        if matches!(
+                                                            item.kind,
+                                                            WorkerControlKind::Continue { .. }
+                                                        ) && item.acknowledged_sequence.is_some()
+                                                        {
+                                                            let execution = continuation_executions
+                                                                .as_ref()
+                                                                .and_then(|records| {
+                                                                    records.iter().find(
+                                                                        |record| {
+                                                                            record.route_id
+                                                                                == item.route_id
+                                                                        },
+                                                                    )
+                                                                });
+                                                            if let Some(execution) = execution {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "CONTINUATION STARTED · lease {}:{} · turn {} · event #{}",
+                                                                        execution.lease_id.get(),
+                                                                        execution.permit_ordinal,
+                                                                        execution.execution_turn_id,
+                                                                        execution.started_sequence,
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                            } else if ui
+                                                                .add_enabled(
+                                                                    continuation_executions
+                                                                        .is_some()
+                                                                        && !self
+                                                                            .worker_control_command_pending
+                                                                        && self.persist_tx.is_some(),
+                                                                    egui::Button::new(
+                                                                        "Start continuation execution",
+                                                                    ),
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                self
+                                                                    .start_worker_continuation_execution(
+                                                                        item.route_id,
+                                                                    );
+                                                            }
+                                                        }
+
                                                         if self.worker_control_command_pending {
                                                             ui.spinner();
                                                         }
