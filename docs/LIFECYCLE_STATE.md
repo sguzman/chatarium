@@ -157,6 +157,15 @@ controller-designated and durably bound to that active worker session.
 Supervision remains provenance only: it does not itself authorize lifecycle
 mutation, continuation, routing, dispatch, or hidden prompts.
 
-The next lifecycle/orchestration boundary is controller-issued typed
-`WorkerControl` actions through the existing admission, issuer-provenance,
-control-route, freshness, and one-shot dispatch machinery.
+Controller-issued typed `WorkerControl` actions now use the existing
+admission, issuer-provenance, control-route, freshness, explicit-approval, and
+one-shot dispatch machinery.
+
+Dispatch now records a separate durable worker-control delivery fact and the
+worker conversation exposes a read-only control inbox. Delivery is intentionally
+not lifecycle evidence: Start/Resume, Stop, and Status Request commands do not
+change WorkerLifecycle merely because they arrived.
+
+The next lifecycle/orchestration boundary is explicit worker-side
+acknowledgement/action, followed by separately durable lifecycle/status evidence
+appropriate to the specific control kind.
