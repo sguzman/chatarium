@@ -9951,6 +9951,18 @@ fn local_worker_binding(
         .find(|binding| binding.conversation_id == conversation_id))
 }
 
+fn local_worker_session_alignment(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+    worker_id: WorkerId,
+) -> Result<(SessionId, Option<SessionId>), String> {
+    let topology = local_conversation_topology(events, conversation_id)?
+        .ok_or_else(|| format!("local conversation {conversation_id} has no orchestration topology"))?;
+    let sessions = replay_session_audit(events)?;
+    let active = active_worker_session(&sessions, worker_id).map(|record| record.session_id);
+    Ok((topology.current_session_id, active))
+}
+
 fn worker_record(
     events: &[EventEnvelope],
     worker_id: WorkerId,
