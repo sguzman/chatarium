@@ -138,8 +138,7 @@ pub fn replay_controller_coordination_audit(
         match event.kind {
             EventKind::ControllerCoordinationTurnStarted => {
                 let value = typed_payload(event, "controller_coordination_started")?;
-                let controller_conversation_id =
-                    parse_conversation_id(&value, event.sequence)?;
+                let controller_conversation_id = parse_conversation_id(&value, event.sequence)?;
                 let controller_session_id =
                     SessionId::new(required_u64(&value, "controller_session_id")?);
                 let coordination_turn_id = parse_turn_id(&value, event.sequence)?;
@@ -220,14 +219,13 @@ pub fn replay_controller_coordination_audit(
                     ));
                 }
 
-                let mut expected_routes =
-                    replay_admitted_controller_worker_result_context(
-                        prior,
-                        controller_conversation_id,
-                    )?
-                    .into_iter()
-                    .map(|record| record.route_id)
-                    .collect::<Vec<_>>();
+                let mut expected_routes = replay_admitted_controller_worker_result_context(
+                    prior,
+                    controller_conversation_id,
+                )?
+                .into_iter()
+                .map(|record| record.route_id)
+                .collect::<Vec<_>>();
                 expected_routes.sort_by_key(|route_id| route_id.get());
 
                 let mut recorded_routes = admitted_result_routes.clone();
@@ -299,8 +297,10 @@ pub fn replay_controller_coordination_audit(
                     ));
                 }
 
-                let transport =
-                    controller_coordination_transport_state(&events[..index], coordination_turn_id)?;
+                let transport = controller_coordination_transport_state(
+                    &events[..index],
+                    coordination_turn_id,
+                )?;
                 let (expected_outcome, expected_terminal) =
                     coordination_terminal_outcome(transport).ok_or_else(|| {
                         format!(
@@ -417,7 +417,11 @@ pub fn controller_coordination_transport_state(
             }
             EventKind::TransportInterrupted => {
                 require_dispatch(state, coordination_turn_id, event.sequence)?;
-                if state.interruption_sequence.replace(event.sequence).is_some() {
+                if state
+                    .interruption_sequence
+                    .replace(event.sequence)
+                    .is_some()
+                {
                     return Err(format!(
                         "controller coordination turn {} has multiple interruption observations",
                         coordination_turn_id
@@ -509,9 +513,7 @@ pub fn coordination_scope(
     controller_conversation_id: LocalConversationId,
     coordination_turn_id: LocalTurnId,
 ) -> String {
-    format!(
-        "controller-coordination:{controller_conversation_id}:{coordination_turn_id}"
-    )
+    format!("controller-coordination:{controller_conversation_id}:{coordination_turn_id}")
 }
 
 fn append_typed(
@@ -552,10 +554,7 @@ fn typed_payload(event: &EventEnvelope, expected_record: &str) -> Result<Value, 
     Ok(value)
 }
 
-fn parse_conversation_id(
-    value: &Value,
-    sequence: u64,
-) -> Result<LocalConversationId, String> {
+fn parse_conversation_id(value: &Value, sequence: u64) -> Result<LocalConversationId, String> {
     LocalConversationId::from_str(required_string(value, "controller_conversation_id")?).map_err(
         |error| {
             format!(
@@ -621,17 +620,15 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed controller coordination payload is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed controller coordination payload is missing integer field '{field}'")
+    })
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("typed controller coordination payload is missing string field '{field}'"))
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        format!("typed controller coordination payload is missing string field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
