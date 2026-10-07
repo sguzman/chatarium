@@ -5,6 +5,7 @@
 //! creates no new journal fact.
 
 use crate::EventEnvelope;
+use crate::control_ack_audit::replay_worker_control_acknowledgement_audit;
 use crate::control_audit::replay_control_audit;
 use crate::control_delivery_audit::replay_worker_control_delivery_audit;
 use chatarium_core::LocalConversationId;
@@ -27,6 +28,7 @@ pub struct WorkerControlInboxItem {
     pub admitted_sequence: u64,
     pub dispatch_sequence: u64,
     pub delivered_sequence: u64,
+    pub acknowledged_sequence: Option<u64>,
 }
 
 pub fn replay_worker_control_inbox(
@@ -35,6 +37,11 @@ pub fn replay_worker_control_inbox(
     let controls = replay_control_audit(events)?
         .into_iter()
         .map(|record| (record.control_id, record))
+        .collect::<BTreeMap<_, _>>();
+
+    let acknowledgements = replay_worker_control_acknowledgement_audit(events)?
+        .into_iter()
+        .map(|record| (record.route_id, record))
         .collect::<BTreeMap<_, _>>();
 
     let mut items = Vec::new();
@@ -70,6 +77,9 @@ pub fn replay_worker_control_inbox(
             admitted_sequence: control.admitted_sequence,
             dispatch_sequence: delivery.dispatch_sequence,
             delivered_sequence: delivery.delivered_sequence,
+            acknowledged_sequence: acknowledgements
+                .get(&delivery.route_id)
+                .map(|record| record.acknowledged_sequence),
         });
     }
 
