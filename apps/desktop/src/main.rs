@@ -3919,8 +3919,10 @@ impl ChatariumApp {
         }) {
             Ok(()) => {
                 self.worker_control_command_pending = true;
-                self.status =
-                    format!("acknowledging delivered worker control route {}…", route_id.get());
+                self.status = format!(
+                    "acknowledging delivered worker control route {}…",
+                    route_id.get()
+                );
             }
             Err(error) => {
                 self.status = format!("failed to queue worker control acknowledgement: {error}");
@@ -9597,19 +9599,17 @@ fn append_worker_control_acknowledgement_checked(
     worker_conversation_id: LocalConversationId,
     route_id: RouteId,
 ) -> Result<EventEnvelope, String> {
-    let item = replay_worker_control_inbox_for_conversation(
-        store.events(),
-        worker_conversation_id,
-    )?
-    .into_iter()
-    .find(|item| item.route_id == route_id)
-    .ok_or_else(|| {
-        format!(
-            "worker control route {} is not a delivered inbox item for conversation {}",
-            route_id.get(),
-            worker_conversation_id,
-        )
-    })?;
+    let item =
+        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation_id)?
+            .into_iter()
+            .find(|item| item.route_id == route_id)
+            .ok_or_else(|| {
+                format!(
+                    "worker control route {} is not a delivered inbox item for conversation {}",
+                    route_id.get(),
+                    worker_conversation_id,
+                )
+            })?;
 
     if item.acknowledged_sequence.is_some() {
         return Err(format!(
@@ -10124,10 +10124,8 @@ fn persistence_worker(
                     route_id,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::WorkerControlAcknowledged {
-                            route_id,
-                            event,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::WorkerControlAcknowledged { route_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -13203,16 +13201,12 @@ mod tests {
             route_id,
         )
         .unwrap();
-        assert_eq!(
-            acknowledgement.kind,
-            EventKind::WorkerControlAcknowledged
-        );
-        let acknowledgement_record =
-            replay_worker_control_acknowledgement_audit(store.events())
-                .unwrap()
-                .into_iter()
-                .find(|record| record.control_id == control_id)
-                .unwrap();
+        assert_eq!(acknowledgement.kind, EventKind::WorkerControlAcknowledged);
+        let acknowledgement_record = replay_worker_control_acknowledgement_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.control_id == control_id)
+            .unwrap();
         assert_eq!(acknowledgement_record.route_id, route_id);
         assert_eq!(
             acknowledgement_record.worker_conversation_id,
