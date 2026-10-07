@@ -7241,7 +7241,7 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Local memory", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Immutable explicit memory artifacts. Recording does not add context. Each artifact is excluded by default for this conversation until you Admit it; admission is reversible and snapshotted at Send.",
+                                    "Immutable explicit memory artifacts. Recording does not add context. Admission is per conversation and snapshotted at Send. Supersession is explicit: stale predecessors remain visible but are mechanically excluded; successors are never auto-admitted.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -7309,12 +7309,28 @@ impl eframe::App for ChatariumApp {
                                                 None
                                             }
                                         };
+                                    let supersessions =
+                                        match replay_local_memory_supersession_audit(&self.events) {
+                                            Ok(records) => Some(records),
+                                            Err(error) => {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "local memory supersession projection blocked: {error}"
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        186, 108, 108,
+                                                    )),
+                                                );
+                                                None
+                                            }
+                                        };
 
                                     egui::ScrollArea::vertical()
                                         .id_salt("local-memory-artifacts")
                                         .max_height(240.0)
                                         .show(ui, |ui| {
-                                            for artifact in artifacts {
+                                            for artifact in &artifacts {
                                                 let source_title =
                                                     local_conversation_display_title(
                                                         &self.local_conversation_catalog,
@@ -7333,6 +7349,39 @@ impl eframe::App for ChatariumApp {
                                                         })
                                                     })
                                                     .map(|record| record.decision);
+                                                let superseded_by = supersessions
+                                                    .as_ref()
+                                                    .and_then(|records| {
+                                                        records.iter().find(|record| {
+                                                            record.predecessor_memory_id
+                                                                == artifact.memory_id
+                                                        })
+                                                    })
+                                                    .map(|record| record.successor_memory_id);
+                                                let successor_candidates = supersessions
+                                                    .as_ref()
+                                                    .map(|records| {
+                                                        artifacts
+                                                            .iter()
+                                                            .filter(|candidate| {
+                                                                candidate.source_conversation_id
+                                                                    == artifact
+                                                                        .source_conversation_id
+                                                                    && candidate.recorded_sequence
+                                                                        > artifact
+                                                                            .recorded_sequence
+                                                                    && !records.iter().any(
+                                                                        |record| {
+                                                                            record
+                                                                                .successor_memory_id
+                                                                                == candidate
+                                                                                    .memory_id
+                                                                        },
+                                                                    )
+                                                            })
+                                                            .collect::<Vec<_>>()
+                                                    })
+                                                    .unwrap_or_default();
 
                                                 ui.group(|ui| {
                                                     ui.horizontal_wrapped(|ui| {
@@ -7347,21 +7396,37 @@ impl eframe::App for ChatariumApp {
                                                         );
                                                         ui.label(
                                                             egui::RichText::new(
-                                                                match current_decision {
-                                                                    Some(
-                                                                        LocalMemoryContextDecision::Admit,
-                                                                    ) => "CONTEXT: ADMITTED",
-                                                                    Some(
-                                                                        LocalMemoryContextDecision::Exclude,
-                                                                    ) => "CONTEXT: EXCLUDED",
-                                                                    None => {
-                                                                        "CONTEXT: EXCLUDED · DEFAULT"
+                                                                if superseded_by.is_some() {
+                                                                    "CONTEXT: EXCLUDED · SUPERSEDED"
+                                                                } else {
+                                                                    match current_decision {
+                                                                        Some(
+                                                                            LocalMemoryContextDecision::Admit,
+                                                                        ) => "CONTEXT: ADMITTED",
+                                                                        Some(
+                                                                            LocalMemoryContextDecision::Exclude,
+                                                                        ) => "CONTEXT: EXCLUDED",
+                                                                        None => {
+                                                                            "CONTEXT: EXCLUDED · DEFAULT"
+                                                                        }
                                                                     }
                                                                 },
                                                             )
                                                             .monospace()
                                                             .size(9.0),
                                                         );
+                                                        if let Some(successor_memory_id) =
+                                                            superseded_by
+                                                        {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "SUPERSEDED BY MEMORY {}",
+                                                                    successor_memory_id.get(),
+                                                                ))
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                        }
                                                     });
 
                                                     ui.label(
@@ -7379,6 +7444,7 @@ impl eframe::App for ChatariumApp {
                                                         if ui
                                                             .add_enabled(
                                                                 can_change
+                                                                    && superseded_by.is_none()
                                                                     && current_decision
                                                                         != Some(
                                                                             LocalMemoryContextDecision::Admit,
@@ -7413,6 +7479,50 @@ impl eframe::App for ChatariumApp {
                                                             );
                                                         }
                                                     });
+
+                                                    if superseded_by.is_none()
+                                                        && !successor_candidates.is_empty()
+                                                    {
+                                                        ui.collapsing("Supersede with…", |ui| {
+                                                            for candidate in &successor_candidates {
+                                                                ui.horizontal_wrapped(|ui| {
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            !self
+                                                                                .local_memory_command_pending
+                                                                                && self
+                                                                                    .persist_tx
+                                                                                    .is_some(),
+                                                                            egui::Button::new(
+                                                                                format!(
+                                                                                    "Memory {} · #{}",
+                                                                                    candidate
+                                                                                        .memory_id
+                                                                                        .get(),
+                                                                                    candidate
+                                                                                        .recorded_sequence,
+                                                                                ),
+                                                                            ),
+                                                                        )
+                                                                        .clicked()
+                                                                    {
+                                                                        self.supersede_local_memory(
+                                                                            artifact.memory_id,
+                                                                            candidate.memory_id,
+                                                                        );
+                                                                    }
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            candidate
+                                                                                .text
+                                                                                .as_str(),
+                                                                        )
+                                                                        .size(9.0),
+                                                                    );
+                                                                });
+                                                            }
+                                                        });
+                                                    }
                                                 });
                                             }
                                         });
