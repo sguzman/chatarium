@@ -6,6 +6,7 @@
 
 use crate::control_admission_audit::replay_validated_control_admissions;
 use crate::control_delivery_audit::replay_worker_control_delivery_audit;
+use crate::control_inbox::replay_worker_control_inbox;
 use crate::control_dispatch_audit::replay_validated_control_dispatches;
 use crate::control_provenance_audit::replay_control_provenance_audit;
 use crate::control_route_audit::replay_control_route_audit;
@@ -165,6 +166,7 @@ pub fn check_archive(
     replay_validated_orchestration_routes(&events).map_err(err)?;
     replay_validated_control_dispatches(&events).map_err(err)?;
     replay_worker_control_delivery_audit(&events).map_err(err)?;
+    replay_worker_control_inbox(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
     replay_local_route_payload_audit(&events).map_err(err)?;
     replay_local_route_delivery_audit(&events).map_err(err)?;
