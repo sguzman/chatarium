@@ -2758,6 +2758,12 @@ impl ChatariumApp {
                     self.lifecycle_command_pending = false;
                     self.status = format!("worker lifecycle durably updated · {kind}");
                 }
+                PersistNotice::SupervisionEventAppended { event } => {
+                    let kind = event.kind.stable_name();
+                    self.events.push(event);
+                    self.supervision_command_pending = false;
+                    self.status = format!("local supervision durably updated · {kind}");
+                }
                 PersistNotice::Failed {
                     operation,
                     revision,
@@ -2782,6 +2788,9 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("lifecycle ") {
                         self.lifecycle_command_pending = false;
+                    }
+                    if operation.starts_with("supervision ") {
+                        self.supervision_command_pending = false;
                     }
                     if request_id.is_some() && request_id == self.commit_in_flight {
                         if let Some(request_id) = request_id {
@@ -3620,6 +3629,74 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue worker binding: {error}");
+            }
+        }
+    }
+
+    fn bind_worker_to_current_session(&mut self, worker_id: WorkerId) {
+        if self.supervision_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot bind worker session: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::BindCurrentSessionWorker {
+            conversation_id: self.local_conversation_id,
+            worker_id,
+        }) {
+            Ok(()) => {
+                self.supervision_command_pending = true;
+                self.status = format!(
+                    "binding worker {} to this conversation's current session…",
+                    worker_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue worker-session binding: {error}");
+            }
+        }
+    }
+
+    fn designate_current_session_controller(&mut self) {
+        if self.supervision_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot designate controller: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DesignateCurrentSessionController {
+            conversation_id: self.local_conversation_id,
+        }) {
+            Ok(()) => {
+                self.supervision_command_pending = true;
+                self.status = "designating current session as controller…".to_owned();
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller designation: {error}");
+            }
+        }
+    }
+
+    fn supervise_local_conversation(&mut self, worker_conversation_id: LocalConversationId) {
+        if self.supervision_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot bind controller supervision: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::BindControllerToLocalWorker {
+            controller_conversation_id: self.local_conversation_id,
+            worker_conversation_id,
+        }) {
+            Ok(()) => {
+                self.supervision_command_pending = true;
+                self.status = "binding current controller to local worker session…".to_owned();
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller-worker binding: {error}");
             }
         }
     }
