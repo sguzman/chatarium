@@ -259,8 +259,7 @@ pub fn replay_controller_coordination_audit(
             }
             EventKind::ControllerCoordinationTurnResultRecorded => {
                 let value = typed_payload(event, "controller_coordination_result")?;
-                let controller_conversation_id =
-                    parse_conversation_id(&value, event.sequence)?;
+                let controller_conversation_id = parse_conversation_id(&value, event.sequence)?;
                 let controller_session_id =
                     SessionId::new(required_u64(&value, "controller_session_id")?);
                 let coordination_turn_id = parse_turn_id(&value, event.sequence)?;
