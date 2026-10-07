@@ -8764,6 +8764,24 @@ impl eframe::App for ChatariumApp {
                                                     );
                                                 }
                                                 Ok(records) => {
+                                                    let coordination_context_records =
+                                                        match replay_controller_coordination_result_context_audit(
+                                                            &self.events,
+                                                        ) {
+                                                            Ok(records) => Some(records),
+                                                            Err(error) => {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "coordination result context projection blocked: {error}"
+                                                                    ))
+                                                                    .size(9.0)
+                                                                    .color(egui::Color32::from_rgb(
+                                                                        186, 108, 108,
+                                                                    )),
+                                                                );
+                                                                None
+                                                            }
+                                                        };
                                                     let owned = records
                                                         .into_iter()
                                                         .filter(|record| {
@@ -8909,6 +8927,88 @@ impl eframe::App for ChatariumApp {
                                                                     );
                                                                 }
                                                             }
+
+                                                            let current_decision =
+                                                                coordination_context_records
+                                                                    .as_ref()
+                                                                    .and_then(|records| {
+                                                                        records.iter().find(
+                                                                            |context_record| {
+                                                                                context_record
+                                                                                    .coordination_turn_id
+                                                                                    == record
+                                                                                        .coordination_turn_id
+                                                                            },
+                                                                        )
+                                                                    })
+                                                                    .map(|context_record| {
+                                                                        context_record.decision
+                                                                    });
+                                                            ui.horizontal_wrapped(|ui| {
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        match current_decision {
+                                                                            Some(
+                                                                                ControllerCoordinationResultContextDecision::Admit,
+                                                                            ) => "CONTEXT: ADMITTED",
+                                                                            Some(
+                                                                                ControllerCoordinationResultContextDecision::Exclude,
+                                                                            ) => "CONTEXT: EXCLUDED",
+                                                                            None => "CONTEXT: EXCLUDED · DEFAULT",
+                                                                        },
+                                                                    )
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+
+                                                                let can_change =
+                                                                    coordination_context_records
+                                                                        .is_some()
+                                                                        && !self
+                                                                            .controller_coordination_result_context_command_pending
+                                                                        && self.persist_tx.is_some();
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_change
+                                                                            && current_decision
+                                                                                != Some(
+                                                                                    ControllerCoordinationResultContextDecision::Admit,
+                                                                                ),
+                                                                        egui::Button::new(
+                                                                            "Admit result to context",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.decide_controller_coordination_result_context(
+                                                                        record.coordination_turn_id,
+                                                                        ControllerCoordinationResultContextDecision::Admit,
+                                                                    );
+                                                                }
+                                                                if ui
+                                                                    .add_enabled(
+                                                                        can_change
+                                                                            && current_decision
+                                                                                == Some(
+                                                                                    ControllerCoordinationResultContextDecision::Admit,
+                                                                                ),
+                                                                        egui::Button::new(
+                                                                            "Exclude result from context",
+                                                                        ),
+                                                                    )
+                                                                    .clicked()
+                                                                {
+                                                                    self.decide_controller_coordination_result_context(
+                                                                        record.coordination_turn_id,
+                                                                        ControllerCoordinationResultContextDecision::Exclude,
+                                                                    );
+                                                                }
+                                                                if self
+                                                                    .controller_coordination_result_context_command_pending
+                                                                {
+                                                                    ui.spinner();
+                                                                }
+                                                            });
                                                         }
                                                     }
 
