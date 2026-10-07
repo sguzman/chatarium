@@ -270,7 +270,20 @@ StatusRequest snapshots, Start/Resume/Stop action results, and terminal Continue
 results including durable worker output. Results remain outside controller
 inference context by default.
 
-The next safe boundary is explicit controller-context admission of selected
-worker results, with visible provenance and user-level trust. Chatarium must not
-silently inject worker output into the controller model simply because the
-result is visible.
+Controller-result context admission is now explicit and reversible. Selected terminal
+worker results enter controller Context Composer only after an Admit decision,
+at user-level trust with control/route/worker/goal/result provenance. The
+admitted set is snapshotted at authored Send.
+
+A deliberate non-authored controller coordination turn is now landed on top of
+that substrate. Starting the turn snapshots the exact currently admitted worker
+result routes; Dispatch is a second explicit user action. The coordination
+request contains an explicit non-authored orchestration marker and cannot by
+itself issue controls, mutate WorkerLifecycle, or consume continuation
+authority. Terminal coordination output is durable and restart-recoverable but
+does not become ordinary transcript content.
+
+The next safe boundary is explicit context admission for completed controller
+coordination results. Only after coordination output has the same visible
+admission boundary should Chatarium explore typed coordination suggestions or
+promotion into real worker-control proposals.
