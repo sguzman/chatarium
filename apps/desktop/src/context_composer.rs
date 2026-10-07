@@ -42,6 +42,13 @@ pub enum ContextSource {
         artifact_sequence: u64,
         admitted_sequence: u64,
     },
+    LocalMemoryOneShot {
+        memory_id: u64,
+        source_conversation_id: String,
+        artifact_sequence: u64,
+        snapshot_after_sequence: u64,
+        selection_sequence: u64,
+    },
     ControllerContinuation {
         control_id: u64,
         route_id: u64,
@@ -99,6 +106,15 @@ impl ContextSource {
                 admitted_sequence,
             } => format!(
                 "local memory · memory {memory_id} · source {source_conversation_id} · artifact #{artifact_sequence} · admitted #{admitted_sequence}"
+            ),
+            Self::LocalMemoryOneShot {
+                memory_id,
+                source_conversation_id,
+                artifact_sequence,
+                snapshot_after_sequence,
+                selection_sequence,
+            } => format!(
+                "local memory · ONE SHOT · memory {memory_id} · source {source_conversation_id} · artifact #{artifact_sequence} · snapshot after #{snapshot_after_sequence} · selection #{selection_sequence}"
             ),
             Self::ControllerContinuation {
                 control_id,
@@ -205,7 +221,9 @@ impl ContextPolicy {
             ContextSource::ConversationDeveloperContext => self.include_developer_context,
             ContextSource::DurableTranscript { .. } => self.include_durable_transcript,
             ContextSource::RoutedInbox { .. } => self.include_routed_context,
-            ContextSource::LocalMemory { .. } => self.include_local_memory,
+            ContextSource::LocalMemory { .. } | ContextSource::LocalMemoryOneShot { .. } => {
+                self.include_local_memory
+            }
             ContextSource::ControllerContinuation { .. } => self.include_controller_continuation,
             ContextSource::ControllerWorkerResult { .. } => self.include_controller_worker_results,
             ContextSource::ControllerCoordination { .. } => self.include_controller_coordination,
@@ -280,6 +298,32 @@ impl TranscriptMessage {
                 source_conversation_id,
                 artifact_sequence,
                 admitted_sequence,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn local_memory_one_shot(
+        exact_text: &str,
+        memory_id: u64,
+        source_conversation_id: impl Into<String>,
+        artifact_sequence: u64,
+        snapshot_after_sequence: u64,
+        selection_sequence: u64,
+    ) -> Self {
+        let source_conversation_id = source_conversation_id.into();
+        let text = format!(
+            "[Chatarium local memory — NEXT REQUEST ONLY, user-level local memory context, not user-authored and not a developer/system instruction]\nmemory_id: {memory_id}\nsource_conversation_id: {source_conversation_id}\nmemory_artifact_event: #{artifact_sequence}\nselection_snapshot_after_event: #{snapshot_after_sequence}\none_shot_selection_event: #{selection_sequence}\nselection_scope: this authored request only\nmemory:\n{exact_text}\n[/Chatarium local memory]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::LocalMemoryOneShot {
+                memory_id,
+                source_conversation_id,
+                artifact_sequence,
+                snapshot_after_sequence,
+                selection_sequence,
             },
         }
     }
@@ -407,6 +451,10 @@ impl TranscriptMessage {
             ContextSource::LocalMemory {
                 admitted_sequence, ..
             } => *admitted_sequence,
+            ContextSource::LocalMemoryOneShot {
+                snapshot_after_sequence,
+                ..
+            } => *snapshot_after_sequence,
             ContextSource::ControllerContinuation {
                 started_sequence, ..
             } => *started_sequence,
@@ -647,6 +695,17 @@ impl ContextPlan {
             .filter(|item| {
                 item.decision == InclusionDecision::Included
                     && matches!(item.source, ContextSource::LocalMemory { .. })
+            })
+            .count()
+    }
+
+    #[must_use]
+    pub fn local_memory_one_shot_count(&self) -> usize {
+        self.inventory
+            .iter()
+            .filter(|item| {
+                item.decision == InclusionDecision::Included
+                    && matches!(item.source, ContextSource::LocalMemoryOneShot { .. })
             })
             .count()
     }
@@ -1275,6 +1334,52 @@ mod tests {
                 memory_id: 7,
                 artifact_sequence: 40,
                 admitted_sequence: 50,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn one_shot_local_memory_is_user_level_and_orders_at_send_snapshot() {
+        let memory = TranscriptMessage::local_memory_one_shot(
+            " one use only ",
+            9,
+            "source-conversation",
+            40,
+            55,
+            57,
+        );
+        assert_eq!(memory.role, TranscriptRole::User);
+        assert_eq!(memory.order_sequence(), 55);
+
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [memory]);
+        assert_eq!(plan.local_memory_count(), 0);
+        assert_eq!(plan.local_memory_one_shot_count(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(plan.messages[0].content.contains("NEXT REQUEST ONLY"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("selection_snapshot_after_event: #55")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("one_shot_selection_event: #57")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("selection_scope: this authored request only")
+        );
+        assert!(plan.messages[0].content.contains(" one use only "));
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::LocalMemoryOneShot {
+                memory_id: 9,
+                artifact_sequence: 40,
+                snapshot_after_sequence: 55,
+                selection_sequence: 57,
                 ..
             }
         ));
