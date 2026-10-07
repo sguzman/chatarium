@@ -596,9 +596,7 @@ impl EventKind {
             "controller_worker_result_context_decision_recorded" => {
                 Some(Self::ControllerWorkerResultContextDecisionRecorded)
             }
-            "controller_coordination_turn_started" => {
-                Some(Self::ControllerCoordinationTurnStarted)
-            }
+            "controller_coordination_turn_started" => Some(Self::ControllerCoordinationTurnStarted),
             "controller_coordination_turn_result_recorded" => {
                 Some(Self::ControllerCoordinationTurnResultRecorded)
             }
