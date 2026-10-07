@@ -3061,8 +3061,7 @@ impl ChatariumApp {
                     self.events.push(event);
                     self.local_memory_command_pending = false;
                     self.local_memory_draft.clear();
-                    self.status =
-                        format!("local memory {} durably recorded", memory_id.get());
+                    self.status = format!("local memory {} durably recorded", memory_id.get());
                 }
                 PersistNotice::LocalMemoryContextDecisionUpdated { memory_id, event } => {
                     self.events.push(event);
@@ -4119,10 +4118,7 @@ impl ChatariumApp {
         }) {
             Ok(()) => {
                 self.local_memory_command_pending = true;
-                self.status = format!(
-                    "recording immutable local memory {}…",
-                    memory_id.get()
-                );
+                self.status = format!("recording immutable local memory {}…", memory_id.get());
             }
             Err(error) => {
                 self.status = format!("failed to queue local memory: {error}");
@@ -4139,8 +4135,8 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status =
-                "cannot update local memory context eligibility: persistence unavailable".to_owned();
+            self.status = "cannot update local memory context eligibility: persistence unavailable"
+                .to_owned();
             return;
         };
         match sender.send(PersistCommand::DecideLocalMemoryContext {
@@ -11566,19 +11562,11 @@ fn append_local_memory_artifact_checked(
         .iter()
         .any(|record| record.memory_id == memory_id)
     {
-        return Err(format!(
-            "local memory {} already exists",
-            memory_id.get()
-        ));
+        return Err(format!("local memory {} already exists", memory_id.get()));
     }
 
-    record_local_memory_artifact(
-        store,
-        memory_id,
-        source_conversation_id,
-        text.clone(),
-    )
-    .map_err(|error| error.to_string())?;
+    record_local_memory_artifact(store, memory_id, source_conversation_id, text.clone())
+        .map_err(|error| error.to_string())?;
 
     let replayed = replay_local_memory_audit(store.events())?
         .into_iter()
@@ -11631,13 +11619,8 @@ fn append_local_memory_context_decision_checked(
         }
     }
 
-    record_local_memory_context_decision(
-        store,
-        memory_id,
-        destination_conversation_id,
-        decision,
-    )
-    .map_err(|error| error.to_string())?;
+    record_local_memory_context_decision(store, memory_id, destination_conversation_id, decision)
+        .map_err(|error| error.to_string())?;
 
     let replayed = replay_local_memory_context_audit(store.events())?
         .into_iter()
@@ -14116,10 +14099,8 @@ fn persistence_worker(
                     text,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::LocalMemoryArtifactRecorded {
-                            memory_id,
-                            event,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::LocalMemoryArtifactRecorded { memory_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -16051,9 +16032,7 @@ fn controller_coordination_result_context_decision_label(
     }
 }
 
-fn local_memory_context_decision_label(
-    decision: LocalMemoryContextDecision,
-) -> &'static str {
+fn local_memory_context_decision_label(decision: LocalMemoryContextDecision) -> &'static str {
     match decision {
         LocalMemoryContextDecision::Admit => "admit",
         LocalMemoryContextDecision::Exclude => "exclude",
@@ -16247,8 +16226,7 @@ fn admitted_local_memory_messages(
     destination_conversation_id: LocalConversationId,
 ) -> Result<Vec<context_composer::TranscriptMessage>, String> {
     let artifacts = replay_local_memory_audit(events)?;
-    let admitted =
-        replay_admitted_local_memory_context(events, destination_conversation_id)?;
+    let admitted = replay_admitted_local_memory_context(events, destination_conversation_id)?;
     let mut messages = Vec::with_capacity(admitted.len());
 
     for record in admitted {
@@ -17903,10 +17881,7 @@ mod tests {
             LocalMemoryContextDecision::Admit,
         )
         .unwrap();
-        assert_eq!(
-            admit.kind,
-            EventKind::LocalMemoryContextDecisionRecorded
-        );
+        assert_eq!(admit.kind, EventKind::LocalMemoryContextDecisionRecorded);
 
         let memory = admitted_local_memory_messages(store.events(), destination).unwrap();
         assert_eq!(memory.len(), 1);
