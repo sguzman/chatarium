@@ -32,6 +32,9 @@ use chatarium_core::session::{
     SessionEndpointBinding, SessionId, WorkerSessionBinding, WorkerSessionSuccessorBinding,
 };
 use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
+use chatarium_core::tool::{
+    ToolCallId, ToolOperationName, ToolProviderEndpointBinding, ToolProviderId, ToolProviderName,
+};
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
@@ -181,6 +184,13 @@ use chatarium_store::session_audit::{
 use chatarium_store::supervision_audit::{
     record_controller_session_designated, record_controller_worker_bound, replay_supervision_audit,
 };
+use chatarium_store::tool_call_audit::{
+    record_tool_call, record_tool_call_route_bound, replay_tool_call_audit,
+};
+use chatarium_store::tool_provider_audit::{
+    record_tool_provider_endpoint_bound, record_tool_provider_registered,
+    replay_tool_provider_audit,
+};
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, WorkerControlTransitionProvenance, record_worker_control_transition,
     record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
@@ -258,6 +268,26 @@ enum PersistCommand {
         route_id: RouteId,
         destination_conversation_id: LocalConversationId,
         decision: LocalRouteContextDecision,
+    },
+    RegisterToolProvider {
+        provider_id: ToolProviderId,
+        name: ToolProviderName,
+    },
+    BindToolProviderEndpoint {
+        provider_id: ToolProviderId,
+        endpoint_id: RouteEndpointId,
+    },
+    ProposeToolCall {
+        call_id: ToolCallId,
+        route_id: RouteId,
+        source_conversation_id: LocalConversationId,
+        provider_id: ToolProviderId,
+        operation: ToolOperationName,
+        arguments_text: String,
+    },
+    DecideToolCallRoute {
+        route_id: RouteId,
+        decision: RouteUserDecision,
     },
     RecordLocalMemory {
         memory_id: LocalMemoryId,
@@ -509,6 +539,19 @@ enum PersistNotice {
         appended_events: Vec<EventEnvelope>,
     },
     LocalRouteContextDecisionUpdated {
+        route_id: RouteId,
+        event: EventEnvelope,
+    },
+    ToolProviderUpdated {
+        provider_id: ToolProviderId,
+        event: EventEnvelope,
+    },
+    ToolCallProposed {
+        call_id: ToolCallId,
+        route_id: RouteId,
+        appended_events: Vec<EventEnvelope>,
+    },
+    ToolCallRoutePolicyUpdated {
         route_id: RouteId,
         event: EventEnvelope,
     },
@@ -849,6 +892,11 @@ struct ChatariumApp {
     route_payload_drafts: BTreeMap<RouteId, String>,
     route_dispatch_command_pending: bool,
     route_context_command_pending: bool,
+    tool_command_pending: bool,
+    tool_provider_name_draft: String,
+    tool_selected_provider: Option<ToolProviderId>,
+    tool_operation_draft: String,
+    tool_arguments_draft: String,
     local_memory_command_pending: bool,
     local_memory_draft: String,
     local_memory_search_query: String,
@@ -1117,6 +1165,11 @@ impl ChatariumApp {
                         route_payload_drafts: BTreeMap::new(),
                         route_dispatch_command_pending: false,
                         route_context_command_pending: false,
+                        tool_command_pending: false,
+                        tool_provider_name_draft: String::new(),
+                        tool_selected_provider: None,
+                        tool_operation_draft: String::new(),
+                        tool_arguments_draft: String::new(),
                         local_memory_command_pending: false,
                         local_memory_draft: String::new(),
                         local_memory_search_query: String::new(),
@@ -1302,6 +1355,11 @@ impl ChatariumApp {
             route_payload_drafts: BTreeMap::new(),
             route_dispatch_command_pending: false,
             route_context_command_pending: false,
+            tool_command_pending: false,
+            tool_provider_name_draft: String::new(),
+            tool_selected_provider: None,
+            tool_operation_draft: String::new(),
+            tool_arguments_draft: String::new(),
             local_memory_command_pending: false,
             local_memory_draft: String::new(),
             local_memory_search_query: String::new(),
