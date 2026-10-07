@@ -125,6 +125,7 @@ use chatarium_store::local_memory_context_audit::{
     LocalMemoryContextDecision, record_local_memory_context_decision,
     replay_admitted_local_memory_context, replay_local_memory_context_audit,
 };
+use chatarium_store::local_memory_search::search_local_memory;
 use chatarium_store::local_memory_supersession_audit::{
     record_local_memory_superseded, replay_local_memory_supersession_audit,
 };
@@ -817,6 +818,8 @@ struct ChatariumApp {
     route_context_command_pending: bool,
     local_memory_command_pending: bool,
     local_memory_draft: String,
+    local_memory_search_query: String,
+    show_superseded_local_memory: bool,
     lifecycle_command_pending: bool,
     supervision_command_pending: bool,
     controller_control_command_pending: bool,
@@ -1079,6 +1082,8 @@ impl ChatariumApp {
                         route_context_command_pending: false,
                         local_memory_command_pending: false,
                         local_memory_draft: String::new(),
+                        local_memory_search_query: String::new(),
+                        show_superseded_local_memory: false,
                         lifecycle_command_pending: false,
                         supervision_command_pending: false,
                         controller_control_command_pending: false,
@@ -1258,6 +1263,8 @@ impl ChatariumApp {
             route_context_command_pending: false,
             local_memory_command_pending: false,
             local_memory_draft: String::new(),
+            local_memory_search_query: String::new(),
+            show_superseded_local_memory: false,
             lifecycle_command_pending: false,
             supervision_command_pending: false,
             controller_control_command_pending: false,
@@ -7274,6 +7281,20 @@ impl eframe::App for ChatariumApp {
                                 self.record_local_memory();
                             }
 
+                            ui.horizontal_wrapped(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.local_memory_search_query,
+                                    )
+                                    .desired_width(280.0)
+                                    .hint_text("Search local memory"),
+                                );
+                                ui.checkbox(
+                                    &mut self.show_superseded_local_memory,
+                                    "Show superseded history",
+                                );
+                            });
+
                             match replay_local_memory_audit(&self.events) {
                                 Err(error) => {
                                     ui.label(
@@ -7324,12 +7345,47 @@ impl eframe::App for ChatariumApp {
                                                 None
                                             }
                                         };
+                                    let search_items = match search_local_memory(
+                                        &self.events,
+                                        self.local_memory_search_query.as_str(),
+                                        self.show_superseded_local_memory,
+                                    ) {
+                                        Ok(items) => Some(items),
+                                        Err(error) => {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "local memory search blocked: {error}"
+                                                ))
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(
+                                                    186, 108, 108,
+                                                )),
+                                            );
+                                            None
+                                        }
+                                    };
+
+                                    if search_items
+                                        .as_ref()
+                                        .is_some_and(|items| items.is_empty())
+                                    {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "no memories match the current discovery view",
+                                            )
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                        );
+                                    }
 
                                     egui::ScrollArea::vertical()
                                         .id_salt("local-memory-artifacts")
                                         .max_height(240.0)
                                         .show(ui, |ui| {
-                                            for artifact in &artifacts {
+                                            for artifact in search_items
+                                                .as_deref()
+                                                .unwrap_or_default()
+                                            {
                                                 let source_title =
                                                     local_conversation_display_title(
                                                         &self.local_conversation_catalog,
@@ -7348,15 +7404,8 @@ impl eframe::App for ChatariumApp {
                                                         })
                                                     })
                                                     .map(|record| record.decision);
-                                                let superseded_by = supersessions
-                                                    .as_ref()
-                                                    .and_then(|records| {
-                                                        records.iter().find(|record| {
-                                                            record.predecessor_memory_id
-                                                                == artifact.memory_id
-                                                        })
-                                                    })
-                                                    .map(|record| record.successor_memory_id);
+                                                let superseded_by =
+                                                    artifact.superseded_by;
                                                 let successor_candidates = supersessions
                                                     .as_ref()
                                                     .map(|records| {
