@@ -238,5 +238,8 @@ and a separate worker-side delivery fact. Delivered controls project into a
 read-only worker control inbox and do not mutate lifecycle, transcript, or
 inference context.
 
-The next safe boundary is worker-side acknowledgement/action with separately
-observed lifecycle/status evidence.
+Worker-side control acknowledgement is now landed as a separate durable fact and
+does not mutate lifecycle.
+
+The next safe boundary is explicit worker-side action/result after
+acknowledgement, with separately durable lifecycle/status evidence.
