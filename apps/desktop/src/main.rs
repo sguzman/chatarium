@@ -14,6 +14,9 @@ use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::control::{
     ControlId, WorkerControl, WorkerControlKind, validate_control_admission,
 };
+use chatarium_core::coordination_suggestion::{
+    CoordinationSuggestion, CoordinationSuggestionAction, CoordinationSuggestionId,
+};
 use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
 use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::orchestration::{
@@ -86,6 +89,10 @@ use chatarium_store::controller_coordination_context_audit::{
     record_controller_coordination_result_context_decision,
     replay_admitted_controller_coordination_result_context,
     replay_controller_coordination_result_context_audit,
+};
+use chatarium_store::controller_coordination_suggestion_audit::{
+    ControllerCoordinationSuggestionRecord, record_controller_coordination_suggestion,
+    replay_controller_coordination_suggestion_audit,
 };
 use chatarium_store::controller_result_context_audit::{
     ControllerWorkerResultContextDecision, record_controller_worker_result_context_decision,
@@ -272,6 +279,12 @@ enum PersistCommand {
         coordination_turn_id: LocalTurnId,
         controller_conversation_id: LocalConversationId,
         decision: ControllerCoordinationResultContextDecision,
+    },
+    RecordControllerCoordinationSuggestion {
+        controller_conversation_id: LocalConversationId,
+        coordination_turn_id: LocalTurnId,
+        basis_result_route_id: RouteId,
+        action: CoordinationSuggestionAction,
     },
     AcknowledgeWorkerControl {
         worker_conversation_id: LocalConversationId,
@@ -483,6 +496,10 @@ enum PersistNotice {
     },
     ControllerCoordinationResultContextDecisionUpdated {
         turn_id: LocalTurnId,
+        event: EventEnvelope,
+    },
+    ControllerCoordinationSuggestionRecorded {
+        suggestion_id: CoordinationSuggestionId,
         event: EventEnvelope,
     },
     WorkerControlAcknowledged {
@@ -753,6 +770,7 @@ struct ChatariumApp {
     controller_result_context_command_pending: bool,
     controller_coordination_command_pending: bool,
     controller_coordination_result_context_command_pending: bool,
+    controller_coordination_suggestion_command_pending: bool,
     continuation_allowance_drafts: BTreeMap<LocalConversationId, u32>,
     worker_control_command_pending: bool,
     conversation_instructions: String,
@@ -1012,6 +1030,7 @@ impl ChatariumApp {
                         controller_result_context_command_pending: false,
                         controller_coordination_command_pending: false,
                         controller_coordination_result_context_command_pending: false,
+                        controller_coordination_suggestion_command_pending: false,
                         continuation_allowance_drafts: BTreeMap::new(),
                         worker_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
@@ -1188,6 +1207,7 @@ impl ChatariumApp {
             controller_result_context_command_pending: false,
             controller_coordination_command_pending: false,
             controller_coordination_result_context_command_pending: false,
+            controller_coordination_suggestion_command_pending: false,
             continuation_allowance_drafts: BTreeMap::new(),
             worker_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
