@@ -613,9 +613,7 @@ impl EventKind {
             }
             "local_memory_label_added" => Some(Self::LocalMemoryLabelAdded),
             "local_memory_label_removed" => Some(Self::LocalMemoryLabelRemoved),
-            "local_memory_turn_selection_recorded" => {
-                Some(Self::LocalMemoryTurnSelectionRecorded)
-            }
+            "local_memory_turn_selection_recorded" => Some(Self::LocalMemoryTurnSelectionRecorded),
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
