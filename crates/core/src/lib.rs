@@ -285,6 +285,8 @@ impl TurnEvidence {
             | EventKind::WorkerContinuationExecutionStarted
             | EventKind::WorkerContinuationExecutionResultRecorded
             | EventKind::ControllerWorkerResultContextDecisionRecorded
+            | EventKind::ControllerCoordinationTurnStarted
+            | EventKind::ControllerCoordinationTurnResultRecorded
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
@@ -411,6 +413,10 @@ pub enum EventKind {
     WorkerContinuationExecutionResultRecorded,
     /// An explicit include/exclude decision for one controller-visible worker result was recorded.
     ControllerWorkerResultContextDecisionRecorded,
+    /// A deliberate non-authored controller coordination turn was started.
+    ControllerCoordinationTurnStarted,
+    /// A non-authored controller coordination turn reached a durable terminal outcome.
+    ControllerCoordinationTurnResultRecorded,
     /// A bounded continuation lease was durably created.
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
@@ -500,6 +506,10 @@ impl EventKind {
             Self::ControllerWorkerResultContextDecisionRecorded => {
                 "controller_worker_result_context_decision_recorded"
             }
+            Self::ControllerCoordinationTurnStarted => "controller_coordination_turn_started",
+            Self::ControllerCoordinationTurnResultRecorded => {
+                "controller_coordination_turn_result_recorded"
+            }
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
@@ -585,6 +595,12 @@ impl EventKind {
             }
             "controller_worker_result_context_decision_recorded" => {
                 Some(Self::ControllerWorkerResultContextDecisionRecorded)
+            }
+            "controller_coordination_turn_started" => {
+                Some(Self::ControllerCoordinationTurnStarted)
+            }
+            "controller_coordination_turn_result_recorded" => {
+                Some(Self::ControllerCoordinationTurnResultRecorded)
             }
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
