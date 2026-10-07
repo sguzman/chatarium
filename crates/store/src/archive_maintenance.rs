@@ -21,7 +21,9 @@ use crate::controller_result_context_audit::replay_controller_worker_result_cont
 use crate::controller_result_inbox::replay_controller_worker_results;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::local_memory_audit::replay_local_memory_audit;
-use crate::local_memory_context_audit::replay_local_memory_context_audit;
+use crate::local_memory_context_audit::{
+    replay_admitted_local_memory_context, replay_local_memory_context_audit,
+};
 use crate::local_memory_supersession_audit::replay_local_memory_supersession_audit;
 use crate::local_route_context_audit::replay_local_route_context_audit;
 use crate::local_route_delivery_audit::replay_local_route_delivery_audit;
@@ -195,7 +197,14 @@ pub fn check_archive(
     replay_local_route_context_audit(&events).map_err(err)?;
     replay_local_memory_audit(&events).map_err(err)?;
     replay_local_memory_supersession_audit(&events).map_err(err)?;
-    replay_local_memory_context_audit(&events).map_err(err)?;
+    let memory_context = replay_local_memory_context_audit(&events).map_err(err)?;
+    let memory_destinations = memory_context
+        .iter()
+        .map(|record| record.destination_conversation_id)
+        .collect::<BTreeSet<_>>();
+    for destination_conversation_id in memory_destinations {
+        replay_admitted_local_memory_context(&events, destination_conversation_id).map_err(err)?;
+    }
     replay_remote_mirror_selection_audit(&events).map_err(err)?;
     replay_remote_read_audit(&events).map_err(err)?;
     RemoteHealthController::from_events(&events, unix_ms() as u64).map_err(err)?;
