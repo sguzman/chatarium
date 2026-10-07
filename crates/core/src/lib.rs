@@ -272,6 +272,7 @@ impl TurnEvidence {
             | EventKind::ControlRouteBound
             | EventKind::WorkerControlDelivered
             | EventKind::WorkerControlAcknowledged
+            | EventKind::WorkerControlStatusResultRecorded
             | EventKind::LocalSessionRegistered
             | EventKind::SessionEndpointBound
             | EventKind::WorkerSessionBound
@@ -379,6 +380,8 @@ pub enum EventKind {
     WorkerControlDelivered,
     /// A delivered worker control was explicitly acknowledged by its local worker conversation.
     WorkerControlAcknowledged,
+    /// An acknowledged worker StatusRequest captured a durable worker lifecycle snapshot.
+    WorkerControlStatusResultRecorded,
     /// A local Chatarium session identity was registered.
     LocalSessionRegistered,
     /// A local session was correlated to one routing endpoint.
@@ -465,6 +468,7 @@ impl EventKind {
             Self::ControlRouteBound => "control_route_bound",
             Self::WorkerControlDelivered => "worker_control_delivered",
             Self::WorkerControlAcknowledged => "worker_control_acknowledged",
+            Self::WorkerControlStatusResultRecorded => "worker_control_status_result_recorded",
             Self::LocalSessionRegistered => "local_session_registered",
             Self::SessionEndpointBound => "session_endpoint_bound",
             Self::WorkerSessionBound => "worker_session_bound",
@@ -535,6 +539,9 @@ impl EventKind {
             "control_route_bound" => Some(Self::ControlRouteBound),
             "worker_control_delivered" => Some(Self::WorkerControlDelivered),
             "worker_control_acknowledged" => Some(Self::WorkerControlAcknowledged),
+            "worker_control_status_result_recorded" => {
+                Some(Self::WorkerControlStatusResultRecorded)
+            }
             "local_session_registered" => Some(Self::LocalSessionRegistered),
             "session_endpoint_bound" => Some(Self::SessionEndpointBound),
             "worker_session_bound" => Some(Self::WorkerSessionBound),
