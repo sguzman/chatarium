@@ -125,6 +125,10 @@ use chatarium_store::local_memory_context_audit::{
     LocalMemoryContextDecision, record_local_memory_context_decision,
     replay_admitted_local_memory_context, replay_local_memory_context_audit,
 };
+use chatarium_store::local_memory_supersession_audit::{
+    record_local_memory_superseded, replay_local_memory_supersession_audit,
+    superseded_memory_ids,
+};
 use chatarium_store::local_route_context_audit::{
     LocalRouteContextDecision, record_local_route_context_decision,
     replay_admitted_local_route_context, replay_local_route_context_audit,
@@ -254,6 +258,10 @@ enum PersistCommand {
         memory_id: LocalMemoryId,
         destination_conversation_id: LocalConversationId,
         decision: LocalMemoryContextDecision,
+    },
+    SupersedeLocalMemory {
+        predecessor_memory_id: LocalMemoryId,
+        successor_memory_id: LocalMemoryId,
     },
     BindLocalConversationWorker {
         conversation_id: LocalConversationId,
@@ -489,6 +497,11 @@ enum PersistNotice {
     },
     LocalMemoryContextDecisionUpdated {
         memory_id: LocalMemoryId,
+        event: EventEnvelope,
+    },
+    LocalMemorySupersessionRecorded {
+        predecessor_memory_id: LocalMemoryId,
+        successor_memory_id: LocalMemoryId,
         event: EventEnvelope,
     },
     LifecycleEventAppended {
@@ -3071,6 +3084,19 @@ impl ChatariumApp {
                         memory_id.get()
                     );
                 }
+                PersistNotice::LocalMemorySupersessionRecorded {
+                    predecessor_memory_id,
+                    successor_memory_id,
+                    event,
+                } => {
+                    self.events.push(event);
+                    self.local_memory_command_pending = false;
+                    self.status = format!(
+                        "local memory {} durably superseded by {}",
+                        predecessor_memory_id.get(),
+                        successor_memory_id.get(),
+                    );
+                }
                 PersistNotice::LifecycleEventAppended { event } => {
                     let kind = event.kind.stable_name();
                     self.events.push(event);
@@ -4154,6 +4180,36 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue local memory context decision: {error}");
+            }
+        }
+    }
+
+    fn supersede_local_memory(
+        &mut self,
+        predecessor_memory_id: LocalMemoryId,
+        successor_memory_id: LocalMemoryId,
+    ) {
+        if self.local_memory_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot supersede local memory: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::SupersedeLocalMemory {
+            predecessor_memory_id,
+            successor_memory_id,
+        }) {
+            Ok(()) => {
+                self.local_memory_command_pending = true;
+                self.status = format!(
+                    "recording local memory {} → {} supersession…",
+                    predecessor_memory_id.get(),
+                    successor_memory_id.get(),
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue local memory supersession: {error}");
             }
         }
     }
@@ -14141,6 +14197,33 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::SupersedeLocalMemory {
+                predecessor_memory_id,
+                successor_memory_id,
+            } => {
+                match append_local_memory_supersession_checked(
+                    &mut store,
+                    predecessor_memory_id,
+                    successor_memory_id,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::LocalMemorySupersessionRecorded {
+                            predecessor_memory_id,
+                            successor_memory_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "local memory supersession",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::BindLocalConversationWorker {
                 conversation_id,
                 worker_id,
@@ -17411,6 +17494,9 @@ mod tests {
             PersistNotice::LocalMemoryArtifactRecorded { .. } => "local_memory_artifact_recorded",
             PersistNotice::LocalMemoryContextDecisionUpdated { .. } => {
                 "local_memory_context_decision_updated"
+            }
+            PersistNotice::LocalMemorySupersessionRecorded { .. } => {
+                "local_memory_supersession_recorded"
             }
             PersistNotice::LifecycleEventAppended { .. } => "lifecycle_event_appended",
             PersistNotice::SupervisionEventAppended { .. } => "supervision_event_appended",
