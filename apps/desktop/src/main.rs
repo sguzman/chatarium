@@ -11993,12 +11993,44 @@ fn persistence_worker(
                 payload,
             } => match store.append_scoped(Some(local_turn_scope(turn_id)), kind, payload) {
                 Ok(_) => {
-                    if let Some(event) = store.events().last().cloned() {
+                    let event = store.events().last().cloned();
+                    let continuation_result = if matches!(
+                        kind,
+                        EventKind::AssistantCompletionObserved
+                            | EventKind::RemoteFailureObserved
+                            | EventKind::TransportInterrupted
+                    ) {
+                        append_worker_continuation_result_if_terminal(&mut store, turn_id)
+                    } else {
+                        Ok(None)
+                    };
+
+                    if let Some(event) = event {
                         let _ = notices.send(PersistNotice::TurnEventAppended {
                             turn_id,
                             kind,
                             event,
                         });
+                    }
+                    match continuation_result {
+                        Ok(Some((route_id, event))) => {
+                            let _ = notices.send(
+                                PersistNotice::WorkerContinuationExecutionResultRecorded {
+                                    route_id,
+                                    event,
+                                },
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "worker continuation execution result",
+                                revision: None,
+                                request_id: None,
+                                turn_id: Some(turn_id),
+                                error,
+                            });
+                        }
                     }
                 }
                 Err(error) => {
