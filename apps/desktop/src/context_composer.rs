@@ -1115,13 +1115,8 @@ mod tests {
             include_controller_coordination_results: false,
             ..ContextPolicy::dispatch()
         };
-        let result = TranscriptMessage::controller_coordination_result(
-            "turn",
-            2,
-            3,
-            "completed",
-            "output",
-        );
+        let result =
+            TranscriptMessage::controller_coordination_result("turn", 2, 3, "completed", "output");
         let plan = ContextPlan::compose(policy, "", "", [result]);
 
         assert_eq!(plan.controller_coordination_result_count(), 0);
