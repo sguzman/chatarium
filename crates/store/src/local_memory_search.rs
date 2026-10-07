@@ -12,6 +12,7 @@ use crate::local_memory_supersession_audit::{
 };
 use chatarium_core::LocalConversationId;
 use chatarium_core::local_memory::{LocalMemoryId, LocalMemoryLabel};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMemorySearchItem {
@@ -23,6 +24,13 @@ pub struct LocalMemorySearchItem {
     pub superseded_by: Option<LocalMemoryId>,
 }
 
+/// One exact active-label facet over the currently eligible discovery corpus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalMemoryLabelFacet {
+    pub label: LocalMemoryLabel,
+    pub artifact_count: usize,
+}
+
 /// Search immutable local memory text with deterministic case-insensitive
 /// substring matching.
 ///
@@ -32,6 +40,20 @@ pub fn search_local_memory(
     events: &[EventEnvelope],
     query: &str,
     include_superseded: bool,
+) -> Result<Vec<LocalMemorySearchItem>, String> {
+    search_local_memory_filtered(events, query, include_superseded, None)
+}
+
+/// Search with an optional exact active-label facet.
+///
+/// The free-text query continues to match artifact text and active label text by
+/// literal case-insensitive substring. When `exact_label` is supplied, an
+/// artifact must additionally carry that exact active label.
+pub fn search_local_memory_filtered(
+    events: &[EventEnvelope],
+    query: &str,
+    include_superseded: bool,
+    exact_label: Option<&LocalMemoryLabel>,
 ) -> Result<Vec<LocalMemorySearchItem>, String> {
     let artifacts = replay_local_memory_audit(events)?;
     let supersessions = replay_local_memory_supersession_audit(events)?;
@@ -48,6 +70,9 @@ pub fn search_local_memory(
         .filter_map(|(artifact, labels)| {
             let superseded_by = current_memory_successor(&supersessions, artifact.memory_id);
             if superseded_by.is_some() && !include_superseded {
+                return None;
+            }
+            if exact_label.is_some_and(|required| !labels.iter().any(|label| label == required)) {
                 return None;
             }
             let text_matches = artifact.text.to_lowercase().contains(&needle);
@@ -70,6 +95,30 @@ pub fn search_local_memory(
 
     items.sort_by_key(|item| std::cmp::Reverse(item.recorded_sequence));
     Ok(items)
+}
+
+/// Build deterministic exact-label facets for the currently eligible memory corpus.
+///
+/// Counts respect the superseded-history toggle and only active labels. This is a
+/// pure read projection and grants no context authority.
+pub fn local_memory_label_facets(
+    events: &[EventEnvelope],
+    include_superseded: bool,
+) -> Result<Vec<LocalMemoryLabelFacet>, String> {
+    let mut counts = BTreeMap::<LocalMemoryLabel, usize>::new();
+    for item in search_local_memory_filtered(events, "", include_superseded, None)? {
+        for label in item.labels {
+            *counts.entry(label).or_default() += 1;
+        }
+    }
+
+    Ok(counts
+        .into_iter()
+        .map(|(label, artifact_count)| LocalMemoryLabelFacet {
+            label,
+            artifact_count,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -149,6 +198,86 @@ mod tests {
             search_local_memory(store.events(), "chatarium", false)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn exact_label_filter_is_conjunctive_with_free_text_search() {
+        let source = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let project = LocalMemoryLabel::new("project:chatarium").unwrap();
+        let topic = LocalMemoryLabel::new("topic:routing").unwrap();
+
+        record_local_memory_artifact(
+            &mut store,
+            LocalMemoryId::new(1),
+            source,
+            "routing architecture",
+        )
+        .unwrap();
+        record_local_memory_artifact(
+            &mut store,
+            LocalMemoryId::new(2),
+            source,
+            "memory architecture",
+        )
+        .unwrap();
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(1), &project).unwrap();
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(1), &topic).unwrap();
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(2), &project).unwrap();
+
+        let project_results =
+            search_local_memory_filtered(store.events(), "", false, Some(&project)).unwrap();
+        assert_eq!(project_results.len(), 2);
+
+        let routing_project =
+            search_local_memory_filtered(store.events(), "routing", false, Some(&project)).unwrap();
+        assert_eq!(routing_project.len(), 1);
+        assert_eq!(routing_project[0].memory_id, LocalMemoryId::new(1));
+
+        let routing_topic =
+            search_local_memory_filtered(store.events(), "memory", false, Some(&topic)).unwrap();
+        assert!(routing_topic.is_empty());
+    }
+
+    #[test]
+    fn label_facets_count_only_active_labels_in_eligible_corpus() {
+        let source = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let project = LocalMemoryLabel::new("project:chatarium").unwrap();
+        let stale = LocalMemoryLabel::new("stale").unwrap();
+
+        for (id, text) in [(1, "old"), (2, "new"), (3, "other")] {
+            record_local_memory_artifact(&mut store, LocalMemoryId::new(id), source, text).unwrap();
+        }
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(1), &project).unwrap();
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(1), &stale).unwrap();
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(2), &project).unwrap();
+        record_local_memory_label_added(&mut store, LocalMemoryId::new(3), &project).unwrap();
+        record_local_memory_label_removed(&mut store, LocalMemoryId::new(1), &stale).unwrap();
+        record_local_memory_superseded(
+            &mut store,
+            LocalMemoryId::new(1),
+            LocalMemoryId::new(2),
+        )
+        .unwrap();
+
+        let current = local_memory_label_facets(store.events(), false).unwrap();
+        assert_eq!(
+            current,
+            vec![LocalMemoryLabelFacet {
+                label: project.clone(),
+                artifact_count: 2,
+            }]
+        );
+
+        let history = local_memory_label_facets(store.events(), true).unwrap();
+        assert_eq!(
+            history,
+            vec![LocalMemoryLabelFacet {
+                label: project,
+                artifact_count: 3,
+            }]
         );
     }
 
