@@ -14585,6 +14585,164 @@ mod tests {
             recovered_delivery.dispatch_sequence,
             original_dispatch_sequence
         );
+
+        let mut continuation_store = chatarium_store::MemoryEventStore::default();
+        let (
+            continuation_controller,
+            continuation_worker_conversation,
+            continuation_worker_id,
+            continuation_goal_id,
+        ) = ready_supervised_pair(&mut continuation_store);
+
+        let before_missing_authority = continuation_store.events().len();
+        assert!(
+            append_controller_worker_control_proposal_checked(
+                &mut continuation_store,
+                continuation_controller,
+                continuation_worker_conversation,
+                ControllerControlAction::Continue,
+            )
+            .unwrap_err()
+            .contains("no live continuation lease")
+        );
+        assert_eq!(
+            continuation_store.events().len(),
+            before_missing_authority
+        );
+
+        let (_, lease_event) = append_controller_continuation_lease_checked(
+            &mut continuation_store,
+            continuation_controller,
+            continuation_worker_conversation,
+            2,
+        )
+        .unwrap();
+        assert_eq!(lease_event.kind, EventKind::ContinuationLeaseCreated);
+        let lease_id = replay_continuation_audit(continuation_store.events())
+            .unwrap()[0]
+            .lease_id;
+        let lease = replay_continuation_audit(continuation_store.events())
+            .unwrap()
+            .remove(0);
+        assert_eq!(lease.worker_id, continuation_worker_id);
+        assert_eq!(lease.goal_id, continuation_goal_id);
+        assert_eq!(lease.allowance, 2);
+        assert_eq!(lease.issued, 0);
+        assert_eq!(lease.remaining, 2);
+
+        let before_overlap = continuation_store.events().len();
+        assert!(
+            append_controller_continuation_lease_checked(
+                &mut continuation_store,
+                continuation_controller,
+                continuation_worker_conversation,
+                1,
+            )
+            .unwrap_err()
+            .contains("already has live continuation authority")
+        );
+        assert_eq!(continuation_store.events().len(), before_overlap);
+
+        let (continue_control, continue_route, continue_events) =
+            append_controller_worker_control_proposal_checked(
+                &mut continuation_store,
+                continuation_controller,
+                continuation_worker_conversation,
+                ControllerControlAction::Continue,
+            )
+            .unwrap();
+        assert_eq!(continue_events.len(), 5);
+        assert_eq!(continue_events[0].kind, EventKind::ContinuationPermitIssued);
+        assert_eq!(continue_events[1].kind, EventKind::WorkerControlAdmitted);
+        assert_eq!(continue_events[2].kind, EventKind::WorkerControlIssuerBound);
+        assert_eq!(continue_events[3].kind, EventKind::RouteProposed);
+        assert_eq!(continue_events[4].kind, EventKind::ControlRouteBound);
+        let continue_record = replay_control_audit(continuation_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.control_id == continue_control)
+            .unwrap();
+        assert_eq!(
+            continue_record.kind,
+            WorkerControlKind::Continue { permit_ordinal: 1 }
+        );
+        let replayed_lease = replay_continuation_audit(continuation_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.lease_id == lease_id)
+            .unwrap();
+        assert_eq!(replayed_lease.issued, 1);
+        assert_eq!(replayed_lease.remaining, 1);
+        assert_eq!(replayed_lease.consumed, 1);
+        assert_eq!(replayed_lease.permits[0].consumed_by, Some(continue_control));
+        assert_eq!(
+            replay_routing_audit(continuation_store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.request.id == continue_route)
+                .unwrap()
+                .gate_state,
+            RouteGateState::PendingApproval
+        );
+
+        let mut stranded_store = chatarium_store::MemoryEventStore::default();
+        let (
+            stranded_controller,
+            stranded_worker_conversation,
+            stranded_worker_id,
+            stranded_goal_id,
+        ) = ready_supervised_pair(&mut stranded_store);
+        append_controller_continuation_lease_checked(
+            &mut stranded_store,
+            stranded_controller,
+            stranded_worker_conversation,
+            1,
+        )
+        .unwrap();
+        let stranded_lease = replay_continuation_audit(stranded_store.events())
+            .unwrap()
+            .remove(0);
+        let mut live_lease = reconstruct_continuation_lease_for_next_issue(
+            stranded_store.events(),
+            stranded_lease.lease_id,
+        )
+        .unwrap();
+        let lifecycle = worker_record(stranded_store.events(), stranded_worker_id)
+            .unwrap()
+            .unwrap()
+            .lifecycle;
+        assert_eq!(lifecycle.goal_id(), Some(stranded_goal_id));
+        let stranded_permit = live_lease.authorize(&lifecycle).unwrap();
+        record_continuation_permit_issued(&mut stranded_store, &stranded_permit).unwrap();
+
+        let before_recovery = stranded_store.events().len();
+        let (recovered_control, _, recovered_continue_events) =
+            append_controller_worker_control_proposal_checked(
+                &mut stranded_store,
+                stranded_controller,
+                stranded_worker_conversation,
+                ControllerControlAction::Continue,
+            )
+            .unwrap();
+        assert_eq!(recovered_continue_events.len(), 4);
+        assert_eq!(
+            recovered_continue_events[0].kind,
+            EventKind::WorkerControlAdmitted
+        );
+        assert_eq!(
+            stranded_store.events().len(),
+            before_recovery + recovered_continue_events.len()
+        );
+        let stranded_replay = replay_continuation_audit(stranded_store.events())
+            .unwrap()
+            .remove(0);
+        assert_eq!(stranded_replay.issued, 1);
+        assert_eq!(stranded_replay.remaining, 0);
+        assert_eq!(stranded_replay.consumed, 1);
+        assert_eq!(
+            stranded_replay.permits[0].consumed_by,
+            Some(recovered_control)
+        );
     }
 
     #[test]
