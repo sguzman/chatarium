@@ -618,6 +618,7 @@ struct PendingInferenceIntent {
     instructions: Option<String>,
     developer_context: String,
     routed_context: Vec<context_composer::TranscriptMessage>,
+    controller_result_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
 }
 
@@ -2441,6 +2442,18 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                let controller_result_context =
+                    match admitted_controller_worker_result_messages(
+                        &self.events,
+                        self.local_conversation_id,
+                    ) {
+                        Ok(messages) => messages,
+                        Err(error) => {
+                            self.status =
+                                format!("cannot snapshot admitted controller results: {error}");
+                            return;
+                        }
+                    };
                 self.commit_remote_intents.insert(
                     request_id,
                     PendingInferenceIntent {
@@ -2449,6 +2462,7 @@ impl ChatariumApp {
                             .then(|| self.conversation_instructions.clone()),
                         developer_context: self.conversation_developer_context.clone(),
                         routed_context,
+                        controller_result_context,
                         request_patch,
                     },
                 );
@@ -2530,6 +2544,7 @@ impl ChatariumApp {
                                     self.local_conversation_id,
                                 ));
                             transcript.extend(intent.routed_context);
+                            transcript.extend(intent.controller_result_context);
                             transcript
                                 .sort_by_key(context_composer::TranscriptMessage::order_sequence);
                             let context_plan = context_composer::ContextPlan::compose(
@@ -8460,6 +8475,21 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                             }
+                            match admitted_controller_worker_result_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Ok(controller_results) => transcript.extend(controller_results),
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "controller result context composition blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
                             transcript.sort_by_key(
                                 context_composer::TranscriptMessage::order_sequence,
                             );
@@ -8476,11 +8506,13 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted controller result{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     context_plan.routed_context_count(),
                                     if context_plan.routed_context_count() == 1 { "" } else { "s" },
+                                    context_plan.controller_worker_result_count(),
+                                    if context_plan.controller_worker_result_count() == 1 { "" } else { "s" },
                                     if context_plan.has_developer_context() { "included" } else { "omitted" },
                                     if context_plan.has_current_draft() { "included (preview only; dispatch policy forbids draft)" } else { "omitted" },
                                 ))
@@ -13928,6 +13960,109 @@ fn admitted_routed_context_messages(
             record.source_conversation_id.to_string(),
             record.delivered_sequence,
             record.last_decision_sequence,
+        ));
+    }
+
+    messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+    Ok(messages)
+}
+
+fn admitted_controller_worker_result_messages(
+    events: &[EventEnvelope],
+    controller_conversation_id: LocalConversationId,
+) -> Result<Vec<context_composer::TranscriptMessage>, String> {
+    let results =
+        replay_controller_worker_results_for_conversation(events, controller_conversation_id)?;
+    let admitted =
+        replay_admitted_controller_worker_result_context(events, controller_conversation_id)?;
+    let mut messages = Vec::with_capacity(admitted.len());
+
+    for record in admitted {
+        let result = results
+            .iter()
+            .find(|item| item.route_id == record.route_id)
+            .ok_or_else(|| {
+                format!(
+                    "admitted controller result route {} has no terminal result",
+                    record.route_id.get()
+                )
+            })?;
+        if result.control_id != record.control_id
+            || result.controller_conversation_id != Some(controller_conversation_id)
+            || result.result_sequence != record.result_sequence
+        {
+            return Err(format!(
+                "admitted controller result route {} disagrees with terminal result provenance",
+                record.route_id.get()
+            ));
+        }
+
+        let (result_kind, result_text) = match &result.detail {
+            ControllerWorkerResultDetail::Status {
+                phase,
+                acknowledged_sequence,
+            } => (
+                "status",
+                format!(
+                    "phase: {}\nacknowledged_event: #{}",
+                    worker_phase_label(*phase),
+                    acknowledged_sequence,
+                ),
+            ),
+            ControllerWorkerResultDetail::Action {
+                kind,
+                from_phase,
+                resulting_phase,
+                started_sequence,
+                lifecycle_sequence,
+            } => (
+                "action",
+                format!(
+                    "control_kind: {}\nfrom_phase: {}\nresulting_phase: {}\naction_started_event: #{}\nlifecycle_event: #{}",
+                    worker_control_kind_label(*kind),
+                    worker_phase_label(*from_phase),
+                    worker_phase_label(*resulting_phase),
+                    started_sequence,
+                    lifecycle_sequence,
+                ),
+            ),
+            ControllerWorkerResultDetail::Continuation {
+                outcome,
+                execution_turn_id,
+                lease_id,
+                permit_ordinal,
+                started_sequence,
+                terminal_sequence,
+                output_text,
+            } => {
+                let output = output_text
+                    .as_deref()
+                    .unwrap_or("(no durable assistant output)");
+                (
+                    "continuation",
+                    format!(
+                        "outcome: {}\ncontinuation_lease: {}\npermit_ordinal: {}\nexecution_turn_id: {}\nexecution_started_event: #{}\nterminal_transport_event: #{}\nworker_output:\n{}",
+                        outcome.stable_name(),
+                        lease_id.get(),
+                        permit_ordinal,
+                        execution_turn_id,
+                        started_sequence,
+                        terminal_sequence,
+                        output,
+                    ),
+                )
+            }
+        };
+
+        messages.push(context_composer::TranscriptMessage::controller_worker_result(
+            result.control_id.get(),
+            result.route_id.get(),
+            result.worker_id.get(),
+            result.goal_id.get(),
+            result.result_sequence,
+            record.last_decision_sequence,
+            result_kind,
+            result_text.as_str(),
         ));
     }
 
