@@ -293,9 +293,25 @@ transcript content.
 This admission does **not** recursively feed old coordination output into the
 special non-authored coordination workflow. That remains intentionally separate.
 
-The active next architectural boundary is typed, non-authoritative coordination
-suggestions. Coordination may surface a machine-readable possible next worker
-action, but no model-produced suggestion may directly create authority or mutate
-state. Any promotion into a real worker control must be a user action and must
-still pass the existing control admission, route approval, and dispatch
-boundaries.
+Typed, non-authoritative coordination suggestions are now durable and exposed in
+the controller UI.
+
+A completed coordination turn can record suggested Start/Resume, Continue, Stop,
+or StatusRequest actions only against worker-result routes that were frozen into
+that turn's coordination snapshot. Suggestions have their own identity and carry
+worker/goal/basis-result provenance. They are explicitly labeled **NO AUTHORITY**
+and create no control, route, lifecycle, continuation, or dispatch state.
+
+The user may explicitly **Promote suggestion**. Promotion fails closed when the
+worker conversation or current goal no longer matches the suggestion. A valid
+promotion uses the existing controller-control proposal machinery and records a
+separate suggestion→control/route correlation only after the real control path
+validates. The promoted route still waits for explicit Allow/Deny and one-shot
+dispatch.
+
+The active next architectural boundary is machine-readable suggestion
+**candidates produced by the coordination model itself**. Those candidates must
+remain untrusted output: no automatic WorkerControl creation and no automatic
+durable suggestion admission. User acceptance into the durable suggestion layer
+remains mandatory. Durable local memory remains a separate later source. Do not
+reopen browser/history work as part of this phase.
