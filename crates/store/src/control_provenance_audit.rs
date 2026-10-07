@@ -582,7 +582,7 @@ mod tests {
         bind_supervision(&mut store, C1);
 
         let error = replay_control_provenance_audit(store.events()).unwrap_err();
-        assert!(error.contains("precedes target worker-session binding"));
+        assert!(error.contains("before any active worker-session binding"));
     }
 
     #[test]
