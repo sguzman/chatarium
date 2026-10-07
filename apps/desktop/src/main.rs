@@ -18230,6 +18230,101 @@ mod tests {
     }
 
     #[test]
+    fn local_memory_supersession_preserves_history_and_requires_fresh_successor_admission() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let predecessor = LocalMemoryId::new(1);
+        let successor = LocalMemoryId::new(2);
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        append_local_memory_artifact_checked(
+            &mut store,
+            predecessor,
+            source,
+            "old fact".to_owned(),
+        )
+        .unwrap();
+        append_local_memory_artifact_checked(
+            &mut store,
+            successor,
+            source,
+            "corrected fact".to_owned(),
+        )
+        .unwrap();
+        append_local_memory_context_decision_checked(
+            &mut store,
+            predecessor,
+            destination,
+            LocalMemoryContextDecision::Admit,
+        )
+        .unwrap();
+        assert_eq!(
+            admitted_local_memory_messages(store.events(), destination)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let supersession = append_local_memory_supersession_checked(
+            &mut store,
+            predecessor,
+            successor,
+        )
+        .unwrap();
+        assert_eq!(
+            supersession.kind,
+            EventKind::LocalMemoryArtifactSuperseded
+        );
+
+        let raw_context = replay_local_memory_context_audit(store.events()).unwrap();
+        let old_decision = raw_context
+            .iter()
+            .find(|record| {
+                record.memory_id == predecessor
+                    && record.destination_conversation_id == destination
+            })
+            .unwrap();
+        assert_eq!(old_decision.decision, LocalMemoryContextDecision::Admit);
+
+        assert!(
+            admitted_local_memory_messages(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+
+        let before_stale_admit = store.events().len();
+        assert!(
+            append_local_memory_context_decision_checked(
+                &mut store,
+                predecessor,
+                destination,
+                LocalMemoryContextDecision::Admit,
+            )
+            .unwrap_err()
+            .contains("superseded by")
+        );
+        assert_eq!(store.events().len(), before_stale_admit);
+
+        assert!(
+            replay_admitted_local_memory_context(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+
+        append_local_memory_context_decision_checked(
+            &mut store,
+            successor,
+            destination,
+            LocalMemoryContextDecision::Admit,
+        )
+        .unwrap();
+        let effective = admitted_local_memory_messages(store.events(), destination).unwrap();
+        assert_eq!(effective.len(), 1);
+        assert!(effective[0].text.contains("corrected fact"));
+        assert!(!effective[0].text.contains("old fact"));
+    }
+
+    #[test]
     fn checked_local_controller_supervision_requires_explicit_worker_session_role() {
         let controller_conversation = LocalConversationId::new();
         let worker_conversation = LocalConversationId::new();
