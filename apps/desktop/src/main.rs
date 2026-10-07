@@ -4148,7 +4148,8 @@ impl ChatariumApp {
 
     fn dispatch_worker_continuation_execution(&mut self, route_id: RouteId) {
         if self.pending_remote_turn.is_some() || self.active_remote_turn.is_some() {
-            self.status = "cannot dispatch continuation while another remote turn is active".to_owned();
+            self.status =
+                "cannot dispatch continuation while another remote turn is active".to_owned();
             return;
         }
         if !self.remote_connected() {
@@ -4156,7 +4157,8 @@ impl ChatariumApp {
             return;
         }
         if self.capability_probe.running() {
-            self.status = "cannot dispatch continuation while capability probes are running".to_owned();
+            self.status =
+                "cannot dispatch continuation while capability probes are running".to_owned();
             return;
         }
         let Some(model) = self.selected_model.clone() else {
@@ -4165,12 +4167,10 @@ impl ChatariumApp {
         };
 
         let execution = match replay_worker_continuation_execution_audit(&self.events) {
-            Ok(records) => records
-                .into_iter()
-                .find(|record| {
-                    record.route_id == route_id
-                        && record.worker_conversation_id == self.local_conversation_id
-                }),
+            Ok(records) => records.into_iter().find(|record| {
+                record.route_id == route_id
+                    && record.worker_conversation_id == self.local_conversation_id
+            }),
             Err(error) => {
                 self.status = format!("cannot replay continuation execution: {error}");
                 return;
@@ -4185,7 +4185,8 @@ impl ChatariumApp {
         };
 
         let transport =
-            match continuation_execution_transport_state(&self.events, execution.execution_turn_id) {
+            match continuation_execution_transport_state(&self.events, execution.execution_turn_id)
+            {
                 Ok(state) => state,
                 Err(error) => {
                     self.status = format!("cannot replay continuation transport: {error}");
@@ -4218,10 +4219,7 @@ impl ChatariumApp {
             &execution_prefix,
             self.local_conversation_id,
         ));
-        match admitted_routed_context_messages(
-            &execution_prefix,
-            self.local_conversation_id,
-        ) {
+        match admitted_routed_context_messages(&execution_prefix, self.local_conversation_id) {
             Ok(routed) => transcript.extend(routed),
             Err(error) => {
                 self.status = format!("cannot compose continuation routed context: {error}");
@@ -4229,15 +4227,17 @@ impl ChatariumApp {
             }
         }
         transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
-        transcript.push(context_composer::TranscriptMessage::controller_continuation(
-            execution.control_id.get(),
-            execution.route_id.get(),
-            execution.worker_id.get(),
-            execution.goal_id.get(),
-            execution.lease_id.get(),
-            execution.permit_ordinal,
-            execution.started_sequence,
-        ));
+        transcript.push(
+            context_composer::TranscriptMessage::controller_continuation(
+                execution.control_id.get(),
+                execution.route_id.get(),
+                execution.worker_id.get(),
+                execution.goal_id.get(),
+                execution.lease_id.get(),
+                execution.permit_ordinal,
+                execution.started_sequence,
+            ),
+        );
 
         let context_plan = context_composer::ContextPlan::compose(
             context_composer::ContextPolicy::dispatch(),
@@ -11279,13 +11279,8 @@ fn append_worker_continuation_result_if_terminal(
         return Ok(None);
     };
 
-    record_worker_continuation_execution_result(
-        store,
-        execution,
-        outcome,
-        terminal_sequence,
-    )
-    .map_err(|error| error.to_string())?;
+    record_worker_continuation_execution_result(store, execution, outcome, terminal_sequence)
+        .map_err(|error| error.to_string())?;
 
     let replayed = replay_worker_continuation_execution_audit(store.events())?
         .into_iter()
@@ -11301,11 +11296,10 @@ fn append_worker_continuation_result_if_terminal(
         );
     }
 
-    let event = store
-        .events()
-        .last()
-        .cloned()
-        .ok_or_else(|| "worker continuation result append produced no durable event".to_owned())?;
+    let event =
+        store.events().last().cloned().ok_or_else(|| {
+            "worker continuation result append produced no durable event".to_owned()
+        })?;
     Ok(Some((execution.route_id, event)))
 }
 
@@ -15514,13 +15508,12 @@ mod tests {
         assert_eq!(transport.completion_sequence, Some(completion_sequence));
         assert!(transport.is_terminal());
 
-        let (result_route, result_event) =
-            append_worker_continuation_result_if_terminal(
-                &mut continuation_store,
-                execution_record.execution_turn_id,
-            )
-            .unwrap()
-            .expect("terminal continuation must produce a result");
+        let (result_route, result_event) = append_worker_continuation_result_if_terminal(
+            &mut continuation_store,
+            execution_record.execution_turn_id,
+        )
+        .unwrap()
+        .expect("terminal continuation must produce a result");
         assert_eq!(result_route, continue_route);
         assert_eq!(
             result_event.kind,
