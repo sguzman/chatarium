@@ -86,10 +86,7 @@ mod tests {
 
     #[test]
     fn local_memory_label_rejects_noncanonical_or_unsafe_text() {
-        assert_eq!(
-            LocalMemoryLabel::new(""),
-            Err(LocalMemoryLabelError::Empty)
-        );
+        assert_eq!(LocalMemoryLabel::new(""), Err(LocalMemoryLabelError::Empty));
         assert_eq!(
             LocalMemoryLabel::new(" spaced "),
             Err(LocalMemoryLabelError::SurroundingWhitespace)
