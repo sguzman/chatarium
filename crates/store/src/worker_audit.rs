@@ -153,7 +153,9 @@ pub fn decode_worker_transition_event(
 
     let control_id = payload.get("control_id").and_then(Value::as_u64);
     let route_id = payload.get("route_id").and_then(Value::as_u64);
-    let action_started_sequence = payload.get("action_started_sequence").and_then(Value::as_u64);
+    let action_started_sequence = payload
+        .get("action_started_sequence")
+        .and_then(Value::as_u64);
     let control_provenance = match (control_id, route_id, action_started_sequence) {
         (None, None, None) => None,
         (Some(control_id), Some(route_id), Some(action_started_sequence)) => {
