@@ -3087,6 +3087,17 @@ impl ChatariumApp {
                         turn_id
                     );
                 }
+                PersistNotice::ControllerCoordinationSuggestionRecorded {
+                    suggestion_id,
+                    event,
+                } => {
+                    self.events.push(event);
+                    self.controller_coordination_suggestion_command_pending = false;
+                    self.status = format!(
+                        "coordination suggestion {} durably recorded · no control authority created",
+                        suggestion_id.get()
+                    );
+                }
                 PersistNotice::WorkerControlAcknowledged { route_id, event } => {
                     self.events.push(event);
                     self.worker_control_command_pending = false;
@@ -3168,6 +3179,8 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("controller coordination result context") {
                         self.controller_coordination_result_context_command_pending = false;
+                    } else if operation.starts_with("controller coordination suggestion") {
+                        self.controller_coordination_suggestion_command_pending = false;
                     } else if operation.starts_with("controller coordination") {
                         self.controller_coordination_command_pending = false;
                     }
@@ -4257,6 +4270,39 @@ impl ChatariumApp {
             Err(error) => {
                 self.status =
                     format!("failed to queue coordination result context decision: {error}");
+            }
+        }
+    }
+
+    fn record_controller_coordination_suggestion(
+        &mut self,
+        coordination_turn_id: LocalTurnId,
+        basis_result_route_id: RouteId,
+        action: CoordinationSuggestionAction,
+    ) {
+        if self.controller_coordination_suggestion_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot record coordination suggestion: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::RecordControllerCoordinationSuggestion {
+            controller_conversation_id: self.local_conversation_id,
+            coordination_turn_id,
+            basis_result_route_id,
+            action,
+        }) {
+            Ok(()) => {
+                self.controller_coordination_suggestion_command_pending = true;
+                self.status = format!(
+                    "recording powerless coordination suggestion {} from route {}…",
+                    coordination_suggestion_action_label(action),
+                    basis_result_route_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue coordination suggestion: {error}");
             }
         }
     }
@@ -13192,6 +13238,38 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::RecordControllerCoordinationSuggestion {
+                controller_conversation_id,
+                coordination_turn_id,
+                basis_result_route_id,
+                action,
+            } => {
+                match append_controller_coordination_suggestion_checked(
+                    &mut store,
+                    controller_conversation_id,
+                    coordination_turn_id,
+                    basis_result_route_id,
+                    action,
+                ) {
+                    Ok((suggestion_id, event)) => {
+                        let _ = notices.send(
+                            PersistNotice::ControllerCoordinationSuggestionRecorded {
+                                suggestion_id,
+                                event,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller coordination suggestion",
+                            revision: None,
+                            request_id: None,
+                            turn_id: Some(coordination_turn_id),
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AcknowledgeWorkerControl {
                 worker_conversation_id,
                 route_id,
@@ -14714,6 +14792,15 @@ fn controller_worker_result_context_decision_label(
     match decision {
         ControllerWorkerResultContextDecision::Admit => "admit",
         ControllerWorkerResultContextDecision::Exclude => "exclude",
+    }
+}
+
+fn coordination_suggestion_action_label(action: CoordinationSuggestionAction) -> &'static str {
+    match action {
+        CoordinationSuggestionAction::StartOrResume => "START/RESUME",
+        CoordinationSuggestionAction::Continue => "CONTINUE",
+        CoordinationSuggestionAction::Stop => "STOP",
+        CoordinationSuggestionAction::StatusRequest => "STATUS",
     }
 }
 
