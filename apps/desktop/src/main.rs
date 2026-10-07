@@ -6024,6 +6024,92 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                             Ok(Some(binding)) => {
+                                match local_worker_session_alignment(
+                                    &self.events,
+                                    self.local_conversation_id,
+                                    binding.worker_id,
+                                ) {
+                                    Err(error) => {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "worker session projection blocked: {error}"
+                                            ))
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(186, 108, 108)),
+                                        );
+                                    }
+                                    Ok((current_session_id, active_session_id)) => {
+                                        ui.horizontal_wrapped(|ui| {
+                                            match active_session_id {
+                                                None => {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "worker session · UNBOUND · current {}",
+                                                            current_session_id.get(),
+                                                        ))
+                                                        .monospace()
+                                                        .size(9.0),
+                                                    );
+                                                    if ui
+                                                        .add_enabled(
+                                                            !self.supervision_command_pending
+                                                                && self.persist_tx.is_some(),
+                                                            egui::Button::new(
+                                                                "Bind worker to current session",
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        self.bind_worker_to_current_session(
+                                                            binding.worker_id,
+                                                        );
+                                                    }
+                                                }
+                                                Some(active)
+                                                    if active == current_session_id =>
+                                                {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "worker session {} · ACTIVE",
+                                                            active.get(),
+                                                        ))
+                                                        .monospace()
+                                                        .size(9.0),
+                                                    );
+                                                }
+                                                Some(active) => {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "worker session {} → current {} · HANDOFF REQUIRED",
+                                                            active.get(),
+                                                            current_session_id.get(),
+                                                        ))
+                                                        .monospace()
+                                                        .size(9.0),
+                                                    );
+                                                    if ui
+                                                        .add_enabled(
+                                                            !self.supervision_command_pending
+                                                                && self.persist_tx.is_some(),
+                                                            egui::Button::new(
+                                                                "Advance worker to current session",
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        self.bind_worker_to_current_session(
+                                                            binding.worker_id,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            if self.supervision_command_pending {
+                                                ui.spinner();
+                                            }
+                                        });
+                                    }
+                                }
+
                                 match worker_record(&self.events, binding.worker_id) {
                                     Err(error) => {
                                         ui.label(
