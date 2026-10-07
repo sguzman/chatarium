@@ -313,8 +313,8 @@ mod tests {
     use crate::control_route_audit::record_control_route_bound;
     use crate::routing_audit::record_route_proposed;
     use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound, record_worker_session_bound,
-        record_worker_session_successor_bound,
+        record_local_session_registered, record_session_endpoint_bound,
+        record_worker_session_bound, record_worker_session_successor_bound,
     };
     use crate::supervision_audit::{
         record_controller_session_designated, record_controller_worker_bound,
@@ -500,12 +500,8 @@ mod tests {
         );
         record_worker_session_successor_bound(
             &mut store,
-            WorkerSessionSuccessorBinding::new(
-                WORKER,
-                WORKER_SESSION,
-                WORKER_SUCCESSOR_SESSION,
-            )
-            .unwrap(),
+            WorkerSessionSuccessorBinding::new(WORKER, WORKER_SESSION, WORKER_SUCCESSOR_SESSION)
+                .unwrap(),
         )
         .unwrap();
         record_controller_worker_bound(
@@ -533,10 +529,7 @@ mod tests {
         let records = replay_validated_orchestration_routes(store.events()).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].worker_session_id, Some(WORKER_SESSION));
-        assert_eq!(
-            records[1].worker_session_id,
-            Some(WORKER_SUCCESSOR_SESSION)
-        );
+        assert_eq!(records[1].worker_session_id, Some(WORKER_SUCCESSOR_SESSION));
     }
 
     #[test]
