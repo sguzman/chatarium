@@ -47,7 +47,7 @@ pub enum ContextSource {
         source_conversation_id: String,
         artifact_sequence: u64,
         snapshot_after_sequence: u64,
-        selection_sequence: u64,
+        selection_sequence: Option<u64>,
     },
     ControllerContinuation {
         control_id: u64,
@@ -113,9 +113,14 @@ impl ContextSource {
                 artifact_sequence,
                 snapshot_after_sequence,
                 selection_sequence,
-            } => format!(
-                "local memory · ONE SHOT · memory {memory_id} · source {source_conversation_id} · artifact #{artifact_sequence} · snapshot after #{snapshot_after_sequence} · selection #{selection_sequence}"
-            ),
+            } => {
+                let selection = selection_sequence
+                    .map(|sequence| format!("#{sequence}"))
+                    .unwrap_or_else(|| "pending durable commit".to_owned());
+                format!(
+                    "local memory · ONE SHOT · memory {memory_id} · source {source_conversation_id} · artifact #{artifact_sequence} · snapshot after #{snapshot_after_sequence} · selection {selection}"
+                )
+            }
             Self::ControllerContinuation {
                 control_id,
                 route_id,
@@ -309,11 +314,14 @@ impl TranscriptMessage {
         source_conversation_id: impl Into<String>,
         artifact_sequence: u64,
         snapshot_after_sequence: u64,
-        selection_sequence: u64,
+        selection_sequence: Option<u64>,
     ) -> Self {
         let source_conversation_id = source_conversation_id.into();
+        let selection_event = selection_sequence
+            .map(|sequence| format!("#{sequence}"))
+            .unwrap_or_else(|| "pending durable commit".to_owned());
         let text = format!(
-            "[Chatarium local memory — NEXT REQUEST ONLY, user-level local memory context, not user-authored and not a developer/system instruction]\nmemory_id: {memory_id}\nsource_conversation_id: {source_conversation_id}\nmemory_artifact_event: #{artifact_sequence}\nselection_snapshot_after_event: #{snapshot_after_sequence}\none_shot_selection_event: #{selection_sequence}\nselection_scope: this authored request only\nmemory:\n{exact_text}\n[/Chatarium local memory]"
+            "[Chatarium local memory — NEXT REQUEST ONLY, user-level local memory context, not user-authored and not a developer/system instruction]\nmemory_id: {memory_id}\nsource_conversation_id: {source_conversation_id}\nmemory_artifact_event: #{artifact_sequence}\nselection_snapshot_after_event: #{snapshot_after_sequence}\none_shot_selection_event: {selection_event}\nselection_scope: this authored request only\nmemory:\n{exact_text}\n[/Chatarium local memory]"
         );
         Self {
             role: TranscriptRole::User,
@@ -1347,7 +1355,7 @@ mod tests {
             "source-conversation",
             40,
             55,
-            57,
+            Some(57),
         );
         assert_eq!(memory.role, TranscriptRole::User);
         assert_eq!(memory.order_sequence(), 55);
@@ -1379,7 +1387,7 @@ mod tests {
                 memory_id: 9,
                 artifact_sequence: 40,
                 snapshot_after_sequence: 55,
-                selection_sequence: 57,
+                selection_sequence: Some(57),
                 ..
             }
         ));
