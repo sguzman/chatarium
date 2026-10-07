@@ -4,7 +4,12 @@
 //! is validated structurally; neither backup manifests nor reports contain private identities,
 //! titles, message text, or raw response bodies.
 
+use crate::control_admission_audit::replay_validated_control_admissions;
+use crate::control_dispatch_audit::replay_validated_control_dispatches;
+use crate::control_provenance_audit::replay_control_provenance_audit;
+use crate::control_route_audit::replay_control_route_audit;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
+use crate::orchestration_route_audit::replay_validated_orchestration_routes;
 use crate::local_route_context_audit::replay_local_route_context_audit;
 use crate::local_route_delivery_audit::replay_local_route_delivery_audit;
 use crate::local_route_payload_audit::replay_local_route_payload_audit;
@@ -153,6 +158,11 @@ pub fn check_archive(
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
     replay_local_conversation_topologies(&events).map_err(err)?;
     replay_supervision_audit(&events).map_err(err)?;
+    replay_validated_control_admissions(&events).map_err(err)?;
+    replay_control_provenance_audit(&events).map_err(err)?;
+    replay_control_route_audit(&events).map_err(err)?;
+    replay_validated_orchestration_routes(&events).map_err(err)?;
+    replay_validated_control_dispatches(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
     replay_local_route_payload_audit(&events).map_err(err)?;
     replay_local_route_delivery_audit(&events).map_err(err)?;
