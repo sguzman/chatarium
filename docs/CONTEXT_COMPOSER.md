@@ -124,14 +124,15 @@ future caller accidentally supplies one before the durability gate.
 
 ## Controller orchestration sources
 
-Context Composer now has three explicit orchestration source types in addition
+Context Composer now has four explicit orchestration source types in addition
 to ordinary transcript and routed peer context:
 
 - bounded controller continuation on the worker side;
 - explicitly admitted terminal worker results on the controller side;
-- a non-authored controller coordination marker.
+- a non-authored controller coordination marker;
+- explicitly admitted terminal controller-coordination results.
 
-All three serialize at **user-level trust**, never as developer/system
+All four serialize at **user-level trust**, never as developer/system
 instructions and never as human-authored transcript messages.
 
 For controller coordination, the worker-result set is frozen by the durable
@@ -141,7 +142,15 @@ the admitted results while explicitly denying authority to issue or execute
 worker controls, mutate lifecycle, or assume continuation authority.
 
 Coordination output is durable remote-turn evidence plus a separate terminal
-coordination result. It is not automatically fed into later context.
+coordination result. It is context-excluded by default. A later explicit
+coordination-result Admit decision may make that exact terminal result eligible
+for ordinary future controller requests; the admitted set is snapshotted at
+authored Send.
+
+The special non-authored coordination dispatch path does not consume admitted
+prior coordination results. This prevents an implicit coordination recursion
+policy from appearing merely because ordinary controller context can use the
+result.
 
 ## Capability admissions
 
