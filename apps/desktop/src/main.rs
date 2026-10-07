@@ -92,6 +92,7 @@ use chatarium_store::controller_coordination_context_audit::{
 };
 use chatarium_store::controller_coordination_suggestion_audit::{
     ControllerCoordinationSuggestionRecord, record_controller_coordination_suggestion,
+    record_controller_coordination_suggestion_promoted,
     replay_controller_coordination_suggestion_audit,
 };
 use chatarium_store::controller_result_context_audit::{
@@ -285,6 +286,10 @@ enum PersistCommand {
         coordination_turn_id: LocalTurnId,
         basis_result_route_id: RouteId,
         action: CoordinationSuggestionAction,
+    },
+    PromoteControllerCoordinationSuggestion {
+        controller_conversation_id: LocalConversationId,
+        suggestion_id: CoordinationSuggestionId,
     },
     AcknowledgeWorkerControl {
         worker_conversation_id: LocalConversationId,
@@ -501,6 +506,12 @@ enum PersistNotice {
     ControllerCoordinationSuggestionRecorded {
         suggestion_id: CoordinationSuggestionId,
         event: EventEnvelope,
+    },
+    ControllerCoordinationSuggestionPromoted {
+        suggestion_id: CoordinationSuggestionId,
+        control_id: ControlId,
+        route_id: RouteId,
+        appended_events: Vec<EventEnvelope>,
     },
     WorkerControlAcknowledged {
         route_id: RouteId,
@@ -12332,6 +12343,9 @@ fn append_controller_coordination_suggestion_checked(
         basis_result_route_id,
         worker_conversation_id: basis.worker_conversation_id,
         recorded_sequence: 0,
+        promoted_control_id: None,
+        promoted_route_id: None,
+        promoted_sequence: None,
     };
     record_controller_coordination_suggestion(store, &record).map_err(|error| error.to_string())?;
 
