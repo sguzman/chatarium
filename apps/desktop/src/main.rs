@@ -2442,18 +2442,17 @@ impl ChatariumApp {
                         return;
                     }
                 };
-                let controller_result_context =
-                    match admitted_controller_worker_result_messages(
-                        &self.events,
-                        self.local_conversation_id,
-                    ) {
-                        Ok(messages) => messages,
-                        Err(error) => {
-                            self.status =
-                                format!("cannot snapshot admitted controller results: {error}");
-                            return;
-                        }
-                    };
+                let controller_result_context = match admitted_controller_worker_result_messages(
+                    &self.events,
+                    self.local_conversation_id,
+                ) {
+                    Ok(messages) => messages,
+                    Err(error) => {
+                        self.status =
+                            format!("cannot snapshot admitted controller results: {error}");
+                        return;
+                    }
+                };
                 self.commit_remote_intents.insert(
                     request_id,
                     PendingInferenceIntent {
@@ -2982,10 +2981,7 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
-                PersistNotice::ControllerWorkerResultContextDecisionUpdated {
-                    route_id,
-                    event,
-                } => {
+                PersistNotice::ControllerWorkerResultContextDecisionUpdated { route_id, event } => {
                     self.events.push(event);
                     self.controller_result_context_command_pending = false;
                     self.status = format!(
@@ -4122,7 +4118,8 @@ impl ChatariumApp {
                 );
             }
             Err(error) => {
-                self.status = format!("failed to queue controller result context decision: {error}");
+                self.status =
+                    format!("failed to queue controller result context decision: {error}");
             }
         }
     }
@@ -11160,11 +11157,9 @@ fn append_controller_worker_result_context_decision_checked(
         );
     }
 
-    store
-        .events()
-        .last()
-        .cloned()
-        .ok_or_else(|| "controller result context decision append produced no durable event".to_owned())
+    store.events().last().cloned().ok_or_else(|| {
+        "controller result context decision append produced no durable event".to_owned()
+    })
 }
 
 fn append_worker_control_acknowledgement_checked(
@@ -14054,16 +14049,18 @@ fn admitted_controller_worker_result_messages(
             }
         };
 
-        messages.push(context_composer::TranscriptMessage::controller_worker_result(
-            result.control_id.get(),
-            result.route_id.get(),
-            result.worker_id.get(),
-            result.goal_id.get(),
-            result.result_sequence,
-            record.last_decision_sequence,
-            result_kind,
-            result_text.as_str(),
-        ));
+        messages.push(
+            context_composer::TranscriptMessage::controller_worker_result(
+                result.control_id.get(),
+                result.route_id.get(),
+                result.worker_id.get(),
+                result.goal_id.get(),
+                result.result_sequence,
+                record.last_decision_sequence,
+                result_kind,
+                result_text.as_str(),
+            ),
+        );
     }
 
     messages.sort_by_key(context_composer::TranscriptMessage::order_sequence);
@@ -15838,12 +15835,9 @@ mod tests {
             }
         ));
         assert!(
-            admitted_controller_worker_result_messages(
-                status_store.events(),
-                status_controller,
-            )
-            .unwrap()
-            .is_empty()
+            admitted_controller_worker_result_messages(status_store.events(), status_controller,)
+                .unwrap()
+                .is_empty()
         );
 
         let admitted_event = append_controller_worker_result_context_decision_checked(
@@ -15861,8 +15855,14 @@ mod tests {
             admitted_controller_worker_result_messages(status_store.events(), status_controller)
                 .unwrap();
         assert_eq!(admitted_context.len(), 1);
-        assert_eq!(admitted_context[0].role, context_composer::TranscriptRole::User);
-        assert_eq!(admitted_context[0].order_sequence(), admitted_event.sequence);
+        assert_eq!(
+            admitted_context[0].role,
+            context_composer::TranscriptRole::User
+        );
+        assert_eq!(
+            admitted_context[0].order_sequence(),
+            admitted_event.sequence
+        );
         assert!(admitted_context[0].text.contains("result_kind: status"));
         assert!(admitted_context[0].text.contains("phase: COMPLETED"));
 
@@ -16285,8 +16285,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(admitted_context.len(), 1);
-        assert_eq!(admitted_context[0].order_sequence(), admitted_event.sequence);
-        assert!(admitted_context[0].text.contains("result_kind: continuation"));
+        assert_eq!(
+            admitted_context[0].order_sequence(),
+            admitted_event.sequence
+        );
+        assert!(
+            admitted_context[0]
+                .text
+                .contains("result_kind: continuation")
+        );
         assert!(admitted_context[0].text.contains("continued worker output"));
 
         assert!(
