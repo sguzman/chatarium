@@ -137,9 +137,7 @@ impl ContextPolicy {
             ContextSource::ConversationDeveloperContext => self.include_developer_context,
             ContextSource::DurableTranscript { .. } => self.include_durable_transcript,
             ContextSource::RoutedInbox { .. } => self.include_routed_context,
-            ContextSource::ControllerContinuation { .. } => {
-                self.include_controller_continuation
-            }
+            ContextSource::ControllerContinuation { .. } => self.include_controller_continuation,
             ContextSource::CurrentDraft => self.include_current_draft,
         }
     }
@@ -724,13 +722,11 @@ mod tests {
 
     #[test]
     fn controller_continuation_is_user_level_but_never_claims_user_authorship() {
-        let continuation =
-            TranscriptMessage::controller_continuation(1, 2, 3, 4, 5, 6, 7);
+        let continuation = TranscriptMessage::controller_continuation(1, 2, 3, 4, 5, 6, 7);
         assert_eq!(continuation.role, TranscriptRole::User);
         assert_eq!(continuation.order_sequence(), 7);
 
-        let plan =
-            ContextPlan::compose(ContextPolicy::dispatch(), "", "", [continuation]);
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [continuation]);
         assert_eq!(plan.messages.len(), 1);
         assert_eq!(plan.messages[0].role, "user");
         assert!(
