@@ -106,6 +106,66 @@ pub fn record_continuation_permit_issued(
     )
 }
 
+/// Reconstruct one durable continuation lease as a live core lease ready for
+/// its next permit issuance.
+///
+/// This does not create new authority: the original allowance and every already
+/// issued ordinal come from the journal. The caller must still durably record
+/// any newly authorized permit before consuming it into a Continue control.
+pub fn reconstruct_continuation_lease_for_next_issue(
+    events: &[EventEnvelope],
+    lease_id: ContinuationLeaseId,
+) -> Result<ContinuationLease, String> {
+    let record = replay_continuation_audit(events)?
+        .into_iter()
+        .find(|record| record.lease_id == lease_id)
+        .ok_or_else(|| format!("continuation lease {} does not exist", lease_id.get()))?;
+
+    let worker = replay_worker_audit(events)?
+        .into_iter()
+        .find(|worker| worker.worker_id == record.worker_id)
+        .ok_or_else(|| {
+            format!(
+                "continuation lease {} references worker {} without durable lifecycle state",
+                lease_id.get(),
+                record.worker_id.get()
+            )
+        })?;
+
+    let mut lease = ContinuationLease::new(
+        record.lease_id,
+        record.worker_id,
+        record.goal_id,
+        record.allowance,
+    );
+    for expected_ordinal in 1..=record.issued {
+        let permit = lease.authorize(&worker.lifecycle).map_err(|error| {
+            format!(
+                "continuation lease {} cannot reconstruct issued ordinal {} against current worker state: {error:?}",
+                lease_id.get(),
+                expected_ordinal
+            )
+        })?;
+        if permit.ordinal() != expected_ordinal {
+            return Err(format!(
+                "continuation lease {} reconstructed ordinal {}, expected {}",
+                lease_id.get(),
+                permit.ordinal(),
+                expected_ordinal
+            ));
+        }
+    }
+
+    if lease.issued() != record.issued || lease.remaining() != record.remaining {
+        return Err(format!(
+            "continuation lease {} live reconstruction disagrees with durable allowance",
+            lease_id.get()
+        ));
+    }
+
+    Ok(lease)
+}
+
 /// Replay all continuation leases, issued permits, and Continue consumption.
 pub fn replay_continuation_audit(
     events: &[EventEnvelope],
@@ -592,6 +652,39 @@ mod tests {
         assert_eq!(records[0].consumed, 1);
         assert_eq!(records[0].permits[0].consumed_by, Some(ControlId::new(1)));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn live_reconstruction_resumes_at_next_durable_ordinal() {
+        let mut store = MemoryEventStore::default();
+        record_working(&mut store, W1, G1);
+        let mut lease = create_lease(&mut store, 3);
+        let lifecycle = working_lifecycle(G1);
+        let first = issue(&mut store, &mut lease, &lifecycle);
+        assert_eq!(first.ordinal(), 1);
+        let second = issue(&mut store, &mut lease, &lifecycle);
+        assert_eq!(second.ordinal(), 2);
+
+        let mut reconstructed =
+            reconstruct_continuation_lease_for_next_issue(store.events(), LEASE).unwrap();
+        assert_eq!(reconstructed.issued(), 2);
+        assert_eq!(reconstructed.remaining(), 1);
+        let third = reconstructed.authorize(&lifecycle).unwrap();
+        assert_eq!(third.ordinal(), 3);
+    }
+
+    #[test]
+    fn live_reconstruction_fails_closed_when_worker_is_no_longer_working() {
+        let mut store = MemoryEventStore::default();
+        record_working(&mut store, W1, G1);
+        let mut lease = create_lease(&mut store, 2);
+        let lifecycle = working_lifecycle(G1);
+        let _ = issue(&mut store, &mut lease, &lifecycle);
+        record_worker_transition(&mut store, W1, G1, WorkerAction::RequestInput).unwrap();
+
+        let error =
+            reconstruct_continuation_lease_for_next_issue(store.events(), LEASE).unwrap_err();
+        assert!(error.contains("cannot reconstruct issued ordinal"));
     }
 
     #[test]
