@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 const SCHEMA: &str = "chatarium-controller-coordination-audit";
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ControllerCoordinationTransportState {
@@ -64,12 +64,31 @@ impl ControllerCoordinationOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerCoordinationOutputContract {
+    /// Historical v1 turns whose assistant output was unconstrained prose.
+    LegacyFreeform,
+    /// V2 turns that request strict JSON summary + typed suggestion candidates.
+    SuggestionCandidatesV1,
+}
+
+impl ControllerCoordinationOutputContract {
+    #[must_use]
+    pub const fn stable_name(self) -> &'static str {
+        match self {
+            Self::LegacyFreeform => "legacy_freeform",
+            Self::SuggestionCandidatesV1 => "suggestion_candidates_v1",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControllerCoordinationRecord {
     pub controller_conversation_id: LocalConversationId,
     pub controller_session_id: SessionId,
     pub coordination_turn_id: LocalTurnId,
     pub admitted_result_routes: Vec<RouteId>,
+    pub output_contract: ControllerCoordinationOutputContract,
     pub started_sequence: u64,
     pub outcome: Option<ControllerCoordinationOutcome>,
     pub terminal_sequence: Option<u64>,
@@ -98,6 +117,8 @@ pub fn record_controller_coordination_started(
                 .iter()
                 .map(|route_id| route_id.get())
                 .collect::<Vec<_>>(),
+            "output_contract": ControllerCoordinationOutputContract::SuggestionCandidatesV1
+                .stable_name(),
         }),
     )
 }
@@ -137,7 +158,9 @@ pub fn replay_controller_coordination_audit(
     for (index, event) in events.iter().enumerate() {
         match event.kind {
             EventKind::ControllerCoordinationTurnStarted => {
-                let value = typed_payload(event, "controller_coordination_started")?;
+                let (value, version) =
+                    typed_payload(event, "controller_coordination_started")?;
+                let output_contract = parse_output_contract(&value, version, event.sequence)?;
                 let controller_conversation_id = parse_conversation_id(&value, event.sequence)?;
                 let controller_session_id =
                     SessionId::new(required_u64(&value, "controller_session_id")?);
@@ -250,6 +273,7 @@ pub fn replay_controller_coordination_audit(
                         controller_session_id,
                         coordination_turn_id,
                         admitted_result_routes: recorded_routes,
+                        output_contract,
                         started_sequence: event.sequence,
                         outcome: None,
                         terminal_sequence: None,
@@ -258,7 +282,8 @@ pub fn replay_controller_coordination_audit(
                 );
             }
             EventKind::ControllerCoordinationTurnResultRecorded => {
-                let value = typed_payload(event, "controller_coordination_result")?;
+                let (value, _) =
+                    typed_payload(event, "controller_coordination_result")?;
                 let controller_conversation_id = parse_conversation_id(&value, event.sequence)?;
                 let controller_session_id =
                     SessionId::new(required_u64(&value, "controller_session_id")?);
@@ -525,7 +550,10 @@ fn append_typed(
     store.append_scoped(Some(scope), kind, encoded)
 }
 
-fn typed_payload(event: &EventEnvelope, expected_record: &str) -> Result<Value, String> {
+fn typed_payload(
+    event: &EventEnvelope,
+    expected_record: &str,
+) -> Result<(Value, u64), String> {
     let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
         format!(
             "malformed controller coordination payload at sequence {}: {error}",
@@ -538,10 +566,19 @@ fn typed_payload(event: &EventEnvelope, expected_record: &str) -> Result<Value, 
             event.sequence
         ));
     }
-    if value.get("version").and_then(Value::as_u64) != Some(VERSION) {
+    let version = value
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            format!(
+                "controller coordination event at sequence {} is missing integer version",
+                event.sequence
+            )
+        })?;
+    if !matches!(version, 1 | VERSION) {
         return Err(format!(
-            "controller coordination event at sequence {} has missing/unsupported version",
-            event.sequence
+            "controller coordination event at sequence {} has unsupported version {}",
+            event.sequence, version
         ));
     }
     if value.get("record").and_then(Value::as_str) != Some(expected_record) {
@@ -550,7 +587,31 @@ fn typed_payload(event: &EventEnvelope, expected_record: &str) -> Result<Value, 
             event.sequence
         ));
     }
-    Ok(value)
+    Ok((value, version))
+}
+
+fn parse_output_contract(
+    value: &Value,
+    version: u64,
+    sequence: u64,
+) -> Result<ControllerCoordinationOutputContract, String> {
+    if version == 1 {
+        if value.get("output_contract").is_some() {
+            return Err(format!(
+                "legacy controller coordination start at sequence {sequence} must not carry output_contract"
+            ));
+        }
+        return Ok(ControllerCoordinationOutputContract::LegacyFreeform);
+    }
+
+    match required_string(value, "output_contract")? {
+        "suggestion_candidates_v1" => {
+            Ok(ControllerCoordinationOutputContract::SuggestionCandidatesV1)
+        }
+        other => Err(format!(
+            "controller coordination start at sequence {sequence} has unsupported output contract '{other}'"
+        )),
+    }
 }
 
 fn parse_conversation_id(value: &Value, sequence: u64) -> Result<LocalConversationId, String> {
