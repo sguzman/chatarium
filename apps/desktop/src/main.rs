@@ -13577,6 +13577,69 @@ mod tests {
             .unwrap();
         assert_eq!(status_dispatch.dispatched_phase, WorkerPhase::Completed);
 
+        let status_acknowledgement = append_worker_control_acknowledgement_checked(
+            &mut status_store,
+            worker_conversation,
+            status_route,
+        )
+        .unwrap();
+        let status_result = append_worker_control_status_result_checked(
+            &mut status_store,
+            worker_conversation,
+            status_route,
+        )
+        .unwrap();
+        assert_eq!(
+            status_result.kind,
+            EventKind::WorkerControlStatusResultRecorded
+        );
+        let replayed_status = replay_worker_control_status_results(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.route_id == status_route)
+            .unwrap();
+        assert_eq!(replayed_status.worker_id, worker_id);
+        assert_eq!(replayed_status.worker_conversation_id, worker_conversation);
+        assert_eq!(replayed_status.goal_id, goal_id);
+        assert_eq!(replayed_status.phase, WorkerPhase::Completed);
+        assert_eq!(
+            replayed_status.acknowledged_sequence,
+            status_acknowledgement.sequence
+        );
+        assert_eq!(replayed_status.recorded_sequence, status_result.sequence);
+        assert_eq!(
+            worker_record(status_store.events(), worker_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle
+                .phase(),
+            WorkerPhase::Completed
+        );
+
+        let before_duplicate_status = status_store.events().len();
+        assert!(
+            append_worker_control_status_result_checked(
+                &mut status_store,
+                worker_conversation,
+                status_route,
+            )
+            .unwrap_err()
+            .contains("already has a durable status result")
+        );
+        assert_eq!(status_store.events().len(), before_duplicate_status);
+
+        let before_stop_status = store.events().len();
+        assert!(
+            append_worker_control_status_result_checked(
+                &mut store,
+                worker_conversation,
+                route_id,
+            )
+            .unwrap_err()
+            .contains("not a StatusRequest")
+        );
+        assert_eq!(store.events().len(), before_stop_status);
+
         let mut recovery_store = chatarium_store::MemoryEventStore::default();
         let (controller, worker_conversation, _, _) = ready_supervised_pair(&mut recovery_store);
         let (recovery_control, recovery_route, _) =
