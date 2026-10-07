@@ -19,6 +19,7 @@ use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::coordination_suggestion::{
     CoordinationSuggestion, CoordinationSuggestionAction, CoordinationSuggestionId,
 };
+use chatarium_core::local_memory::LocalMemoryId;
 use chatarium_core::orchestration::{
     ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle,
     WorkerPhase,
@@ -116,6 +117,13 @@ use chatarium_store::local_conversation_chat_container_audit::{
 use chatarium_store::local_conversation_worker_audit::{
     LocalConversationWorkerBindingRecord, record_local_conversation_worker_bound,
     replay_local_conversation_worker_bindings,
+};
+use chatarium_store::local_memory_audit::{
+    record_local_memory_artifact, replay_local_memory_audit,
+};
+use chatarium_store::local_memory_context_audit::{
+    LocalMemoryContextDecision, record_local_memory_context_decision,
+    replay_admitted_local_memory_context, replay_local_memory_context_audit,
 };
 use chatarium_store::local_route_context_audit::{
     LocalRouteContextDecision, record_local_route_context_decision,
@@ -679,6 +687,7 @@ struct PendingInferenceIntent {
     instructions: Option<String>,
     developer_context: String,
     routed_context: Vec<context_composer::TranscriptMessage>,
+    local_memory_context: Vec<context_composer::TranscriptMessage>,
     controller_result_context: Vec<context_composer::TranscriptMessage>,
     controller_coordination_result_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
@@ -2513,6 +2522,16 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                let local_memory_context = match admitted_local_memory_messages(
+                    &self.events,
+                    self.local_conversation_id,
+                ) {
+                    Ok(messages) => messages,
+                    Err(error) => {
+                        self.status = format!("cannot snapshot admitted local memory: {error}");
+                        return;
+                    }
+                };
                 let controller_result_context = match admitted_controller_worker_result_messages(
                     &self.events,
                     self.local_conversation_id,
@@ -2545,6 +2564,7 @@ impl ChatariumApp {
                             .then(|| self.conversation_instructions.clone()),
                         developer_context: self.conversation_developer_context.clone(),
                         routed_context,
+                        local_memory_context,
                         controller_result_context,
                         controller_coordination_result_context,
                         request_patch,
@@ -2628,6 +2648,7 @@ impl ChatariumApp {
                                     self.local_conversation_id,
                                 ));
                             transcript.extend(intent.routed_context);
+                            transcript.extend(intent.local_memory_context);
                             transcript.extend(intent.controller_result_context);
                             transcript.extend(intent.controller_coordination_result_context);
                             transcript
@@ -9568,6 +9589,21 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                             }
+                            match admitted_local_memory_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Ok(memory_context) => transcript.extend(memory_context),
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "local memory composition blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
                             match admitted_controller_worker_result_messages(
                                 &self.events,
                                 self.local_conversation_id,
@@ -9614,11 +9650,13 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted local memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     context_plan.routed_context_count(),
                                     if context_plan.routed_context_count() == 1 { "" } else { "s" },
+                                    context_plan.local_memory_count(),
+                                    if context_plan.local_memory_count() == 1 { "y" } else { "ies" },
                                     context_plan.controller_worker_result_count(),
                                     if context_plan.controller_worker_result_count() == 1 { "" } else { "s" },
                                     context_plan.controller_coordination_result_count(),
