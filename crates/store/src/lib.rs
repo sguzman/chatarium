@@ -33,6 +33,7 @@ pub mod local_memory_context_audit;
 pub mod local_memory_label_audit;
 pub mod local_memory_search;
 pub mod local_memory_supersession_audit;
+pub mod local_memory_turn_selection_audit;
 pub mod local_route_context_audit;
 pub mod local_route_delivery_audit;
 pub mod local_route_payload_audit;
