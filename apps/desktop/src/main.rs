@@ -3009,6 +3009,21 @@ impl ChatariumApp {
                         route_id.get()
                     );
                 }
+                PersistNotice::ControllerCoordinationStarted { turn_id, event } => {
+                    self.events.push(event);
+                    self.controller_coordination_command_pending = false;
+                    self.status = format!(
+                        "controller coordination turn {} durably started",
+                        turn_id
+                    );
+                }
+                PersistNotice::ControllerCoordinationResultRecorded { turn_id, event } => {
+                    self.events.push(event);
+                    self.status = format!(
+                        "controller coordination turn {} terminal result durably recorded",
+                        turn_id
+                    );
+                }
                 PersistNotice::WorkerControlAcknowledged { route_id, event } => {
                     self.events.push(event);
                     self.worker_control_command_pending = false;
@@ -3087,6 +3102,9 @@ impl ChatariumApp {
                     }
                     if operation.starts_with("controller result context") {
                         self.controller_result_context_command_pending = false;
+                    }
+                    if operation.starts_with("controller coordination") {
+                        self.controller_coordination_command_pending = false;
                     }
                     if operation.starts_with("worker control acknowledgement")
                         || operation.starts_with("worker control status result")
@@ -4140,6 +4158,27 @@ impl ChatariumApp {
             Err(error) => {
                 self.status =
                     format!("failed to queue controller result context decision: {error}");
+            }
+        }
+    }
+
+    fn start_controller_coordination(&mut self) {
+        if self.controller_coordination_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot start controller coordination: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::StartControllerCoordination {
+            controller_conversation_id: self.local_conversation_id,
+        }) {
+            Ok(()) => {
+                self.controller_coordination_command_pending = true;
+                self.status = "starting durable non-authored controller coordination turn…".to_owned();
+            }
+            Err(error) => {
+                self.status = format!("failed to queue controller coordination start: {error}");
             }
         }
     }
@@ -12300,6 +12339,30 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::StartControllerCoordination {
+                controller_conversation_id,
+            } => {
+                match append_controller_coordination_start_checked(
+                    &mut store,
+                    controller_conversation_id,
+                ) {
+                    Ok((turn_id, event)) => {
+                        let _ = notices.send(PersistNotice::ControllerCoordinationStarted {
+                            turn_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "controller coordination start",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::AcknowledgeWorkerControl {
                 worker_conversation_id,
                 route_id,
@@ -15048,6 +15111,12 @@ mod tests {
             PersistNotice::ControllerControlDispatched { .. } => "controller_control_dispatched",
             PersistNotice::ControllerWorkerResultContextDecisionUpdated { .. } => {
                 "controller_worker_result_context_decision_updated"
+            }
+            PersistNotice::ControllerCoordinationStarted { .. } => {
+                "controller_coordination_started"
+            }
+            PersistNotice::ControllerCoordinationResultRecorded { .. } => {
+                "controller_coordination_result_recorded"
             }
             PersistNotice::WorkerControlAcknowledged { .. } => "worker_control_acknowledged",
             PersistNotice::WorkerControlStatusResultRecorded { .. } => {
