@@ -14525,6 +14525,17 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
         }
     }
 
+    let mut coordination_interrupted = Vec::new();
+    for coordination in replay_controller_coordination_audit(store.events())? {
+        let transport = controller_coordination_transport_state(
+            store.events(),
+            coordination.coordination_turn_id,
+        )?;
+        if transport.was_dispatched() && !transport.is_terminal() {
+            coordination_interrupted.push(coordination.coordination_turn_id);
+        }
+    }
+
     for turn_id in &interrupted {
         let request_id = turn_id.to_string();
         store
@@ -14569,6 +14580,29 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
             })?;
     }
 
+    for turn_id in &coordination_interrupted {
+        let request_id = turn_id.to_string();
+        store
+            .append_scoped(
+                Some(local_turn_scope(*turn_id)),
+                EventKind::TransportInterrupted,
+                remote_turn_payload(
+                    *turn_id,
+                    &request_id,
+                    None,
+                    None,
+                    Some(
+                        "Chatarium restarted without a durable terminal outcome for this non-authored controller coordination turn",
+                    ),
+                ),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to persist restart interruption for controller coordination turn {turn_id}: {error}"
+                )
+            })?;
+    }
+
     let continuation_turn_ids = replay_worker_continuation_execution_audit(store.events())?
         .into_iter()
         .map(|record| record.execution_turn_id)
@@ -14577,7 +14611,19 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
         append_worker_continuation_result_if_terminal(store, turn_id)?;
     }
 
-    Ok(interrupted.len() + continuation_interrupted.len())
+    let coordination_turn_ids = replay_controller_coordination_audit(store.events())?
+        .into_iter()
+        .map(|record| record.coordination_turn_id)
+        .collect::<Vec<_>>();
+    for turn_id in coordination_turn_ids {
+        append_controller_coordination_result_if_terminal(store, turn_id)?;
+    }
+
+    Ok(
+        interrupted.len()
+            + continuation_interrupted.len()
+            + coordination_interrupted.len(),
+    )
 }
 
 fn projected_local_conversation_id(
