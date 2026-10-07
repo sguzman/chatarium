@@ -17448,6 +17448,86 @@ mod tests {
             .is_empty()
         );
 
+        let before_bad_suggestion = status_store.events().len();
+        assert!(
+            append_controller_coordination_suggestion_checked(
+                &mut status_store,
+                status_controller,
+                coordination_turn_id,
+                RouteId::new(999_999),
+                CoordinationSuggestionAction::StatusRequest,
+            )
+            .unwrap_err()
+            .contains("was not frozen into coordination turn")
+        );
+        assert_eq!(status_store.events().len(), before_bad_suggestion);
+
+        let before_suggestion = status_store.events().len();
+        let (suggestion_id, suggestion_event) =
+            append_controller_coordination_suggestion_checked(
+                &mut status_store,
+                status_controller,
+                coordination_turn_id,
+                status_route,
+                CoordinationSuggestionAction::StatusRequest,
+            )
+            .unwrap();
+        assert_eq!(suggestion_id, CoordinationSuggestionId::new(1));
+        assert_eq!(
+            suggestion_event.kind,
+            EventKind::ControllerCoordinationSuggestionRecorded
+        );
+        let appended = &status_store.events()[before_suggestion..];
+        assert_eq!(appended.len(), 1);
+        assert_eq!(
+            appended[0].kind,
+            EventKind::ControllerCoordinationSuggestionRecorded
+        );
+        assert!(appended.iter().all(|event| {
+            !matches!(
+                event.kind,
+                EventKind::WorkerControlAdmitted
+                    | EventKind::ControlRouteBound
+                    | EventKind::RouteProposed
+                    | EventKind::RouteUserDecisionRecorded
+                    | EventKind::RouteDispatched
+                    | EventKind::WorkerLifecycleTransitionRecorded
+                    | EventKind::ContinuationLeaseCreated
+                    | EventKind::ContinuationPermitIssued
+            )
+        }));
+        let suggestion = replay_controller_coordination_suggestion_audit(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.suggestion.id() == suggestion_id)
+            .unwrap();
+        assert_eq!(suggestion.controller_conversation_id, status_controller);
+        assert_eq!(suggestion.coordination_turn_id, coordination_turn_id);
+        assert_eq!(suggestion.basis_result_route_id, status_route);
+        assert_eq!(suggestion.worker_conversation_id, status_worker_conversation);
+        assert_eq!(suggestion.suggestion.worker_id(), status_worker_id);
+        assert_eq!(
+            suggestion.suggestion.action(),
+            CoordinationSuggestionAction::StatusRequest
+        );
+
+        let before_duplicate_suggestion = status_store.events().len();
+        assert!(
+            append_controller_coordination_suggestion_checked(
+                &mut status_store,
+                status_controller,
+                coordination_turn_id,
+                status_route,
+                CoordinationSuggestionAction::StatusRequest,
+            )
+            .unwrap_err()
+            .contains("already has STATUS suggestion")
+        );
+        assert_eq!(
+            status_store.events().len(),
+            before_duplicate_suggestion
+        );
+
         let coordination_admit = append_controller_coordination_result_context_decision_checked(
             &mut status_store,
             coordination_turn_id,
