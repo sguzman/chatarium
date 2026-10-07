@@ -41,10 +41,7 @@ pub fn record_controller_coordination_suggestion(
 ) -> std::io::Result<u64> {
     append_typed(
         store,
-        suggestion_scope(
-            record.controller_conversation_id,
-            record.suggestion.id(),
-        ),
+        suggestion_scope(record.controller_conversation_id, record.suggestion.id()),
         EventKind::ControllerCoordinationSuggestionRecorded,
         json!({
             "schema": SCHEMA,
@@ -82,15 +79,12 @@ pub fn replay_controller_coordination_suggestion_audit(
         }
 
         let value = typed_payload(event)?;
-        let suggestion_id =
-            CoordinationSuggestionId::new(required_u64(&value, "suggestion_id")?);
+        let suggestion_id = CoordinationSuggestionId::new(required_u64(&value, "suggestion_id")?);
         let controller_conversation_id =
             parse_conversation_id(&value, "controller_conversation_id", event.sequence)?;
         let coordination_turn_id = parse_turn_id(&value, event.sequence)?;
-        let coordination_result_sequence =
-            required_u64(&value, "coordination_result_sequence")?;
-        let basis_result_route_id =
-            RouteId::new(required_u64(&value, "basis_result_route_id")?);
+        let coordination_result_sequence = required_u64(&value, "coordination_result_sequence")?;
+        let basis_result_route_id = RouteId::new(required_u64(&value, "basis_result_route_id")?);
         let worker_conversation_id =
             parse_conversation_id(&value, "worker_conversation_id", event.sequence)?;
         let worker_id = WorkerId::new(required_u64(&value, "worker_id")?);
@@ -147,8 +141,8 @@ pub fn replay_controller_coordination_suggestion_audit(
                 coordination_turn_id
             ));
         }
-        let output = controller_coordination_output_text(prior, coordination_turn_id)?
-            .ok_or_else(|| {
+        let output =
+            controller_coordination_output_text(prior, coordination_turn_id)?.ok_or_else(|| {
                 format!(
                     "coordination suggestion {} source coordination has no durable output text",
                     suggestion_id.get()
@@ -204,12 +198,7 @@ pub fn replay_controller_coordination_suggestion_audit(
         by_id.insert(
             suggestion_id,
             ControllerCoordinationSuggestionRecord {
-                suggestion: CoordinationSuggestion::new(
-                    suggestion_id,
-                    worker_id,
-                    goal_id,
-                    action,
-                ),
+                suggestion: CoordinationSuggestion::new(suggestion_id, worker_id, goal_id, action),
                 controller_conversation_id,
                 coordination_turn_id,
                 coordination_result_sequence,
@@ -277,9 +266,7 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
             event.sequence
         ));
     }
-    if value.get("record").and_then(Value::as_str)
-        != Some("controller_coordination_suggestion")
-    {
+    if value.get("record").and_then(Value::as_str) != Some("controller_coordination_suggestion") {
         return Err(format!(
             "coordination suggestion event at sequence {} has unexpected record",
             event.sequence
@@ -309,9 +296,7 @@ fn parse_conversation_id(
     sequence: u64,
 ) -> Result<LocalConversationId, String> {
     LocalConversationId::from_str(required_string(value, field)?).map_err(|error| {
-        format!(
-            "coordination suggestion event at sequence {sequence} has invalid {field}: {error}"
-        )
+        format!("coordination suggestion event at sequence {sequence} has invalid {field}: {error}")
     })
 }
 
