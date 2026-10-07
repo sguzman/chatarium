@@ -17891,12 +17891,11 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let candidate_projection =
-            project_controller_coordination_suggestion_candidates(
-                status_store.events(),
-                coordination_turn_id,
-            )
-            .unwrap();
+        let candidate_projection = project_controller_coordination_suggestion_candidates(
+            status_store.events(),
+            coordination_turn_id,
+        )
+        .unwrap();
         assert_eq!(candidate_projection.summary, "coordination synthesis");
         assert_eq!(candidate_projection.candidates.len(), 1);
         assert_eq!(
@@ -17915,10 +17914,7 @@ mod tests {
             candidate_projection.candidates[0].worker_id,
             status_worker_id
         );
-        assert_eq!(
-            candidate_projection.candidates[0].goal_id,
-            status_goal_id
-        );
+        assert_eq!(candidate_projection.candidates[0].goal_id, status_goal_id);
         assert_eq!(status_store.events().len(), before_candidate_projection);
 
         let before_bad_suggestion = status_store.events().len();
