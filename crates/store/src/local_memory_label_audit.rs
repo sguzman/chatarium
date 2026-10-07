@@ -80,13 +80,14 @@ pub fn replay_local_memory_label_audit(
         };
         let value = typed_payload(event, expected_record)?;
         let memory_id = LocalMemoryId::new(required_u64(&value, "memory_id")?);
-        let label = LocalMemoryLabel::new(required_string(&value, "label")?.to_owned())
-            .map_err(|error| {
+        let label = LocalMemoryLabel::new(required_string(&value, "label")?.to_owned()).map_err(
+            |error| {
                 format!(
                     "local memory label event at sequence {} has invalid label: {error:?}",
                     event.sequence
                 )
-            })?;
+            },
+        )?;
         validate_scope(event, memory_id)?;
 
         let artifact_exists = replay_local_memory_audit(&events[..index])?
