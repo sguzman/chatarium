@@ -7,6 +7,7 @@ pub mod archive_maintenance;
 pub mod authored;
 pub mod chat_container_audit;
 pub mod continuation_audit;
+pub mod continuation_execution_audit;
 pub mod control_ack_audit;
 pub mod control_action_audit;
 pub mod control_admission_audit;
