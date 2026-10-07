@@ -14,11 +14,11 @@ use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::control::{
     ControlId, WorkerControl, WorkerControlKind, validate_control_admission,
 };
+use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
+use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::coordination_suggestion::{
     CoordinationSuggestion, CoordinationSuggestionAction, CoordinationSuggestionId,
 };
-use chatarium_core::control_provenance::{ControlIssuer, ControlProvenance};
-use chatarium_core::control_route::ControlRouteBinding;
 use chatarium_core::orchestration::{
     ContinuationLease, ContinuationLeaseId, WorkerAction, WorkerGoalId, WorkerId, WorkerLifecycle,
     WorkerPhase,
@@ -4284,7 +4284,8 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status = "cannot record coordination suggestion: persistence unavailable".to_owned();
+            self.status =
+                "cannot record coordination suggestion: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::RecordControllerCoordinationSuggestion {
@@ -12332,8 +12333,7 @@ fn append_controller_coordination_suggestion_checked(
         worker_conversation_id: basis.worker_conversation_id,
         recorded_sequence: 0,
     };
-    record_controller_coordination_suggestion(store, &record)
-        .map_err(|error| error.to_string())?;
+    record_controller_coordination_suggestion(store, &record).map_err(|error| error.to_string())?;
 
     let replayed = replay_controller_coordination_suggestion_audit(store.events())?
         .into_iter()
@@ -13546,12 +13546,11 @@ fn persistence_worker(
                     action,
                 ) {
                     Ok((suggestion_id, event)) => {
-                        let _ = notices.send(
-                            PersistNotice::ControllerCoordinationSuggestionRecorded {
+                        let _ =
+                            notices.send(PersistNotice::ControllerCoordinationSuggestionRecorded {
                                 suggestion_id,
                                 event,
-                            },
-                        );
+                            });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -17463,15 +17462,14 @@ mod tests {
         assert_eq!(status_store.events().len(), before_bad_suggestion);
 
         let before_suggestion = status_store.events().len();
-        let (suggestion_id, suggestion_event) =
-            append_controller_coordination_suggestion_checked(
-                &mut status_store,
-                status_controller,
-                coordination_turn_id,
-                status_route,
-                CoordinationSuggestionAction::StatusRequest,
-            )
-            .unwrap();
+        let (suggestion_id, suggestion_event) = append_controller_coordination_suggestion_checked(
+            &mut status_store,
+            status_controller,
+            coordination_turn_id,
+            status_route,
+            CoordinationSuggestionAction::StatusRequest,
+        )
+        .unwrap();
         assert_eq!(suggestion_id, CoordinationSuggestionId::new(1));
         assert_eq!(
             suggestion_event.kind,
@@ -17504,7 +17502,10 @@ mod tests {
         assert_eq!(suggestion.controller_conversation_id, status_controller);
         assert_eq!(suggestion.coordination_turn_id, coordination_turn_id);
         assert_eq!(suggestion.basis_result_route_id, status_route);
-        assert_eq!(suggestion.worker_conversation_id, status_worker_conversation);
+        assert_eq!(
+            suggestion.worker_conversation_id,
+            status_worker_conversation
+        );
         assert_eq!(suggestion.suggestion.worker_id(), status_worker_id);
         assert_eq!(
             suggestion.suggestion.action(),
@@ -17523,10 +17524,7 @@ mod tests {
             .unwrap_err()
             .contains("already has STATUS suggestion")
         );
-        assert_eq!(
-            status_store.events().len(),
-            before_duplicate_suggestion
-        );
+        assert_eq!(status_store.events().len(), before_duplicate_suggestion);
 
         let coordination_admit = append_controller_coordination_result_context_decision_checked(
             &mut status_store,
