@@ -271,12 +271,8 @@ mod tests {
         for (id, text) in [(1, "a"), (2, "b"), (3, "c")] {
             record_local_memory_artifact(&mut store, LocalMemoryId::new(id), source, text).unwrap();
         }
-        record_local_memory_superseded(
-            &mut store,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut store, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
         record_local_memory_superseded(&mut store, LocalMemoryId::new(2), LocalMemoryId::new(3))
             .unwrap();
         let records = replay_local_memory_supersession_audit(store.events()).unwrap();
