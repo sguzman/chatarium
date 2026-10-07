@@ -460,13 +460,29 @@ missing correlated lifecycle transition; restart after that transition can add
 only the missing result. An unrelated lifecycle transition after action start
 causes recovery to fail closed rather than being misidentified as execution.
 
+## Landed worker-side continuation execution start
+
+The bounded `ContinuationLease → ContinuationPermit → Continue control` chain
+is now exposed through the desktop and preserved durably.
+
+After delivery and acknowledgement, the worker conversation may explicitly
+**Start continuation execution**. The persistence worker revalidates:
+
+- Continue control identity and route ownership;
+- acknowledgement provenance;
+- the exact lease and permit ordinal consumed by the control;
+- WorkerId and current goal identity;
+- that WorkerPhase is still continuation-eligible.
+
+A successful start records `WorkerContinuationExecutionStarted` and allocates
+a fresh non-authored `LocalTurnId`. It does not mutate WorkerLifecycle, append
+a user message, enter authored-turn history, or dispatch remote inference.
+
 ## Next implementation boundary
 
-The next safe boundary is bounded `Continue` execution.
+The next safe boundary is transport and terminal result evidence for the
+non-authored continuation execution turn.
 
-Continue must not be forced through the Start/Stop lifecycle-action audit,
-because a Continue command consumes finite continuation authority but does not
-change WorkerPhase. The desktop must expose the existing
-`ContinuationLease → ContinuationPermit → Continue control` chain explicitly,
-and worker-side continuation execution/result must receive its own durable,
-crash-safe provenance.
+The execution turn may reuse durable remote observation kinds, but it must have
+its own replay semantics. It must never be introduced into `AuthoredTurnRow`
+or represented as if the user typed a synthetic "Continue" message.
