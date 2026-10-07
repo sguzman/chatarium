@@ -8291,6 +8291,418 @@ impl eframe::App for ChatariumApp {
                         ui.add_space(10.0);
                         ui.separator();
                         ui.add_space(6.0);
+                        ui.collapsing("Tools / MCP · inert substrate", |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Transport-neutral identities and approval routes only. No tool execution is enabled. The existing XML/MCP envelope still needs to be recovered and versioned before an adapter may dispatch anything.",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+
+                            match replay_tool_provider_audit(&self.events) {
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "tool provider projection blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                                Ok(providers) => {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(
+                                                &mut self.tool_provider_name_draft,
+                                            )
+                                            .desired_width(180.0)
+                                            .hint_text("Provider name"),
+                                        );
+                                        if ui
+                                            .add_enabled(
+                                                !self.tool_command_pending
+                                                    && !self
+                                                        .tool_provider_name_draft
+                                                        .is_empty()
+                                                    && self.persist_tx.is_some(),
+                                                egui::Button::new("Register provider"),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.register_tool_provider();
+                                        }
+                                    });
+
+                                    if providers.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "no local tool providers registered",
+                                            )
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                        );
+                                    } else {
+                                        if self.tool_selected_provider.is_none()
+                                            || !providers.iter().any(|provider| {
+                                                Some(provider.provider_id)
+                                                    == self.tool_selected_provider
+                                            })
+                                        {
+                                            self.tool_selected_provider =
+                                                Some(providers[0].provider_id);
+                                        }
+
+                                        let selected_text = self
+                                            .tool_selected_provider
+                                            .and_then(|provider_id| {
+                                                providers.iter().find(|provider| {
+                                                    provider.provider_id == provider_id
+                                                })
+                                            })
+                                            .map(|provider| {
+                                                format!(
+                                                    "{} · provider {}",
+                                                    provider.name.as_str(),
+                                                    provider.provider_id.get()
+                                                )
+                                            })
+                                            .unwrap_or_else(|| "Select provider".to_owned());
+
+                                        egui::ComboBox::from_id_salt("tool-provider-select")
+                                            .selected_text(selected_text)
+                                            .show_ui(ui, |ui| {
+                                                for provider in &providers {
+                                                    ui.selectable_value(
+                                                        &mut self.tool_selected_provider,
+                                                        Some(provider.provider_id),
+                                                        format!(
+                                                            "{} · provider {}",
+                                                            provider.name.as_str(),
+                                                            provider.provider_id.get()
+                                                        ),
+                                                    );
+                                                }
+                                            });
+
+                                        ui.collapsing("Provider registry", |ui| {
+                                            for provider in &providers {
+                                                ui.horizontal_wrapped(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "{} · provider {}",
+                                                            provider.name.as_str(),
+                                                            provider.provider_id.get(),
+                                                        ))
+                                                        .monospace()
+                                                        .size(9.0),
+                                                    );
+                                                    match provider.endpoint_binding {
+                                                        Some(binding) => {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "endpoint {} · inert",
+                                                                    binding.endpoint_id().get()
+                                                                ))
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                        }
+                                                        None => {
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    "NOT ADDRESSABLE",
+                                                                )
+                                                                .monospace()
+                                                                .size(9.0),
+                                                            );
+                                                            if ui
+                                                                .add_enabled(
+                                                                    !self.tool_command_pending
+                                                                        && self.persist_tx.is_some(),
+                                                                    egui::Button::new(
+                                                                        "Bind routing endpoint",
+                                                                    ),
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                self.bind_tool_provider_endpoint(
+                                                                    provider.provider_id,
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        });
+
+                                        let provider_addressable = self
+                                            .tool_selected_provider
+                                            .and_then(|provider_id| {
+                                                providers.iter().find(|provider| {
+                                                    provider.provider_id == provider_id
+                                                })
+                                            })
+                                            .is_some_and(|provider| {
+                                                provider.endpoint_binding.is_some()
+                                            });
+                                        let source_addressable =
+                                            replay_local_routing_directory(&self.events)
+                                                .map(|directory| {
+                                                    directory.iter().any(|entry| {
+                                                        entry.conversation_id
+                                                            == self.local_conversation_id
+                                                            && entry
+                                                                .current_session_phase
+                                                                .accepts_ordinary_turns()
+                                                    })
+                                                })
+                                                .unwrap_or(false);
+
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new("Immutable call intent").strong(),
+                                        );
+                                        ui.add(
+                                            egui::TextEdit::singleline(
+                                                &mut self.tool_operation_draft,
+                                            )
+                                            .desired_width(220.0)
+                                            .hint_text("Operation name"),
+                                        );
+                                        ui.add(
+                                            egui::TextEdit::multiline(
+                                                &mut self.tool_arguments_draft,
+                                            )
+                                            .desired_width(360.0)
+                                            .desired_rows(3)
+                                            .hint_text(
+                                                "Exact opaque arguments/payload text (wire format intentionally unresolved)",
+                                            ),
+                                        );
+                                        if ui
+                                            .add_enabled(
+                                                !self.tool_command_pending
+                                                    && provider_addressable
+                                                    && source_addressable
+                                                    && !self.tool_operation_draft.is_empty()
+                                                    && self.persist_tx.is_some(),
+                                                egui::Button::new(
+                                                    "Record call + propose approval route",
+                                                ),
+                                            )
+                                            .on_hover_text(
+                                                "Records immutable local intent and a RequireApproval ToolCall route. Does not execute the tool.",
+                                            )
+                                            .clicked()
+                                        {
+                                            self.propose_tool_call();
+                                        }
+                                        if !source_addressable {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Current conversation needs an active routing endpoint before it can originate a tool call.",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                                            );
+                                        }
+                                    }
+
+                                    ui.add_space(5.0);
+                                    ui.label(
+                                        egui::RichText::new("Tool call audit").strong().size(10.0),
+                                    );
+                                    match replay_tool_call_audit(&self.events) {
+                                        Err(error) => {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "tool call projection blocked: {error}"
+                                                ))
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(186, 108, 108)),
+                                            );
+                                        }
+                                        Ok(calls) if calls.is_empty() => {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "no immutable tool calls recorded",
+                                                )
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                                            );
+                                        }
+                                        Ok(calls) => {
+                                            let routes =
+                                                replay_routing_audit(&self.events).ok();
+                                            egui::ScrollArea::vertical()
+                                                .id_salt("tool-call-audit")
+                                                .max_height(240.0)
+                                                .show(ui, |ui| {
+                                                    for call in calls.iter().rev() {
+                                                        let provider_label = providers
+                                                            .iter()
+                                                            .find(|provider| {
+                                                                provider.provider_id
+                                                                    == call.provider_id
+                                                            })
+                                                            .map(|provider| {
+                                                                provider.name.as_str().to_owned()
+                                                            })
+                                                            .unwrap_or_else(|| {
+                                                                format!(
+                                                                    "provider {}",
+                                                                    call.provider_id.get()
+                                                                )
+                                                            });
+                                                        let route = call.route_id.and_then(
+                                                            |route_id| {
+                                                                routes.as_ref().and_then(|routes| {
+                                                                    routes.iter().find(|route| {
+                                                                        route.request.id == route_id
+                                                                    })
+                                                                })
+                                                            },
+                                                        );
+
+                                                        ui.group(|ui| {
+                                                            ui.horizontal_wrapped(|ui| {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "CALL {} · {} · {} · source session {}",
+                                                                        call.call_id.get(),
+                                                                        provider_label,
+                                                                        call.operation.as_str(),
+                                                                        call.source_session_id.get(),
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                                if let Some(route) = route {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            format!(
+                                                                                "route {} · {}",
+                                                                                route.request.id.get(),
+                                                                                route_gate_state_label(
+                                                                                    route.gate_state,
+                                                                                ),
+                                                                            ),
+                                                                        )
+                                                                        .monospace()
+                                                                        .size(9.0),
+                                                                    );
+
+                                                                    let can_decide =
+                                                                        !self.tool_command_pending
+                                                                            && !route
+                                                                                .gate_state
+                                                                                .is_dispatched()
+                                                                            && self
+                                                                                .persist_tx
+                                                                                .is_some();
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            can_decide
+                                                                                && route
+                                                                                    .latest_user_decision
+                                                                                    != Some(
+                                                                                        RouteUserDecision::Allow,
+                                                                                    ),
+                                                                            egui::Button::new(
+                                                                                "Allow",
+                                                                            ),
+                                                                        )
+                                                                        .clicked()
+                                                                    {
+                                                                        self.decide_tool_call_route(
+                                                                            route.request.id,
+                                                                            RouteUserDecision::Allow,
+                                                                        );
+                                                                    }
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            can_decide
+                                                                                && route
+                                                                                    .latest_user_decision
+                                                                                    != Some(
+                                                                                        RouteUserDecision::Deny,
+                                                                                    ),
+                                                                            egui::Button::new(
+                                                                                "Deny",
+                                                                            ),
+                                                                        )
+                                                                        .clicked()
+                                                                    {
+                                                                        self.decide_tool_call_route(
+                                                                            route.request.id,
+                                                                            RouteUserDecision::Deny,
+                                                                        );
+                                                                    }
+                                                                } else {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            "UNBOUND CALL INTENT",
+                                                                        )
+                                                                        .monospace()
+                                                                        .size(9.0),
+                                                                    );
+                                                                }
+                                                            });
+                                                            ui.collapsing(
+                                                                format!(
+                                                                    "Exact opaque arguments · {} bytes",
+                                                                    call.arguments_text.len()
+                                                                ),
+                                                                |ui| {
+                                                                    if call.arguments_text.is_empty()
+                                                                    {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                "<empty>",
+                                                                            )
+                                                                            .monospace()
+                                                                            .size(9.0),
+                                                                        );
+                                                                    } else {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                call.arguments_text
+                                                                                    .as_str(),
+                                                                            )
+                                                                            .size(10.0),
+                                                                        );
+                                                                    }
+                                                                },
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    "EXECUTION DISABLED · approval is durable policy only; no MCP/tool adapter or recovered XML wire envelope is attached.",
+                                                                )
+                                                                .monospace()
+                                                                .size(9.0)
+                                                                .color(
+                                                                    egui::Color32::from_rgb(
+                                                                        139, 143, 153,
+                                                                    ),
+                                                                ),
+                                                            );
+                                                        });
+                                                    }
+                                                });
+                                        }
+                                    }
+                                }
+                            }
+
+                            if self.tool_command_pending {
+                                ui.spinner();
+                            }
+                        });
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(6.0);
                         ui.label(egui::RichText::new("Worker lifecycle").strong());
                         ui.label(
                             egui::RichText::new(
