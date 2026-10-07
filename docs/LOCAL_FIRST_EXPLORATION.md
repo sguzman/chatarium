@@ -212,8 +212,13 @@ context-inert.
 The manual local routing stack is therefore vertically complete enough for
 behavioral experiments without hidden cross-conversation state.
 
-The active next architectural boundary is controller/worker orchestration:
-first freeze WorkerId semantics across session rollover, then expose explicit
-controller→worker supervision using the existing typed local orchestration
-machinery. Durable local memory remains a separate later source. Do not reopen
-browser/history work as part of this phase.
+WorkerId semantics across session rollover are now frozen: WorkerId persists,
+SessionId is replaceable, and active execution moves only through an explicit
+durable worker-session successor handoff. Historical controller provenance and
+orchestration routes are validated against the worker session active at their
+own event sequence.
+
+The active next architectural boundary is explicit local controller→worker
+supervision using the existing typed local orchestration machinery. Durable
+local memory remains a separate later source. Do not reopen browser/history
+work as part of this phase.
