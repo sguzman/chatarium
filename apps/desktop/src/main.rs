@@ -9259,7 +9259,12 @@ fn append_controller_control_dispatch_checked(
     let validated = replay_validated_orchestration_routes(store.events())?
         .into_iter()
         .find(|record| record.route.id == route_id)
-        .ok_or_else(|| format!("route {} is not a validated orchestration control", route_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "route {} is not a validated orchestration control",
+                route_id.get()
+            )
+        })?;
     if !matches!(validated.issuer, ControlIssuer::ControllerSession(_)) {
         return Err(format!(
             "route {} is not controller-issued and cannot use the controller control UI",
@@ -9274,7 +9279,12 @@ fn append_controller_control_dispatch_checked(
     let control = replay_control_audit(store.events())?
         .into_iter()
         .find(|record| record.control_id == validated.control_id)
-        .ok_or_else(|| format!("controller control {} disappeared", validated.control_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "controller control {} disappeared",
+                validated.control_id.get()
+            )
+        })?;
 
     let next_sequence = store
         .events()
