@@ -70,26 +70,12 @@ mod tests {
     fn current_view_hides_superseded_history_and_preserves_exact_text() {
         let source = LocalConversationId::new();
         let mut store = MemoryEventStore::default();
-        record_local_memory_artifact(
-            &mut store,
-            LocalMemoryId::new(1),
-            source,
-            " Original Fact ",
-        )
-        .unwrap();
-        record_local_memory_artifact(
-            &mut store,
-            LocalMemoryId::new(2),
-            source,
-            "Corrected Fact",
-        )
-        .unwrap();
-        record_local_memory_superseded(
-            &mut store,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut store, LocalMemoryId::new(1), source, " Original Fact ")
+            .unwrap();
+        record_local_memory_artifact(&mut store, LocalMemoryId::new(2), source, "Corrected Fact")
+            .unwrap();
+        record_local_memory_superseded(&mut store, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
 
         let current = search_local_memory(store.events(), "", false).unwrap();
         assert_eq!(current.len(), 1);
@@ -104,10 +90,7 @@ mod tests {
             .find(|item| item.memory_id == LocalMemoryId::new(1))
             .unwrap();
         assert_eq!(predecessor.text, " Original Fact ");
-        assert_eq!(
-            predecessor.superseded_by,
-            Some(LocalMemoryId::new(2))
-        );
+        assert_eq!(predecessor.superseded_by, Some(LocalMemoryId::new(2)));
     }
 
     #[test]
@@ -121,13 +104,8 @@ mod tests {
             "Alpha BETA gamma",
         )
         .unwrap();
-        record_local_memory_artifact(
-            &mut store,
-            LocalMemoryId::new(2),
-            source,
-            "something else",
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut store, LocalMemoryId::new(2), source, "something else")
+            .unwrap();
 
         let before = store.events().len();
         let results = search_local_memory(store.events(), " beta ", false).unwrap();
