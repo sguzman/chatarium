@@ -12,6 +12,7 @@ pub mod remote;
 pub mod routing;
 pub mod session;
 pub mod supervision;
+pub mod tool;
 
 use std::fmt;
 use std::str::FromStr;
@@ -271,6 +272,10 @@ impl TurnEvidence {
             | EventKind::LocalMemoryLabelAdded
             | EventKind::LocalMemoryLabelRemoved
             | EventKind::LocalMemoryTurnSelectionRecorded
+            | EventKind::ToolProviderRegistered
+            | EventKind::ToolProviderEndpointBound
+            | EventKind::ToolCallRecorded
+            | EventKind::ToolCallRouteBound
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
@@ -392,6 +397,14 @@ pub enum EventKind {
     LocalMemoryLabelRemoved,
     /// A next-request-only local memory set was durably bound to one authored turn.
     LocalMemoryTurnSelectionRecorded,
+    /// One local tool/provider identity was durably registered.
+    ToolProviderRegistered,
+    /// One registered tool/provider was correlated to a routing endpoint.
+    ToolProviderEndpointBound,
+    /// One immutable local tool-call intent was recorded.
+    ToolCallRecorded,
+    /// One immutable tool-call intent was correlated to a ToolCall route.
+    ToolCallRouteBound,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
@@ -515,6 +528,10 @@ impl EventKind {
             Self::LocalMemoryLabelAdded => "local_memory_label_added",
             Self::LocalMemoryLabelRemoved => "local_memory_label_removed",
             Self::LocalMemoryTurnSelectionRecorded => "local_memory_turn_selection_recorded",
+            Self::ToolProviderRegistered => "tool_provider_registered",
+            Self::ToolProviderEndpointBound => "tool_provider_endpoint_bound",
+            Self::ToolCallRecorded => "tool_call_recorded",
+            Self::ToolCallRouteBound => "tool_call_route_bound",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
@@ -614,6 +631,10 @@ impl EventKind {
             "local_memory_label_added" => Some(Self::LocalMemoryLabelAdded),
             "local_memory_label_removed" => Some(Self::LocalMemoryLabelRemoved),
             "local_memory_turn_selection_recorded" => Some(Self::LocalMemoryTurnSelectionRecorded),
+            "tool_provider_registered" => Some(Self::ToolProviderRegistered),
+            "tool_provider_endpoint_bound" => Some(Self::ToolProviderEndpointBound),
+            "tool_call_recorded" => Some(Self::ToolCallRecorded),
+            "tool_call_route_bound" => Some(Self::ToolCallRouteBound),
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
