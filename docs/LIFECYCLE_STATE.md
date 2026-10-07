@@ -144,6 +144,10 @@ Currently admitted routed items enter Context Composer at user trust level with
 explicit route/payload/source provenance and are snapshotted at Send. They never
 become authored transcript messages and create no automatic controller action.
 
-The next lifecycle/orchestration boundary is explicit WorkerId behavior across
-chat-container session rollover, followed by local controller→worker supervision
+WorkerId rollover behavior is now explicit: the logical WorkerId persists,
+while active execution moves between SessionId leaves only through a durable
+`WorkerSessionSuccessorBound` handoff. Historical predecessor bindings remain
+available for point-in-time control provenance.
+
+The next lifecycle/orchestration boundary is local controller→worker supervision
 using the already-existing typed session/supervision/control machinery.
