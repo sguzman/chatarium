@@ -6785,7 +6785,7 @@ impl eframe::App for ChatariumApp {
                                             );
                                             ui.label(
                                                 egui::RichText::new(
-                                                    "Typed controls are inert until explicitly approved and one-shot dispatched. Dispatch does not itself mutate worker lifecycle.",
+                                                    "Typed controls are inert until explicitly approved, one-shot dispatched, and durably delivered to the worker control inbox. Delivery does not itself mutate worker lifecycle.",
                                                 )
                                                 .size(9.0)
                                                 .color(egui::Color32::from_rgb(
@@ -6798,12 +6798,14 @@ impl eframe::App for ChatariumApp {
                                                 replay_control_provenance_audit(&self.events),
                                                 replay_control_route_audit(&self.events),
                                                 replay_routing_audit(&self.events),
+                                                replay_worker_control_delivery_audit(&self.events),
                                             ) {
                                                 (
                                                     Ok(controls),
                                                     Ok(provenance),
                                                     Ok(bindings),
                                                     Ok(routes),
+                                                    Ok(deliveries),
                                                 ) => {
                                                     let mut shown_controls = 0_usize;
                                                     for provenance_record in provenance {
@@ -6843,6 +6845,11 @@ impl eframe::App for ChatariumApp {
                                                         ) else {
                                                             continue;
                                                         };
+                                                        let delivery = deliveries.iter().find(
+                                                            |record| {
+                                                                record.route_id == route.request.id
+                                                            },
+                                                        );
                                                         shown_controls =
                                                             shown_controls.saturating_add(1);
 
@@ -6934,26 +6941,50 @@ impl eframe::App for ChatariumApp {
                                                                     );
                                                                 }
 
+                                                                let can_dispatch =
+                                                                    delivery.is_none()
+                                                                        && !self
+                                                                            .controller_control_command_pending
+                                                                        && self.persist_tx.is_some()
+                                                                        && (matches!(
+                                                                            route.gate_state,
+                                                                            RouteGateState::Allowed {
+                                                                                by: DecisionAuthority::User
+                                                                            }
+                                                                        ) && fresh
+                                                                            || route
+                                                                                .gate_state
+                                                                                .is_dispatched());
+                                                                let dispatch_label = if route
+                                                                    .gate_state
+                                                                    .is_dispatched()
+                                                                {
+                                                                    "Finish delivery"
+                                                                } else {
+                                                                    "Dispatch + deliver"
+                                                                };
                                                                 if ui
                                                                     .add_enabled(
-                                                                        fresh
-                                                                            && matches!(
-                                                                                route.gate_state,
-                                                                                RouteGateState::Allowed {
-                                                                                    by: DecisionAuthority::User
-                                                                                }
-                                                                            )
-                                                                            && !self
-                                                                                .controller_control_command_pending
-                                                                            && self.persist_tx.is_some(),
+                                                                        can_dispatch,
                                                                         egui::Button::new(
-                                                                            "Dispatch control",
+                                                                            dispatch_label,
                                                                         ),
                                                                     )
                                                                     .clicked()
                                                                 {
                                                                     self.dispatch_controller_worker_control_route(
                                                                         route.request.id,
+                                                                    );
+                                                                }
+                                                                if let Some(delivery) = delivery {
+                                                                    ui.label(
+                                                                        egui::RichText::new(format!(
+                                                                            "DELIVERED · event #{}",
+                                                                            delivery
+                                                                                .delivered_sequence,
+                                                                        ))
+                                                                        .monospace()
+                                                                        .size(9.0),
                                                                     );
                                                                 }
                                                             });
@@ -6974,10 +7005,11 @@ impl eframe::App for ChatariumApp {
                                                         );
                                                     }
                                                 }
-                                                (Err(error), _, _, _)
-                                                | (_, Err(error), _, _)
-                                                | (_, _, Err(error), _)
-                                                | (_, _, _, Err(error)) => {
+                                                (Err(error), _, _, _, _)
+                                                | (_, Err(error), _, _, _)
+                                                | (_, _, Err(error), _, _)
+                                                | (_, _, _, Err(error), _)
+                                                | (_, _, _, _, Err(error)) => {
                                                     ui.label(
                                                         egui::RichText::new(format!(
                                                             "controller control projection blocked: {error}"
