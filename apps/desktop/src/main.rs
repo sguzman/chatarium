@@ -7186,6 +7186,188 @@ impl eframe::App for ChatariumApp {
                             }
                         });
 
+                        ui.collapsing("Local memory", |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Immutable explicit memory artifacts. Recording does not add context. Each artifact is excluded by default for this conversation until you Admit it; admission is reversible and snapshotted at Send.",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+
+                            let mut record_clicked = false;
+                            ui.horizontal_wrapped(|ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.local_memory_draft)
+                                        .desired_width(360.0)
+                                        .desired_rows(2)
+                                        .hint_text("Exact local memory text"),
+                                );
+                                let can_record = !self.local_memory_command_pending
+                                    && !self.local_memory_draft.trim().is_empty()
+                                    && self.persist_tx.is_some();
+                                if ui
+                                    .add_enabled(
+                                        can_record,
+                                        egui::Button::new("Record memory"),
+                                    )
+                                    .clicked()
+                                {
+                                    record_clicked = true;
+                                }
+                                if self.local_memory_command_pending {
+                                    ui.spinner();
+                                }
+                            });
+                            if record_clicked {
+                                self.record_local_memory();
+                            }
+
+                            match replay_local_memory_audit(&self.events) {
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "local memory projection blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                                Ok(artifacts) if artifacts.is_empty() => {
+                                    ui.label(
+                                        egui::RichText::new("no local memory artifacts")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                }
+                                Ok(artifacts) => {
+                                    let context_records =
+                                        match replay_local_memory_context_audit(&self.events) {
+                                            Ok(records) => Some(records),
+                                            Err(error) => {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "local memory context projection blocked: {error}"
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(egui::Color32::from_rgb(
+                                                        186, 108, 108,
+                                                    )),
+                                                );
+                                                None
+                                            }
+                                        };
+
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("local-memory-artifacts")
+                                        .max_height(240.0)
+                                        .show(ui, |ui| {
+                                            for artifact in artifacts {
+                                                let source_title =
+                                                    local_conversation_display_title(
+                                                        &self.local_conversation_catalog,
+                                                        artifact.source_conversation_id,
+                                                        &self.events,
+                                                    );
+                                                let current_decision = context_records
+                                                    .as_ref()
+                                                    .and_then(|records| {
+                                                        records.iter().find(|record| {
+                                                            record.memory_id
+                                                                == artifact.memory_id
+                                                                && record
+                                                                    .destination_conversation_id
+                                                                    == self.local_conversation_id
+                                                        })
+                                                    })
+                                                    .map(|record| record.decision);
+
+                                                ui.group(|ui| {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "MEMORY {} · source {source_title} · artifact #{}",
+                                                                artifact.memory_id.get(),
+                                                                artifact.recorded_sequence,
+                                                            ))
+                                                            .monospace()
+                                                            .size(9.0),
+                                                        );
+                                                        ui.label(
+                                                            egui::RichText::new(
+                                                                match current_decision {
+                                                                    Some(
+                                                                        LocalMemoryContextDecision::Admit,
+                                                                    ) => "CONTEXT: ADMITTED",
+                                                                    Some(
+                                                                        LocalMemoryContextDecision::Exclude,
+                                                                    ) => "CONTEXT: EXCLUDED",
+                                                                    None => {
+                                                                        "CONTEXT: EXCLUDED · DEFAULT"
+                                                                    }
+                                                                },
+                                                            )
+                                                            .monospace()
+                                                            .size(9.0),
+                                                        );
+                                                    });
+
+                                                    ui.label(
+                                                        egui::RichText::new(
+                                                            artifact.text.as_str(),
+                                                        )
+                                                        .size(10.0),
+                                                    );
+
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        let can_change =
+                                                            !self.local_memory_command_pending
+                                                                && context_records.is_some()
+                                                                && self.persist_tx.is_some();
+                                                        if ui
+                                                            .add_enabled(
+                                                                can_change
+                                                                    && current_decision
+                                                                        != Some(
+                                                                            LocalMemoryContextDecision::Admit,
+                                                                        ),
+                                                                egui::Button::new(
+                                                                    "Admit memory",
+                                                                ),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.decide_local_memory_context(
+                                                                artifact.memory_id,
+                                                                LocalMemoryContextDecision::Admit,
+                                                            );
+                                                        }
+                                                        if ui
+                                                            .add_enabled(
+                                                                can_change
+                                                                    && current_decision
+                                                                        == Some(
+                                                                            LocalMemoryContextDecision::Admit,
+                                                                        ),
+                                                                egui::Button::new(
+                                                                    "Exclude memory",
+                                                                ),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.decide_local_memory_context(
+                                                                artifact.memory_id,
+                                                                LocalMemoryContextDecision::Exclude,
+                                                            );
+                                                        }
+                                                    });
+                                                });
+                                            }
+                                        });
+                                }
+                            }
+                        });
+
                         ui.add_space(10.0);
                         ui.separator();
                         ui.add_space(6.0);
