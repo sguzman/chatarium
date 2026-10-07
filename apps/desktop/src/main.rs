@@ -12043,6 +12043,60 @@ fn append_local_memory_supersession_checked(
         .ok_or_else(|| "local memory supersession append produced no durable event".to_owned())
 }
 
+fn append_local_memory_label_change_checked(
+    store: &mut impl EventStore,
+    memory_id: LocalMemoryId,
+    label: LocalMemoryLabel,
+    add: bool,
+) -> Result<EventEnvelope, String> {
+    if !replay_local_memory_audit(store.events())?
+        .iter()
+        .any(|artifact| artifact.memory_id == memory_id)
+    {
+        return Err(format!("local memory {} does not exist", memory_id.get()));
+    }
+
+    let existing = replay_local_memory_label_audit(store.events())?
+        .into_iter()
+        .find(|record| record.memory_id == memory_id && record.label == label);
+
+    if add {
+        if existing.as_ref().is_some_and(|record| record.active) {
+            return Err(format!(
+                "local memory {} already has active label '{}'",
+                memory_id.get(),
+                label,
+            ));
+        }
+        record_local_memory_label_added(store, memory_id, &label)
+            .map_err(|error| error.to_string())?;
+    } else {
+        if !existing.as_ref().is_some_and(|record| record.active) {
+            return Err(format!(
+                "local memory {} does not have active label '{}'",
+                memory_id.get(),
+                label,
+            ));
+        }
+        record_local_memory_label_removed(store, memory_id, &label)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let replayed = replay_local_memory_label_audit(store.events())?
+        .into_iter()
+        .find(|record| record.memory_id == memory_id && record.label == label)
+        .ok_or_else(|| "local memory label append did not replay".to_owned())?;
+    if replayed.active != add {
+        return Err("local memory label replay disagrees with appended mutation".to_owned());
+    }
+
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "local memory label append produced no durable event".to_owned())
+}
+
 fn append_local_worker_binding_checked(
     store: &mut impl EventStore,
     conversation_id: LocalConversationId,
