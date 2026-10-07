@@ -1230,6 +1230,76 @@ mod tests {
     }
 
     #[test]
+    fn local_memory_is_user_level_with_explicit_memory_provenance() {
+        let memory = TranscriptMessage::local_memory(
+            " exact remembered fact ",
+            7,
+            "source-conversation",
+            40,
+            50,
+        );
+        assert_eq!(memory.role, TranscriptRole::User);
+        assert_eq!(memory.order_sequence(), 50);
+
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [memory]);
+        assert_eq!(plan.local_memory_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert_eq!(plan.messages[0].role, "user");
+        assert!(plan.messages[0].content.contains("Chatarium local memory"));
+        assert!(plan.messages[0].content.contains("not user-authored"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(plan.messages[0].content.contains("memory_id: 7"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("source_conversation_id: source-conversation")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("memory_artifact_event: #40")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("context_admitted_event: #50")
+        );
+        assert!(plan.messages[0].content.contains(" exact remembered fact "));
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::LocalMemory {
+                memory_id: 7,
+                artifact_sequence: 40,
+                admitted_sequence: 50,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn local_memory_can_be_excluded_by_context_policy() {
+        let policy = ContextPolicy {
+            include_local_memory: false,
+            ..ContextPolicy::dispatch()
+        };
+        let memory = TranscriptMessage::local_memory("memory", 1, "source", 2, 3);
+        let plan = ContextPlan::compose(policy, "", "", [memory]);
+
+        assert_eq!(plan.local_memory_count(), 0);
+        assert!(plan.messages.is_empty());
+        let item = plan
+            .inventory
+            .iter()
+            .find(|item| matches!(item.source, ContextSource::LocalMemory { .. }))
+            .unwrap();
+        assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
+    }
+
+    #[test]
     fn routed_context_can_be_excluded_by_context_policy() {
         let policy = ContextPolicy {
             include_routed_context: false,
