@@ -266,6 +266,7 @@ impl TurnEvidence {
             | EventKind::LocalRouteDelivered
             | EventKind::LocalRouteContextDecisionRecorded
             | EventKind::LocalMemoryArtifactRecorded
+            | EventKind::LocalMemoryArtifactSuperseded
             | EventKind::LocalMemoryContextDecisionRecorded
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
@@ -378,6 +379,8 @@ pub enum EventKind {
     LocalRouteContextDecisionRecorded,
     /// One immutable explicit local memory artifact was recorded.
     LocalMemoryArtifactRecorded,
+    /// One immutable local memory artifact was explicitly superseded by a newer artifact.
+    LocalMemoryArtifactSuperseded,
     /// An explicit include/exclude decision for one local memory artifact was recorded.
     LocalMemoryContextDecisionRecorded,
     /// A generic routing-layer result or error observation was recorded.
@@ -498,6 +501,7 @@ impl EventKind {
             Self::LocalRouteDelivered => "local_route_delivered",
             Self::LocalRouteContextDecisionRecorded => "local_route_context_decision_recorded",
             Self::LocalMemoryArtifactRecorded => "local_memory_artifact_recorded",
+            Self::LocalMemoryArtifactSuperseded => "local_memory_artifact_superseded",
             Self::LocalMemoryContextDecisionRecorded => "local_memory_context_decision_recorded",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
@@ -591,6 +595,7 @@ impl EventKind {
                 Some(Self::LocalRouteContextDecisionRecorded)
             }
             "local_memory_artifact_recorded" => Some(Self::LocalMemoryArtifactRecorded),
+            "local_memory_artifact_superseded" => Some(Self::LocalMemoryArtifactSuperseded),
             "local_memory_context_decision_recorded" => {
                 Some(Self::LocalMemoryContextDecisionRecorded)
             }
