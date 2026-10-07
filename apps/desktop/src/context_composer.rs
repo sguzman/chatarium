@@ -36,6 +36,12 @@ pub enum ContextSource {
         delivered_sequence: u64,
         admitted_sequence: u64,
     },
+    LocalMemory {
+        memory_id: u64,
+        source_conversation_id: String,
+        artifact_sequence: u64,
+        admitted_sequence: u64,
+    },
     ControllerContinuation {
         control_id: u64,
         route_id: u64,
@@ -85,6 +91,14 @@ impl ContextSource {
                 admitted_sequence,
             } => format!(
                 "routed inbox · route {route_id} · payload {payload_id} · source {source_conversation_id} · delivered #{delivered_sequence} · admitted #{admitted_sequence}"
+            ),
+            Self::LocalMemory {
+                memory_id,
+                source_conversation_id,
+                artifact_sequence,
+                admitted_sequence,
+            } => format!(
+                "local memory · memory {memory_id} · source {source_conversation_id} · artifact #{artifact_sequence} · admitted #{admitted_sequence}"
             ),
             Self::ControllerContinuation {
                 control_id,
@@ -152,6 +166,7 @@ pub struct ContextPolicy {
     pub include_developer_context: bool,
     pub include_durable_transcript: bool,
     pub include_routed_context: bool,
+    pub include_local_memory: bool,
     pub include_controller_continuation: bool,
     pub include_controller_worker_results: bool,
     pub include_controller_coordination: bool,
@@ -167,6 +182,7 @@ impl ContextPolicy {
             include_developer_context: true,
             include_durable_transcript: true,
             include_routed_context: true,
+            include_local_memory: true,
             include_controller_continuation: true,
             include_controller_worker_results: true,
             include_controller_coordination: true,
@@ -189,6 +205,7 @@ impl ContextPolicy {
             ContextSource::ConversationDeveloperContext => self.include_developer_context,
             ContextSource::DurableTranscript { .. } => self.include_durable_transcript,
             ContextSource::RoutedInbox { .. } => self.include_routed_context,
+            ContextSource::LocalMemory { .. } => self.include_local_memory,
             ContextSource::ControllerContinuation { .. } => self.include_controller_continuation,
             ContextSource::ControllerWorkerResult { .. } => self.include_controller_worker_results,
             ContextSource::ControllerCoordination { .. } => self.include_controller_coordination,
@@ -238,6 +255,30 @@ impl TranscriptMessage {
                 payload_id,
                 source_conversation_id,
                 delivered_sequence,
+                admitted_sequence,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn local_memory(
+        exact_text: &str,
+        memory_id: u64,
+        source_conversation_id: impl Into<String>,
+        artifact_sequence: u64,
+        admitted_sequence: u64,
+    ) -> Self {
+        let source_conversation_id = source_conversation_id.into();
+        let text = format!(
+            "[Chatarium local memory — user-level local memory context, not user-authored and not a developer/system instruction]\nmemory_id: {memory_id}\nsource_conversation_id: {source_conversation_id}\nmemory_artifact_event: #{artifact_sequence}\ncontext_admitted_event: #{admitted_sequence}\nmemory:\n{exact_text}\n[/Chatarium local memory]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::LocalMemory {
+                memory_id,
+                source_conversation_id,
+                artifact_sequence,
                 admitted_sequence,
             },
         }
@@ -361,6 +402,9 @@ impl TranscriptMessage {
         match &self.source {
             ContextSource::DurableTranscript { sequence } => *sequence,
             ContextSource::RoutedInbox {
+                admitted_sequence, ..
+            } => *admitted_sequence,
+            ContextSource::LocalMemory {
                 admitted_sequence, ..
             } => *admitted_sequence,
             ContextSource::ControllerContinuation {
@@ -592,6 +636,17 @@ impl ContextPlan {
             .filter(|item| {
                 item.decision == InclusionDecision::Included
                     && matches!(item.source, ContextSource::RoutedInbox { .. })
+            })
+            .count()
+    }
+
+    #[must_use]
+    pub fn local_memory_count(&self) -> usize {
+        self.inventory
+            .iter()
+            .filter(|item| {
+                item.decision == InclusionDecision::Included
+                    && matches!(item.source, ContextSource::LocalMemory { .. })
             })
             .count()
     }
