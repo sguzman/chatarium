@@ -9164,18 +9164,63 @@ impl eframe::App for ChatariumApp {
                                                                                             })
                                                                                             .unwrap_or_default();
                                                                                         for suggestion in &existing {
-                                                                                            ui.label(
-                                                                                                egui::RichText::new(format!(
-                                                                                                    "SUGGESTION {} · {} · NO AUTHORITY · event #{}",
-                                                                                                    suggestion.suggestion.id().get(),
-                                                                                                    coordination_suggestion_action_label(
-                                                                                                        suggestion.suggestion.action()
-                                                                                                    ),
-                                                                                                    suggestion.recorded_sequence,
-                                                                                                ))
-                                                                                                .monospace()
-                                                                                                .size(9.0),
-                                                                                            );
+                                                                                            ui.horizontal_wrapped(|ui| {
+                                                                                                if let (
+                                                                                                    Some(control_id),
+                                                                                                    Some(route_id),
+                                                                                                    Some(promoted_sequence),
+                                                                                                ) = (
+                                                                                                    suggestion.promoted_control_id,
+                                                                                                    suggestion.promoted_route_id,
+                                                                                                    suggestion.promoted_sequence,
+                                                                                                ) {
+                                                                                                    ui.label(
+                                                                                                        egui::RichText::new(format!(
+                                                                                                            "SUGGESTION {} · {} · PROMOTED → control {} · route {} · promotion #{} · AWAITING ROUTE APPROVAL",
+                                                                                                            suggestion.suggestion.id().get(),
+                                                                                                            coordination_suggestion_action_label(
+                                                                                                                suggestion.suggestion.action()
+                                                                                                            ),
+                                                                                                            control_id.get(),
+                                                                                                            route_id.get(),
+                                                                                                            promoted_sequence,
+                                                                                                        ))
+                                                                                                        .monospace()
+                                                                                                        .size(9.0),
+                                                                                                    );
+                                                                                                } else {
+                                                                                                    ui.label(
+                                                                                                        egui::RichText::new(format!(
+                                                                                                            "SUGGESTION {} · {} · NO AUTHORITY · event #{}",
+                                                                                                            suggestion.suggestion.id().get(),
+                                                                                                            coordination_suggestion_action_label(
+                                                                                                                suggestion.suggestion.action()
+                                                                                                            ),
+                                                                                                            suggestion.recorded_sequence,
+                                                                                                        ))
+                                                                                                        .monospace()
+                                                                                                        .size(9.0),
+                                                                                                    );
+                                                                                                    let can_promote = !self
+                                                                                                        .controller_coordination_suggestion_command_pending
+                                                                                                        && !self
+                                                                                                            .controller_control_command_pending
+                                                                                                        && self.persist_tx.is_some();
+                                                                                                    if ui
+                                                                                                        .add_enabled(
+                                                                                                            can_promote,
+                                                                                                            egui::Button::new(
+                                                                                                                "Promote suggestion",
+                                                                                                            ),
+                                                                                                        )
+                                                                                                        .clicked()
+                                                                                                    {
+                                                                                                        self.promote_controller_coordination_suggestion(
+                                                                                                            suggestion.suggestion.id(),
+                                                                                                        );
+                                                                                                    }
+                                                                                                }
+                                                                                            });
                                                                                         }
 
                                                                                         ui.horizontal_wrapped(|ui| {
@@ -9196,6 +9241,8 @@ impl eframe::App for ChatariumApp {
                                                                                                     && !already_exists
                                                                                                     && !self
                                                                                                         .controller_coordination_suggestion_command_pending
+                                                                                                    && !self
+                                                                                                        .controller_control_command_pending
                                                                                                     && self.persist_tx.is_some();
                                                                                                 if ui
                                                                                                     .add_enabled(
