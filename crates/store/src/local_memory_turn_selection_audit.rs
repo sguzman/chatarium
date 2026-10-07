@@ -5,7 +5,7 @@
 //! fact. This does not change persistent memory Admit/Exclude state.
 
 use crate::authored::{DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope};
-use crate::local_memory_audit::replay_local_memory_audit;
+use crate::local_memory_audit::{LocalMemoryArtifactRecord, replay_local_memory_audit};
 use crate::local_memory_context_audit::replay_admitted_local_memory_context;
 use crate::local_memory_supersession_audit::{
     replay_local_memory_supersession_audit, superseded_memory_ids,
@@ -54,6 +54,83 @@ pub fn record_local_memory_turn_selection(
     )
 }
 
+/// Validate one exact one-shot selection against a frozen journal high-water mark.
+///
+/// Returned artifacts preserve the canonical ascending memory-id selection order.
+pub fn validate_local_memory_one_shot_snapshot(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+    memory_ids: &[LocalMemoryId],
+    selection_snapshot_after_sequence: u64,
+) -> Result<Vec<LocalMemoryArtifactRecord>, String> {
+    if memory_ids.is_empty() {
+        return Err("one-shot local memory selection cannot be empty".to_owned());
+    }
+    if memory_ids.len() > MAX_ONE_SHOT_MEMORIES_PER_TURN {
+        return Err(format!(
+            "one-shot local memory selection has {} memories; maximum is {}",
+            memory_ids.len(),
+            MAX_ONE_SHOT_MEMORIES_PER_TURN
+        ));
+    }
+    if memory_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(
+            "one-shot local memory selection must contain strictly ascending unique memory ids"
+                .to_owned(),
+        );
+    }
+
+    let highest_sequence = events.last().map(|event| event.sequence).unwrap_or(0);
+    if selection_snapshot_after_sequence > highest_sequence {
+        return Err(format!(
+            "one-shot local memory snapshot high-water {} exceeds available journal sequence {}",
+            selection_snapshot_after_sequence, highest_sequence
+        ));
+    }
+
+    let snapshot_end = events
+        .iter()
+        .take_while(|candidate| candidate.sequence <= selection_snapshot_after_sequence)
+        .count();
+    let snapshot = &events[..snapshot_end];
+
+    let artifacts = replay_local_memory_audit(snapshot)?
+        .into_iter()
+        .map(|artifact| (artifact.memory_id, artifact))
+        .collect::<BTreeMap<_, _>>();
+    let superseded = superseded_memory_ids(&replay_local_memory_supersession_audit(snapshot)?);
+    let admitted = replay_admitted_local_memory_context(snapshot, conversation_id)?
+        .into_iter()
+        .map(|record| record.memory_id)
+        .collect::<BTreeSet<_>>();
+
+    let mut selected = Vec::with_capacity(memory_ids.len());
+    for memory_id in memory_ids {
+        let artifact = artifacts.get(memory_id).ok_or_else(|| {
+            format!(
+                "one-shot local memory selection references memory {} absent from frozen snapshot through event #{}",
+                memory_id.get(),
+                selection_snapshot_after_sequence
+            )
+        })?;
+        if superseded.contains(memory_id) {
+            return Err(format!(
+                "one-shot local memory selection references superseded memory {}",
+                memory_id.get()
+            ));
+        }
+        if admitted.contains(memory_id) {
+            return Err(format!(
+                "one-shot local memory selection redundantly selects persistently admitted memory {}",
+                memory_id.get()
+            ));
+        }
+        selected.push(artifact.clone());
+    }
+
+    Ok(selected)
+}
+
 pub fn replay_local_memory_turn_selection_audit(
     events: &[EventEnvelope],
 ) -> Result<Vec<LocalMemoryTurnSelectionRecord>, String> {
@@ -86,26 +163,6 @@ pub fn replay_local_memory_turn_selection_audit(
         let memory_ids = required_memory_ids(&value)?;
         validate_scope(event, turn_id)?;
 
-        if memory_ids.is_empty() {
-            return Err(format!(
-                "local memory turn selection at sequence {} has an empty memory set",
-                event.sequence
-            ));
-        }
-        if memory_ids.len() > MAX_ONE_SHOT_MEMORIES_PER_TURN {
-            return Err(format!(
-                "local memory turn selection at sequence {} has {} memories; maximum is {}",
-                event.sequence,
-                memory_ids.len(),
-                MAX_ONE_SHOT_MEMORIES_PER_TURN
-            ));
-        }
-        if memory_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(format!(
-                "local memory turn selection at sequence {} must contain strictly ascending unique memory ids",
-                event.sequence
-            ));
-        }
         if by_turn.contains_key(&turn_id) {
             return Err(format!(
                 "duplicate local memory turn selection for turn {} at sequence {}",
@@ -146,47 +203,18 @@ pub fn replay_local_memory_turn_selection_audit(
             ));
         }
 
-        let snapshot_end = prior
-            .iter()
-            .take_while(|candidate| candidate.sequence <= selection_snapshot_after_sequence)
-            .count();
-        let snapshot = &prior[..snapshot_end];
-
-        let artifacts = replay_local_memory_audit(snapshot)?
-            .into_iter()
-            .map(|artifact| (artifact.memory_id, artifact))
-            .collect::<BTreeMap<_, _>>();
-        let superseded =
-            superseded_memory_ids(&replay_local_memory_supersession_audit(snapshot)?);
-        let admitted = replay_admitted_local_memory_context(snapshot, conversation_id)?
-            .into_iter()
-            .map(|record| record.memory_id)
-            .collect::<BTreeSet<_>>();
-
-        for memory_id in &memory_ids {
-            if !artifacts.contains_key(memory_id) {
-                return Err(format!(
-                    "local memory turn selection at sequence {} references memory {} absent from frozen snapshot through event #{}",
-                    event.sequence,
-                    memory_id.get(),
-                    selection_snapshot_after_sequence
-                ));
-            }
-            if superseded.contains(memory_id) {
-                return Err(format!(
-                    "local memory turn selection at sequence {} references superseded memory {}",
-                    event.sequence,
-                    memory_id.get()
-                ));
-            }
-            if admitted.contains(memory_id) {
-                return Err(format!(
-                    "local memory turn selection at sequence {} redundantly selects persistently admitted memory {}",
-                    event.sequence,
-                    memory_id.get()
-                ));
-            }
-        }
+        validate_local_memory_one_shot_snapshot(
+            prior,
+            conversation_id,
+            &memory_ids,
+            selection_snapshot_after_sequence,
+        )
+        .map_err(|error| {
+            format!(
+                "local memory turn selection at sequence {} is invalid: {error}",
+                event.sequence
+            )
+        })?;
 
         by_turn.insert(
             turn_id,
