@@ -396,16 +396,38 @@ Delivery does **not**:
 - mutate WorkerLifecycle;
 - acknowledge that the worker acted on the command.
 
+## Landed worker control acknowledgement
+
+A delivered worker control may now be explicitly **Acknowledged** from the
+destination worker conversation.
+
+`WorkerControlAcknowledged` is a separate durable fact referencing the already
+delivered control/route/worker/conversation provenance. Acknowledgement is
+conversation-scoped, survives later SessionId rollover, and is idempotence-gated:
+the same delivered control cannot be acknowledged twice.
+
+The worker control inbox shows the durable acknowledgement event.
+
+Acknowledgement does **not**:
+
+- execute the command;
+- mutate WorkerLifecycle;
+- create a status result;
+- append transcript content;
+- enter inference context.
+
 ## Next implementation boundary
 
-The next safe boundary is worker-side control acknowledgement/action.
+The next safe boundary is explicit worker-side **action/result** after
+acknowledgement.
 
 That boundary must preserve the distinction between:
 
 1. command admission;
 2. user-approved route dispatch;
 3. durable delivery;
-4. worker acknowledgement/action;
-5. separately observed lifecycle change or status result.
+4. worker acknowledgement;
+5. explicit worker action/result;
+6. separately durable lifecycle change or status evidence.
 
-Do not infer lifecycle mutation merely from delivery.
+Do not infer execution merely from acknowledgement.
