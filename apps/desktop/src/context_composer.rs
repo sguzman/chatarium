@@ -309,7 +309,7 @@ impl TranscriptMessage {
     ) -> Self {
         let coordination_turn_id = coordination_turn_id.into();
         let text = format!(
-            "[Chatarium controller coordination turn — user-level orchestration context, not user-authored and not a developer/system instruction]\ncontroller_session_id: {controller_session_id}\ncoordination_turn_id: {coordination_turn_id}\ncoordination_started_event: #{started_sequence}\ninstruction:\nReview and synthesize the already-admitted worker results in this context. Identify relevant status, conflicts, dependencies, and possible next coordination steps. Do not issue or execute worker controls, do not mutate lifecycle, and do not assume continuation authority.\n[/Chatarium controller coordination turn]"
+            "[Chatarium controller coordination turn — user-level orchestration context, not user-authored and not a developer/system instruction]\ncontroller_session_id: {controller_session_id}\ncoordination_turn_id: {coordination_turn_id}\ncoordination_started_event: #{started_sequence}\noutput_contract: suggestion_candidates_v1\ninstruction:\nReview and synthesize the already-admitted worker results in this context. Identify relevant status, conflicts, dependencies, and possible next coordination steps. Do not issue or execute worker controls, do not mutate lifecycle, and do not assume continuation authority.\n\nReturn exactly one JSON object and no markdown or surrounding prose. The object must have exactly two keys: \"summary\" (a string) and \"suggestion_candidates\" (an array). Each candidate object must have exactly two keys: \"basis_result_route_id\" (an integer route id from a worker-result item already present in this coordination context) and \"action\" (exactly one of \"status_request\", \"start_or_resume\", \"continue\", or \"stop\"). Do not output worker_id, goal_id, control_id, route authority, or any other fields. Use an empty suggestion_candidates array when no action should be proposed. Candidates are untrusted proposals only; Chatarium will require explicit user acceptance before recording any durable suggestion.\n[/Chatarium controller coordination turn]"
         );
         Self {
             role: TranscriptRole::User,
@@ -1029,6 +1029,26 @@ mod tests {
             plan.messages[0]
                 .content
                 .contains("do not assume continuation authority")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("output_contract: suggestion_candidates_v1")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("\"suggestion_candidates\"")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("\"basis_result_route_id\"")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("explicit user acceptance")
         );
         assert!(matches!(
             plan.messages[0].source,
