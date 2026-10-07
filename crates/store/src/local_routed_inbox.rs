@@ -110,13 +110,13 @@ pub fn replay_local_routed_inbox_for_conversation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EventStore, MemoryEventStore};
     use crate::chat_container_audit::record_chat_container_created;
     use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
     use crate::local_route_delivery_audit::record_local_route_delivered;
     use crate::local_route_payload_audit::record_local_route_payload_attached;
     use crate::routing_audit::{record_route_dispatched, record_route_proposed};
     use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
+    use crate::{EventStore, MemoryEventStore};
     use chatarium_core::chat_container::ChatContainerId;
     use chatarium_core::routing::{
         RouteClass, RouteEndpointId, RouteGate, RoutePolicy, RouteRequest,
