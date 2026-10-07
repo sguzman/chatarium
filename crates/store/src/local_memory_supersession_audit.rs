@@ -64,8 +64,7 @@ pub fn replay_local_memory_supersession_audit(
         let value = typed_payload(event)?;
         let predecessor_memory_id =
             LocalMemoryId::new(required_u64(&value, "predecessor_memory_id")?);
-        let successor_memory_id =
-            LocalMemoryId::new(required_u64(&value, "successor_memory_id")?);
+        let successor_memory_id = LocalMemoryId::new(required_u64(&value, "successor_memory_id")?);
         validate_scope(event, predecessor_memory_id, successor_memory_id)?;
 
         if predecessor_memory_id == successor_memory_id {
@@ -230,10 +229,9 @@ fn validate_scope(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("typed local memory supersession is missing integer field '{field}'"))
+    value.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("typed local memory supersession is missing integer field '{field}'")
+    })
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -253,12 +251,8 @@ mod tests {
         let mut store = MemoryEventStore::default();
         record_local_memory_artifact(&mut store, LocalMemoryId::new(1), source, "old").unwrap();
         record_local_memory_artifact(&mut store, LocalMemoryId::new(2), source, "new").unwrap();
-        record_local_memory_superseded(
-            &mut store,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut store, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
 
         let records = replay_local_memory_supersession_audit(store.events()).unwrap();
         assert_eq!(records.len(), 1);
@@ -275,13 +269,7 @@ mod tests {
         let source = LocalConversationId::new();
         let mut store = MemoryEventStore::default();
         for (id, text) in [(1, "a"), (2, "b"), (3, "c")] {
-            record_local_memory_artifact(
-                &mut store,
-                LocalMemoryId::new(id),
-                source,
-                text,
-            )
-            .unwrap();
+            record_local_memory_artifact(&mut store, LocalMemoryId::new(id), source, text).unwrap();
         }
         record_local_memory_superseded(
             &mut store,
@@ -289,37 +277,20 @@ mod tests {
             LocalMemoryId::new(2),
         )
         .unwrap();
-        record_local_memory_superseded(
-            &mut store,
-            LocalMemoryId::new(2),
-            LocalMemoryId::new(3),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut store, LocalMemoryId::new(2), LocalMemoryId::new(3))
+            .unwrap();
         let records = replay_local_memory_supersession_audit(store.events()).unwrap();
         assert_eq!(records.len(), 2);
 
         let mut branch = MemoryEventStore::default();
         for (id, text) in [(1, "a"), (2, "b"), (3, "c")] {
-            record_local_memory_artifact(
-                &mut branch,
-                LocalMemoryId::new(id),
-                source,
-                text,
-            )
-            .unwrap();
+            record_local_memory_artifact(&mut branch, LocalMemoryId::new(id), source, text)
+                .unwrap();
         }
-        record_local_memory_superseded(
-            &mut branch,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
-        record_local_memory_superseded(
-            &mut branch,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(3),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut branch, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
+        record_local_memory_superseded(&mut branch, LocalMemoryId::new(1), LocalMemoryId::new(3))
+            .unwrap();
         assert!(
             replay_local_memory_supersession_audit(branch.events())
                 .unwrap_err()
@@ -335,12 +306,8 @@ mod tests {
         let mut cross = MemoryEventStore::default();
         record_local_memory_artifact(&mut cross, LocalMemoryId::new(1), source, "a").unwrap();
         record_local_memory_artifact(&mut cross, LocalMemoryId::new(2), other, "b").unwrap();
-        record_local_memory_superseded(
-            &mut cross,
-            LocalMemoryId::new(1),
-            LocalMemoryId::new(2),
-        )
-        .unwrap();
+        record_local_memory_superseded(&mut cross, LocalMemoryId::new(1), LocalMemoryId::new(2))
+            .unwrap();
         assert!(
             replay_local_memory_supersession_audit(cross.events())
                 .unwrap_err()
@@ -348,14 +315,12 @@ mod tests {
         );
 
         let mut backward = MemoryEventStore::default();
-        record_local_memory_artifact(&mut backward, LocalMemoryId::new(1), source, "older").unwrap();
-        record_local_memory_artifact(&mut backward, LocalMemoryId::new(2), source, "newer").unwrap();
-        record_local_memory_superseded(
-            &mut backward,
-            LocalMemoryId::new(2),
-            LocalMemoryId::new(1),
-        )
-        .unwrap();
+        record_local_memory_artifact(&mut backward, LocalMemoryId::new(1), source, "older")
+            .unwrap();
+        record_local_memory_artifact(&mut backward, LocalMemoryId::new(2), source, "newer")
+            .unwrap();
+        record_local_memory_superseded(&mut backward, LocalMemoryId::new(2), LocalMemoryId::new(1))
+            .unwrap();
         assert!(
             replay_local_memory_supersession_audit(backward.events())
                 .unwrap_err()
