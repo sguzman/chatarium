@@ -16535,6 +16535,30 @@ mod tests {
         );
         assert_eq!(context_plan.controller_worker_result_count(), 1);
 
+        let (coordination_turn_id, coordination_start) =
+            append_controller_coordination_start_checked(&mut status_store, status_controller)
+                .unwrap();
+        assert_eq!(
+            coordination_start.kind,
+            EventKind::ControllerCoordinationTurnStarted
+        );
+        let coordination = replay_controller_coordination_audit(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.coordination_turn_id == coordination_turn_id)
+            .unwrap();
+        assert_eq!(coordination.controller_conversation_id, status_controller);
+        assert_eq!(coordination.controller_session_id, SessionId::new(1));
+        assert_eq!(coordination.admitted_result_routes, vec![status_route]);
+        assert_eq!(coordination.result_sequence, None);
+        assert!(
+            status_store.events().iter().all(|event| {
+                !(event.kind == EventKind::UserMessageCommitted
+                    && event.scope.as_deref()
+                        == Some(local_turn_scope(coordination_turn_id).as_str()))
+            })
+        );
+
         append_controller_worker_result_context_decision_checked(
             &mut status_store,
             status_route,
@@ -16542,6 +16566,99 @@ mod tests {
             ControllerWorkerResultContextDecision::Exclude,
         )
         .unwrap();
+        assert!(
+            admitted_controller_worker_result_messages(status_store.events(), status_controller,)
+                .unwrap()
+                .is_empty()
+        );
+
+        let coordination_prefix = status_store
+            .events()
+            .iter()
+            .take_while(|event| event.sequence <= coordination.started_sequence)
+            .cloned()
+            .collect::<Vec<_>>();
+        let frozen_results =
+            admitted_controller_worker_result_messages(&coordination_prefix, status_controller)
+                .unwrap();
+        assert_eq!(frozen_results.len(), 1);
+        let mut coordination_context = frozen_results;
+        coordination_context.push(context_composer::TranscriptMessage::controller_coordination(
+            coordination.controller_session_id.get(),
+            coordination_turn_id.to_string(),
+            coordination.started_sequence,
+        ));
+        let coordination_plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            coordination_context,
+        );
+        assert_eq!(coordination_plan.controller_worker_result_count(), 1);
+        assert_eq!(coordination_plan.controller_coordination_count(), 1);
+        assert_eq!(
+            coordination_plan
+                .messages
+                .last()
+                .expect("coordination marker")
+                .role,
+            "user"
+        );
+
+        let request_id = coordination_turn_id.to_string();
+        status_store
+            .append_scoped(
+                Some(local_turn_scope(coordination_turn_id)),
+                EventKind::DispatchAttempted,
+                remote_turn_payload(
+                    coordination_turn_id,
+                    &request_id,
+                    Some("model"),
+                    None,
+                    Some("coordination test dispatch"),
+                ),
+            )
+            .unwrap();
+        status_store
+            .append_scoped(
+                Some(local_turn_scope(coordination_turn_id)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(
+                    coordination_turn_id,
+                    &request_id,
+                    None,
+                    Some("coordination synthesis"),
+                    Some("coordination test completion"),
+                ),
+            )
+            .unwrap();
+        let coordination_result =
+            append_controller_coordination_result_if_terminal(
+                &mut status_store,
+                coordination_turn_id,
+            )
+            .unwrap()
+            .expect("terminal coordination result");
+        assert_eq!(
+            coordination_result.kind,
+            EventKind::ControllerCoordinationTurnResultRecorded
+        );
+        let completed_coordination = replay_controller_coordination_audit(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.coordination_turn_id == coordination_turn_id)
+            .unwrap();
+        assert_eq!(
+            completed_coordination.outcome,
+            Some(ControllerCoordinationOutcome::Completed)
+        );
+        assert!(completed_coordination.result_sequence.is_some());
+        assert_eq!(
+            controller_coordination_output_text(status_store.events(), coordination_turn_id)
+                .unwrap()
+                .as_deref(),
+            Some("coordination synthesis")
+        );
         assert!(
             admitted_controller_worker_result_messages(status_store.events(), status_controller,)
                 .unwrap()
