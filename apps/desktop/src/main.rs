@@ -12997,8 +12997,29 @@ mod tests {
             RouteUserDecision::Allow,
         )
         .unwrap();
-        let dispatch = append_controller_control_dispatch_checked(&mut store, route_id).unwrap();
-        assert_eq!(dispatch.kind, EventKind::RouteDispatched);
+        let dispatched_events =
+            append_controller_control_dispatch_checked(&mut store, route_id).unwrap();
+        assert_eq!(dispatched_events.len(), 2);
+        assert_eq!(dispatched_events[0].kind, EventKind::RouteDispatched);
+        assert_eq!(dispatched_events[1].kind, EventKind::WorkerControlDelivered);
+
+        let delivery = replay_worker_control_delivery_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.control_id == control_id)
+            .unwrap();
+        assert_eq!(delivery.route_id, route_id);
+        assert_eq!(delivery.worker_conversation_id, worker_conversation);
+        assert_eq!(delivery.worker_session_id, SessionId::new(2));
+        assert_eq!(delivery.controller_session_id, SessionId::new(1));
+
+        let inbox =
+            replay_worker_control_inbox_for_conversation(store.events(), worker_conversation)
+                .unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].control_id, control_id);
+        assert_eq!(inbox[0].kind, WorkerControlKind::Stop);
+        assert_eq!(inbox[0].goal_id, goal_id);
 
         let validated = replay_validated_control_dispatches(store.events()).unwrap();
         let dispatched = validated
@@ -13074,13 +13095,70 @@ mod tests {
             WorkerAction::Complete,
         )
         .unwrap();
-        append_controller_control_dispatch_checked(&mut status_store, status_route).unwrap();
+        let status_events =
+            append_controller_control_dispatch_checked(&mut status_store, status_route).unwrap();
+        assert_eq!(status_events.len(), 2);
+        assert_eq!(status_events[1].kind, EventKind::WorkerControlDelivered);
         let status_dispatch = replay_validated_control_dispatches(status_store.events())
             .unwrap()
             .into_iter()
             .find(|record| record.route.id == status_route)
             .unwrap();
         assert_eq!(status_dispatch.dispatched_phase, WorkerPhase::Completed);
+
+        let mut recovery_store = chatarium_store::MemoryEventStore::default();
+        let (controller, worker_conversation, _, _) =
+            ready_supervised_pair(&mut recovery_store);
+        let (recovery_control, recovery_route, _) =
+            append_controller_worker_control_proposal_checked(
+                &mut recovery_store,
+                controller,
+                worker_conversation,
+                ControllerControlAction::Stop,
+            )
+            .unwrap();
+        append_controller_control_route_decision_checked(
+            &mut recovery_store,
+            recovery_route,
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+
+        let route = replay_routing_audit(recovery_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.request.id == recovery_route)
+            .unwrap();
+        let mut gate = route_gate_before_dispatch(&route).unwrap();
+        let permit = gate.authorize_dispatch(recovery_route).unwrap();
+        let original_dispatch_sequence =
+            record_route_dispatched(&mut recovery_store, permit).unwrap();
+
+        let recovered_events =
+            append_controller_control_dispatch_checked(&mut recovery_store, recovery_route)
+                .unwrap();
+        assert_eq!(recovered_events.len(), 1);
+        assert_eq!(recovered_events[0].kind, EventKind::WorkerControlDelivered);
+
+        let recovered_dispatch = replay_validated_control_dispatches(recovery_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.control_id == recovery_control)
+            .unwrap();
+        assert_eq!(
+            recovered_dispatch.dispatch_sequence,
+            original_dispatch_sequence
+        );
+        let recovered_delivery =
+            replay_worker_control_delivery_audit(recovery_store.events())
+                .unwrap()
+                .into_iter()
+                .find(|record| record.control_id == recovery_control)
+                .unwrap();
+        assert_eq!(
+            recovered_delivery.dispatch_sequence,
+            original_dispatch_sequence
+        );
     }
 
     #[test]
