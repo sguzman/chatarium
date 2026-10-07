@@ -17031,6 +17031,86 @@ mod tests {
             Some("coordination synthesis")
         );
         assert!(
+            admitted_controller_coordination_result_messages(
+                status_store.events(),
+                status_controller,
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        let coordination_admit =
+            append_controller_coordination_result_context_decision_checked(
+                &mut status_store,
+                coordination_turn_id,
+                status_controller,
+                ControllerCoordinationResultContextDecision::Admit,
+            )
+            .unwrap();
+        assert_eq!(
+            coordination_admit.kind,
+            EventKind::ControllerCoordinationResultContextDecisionRecorded
+        );
+        let admitted_coordination = admitted_controller_coordination_result_messages(
+            status_store.events(),
+            status_controller,
+        )
+        .unwrap();
+        assert_eq!(admitted_coordination.len(), 1);
+        assert_eq!(
+            admitted_coordination[0].role,
+            context_composer::TranscriptRole::User
+        );
+        assert_eq!(
+            admitted_coordination[0].order_sequence(),
+            coordination_admit.sequence
+        );
+        assert!(
+            admitted_coordination[0]
+                .text
+                .contains("coordination synthesis")
+        );
+        let admitted_coordination_plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            "",
+            "",
+            admitted_coordination,
+        );
+        assert_eq!(
+            admitted_coordination_plan.controller_coordination_result_count(),
+            1
+        );
+
+        append_controller_coordination_result_context_decision_checked(
+            &mut status_store,
+            coordination_turn_id,
+            status_controller,
+            ControllerCoordinationResultContextDecision::Exclude,
+        )
+        .unwrap();
+        assert!(
+            admitted_controller_coordination_result_messages(
+                status_store.events(),
+                status_controller,
+            )
+            .unwrap()
+            .is_empty()
+        );
+        let terminal_after_exclude = replay_controller_coordination_audit(status_store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.coordination_turn_id == coordination_turn_id)
+            .unwrap();
+        assert_eq!(
+            terminal_after_exclude.result_sequence,
+            completed_coordination.result_sequence
+        );
+        assert_eq!(
+            terminal_after_exclude.outcome,
+            Some(ControllerCoordinationOutcome::Completed)
+        );
+
+        assert!(
             admitted_controller_worker_result_messages(status_store.events(), status_controller,)
                 .unwrap()
                 .is_empty()
