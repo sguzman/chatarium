@@ -2752,9 +2752,17 @@ impl ChatariumApp {
                     request_id,
                     message,
                     event,
+                    one_shot_memory_event,
                 } => {
                     let sequence = event.sequence;
+                    let one_shot_selection_sequence =
+                        one_shot_memory_event.as_ref().map(|event| event.sequence);
                     self.events.push(event);
+                    if let Some(event) = one_shot_memory_event {
+                        self.events.push(event);
+                        self.local_memory_one_shot_selections
+                            .remove(&message.conversation_id);
+                    }
                     if self.commit_in_flight == Some(request_id) {
                         self.commit_in_flight = None;
                         self.evidence.commit_local_message();
@@ -2765,10 +2773,38 @@ impl ChatariumApp {
                             let mut transcript =
                                 context_transcript(&projected_local_display_messages(
                                     &self.events,
-                                    self.local_conversation_id,
+                                    message.conversation_id,
                                 ));
                             transcript.extend(intent.routed_context);
                             transcript.extend(intent.local_memory_context);
+                            if !intent.local_memory_one_shot.is_empty() {
+                                let Some(snapshot_after_sequence) =
+                                    intent.local_memory_one_shot_snapshot_after_sequence
+                                else {
+                                    self.status =
+                                        "one-shot local memory snapshot lost before dispatch"
+                                            .to_owned();
+                                    continue;
+                                };
+                                let Some(selection_sequence) = one_shot_selection_sequence else {
+                                    self.status =
+                                        "one-shot local memory was not durably bound before dispatch"
+                                            .to_owned();
+                                    continue;
+                                };
+                                transcript.extend(intent.local_memory_one_shot.into_iter().map(
+                                    |memory| {
+                                        context_composer::TranscriptMessage::local_memory_one_shot(
+                                            memory.text.as_str(),
+                                            memory.memory_id.get(),
+                                            memory.source_conversation_id.to_string(),
+                                            memory.artifact_sequence,
+                                            snapshot_after_sequence,
+                                            Some(selection_sequence),
+                                        )
+                                    },
+                                ));
+                            }
                             transcript.extend(intent.controller_result_context);
                             transcript.extend(intent.controller_coordination_result_context);
                             transcript
