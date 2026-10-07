@@ -3012,10 +3012,8 @@ impl ChatariumApp {
                 PersistNotice::ControllerCoordinationStarted { turn_id, event } => {
                     self.events.push(event);
                     self.controller_coordination_command_pending = false;
-                    self.status = format!(
-                        "controller coordination turn {} durably started",
-                        turn_id
-                    );
+                    self.status =
+                        format!("controller coordination turn {} durably started", turn_id);
                 }
                 PersistNotice::ControllerCoordinationResultRecorded { turn_id, event } => {
                     self.events.push(event);
@@ -4167,7 +4165,8 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status = "cannot start controller coordination: persistence unavailable".to_owned();
+            self.status =
+                "cannot start controller coordination: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::StartControllerCoordination {
@@ -4175,7 +4174,8 @@ impl ChatariumApp {
         }) {
             Ok(()) => {
                 self.controller_coordination_command_pending = true;
-                self.status = "starting durable non-authored controller coordination turn…".to_owned();
+                self.status =
+                    "starting durable non-authored controller coordination turn…".to_owned();
             }
             Err(error) => {
                 self.status = format!("failed to queue controller coordination start: {error}");
@@ -4191,8 +4191,8 @@ impl ChatariumApp {
             return;
         }
         if !self.remote_connected() {
-            self.status = "cannot dispatch controller coordination: ChatGPT is not connected"
-                .to_owned();
+            self.status =
+                "cannot dispatch controller coordination: ChatGPT is not connected".to_owned();
             return;
         }
         if self.capability_probe.running() {
@@ -4224,19 +4224,20 @@ impl ChatariumApp {
             return;
         };
         if coordination.result_sequence.is_some() {
-            self.status =
-                format!("controller coordination turn {} is already terminal", turn_id);
+            self.status = format!(
+                "controller coordination turn {} is already terminal",
+                turn_id
+            );
             return;
         }
 
-        let transport =
-            match controller_coordination_transport_state(&self.events, turn_id) {
-                Ok(state) => state,
-                Err(error) => {
-                    self.status = format!("cannot replay controller coordination transport: {error}");
-                    return;
-                }
-            };
+        let transport = match controller_coordination_transport_state(&self.events, turn_id) {
+            Ok(state) => state,
+            Err(error) => {
+                self.status = format!("cannot replay controller coordination transport: {error}");
+                return;
+            }
+        };
         if transport.was_dispatched() {
             self.status = format!(
                 "controller coordination turn {} already has durable dispatch evidence",
@@ -4248,8 +4249,7 @@ impl ChatariumApp {
         let request_patch = match self.current_behavior_request_patch() {
             Ok(patch) => patch,
             Err(error) => {
-                self.status =
-                    format!("cannot coordinate with current behavior profile: {error}");
+                self.status = format!("cannot coordinate with current behavior profile: {error}");
                 return;
             }
         };
@@ -4264,10 +4264,7 @@ impl ChatariumApp {
             &coordination_prefix,
             self.local_conversation_id,
         ));
-        match admitted_routed_context_messages(
-            &coordination_prefix,
-            self.local_conversation_id,
-        ) {
+        match admitted_routed_context_messages(&coordination_prefix, self.local_conversation_id) {
             Ok(routed) => transcript.extend(routed),
             Err(error) => {
                 self.status =
@@ -4281,17 +4278,18 @@ impl ChatariumApp {
         ) {
             Ok(results) => transcript.extend(results),
             Err(error) => {
-                self.status =
-                    format!("cannot compose admitted controller results: {error}");
+                self.status = format!("cannot compose admitted controller results: {error}");
                 return;
             }
         }
         transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
-        transcript.push(context_composer::TranscriptMessage::controller_coordination(
-            coordination.controller_session_id.get(),
-            coordination.coordination_turn_id.to_string(),
-            coordination.started_sequence,
-        ));
+        transcript.push(
+            context_composer::TranscriptMessage::controller_coordination(
+                coordination.controller_session_id.get(),
+                coordination.coordination_turn_id.to_string(),
+                coordination.started_sequence,
+            ),
+        );
 
         let context_plan = context_composer::ContextPlan::compose(
             context_composer::ContextPolicy::dispatch(),
@@ -11619,16 +11617,18 @@ fn append_controller_coordination_start_checked(
         ));
     }
 
-    let topology =
-        local_conversation_topology(store.events(), controller_conversation_id)?.ok_or_else(|| {
+    let topology = local_conversation_topology(store.events(), controller_conversation_id)?
+        .ok_or_else(|| {
             format!(
                 "controller conversation {controller_conversation_id} has no orchestration topology"
             )
         })?;
     let supervision = replay_supervision_audit(store.events())?;
-    if !supervision.controllers.iter().any(|record| {
-        record.designation.session_id() == topology.current_session_id
-    }) {
+    if !supervision
+        .controllers
+        .iter()
+        .any(|record| record.designation.session_id() == topology.current_session_id)
+    {
         return Err(format!(
             "controller conversation {} current session {} is not controller-designated",
             controller_conversation_id,
@@ -11636,11 +11636,13 @@ fn append_controller_coordination_start_checked(
         ));
     }
 
-    let mut admitted_routes =
-        replay_admitted_controller_worker_result_context(store.events(), controller_conversation_id)?
-            .into_iter()
-            .map(|record| record.route_id)
-            .collect::<Vec<_>>();
+    let mut admitted_routes = replay_admitted_controller_worker_result_context(
+        store.events(),
+        controller_conversation_id,
+    )?
+    .into_iter()
+    .map(|record| record.route_id)
+    .collect::<Vec<_>>();
     admitted_routes.sort_by_key(|route_id| route_id.get());
     if admitted_routes.is_empty() {
         return Err(
@@ -11695,8 +11697,7 @@ fn append_controller_coordination_result_if_terminal(
         return Ok(None);
     }
 
-    let transport =
-        controller_coordination_transport_state(store.events(), coordination_turn_id)?;
+    let transport = controller_coordination_transport_state(store.events(), coordination_turn_id)?;
     let Some((outcome, terminal_sequence)) = coordination_terminal_outcome(transport) else {
         return Ok(None);
     };
@@ -12847,10 +12848,8 @@ fn persistence_worker(
                     controller_conversation_id,
                 ) {
                     Ok((turn_id, event)) => {
-                        let _ = notices.send(PersistNotice::ControllerCoordinationStarted {
-                            turn_id,
-                            event,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::ControllerCoordinationStarted { turn_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -13117,12 +13116,11 @@ fn persistence_worker(
                     }
                     match coordination_result {
                         Ok(Some(event)) => {
-                            let _ = notices.send(
-                                PersistNotice::ControllerCoordinationResultRecorded {
+                            let _ =
+                                notices.send(PersistNotice::ControllerCoordinationResultRecorded {
                                     turn_id,
                                     event,
-                                },
-                            );
+                                });
                         }
                         Ok(None) => {}
                         Err(error) => {
@@ -14853,11 +14851,7 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
         append_controller_coordination_result_if_terminal(store, turn_id)?;
     }
 
-    Ok(
-        interrupted.len()
-            + continuation_interrupted.len()
-            + coordination_interrupted.len(),
-    )
+    Ok(interrupted.len() + continuation_interrupted.len() + coordination_interrupted.len())
 }
 
 fn projected_local_conversation_id(
@@ -16551,13 +16545,10 @@ mod tests {
         assert_eq!(coordination.controller_session_id, SessionId::new(1));
         assert_eq!(coordination.admitted_result_routes, vec![status_route]);
         assert_eq!(coordination.result_sequence, None);
-        assert!(
-            status_store.events().iter().all(|event| {
-                !(event.kind == EventKind::UserMessageCommitted
-                    && event.scope.as_deref()
-                        == Some(local_turn_scope(coordination_turn_id).as_str()))
-            })
-        );
+        assert!(status_store.events().iter().all(|event| {
+            !(event.kind == EventKind::UserMessageCommitted
+                && event.scope.as_deref() == Some(local_turn_scope(coordination_turn_id).as_str()))
+        }));
 
         append_controller_worker_result_context_decision_checked(
             &mut status_store,
@@ -16583,11 +16574,13 @@ mod tests {
                 .unwrap();
         assert_eq!(frozen_results.len(), 1);
         let mut coordination_context = frozen_results;
-        coordination_context.push(context_composer::TranscriptMessage::controller_coordination(
-            coordination.controller_session_id.get(),
-            coordination_turn_id.to_string(),
-            coordination.started_sequence,
-        ));
+        coordination_context.push(
+            context_composer::TranscriptMessage::controller_coordination(
+                coordination.controller_session_id.get(),
+                coordination_turn_id.to_string(),
+                coordination.started_sequence,
+            ),
+        );
         let coordination_plan = context_composer::ContextPlan::compose(
             context_composer::ContextPolicy::dispatch(),
             "",
@@ -16632,13 +16625,12 @@ mod tests {
                 ),
             )
             .unwrap();
-        let coordination_result =
-            append_controller_coordination_result_if_terminal(
-                &mut status_store,
-                coordination_turn_id,
-            )
-            .unwrap()
-            .expect("terminal coordination result");
+        let coordination_result = append_controller_coordination_result_if_terminal(
+            &mut status_store,
+            coordination_turn_id,
+        )
+        .unwrap()
+        .expect("terminal coordination result");
         assert_eq!(
             coordination_result.kind,
             EventKind::ControllerCoordinationTurnResultRecorded
