@@ -9746,6 +9746,7 @@ fn append_controller_worker_control_proposal_checked(
 
     let control_id = next_available_control_id(store.events())?;
     let route_id = next_available_route_id(store.events())?;
+    let before = store.events().len();
     let control = match action {
         ControllerControlAction::StartOrResume => WorkerControl::start_or_resume(
             control_id,
@@ -9753,6 +9754,81 @@ fn append_controller_worker_control_proposal_checked(
             goal_id,
             &worker.lifecycle,
         ),
+        ControllerControlAction::Continue => {
+            let leases = replay_continuation_audit(store.events())?
+                .into_iter()
+                .filter(|record| {
+                    record.worker_id == worker_binding.worker_id && record.goal_id == goal_id
+                })
+                .collect::<Vec<_>>();
+            let unconsumed = leases
+                .iter()
+                .flat_map(|record| {
+                    record
+                        .permits
+                        .iter()
+                        .filter(|permit| permit.consumed_by.is_none())
+                        .map(|permit| (record.lease_id, permit.ordinal))
+                })
+                .collect::<Vec<_>>();
+
+            let permit = match unconsumed.as_slice() {
+                [(lease_id, ordinal)] => reconstruct_unconsumed_continuation_permit(
+                    store.events(),
+                    *lease_id,
+                    *ordinal,
+                )?,
+                [] => {
+                    let live = leases
+                        .iter()
+                        .filter(|record| record.remaining > 0)
+                        .map(|record| record.lease_id)
+                        .collect::<Vec<_>>();
+                    let lease_id = match live.as_slice() {
+                        [lease_id] => *lease_id,
+                        [] => {
+                            return Err(format!(
+                                "worker {} goal {} has no live continuation lease",
+                                worker_binding.worker_id.get(),
+                                goal_id.get()
+                            ));
+                        }
+                        _ => {
+                            return Err(format!(
+                                "worker {} goal {} has ambiguous live continuation leases",
+                                worker_binding.worker_id.get(),
+                                goal_id.get()
+                            ));
+                        }
+                    };
+                    let mut lease =
+                        reconstruct_continuation_lease_for_next_issue(store.events(), lease_id)?;
+                    let permit = lease.authorize(&worker.lifecycle).map_err(|error| {
+                        format!(
+                            "continuation lease {} cannot issue its next permit: {error:?}",
+                            lease_id.get()
+                        )
+                    })?;
+                    record_continuation_permit_issued(store, &permit)
+                        .map_err(|error| error.to_string())?;
+                    permit
+                }
+                _ => {
+                    return Err(format!(
+                        "worker {} goal {} has multiple issued unconsumed continuation permits",
+                        worker_binding.worker_id.get(),
+                        goal_id.get()
+                    ));
+                }
+            };
+
+            WorkerControl::continue_work(
+                control_id,
+                worker_binding.worker_id,
+                &worker.lifecycle,
+                permit,
+            )
+        }
         ControllerControlAction::Stop => WorkerControl::stop(
             control_id,
             worker_binding.worker_id,
@@ -9782,7 +9858,6 @@ fn append_controller_worker_control_proposal_checked(
     let route_binding = ControlRouteBinding::new(control_id, &request)
         .map_err(|error| format!("invalid controller control route binding: {error:?}"))?;
 
-    let before = store.events().len();
     record_worker_control_admitted(store, &control).map_err(|error| error.to_string())?;
     record_worker_control_issuer_bound(
         store,
