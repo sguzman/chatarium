@@ -3,6 +3,7 @@
 pub mod authenticated_session;
 pub mod chat_container;
 pub mod control;
+pub mod coordination_suggestion;
 pub mod control_provenance;
 pub mod control_route;
 pub mod orchestration;
@@ -288,6 +289,7 @@ impl TurnEvidence {
             | EventKind::ControllerCoordinationTurnStarted
             | EventKind::ControllerCoordinationTurnResultRecorded
             | EventKind::ControllerCoordinationResultContextDecisionRecorded
+            | EventKind::ControllerCoordinationSuggestionRecorded
             | EventKind::ContinuationLeaseCreated
             | EventKind::ContinuationPermitIssued
             | EventKind::RemoteConversationBound
@@ -420,6 +422,8 @@ pub enum EventKind {
     ControllerCoordinationTurnResultRecorded,
     /// An explicit include/exclude decision for one terminal controller coordination result was recorded.
     ControllerCoordinationResultContextDecisionRecorded,
+    /// A non-authoritative typed next-action suggestion was recorded from controller coordination.
+    ControllerCoordinationSuggestionRecorded,
     /// A bounded continuation lease was durably created.
     ContinuationLeaseCreated,
     /// One continuation permit ordinal was durably issued from a lease.
@@ -516,6 +520,9 @@ impl EventKind {
             Self::ControllerCoordinationResultContextDecisionRecorded => {
                 "controller_coordination_result_context_decision_recorded"
             }
+            Self::ControllerCoordinationSuggestionRecorded => {
+                "controller_coordination_suggestion_recorded"
+            }
             Self::ContinuationLeaseCreated => "continuation_lease_created",
             Self::ContinuationPermitIssued => "continuation_permit_issued",
             Self::RemoteConversationBound => "remote_conversation_bound",
@@ -608,6 +615,9 @@ impl EventKind {
             }
             "controller_coordination_result_context_decision_recorded" => {
                 Some(Self::ControllerCoordinationResultContextDecisionRecorded)
+            }
+            "controller_coordination_suggestion_recorded" => {
+                Some(Self::ControllerCoordinationSuggestionRecorded)
             }
             "continuation_lease_created" => Some(Self::ContinuationLeaseCreated),
             "continuation_permit_issued" => Some(Self::ContinuationPermitIssued),
