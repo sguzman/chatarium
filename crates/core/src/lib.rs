@@ -270,6 +270,7 @@ impl TurnEvidence {
             | EventKind::LocalMemoryContextDecisionRecorded
             | EventKind::LocalMemoryLabelAdded
             | EventKind::LocalMemoryLabelRemoved
+            | EventKind::LocalMemoryTurnSelectionRecorded
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
@@ -389,6 +390,8 @@ pub enum EventKind {
     LocalMemoryLabelAdded,
     /// A user-authored organization label was removed from one local memory artifact.
     LocalMemoryLabelRemoved,
+    /// A next-request-only local memory set was durably bound to one authored turn.
+    LocalMemoryTurnSelectionRecorded,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
@@ -511,6 +514,7 @@ impl EventKind {
             Self::LocalMemoryContextDecisionRecorded => "local_memory_context_decision_recorded",
             Self::LocalMemoryLabelAdded => "local_memory_label_added",
             Self::LocalMemoryLabelRemoved => "local_memory_label_removed",
+            Self::LocalMemoryTurnSelectionRecorded => "local_memory_turn_selection_recorded",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
@@ -609,6 +613,9 @@ impl EventKind {
             }
             "local_memory_label_added" => Some(Self::LocalMemoryLabelAdded),
             "local_memory_label_removed" => Some(Self::LocalMemoryLabelRemoved),
+            "local_memory_turn_selection_recorded" => {
+                Some(Self::LocalMemoryTurnSelectionRecorded)
+            }
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
