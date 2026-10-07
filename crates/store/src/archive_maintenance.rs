@@ -4,6 +4,7 @@
 //! is validated structurally; neither backup manifests nor reports contain private identities,
 //! titles, message text, or raw response bodies.
 
+use crate::control_ack_audit::replay_worker_control_acknowledgement_audit;
 use crate::control_admission_audit::replay_validated_control_admissions;
 use crate::control_delivery_audit::replay_worker_control_delivery_audit;
 use crate::control_dispatch_audit::replay_validated_control_dispatches;
@@ -167,6 +168,7 @@ pub fn check_archive(
     replay_validated_control_dispatches(&events).map_err(err)?;
     replay_worker_control_delivery_audit(&events).map_err(err)?;
     replay_worker_control_inbox(&events).map_err(err)?;
+    replay_worker_control_acknowledgement_audit(&events).map_err(err)?;
     replay_local_routing_directory(&events).map_err(err)?;
     replay_local_route_payload_audit(&events).map_err(err)?;
     replay_local_route_delivery_audit(&events).map_err(err)?;
