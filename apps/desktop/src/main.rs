@@ -15882,12 +15882,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            admitted_controller_worker_result_messages(
-                status_store.events(),
-                status_controller,
-            )
-            .unwrap()
-            .is_empty()
+            admitted_controller_worker_result_messages(status_store.events(), status_controller,)
+                .unwrap()
+                .is_empty()
         );
         assert_eq!(
             replay_controller_worker_results_for_conversation(
