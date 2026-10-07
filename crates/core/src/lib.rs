@@ -273,6 +273,8 @@ impl TurnEvidence {
             | EventKind::WorkerControlDelivered
             | EventKind::WorkerControlAcknowledged
             | EventKind::WorkerControlStatusResultRecorded
+            | EventKind::WorkerControlActionStarted
+            | EventKind::WorkerControlActionResultRecorded
             | EventKind::LocalSessionRegistered
             | EventKind::SessionEndpointBound
             | EventKind::WorkerSessionBound
@@ -382,6 +384,10 @@ pub enum EventKind {
     WorkerControlAcknowledged,
     /// An acknowledged worker StatusRequest captured a durable worker lifecycle snapshot.
     WorkerControlStatusResultRecorded,
+    /// A worker explicitly began applying an acknowledged mutating control.
+    WorkerControlActionStarted,
+    /// A control-correlated worker lifecycle mutation produced a durable action result.
+    WorkerControlActionResultRecorded,
     /// A local Chatarium session identity was registered.
     LocalSessionRegistered,
     /// A local session was correlated to one routing endpoint.
@@ -469,6 +475,8 @@ impl EventKind {
             Self::WorkerControlDelivered => "worker_control_delivered",
             Self::WorkerControlAcknowledged => "worker_control_acknowledged",
             Self::WorkerControlStatusResultRecorded => "worker_control_status_result_recorded",
+            Self::WorkerControlActionStarted => "worker_control_action_started",
+            Self::WorkerControlActionResultRecorded => "worker_control_action_result_recorded",
             Self::LocalSessionRegistered => "local_session_registered",
             Self::SessionEndpointBound => "session_endpoint_bound",
             Self::WorkerSessionBound => "worker_session_bound",
@@ -541,6 +549,10 @@ impl EventKind {
             "worker_control_acknowledged" => Some(Self::WorkerControlAcknowledged),
             "worker_control_status_result_recorded" => {
                 Some(Self::WorkerControlStatusResultRecorded)
+            }
+            "worker_control_action_started" => Some(Self::WorkerControlActionStarted),
+            "worker_control_action_result_recorded" => {
+                Some(Self::WorkerControlActionResultRecorded)
             }
             "local_session_registered" => Some(Self::LocalSessionRegistered),
             "session_endpoint_bound" => Some(Self::SessionEndpointBound),
