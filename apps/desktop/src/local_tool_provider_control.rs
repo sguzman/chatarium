@@ -2,9 +2,7 @@
 //! These checks run in the persistence worker, never the egui render loop.
 //! No subprocess, network request, or RouteGate dispatch is performed.
 
-use chatarium_core::tool::{
-    StdioToolProviderConfig, ToolOperationName, ToolProviderId,
-};
+use chatarium_core::tool::{StdioToolProviderConfig, ToolOperationName, ToolProviderId};
 use chatarium_store::tool_provider_activation_audit::{
     ProviderActivationDecision, append_tool_provider_activation_decision_checked,
 };
@@ -18,12 +16,16 @@ pub fn parse_stdio_config_draft(
     argv_lines: &str,
     operation_lines: &str,
 ) -> Result<StdioToolProviderConfig, String> {
-    let argv = argv_lines.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    let argv = argv_lines
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
     let operations = operation_lines
         .lines()
-        .map(|name| ToolOperationName::new(name).map_err(|error| {
-            format!("invalid allowed operation {name:?}: {error:?}")
-        }))
+        .map(|name| {
+            ToolOperationName::new(name)
+                .map_err(|error| format!("invalid allowed operation {name:?}: {error:?}"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     StdioToolProviderConfig::new(executable, argv, operations)
         .map_err(|error| format!("invalid Linux stdio configuration: {error:?}"))
@@ -46,11 +48,15 @@ pub fn append_activation_with_inspection(
         if configured.configured_sequence != configured_sequence {
             return Err("activation references a stale configuration sequence".to_owned());
         }
-        inspect_stdio_executable(&configured.config)
-            .map_err(|error| format!("Linux executable inspection rejected activation: {error:?}"))?;
+        inspect_stdio_executable(&configured.config).map_err(|error| {
+            format!("Linux executable inspection rejected activation: {error:?}")
+        })?;
     }
     append_tool_provider_activation_decision_checked(
-        store, provider_id, configured_sequence, decision,
+        store,
+        provider_id,
+        configured_sequence,
+        decision,
     )
 }
 
@@ -69,8 +75,11 @@ mod tests {
     #[test]
     fn drafts_preserve_exact_argv_and_validate_operations() {
         let config = parse_stdio_config_draft(
-            "/usr/bin/example-mcp", "--name=two words\n--dry-run", "read\nsearch",
-        ).unwrap();
+            "/usr/bin/example-mcp",
+            "--name=two words\n--dry-run",
+            "read\nsearch",
+        )
+        .unwrap();
         assert_eq!(config.args(), &["--name=two words", "--dry-run"]);
         assert_eq!(config.allowed_operations().len(), 2);
         assert!(parse_stdio_config_draft("relative/path", "", "read").is_err());
@@ -83,23 +92,36 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let provider = ToolProviderId::new(30);
         record_tool_provider_registered(
-            &mut store, provider, &ToolProviderName::new("external").unwrap(),
-        ).unwrap();
+            &mut store,
+            provider,
+            &ToolProviderName::new("external").unwrap(),
+        )
+        .unwrap();
         record_tool_provider_endpoint_bound(
             &mut store,
             ToolProviderEndpointBinding::new(provider, RouteEndpointId::new(40)),
-        ).unwrap();
-        let config = parse_stdio_config_draft(
-            "/chatarium-missing-executable-892342/example", "", "read",
-        ).unwrap();
+        )
+        .unwrap();
+        let config =
+            parse_stdio_config_draft("/chatarium-missing-executable-892342/example", "", "read")
+                .unwrap();
         let recorded = append_tool_transport_config_checked(&mut store, provider, &config).unwrap();
         let count = store.events().len();
-        assert!(append_activation_with_inspection(
-            &mut store, provider, recorded.sequence, ProviderActivationDecision::Activate,
-        ).is_err());
+        assert!(
+            append_activation_with_inspection(
+                &mut store,
+                provider,
+                recorded.sequence,
+                ProviderActivationDecision::Activate,
+            )
+            .is_err()
+        );
         assert_eq!(store.events().len(), count);
-        assert!(!store.events().iter().any(|event| {
-            event.kind == EventKind::ToolProviderActivationDecisionRecorded
-        }));
+        assert!(
+            !store
+                .events()
+                .iter()
+                .any(|event| { event.kind == EventKind::ToolProviderActivationDecisionRecorded })
+        );
     }
 }

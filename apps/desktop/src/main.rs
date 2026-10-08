@@ -194,21 +194,21 @@ use chatarium_store::tool_call_audit::{
 use chatarium_store::tool_outcome_audit::{
     ToolCallOutcomeKind, append_tool_call_outcome_checked, replay_tool_call_outcome_audit,
 };
+use chatarium_store::tool_provider_activation_audit::{
+    ProviderActivationDecision, replay_tool_provider_activation_audit,
+};
 use chatarium_store::tool_provider_audit::{
     record_tool_provider_endpoint_bound, record_tool_provider_registered,
     replay_tool_provider_audit,
 };
-use chatarium_store::tool_provider_activation_audit::{
-    ProviderActivationDecision, replay_tool_provider_activation_audit,
-};
-use chatarium_store::tool_transport_config_audit::{
-    append_tool_transport_config_checked, replay_tool_transport_config_audit,
-};
-use chatarium_store::tool_stdio_preflight::preview_activated_stdio_tool_invocation;
 use chatarium_store::tool_result_context_audit::{
     MAX_CONTEXT_TOOL_RESULT_BYTES, ToolResultContextDecision,
     append_tool_result_context_decision_checked, replay_admitted_tool_results,
     replay_tool_result_context_audit, tool_outcome_owning_conversation,
+};
+use chatarium_store::tool_stdio_preflight::preview_activated_stdio_tool_invocation;
+use chatarium_store::tool_transport_config_audit::{
+    append_tool_transport_config_checked, replay_tool_transport_config_audit,
 };
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, WorkerControlTransitionProvenance, record_worker_control_transition,
@@ -4521,10 +4521,16 @@ impl ChatariumApp {
             self.status = "cannot configure provider: persistence unavailable".to_owned();
             return;
         };
-        match sender.send(PersistCommand::ConfigureToolProviderTransport { provider_id, config }) {
+        match sender.send(PersistCommand::ConfigureToolProviderTransport {
+            provider_id,
+            config,
+        }) {
             Ok(()) => {
                 self.tool_command_pending = true;
-                self.status = format!("recording inert stdio configuration for provider {}…", provider_id.get());
+                self.status = format!(
+                    "recording inert stdio configuration for provider {}…",
+                    provider_id.get()
+                );
             }
             Err(error) => self.status = format!("failed to queue tool configuration: {error}"),
         }
@@ -4544,11 +4550,17 @@ impl ChatariumApp {
             return;
         };
         match sender.send(PersistCommand::DecideToolProviderActivation {
-            provider_id, configured_sequence, decision,
+            provider_id,
+            configured_sequence,
+            decision,
         }) {
             Ok(()) => {
                 self.tool_command_pending = true;
-                self.status = format!("recording explicit {:?} for provider {}…", decision, provider_id.get());
+                self.status = format!(
+                    "recording explicit {:?} for provider {}…",
+                    decision,
+                    provider_id.get()
+                );
             }
             Err(error) => self.status = format!("failed to queue tool activation: {error}"),
         }
@@ -16629,32 +16641,45 @@ fn persistence_worker(
                     }
                 }
             }
-            PersistCommand::ConfigureToolProviderTransport { provider_id, config } => {
-                match append_tool_transport_config_checked(&mut store, provider_id, &config) {
-                    Ok(event) => {
-                        let _ = notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
-                    }
-                    Err(error) => {
-                        let _ = notices.send(PersistNotice::Failed {
-                            operation: "tool transport configuration",
-                            revision: None, request_id: None, turn_id: None, error,
-                        });
-                    }
+            PersistCommand::ConfigureToolProviderTransport {
+                provider_id,
+                config,
+            } => match append_tool_transport_config_checked(&mut store, provider_id, &config) {
+                Ok(event) => {
+                    let _ = notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
                 }
-            }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "tool transport configuration",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            },
             PersistCommand::DecideToolProviderActivation {
-                provider_id, configured_sequence, decision,
+                provider_id,
+                configured_sequence,
+                decision,
             } => {
                 match local_tool_provider_control::append_activation_with_inspection(
-                    &mut store, provider_id, configured_sequence, decision,
+                    &mut store,
+                    provider_id,
+                    configured_sequence,
+                    decision,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
+                        let _ =
+                            notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "tool provider activation",
-                            revision: None, request_id: None, turn_id: None, error,
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
                         });
                     }
                 }
