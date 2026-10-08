@@ -8336,10 +8336,10 @@ impl eframe::App for ChatariumApp {
                         ui.add_space(10.0);
                         ui.separator();
                         ui.add_space(6.0);
-                        ui.collapsing("Tools / MCP · inert substrate", |ui| {
+                        ui.collapsing("Tools / MCP · restricted local adapter", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Transport-neutral identities and approval routes only. No tool execution is enabled. The existing XML/MCP envelope still needs to be recovered and versioned before an adapter may dispatch anything.",
+                                    "Durable provider/call identities, explicit approval, and the recovered legacy tool envelope. Only manually approved chatarium.builtin hello can execute; general MCP, browser, filesystem, process, and network tools remain disabled.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -8446,7 +8446,7 @@ impl eframe::App for ChatariumApp {
                                                         Some(binding) => {
                                                             ui.label(
                                                                 egui::RichText::new(format!(
-                                                                    "endpoint {} · inert",
+                                                                    "endpoint {} · registered",
                                                                     binding.endpoint_id().get()
                                                                 ))
                                                                 .monospace()
@@ -8522,7 +8522,7 @@ impl eframe::App for ChatariumApp {
                                             .desired_width(360.0)
                                             .desired_rows(3)
                                             .hint_text(
-                                                "Opaque arguments or exact legacy <tool_call> envelope (adapter disabled)",
+                                                "Exact JSON arguments or legacy <tool_call> envelope",
                                             ),
                                         );
                                         if self.tool_arguments_draft.trim_start().starts_with("<tool_call")
@@ -8828,7 +8828,11 @@ impl eframe::App for ChatariumApp {
                                                             }
                                                             ui.label(
                                                                 egui::RichText::new(
-                                                                    "EXECUTION DISABLED · legacy XML compatibility is available, but no MCP/tool execution adapter is attached.",
+                                                                    if local_tool_adapter::supports_hello(provider_label.as_str(), call.operation.as_str()) {
+                                                                        "LOCAL HELLO ONLY · explicit Allow and separate one-shot Run required."
+                                                                    } else {
+                                                                        "EXECUTION DISABLED · no general MCP or external tool adapter is attached."
+                                                                    },
                                                                 )
                                                                 .monospace()
                                                                 .size(9.0)
