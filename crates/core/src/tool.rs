@@ -185,21 +185,24 @@ impl StdioToolProviderConfig {
         if executable == "/"
             || executable.len() > Self::MAX_EXECUTABLE_BYTES
             || executable.chars().any(char::is_control)
-            || std::path::Path::new(&executable).components().any(|component| {
-                matches!(
-                    component,
-                    std::path::Component::CurDir | std::path::Component::ParentDir
-                )
-            })
+            || std::path::Path::new(&executable)
+                .components()
+                .any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::CurDir | std::path::Component::ParentDir
+                    )
+                })
         {
             return Err(StdioToolConfigError::NonCanonicalExecutable);
         }
         if args.len() > Self::MAX_ARGUMENTS {
             return Err(StdioToolConfigError::TooManyArguments);
         }
-        if args.iter().any(|arg| {
-            arg.len() > Self::MAX_ARGUMENT_BYTES || arg.chars().any(char::is_control)
-        }) {
+        if args
+            .iter()
+            .any(|arg| arg.len() > Self::MAX_ARGUMENT_BYTES || arg.chars().any(char::is_control))
+        {
             return Err(StdioToolConfigError::InvalidArgument);
         }
         if allowed_operations.is_empty() {
@@ -262,19 +265,11 @@ mod tests {
         assert!(!config.allows(&ToolOperationName::new("write").unwrap()));
 
         assert_eq!(
-            StdioToolProviderConfig::new(
-                "local-mcp",
-                Vec::new(),
-                vec![op.clone()]
-            ),
+            StdioToolProviderConfig::new("local-mcp", Vec::new(), vec![op.clone()]),
             Err(StdioToolConfigError::NonAbsoluteExecutable)
         );
         assert_eq!(
-            StdioToolProviderConfig::new(
-                "/usr/../bin/local-mcp",
-                Vec::new(),
-                vec![op.clone()]
-            ),
+            StdioToolProviderConfig::new("/usr/../bin/local-mcp", Vec::new(), vec![op.clone()]),
             Err(StdioToolConfigError::NonCanonicalExecutable)
         );
         assert_eq!(
@@ -290,11 +285,7 @@ mod tests {
             Err(StdioToolConfigError::EmptyOperationAllowlist)
         );
         assert_eq!(
-            StdioToolProviderConfig::new(
-                "/usr/bin/local-mcp",
-                Vec::new(),
-                vec![op.clone(), op]
-            ),
+            StdioToolProviderConfig::new("/usr/bin/local-mcp", Vec::new(), vec![op.clone(), op]),
             Err(StdioToolConfigError::DuplicateOperation)
         );
     }
