@@ -269,6 +269,9 @@ mod tests {
         record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
     use crate::tool_transport_config_audit::append_tool_transport_config_checked;
+    use crate::tool_provider_activation_audit::{
+        append_tool_provider_activation_decision_checked, ProviderActivationDecision,
+    };
     use chatarium_core::LocalConversationId;
     use chatarium_core::chat_container::{
         ChatContainerId, ContextHandoffId, SessionLifecyclePhase, SessionLifecycleTransition,
@@ -293,6 +296,16 @@ mod tests {
         allow: &str,
         arguments: &str,
         user_approved: bool,
+    ) -> MemoryEventStore {
+        configured_call_with_activation(operation, allow, arguments, user_approved, false)
+    }
+
+    fn configured_call_with_activation(
+        operation: &str,
+        allow: &str,
+        arguments: &str,
+        user_approved: bool,
+        active_before_call: bool,
     ) -> MemoryEventStore {
         let mut store = MemoryEventStore::default();
         record_local_session_registered(&mut store, SOURCE).unwrap();
@@ -325,7 +338,17 @@ mod tests {
             vec![ToolOperationName::new(allow).unwrap()],
         )
         .unwrap();
-        append_tool_transport_config_checked(&mut store, PROVIDER, &config).unwrap();
+        let configured = append_tool_transport_config_checked(&mut store, PROVIDER, &config)
+            .unwrap();
+        if active_before_call {
+            append_tool_provider_activation_decision_checked(
+                &mut store,
+                PROVIDER,
+                configured.sequence,
+                ProviderActivationDecision::Activate,
+            )
+            .unwrap();
+        }
         record_tool_call(
             &mut store,
             CALL,
@@ -455,6 +478,65 @@ mod tests {
                 .unwrap_err()
                 .contains("undispatched")
         );
+    }
+
+    #[test]
+    fn activated_preflight_rejects_unconfigured_activation_and_retroactive_enable() {
+        let mut store = configured_call("hello", "hello", "{}", true);
+        assert!(preview_activated_stdio_tool_invocation(store.events(), CALL)
+            .unwrap_err()
+            .contains("no explicit activation"));
+        let configured = replay_tool_transport_config_audit(store.events()).unwrap();
+        append_tool_provider_activation_decision_checked(
+            &mut store,
+            PROVIDER,
+            configured[0].configured_sequence,
+            ProviderActivationDecision::Activate,
+        ).unwrap();
+        assert!(preview_activated_stdio_tool_invocation(store.events(), CALL)
+            .unwrap_err()
+            .contains("not active when this call was recorded"));
+    }
+
+    #[test]
+    fn activated_preflight_passes_only_after_separate_prior_provider_activation() {
+        let store = configured_call_with_activation("hello", "hello", "{}", true, true);
+        let before = store.events().len();
+        let preview = preview_activated_stdio_tool_invocation(store.events(), CALL).unwrap();
+        assert_eq!(preview.invocation.call_id, CALL);
+        assert_eq!(preview.invocation.route_id, ROUTE);
+        assert!(preview.activation_sequence < replay_tool_call_audit(store.events())
+            .unwrap()[0].recorded_sequence);
+        assert_eq!(store.events().len(), before);
+        assert!(replay_routing_audit(store.events()).unwrap()[0]
+            .dispatch_sequence.is_none());
+    }
+
+    #[test]
+    fn revocation_blocks_pending_calls_and_reactivation_does_not_retroactively_revive_them() {
+        let mut store = configured_call_with_activation("hello", "hello", "{}", true, true);
+        let configured_seq = replay_tool_transport_config_audit(store.events())
+            .unwrap()[0].configured_sequence;
+        append_tool_provider_activation_decision_checked(
+            &mut store, PROVIDER, configured_seq, ProviderActivationDecision::Deactivate,
+        ).unwrap();
+        assert!(preview_activated_stdio_tool_invocation(store.events(), CALL)
+            .unwrap_err()
+            .contains("deactivated"));
+        append_tool_provider_activation_decision_checked(
+            &mut store, PROVIDER, configured_seq, ProviderActivationDecision::Activate,
+        ).unwrap();
+        assert!(preview_activated_stdio_tool_invocation(store.events(), CALL)
+            .unwrap_err()
+            .contains("not active when this call was recorded"));
+    }
+
+    #[test]
+    fn activation_cannot_override_an_unapproved_tool_route() {
+        let store = configured_call_with_activation("hello", "hello", "{}", false, true);
+        assert!(preview_activated_stdio_tool_invocation(store.events(), CALL)
+            .unwrap_err()
+            .contains("user-approved"));
     }
 
     #[test]
