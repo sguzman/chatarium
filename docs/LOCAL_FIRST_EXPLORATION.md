@@ -373,22 +373,23 @@ The first **MCP/tool integration substrate** is now landed: typed
 provider/tool-call identities, durable provider endpoint correlation, immutable
 call argument/provenance records, explicit RequireApproval ToolCall routing,
 manual Allow/Deny controls, and a separate terminal tool result/error audit.
-The original XML-like tool envelope has now been recovered from the dormant
-ChatGPT Tool Shim and ported to a bounded pure Rust parser/formatter. Only the
-side-effect-free local `chatarium.builtin` / `hello` smoke adapter is executable:
-it requires the immutable call, explicit Allow, and a second user click to
-consume the one-shot dispatch permit. Its exact terminal result is audited
-separately. Arbitrary local commands, browser, filesystem, network, and general
-MCP adapters remain disabled.
+The original XML-like tool envelope has been recovered from ChatGPT Tool
+Shim and ported to a bounded pure Rust parser/formatter. A side-effect-free
+local `chatarium.builtin` / `hello` adapter requires the immutable call,
+explicit Allow, and a separate dispatch click.
 
-Explicit reversible tool-result context admission is now implemented. The
-statically bounded MCP 2026 codec and inert external stdio provider configuration
-are also landed, followed by read-only pre-dispatch call validation and Linux
-executable metadata inspection. None of these operations launches a server.
+Explicit reversible tool-result context admission is implemented separately
+from execution authority. The MCP 2026 codec, durable external stdio provider
+configuration and activation, read-only preflight, executable inspection, and
+one-shot Linux sandboxed runner are landed. Configuring and activating a
+provider never executes it. Individual user-approved calls require a further
+one-shot Run action and launch inside a strict, network-isolated Linux sandbox.
+The subprocess now runs off the persistence worker, with its terminal
+observation separately appended through the durable journal.
 
-The next boundary is user-reviewed activation, race-aware executable handling,
-and a bounded one-shot provider adapter, after the existing user-approved
-ToolCall route has been revalidated. See
-[LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). No automatic
-model-driven tool execution or hidden tool-result context admission is
-authorized. Do not reopen browser/history work as part of this phase.
+The next boundary is wider Linux-host compatibility testing and incremental
+adapter functionality without weakening explicit permission or sandbox
+constraints. Arbitrary host commands, automatic model-driven tool execution,
+browser access, network access, and hidden tool-result context admission are
+not authorized. See [LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md).
+Do not reopen browser/history work as part of this phase.
