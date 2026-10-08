@@ -99,3 +99,7 @@ jobs:
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
         run: cargo test -p chatarium-desktop live_stdio_dispatch_worker_contract -- --nocapture
+      - name: Assert isolated MCP process cannot inspect host files
+        env:
+          CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
+        run: cargo test -p chatarium-desktop live_sandbox_denies_host_etc_and_home_paths -- --nocapture
