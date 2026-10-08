@@ -340,6 +340,9 @@ Lifecycle semantics remain unchanged by memory recording, admission,
 supersession, discovery, labeling, persistent context use, or one-shot
 request-scoped use.
 
-The active local-first frontier is now the first MCP/tool integration substrate.
-Tool calls must reuse routing/policy authority rather than creating a hidden
-side-channel around lifecycle or supervision.
+The local tool integration substrate has landed as a separate domain; see
+[LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). Immutable tool calls,
+explicit user-approved routes, one-shot dispatch, and terminal tool outcomes
+must remain separate from WorkerLifecycle, supervision, and conversation
+context. Only the deterministic, side-effect-free builtin hello smoke adapter
+is currently executable; arbitrary MCP and external tools remain disabled.
