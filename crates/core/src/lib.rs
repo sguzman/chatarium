@@ -543,7 +543,9 @@ impl EventKind {
             Self::ToolProviderRegistered => "tool_provider_registered",
             Self::ToolProviderEndpointBound => "tool_provider_endpoint_bound",
             Self::ToolProviderTransportConfigured => "tool_provider_transport_configured",
-            Self::ToolProviderActivationDecisionRecorded => "tool_provider_activation_decision_recorded",
+            Self::ToolProviderActivationDecisionRecorded => {
+                "tool_provider_activation_decision_recorded"
+            }
             Self::ToolCallRecorded => "tool_call_recorded",
             Self::ToolCallRouteBound => "tool_call_route_bound",
             Self::ToolCallOutcomeObserved => "tool_call_outcome_observed",
@@ -650,7 +652,9 @@ impl EventKind {
             "tool_provider_registered" => Some(Self::ToolProviderRegistered),
             "tool_provider_endpoint_bound" => Some(Self::ToolProviderEndpointBound),
             "tool_provider_transport_configured" => Some(Self::ToolProviderTransportConfigured),
-            "tool_provider_activation_decision_recorded" => Some(Self::ToolProviderActivationDecisionRecorded),
+            "tool_provider_activation_decision_recorded" => {
+                Some(Self::ToolProviderActivationDecisionRecorded)
+            }
             "tool_call_recorded" => Some(Self::ToolCallRecorded),
             "tool_call_route_bound" => Some(Self::ToolCallRouteBound),
             "tool_call_outcome_observed" => Some(Self::ToolCallOutcomeObserved),

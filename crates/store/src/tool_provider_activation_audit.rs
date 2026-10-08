@@ -104,32 +104,50 @@ pub fn replay_tool_provider_activation_audit(
         if event.kind != EventKind::ToolProviderActivationDecisionRecorded {
             continue;
         }
-        let value: Value = serde_json::from_str(&event.payload)
-            .map_err(|error| format!("malformed provider activation at #{}: {error}", event.sequence))?;
+        let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
+            format!(
+                "malformed provider activation at #{}: {error}",
+                event.sequence
+            )
+        })?;
         if value.get("schema").and_then(Value::as_str) != Some(SCHEMA)
             || value.get("version").and_then(Value::as_u64) != Some(VERSION)
-            || value.get("record").and_then(Value::as_str) != Some("tool_provider_activation_decision")
+            || value.get("record").and_then(Value::as_str)
+                != Some("tool_provider_activation_decision")
             || value.get("authority").and_then(Value::as_str) != Some("user")
         {
-            return Err(format!("unsupported provider activation schema at #{}", event.sequence));
+            return Err(format!(
+                "unsupported provider activation schema at #{}",
+                event.sequence
+            ));
         }
         let provider_id = ToolProviderId::new(required_u64(&value, "provider_id")?);
         let configured_sequence = required_u64(&value, "configured_sequence")?;
         if event.scope.as_deref() != Some(activation_scope(provider_id).as_str()) {
-            return Err(format!("incorrect provider activation scope at #{}", event.sequence));
+            return Err(format!(
+                "incorrect provider activation scope at #{}",
+                event.sequence
+            ));
         }
         let decision = match value.get("decision").and_then(Value::as_str) {
             Some("activate") => ProviderActivationDecision::Activate,
             Some("deactivate") => ProviderActivationDecision::Deactivate,
-            _ => return Err(format!("unknown provider activation decision at #{}", event.sequence)),
+            _ => {
+                return Err(format!(
+                    "unknown provider activation decision at #{}",
+                    event.sequence
+                ));
+            }
         };
         let config = replay_tool_transport_config_audit(&events[..index])?
             .into_iter()
             .find(|record| record.provider_id == provider_id)
-            .ok_or_else(|| format!(
-                "provider {} has no prior durable external transport configuration",
-                provider_id.get()
-            ))?;
+            .ok_or_else(|| {
+                format!(
+                    "provider {} has no prior durable external transport configuration",
+                    provider_id.get()
+                )
+            })?;
         if config.configured_sequence != configured_sequence
             || configured_sequence >= event.sequence
         {
@@ -138,7 +156,9 @@ pub fn replay_tool_provider_activation_audit(
                 provider_id.get()
             ));
         }
-        let previous_active = records.get(&provider_id).is_some_and(|record| record.active);
+        let previous_active = records
+            .get(&provider_id)
+            .is_some_and(|record| record.active);
         let next_active = decision == ProviderActivationDecision::Activate;
         if previous_active == next_active {
             return Err(format!(
@@ -147,13 +167,16 @@ pub fn replay_tool_provider_activation_audit(
                 event.sequence
             ));
         }
-        records.insert(provider_id, ToolProviderActivationRecord {
+        records.insert(
             provider_id,
-            configured_sequence,
-            active: next_active,
-            activated_sequence: next_active.then_some(event.sequence),
-            last_sequence: event.sequence,
-        });
+            ToolProviderActivationRecord {
+                provider_id,
+                configured_sequence,
+                active: next_active,
+                activated_sequence: next_active.then_some(event.sequence),
+                last_sequence: event.sequence,
+            },
+        );
     }
     let mut values = records.into_values().collect::<Vec<_>>();
     values.sort_by_key(|record| record.last_sequence);
@@ -177,7 +200,9 @@ fn activation_value(
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value.get(field).and_then(Value::as_u64)
+    value
+        .get(field)
+        .and_then(Value::as_u64)
         .ok_or_else(|| format!("provider activation missing integer '{field}'"))
 }
 
@@ -204,18 +229,25 @@ mod tests {
     fn setup() -> (MemoryEventStore, u64) {
         let mut store = MemoryEventStore::default();
         record_tool_provider_registered(
-            &mut store, PROVIDER, &ToolProviderName::new("example.external").unwrap()
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            &ToolProviderName::new("example.external").unwrap(),
+        )
+        .unwrap();
         record_tool_provider_endpoint_bound(
             &mut store,
-            ToolProviderEndpointBinding::new(PROVIDER, RouteEndpointId::new(88))
-        ).unwrap();
+            ToolProviderEndpointBinding::new(PROVIDER, RouteEndpointId::new(88)),
+        )
+        .unwrap();
         let config = StdioToolProviderConfig::new(
-            "/usr/bin/example-mcp", Vec::new(),
-            vec![ToolOperationName::new("read").unwrap()]
-        ).unwrap();
+            "/usr/bin/example-mcp",
+            Vec::new(),
+            vec![ToolOperationName::new("read").unwrap()],
+        )
+        .unwrap();
         let seq = append_tool_transport_config_checked(&mut store, PROVIDER, &config)
-            .unwrap().sequence;
+            .unwrap()
+            .sequence;
         (store, seq)
     }
 
@@ -223,15 +255,26 @@ mod tests {
     fn activation_and_revocation_are_durable_but_never_dispatch() {
         let (mut store, config_seq) = setup();
         let first = append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Activate
-        ).unwrap();
-        assert_eq!(first.kind, EventKind::ToolProviderActivationDecisionRecorded);
+            &mut store,
+            PROVIDER,
+            config_seq,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
+        assert_eq!(
+            first.kind,
+            EventKind::ToolProviderActivationDecisionRecorded
+        );
         let state = replay_tool_provider_activation_audit(store.events()).unwrap();
         assert!(state[0].active);
         assert_eq!(state[0].activated_sequence, Some(first.sequence));
         let revoked = append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Deactivate
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            config_seq,
+            ProviderActivationDecision::Deactivate,
+        )
+        .unwrap();
         assert!(revoked.sequence > first.sequence);
         let state = replay_tool_provider_activation_audit(store.events()).unwrap();
         assert!(!state[0].active);
@@ -241,8 +284,12 @@ mod tests {
             EventKind::RouteDispatched | EventKind::ToolCallOutcomeObserved
         )));
         append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Activate
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            config_seq,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
         assert!(replay_tool_provider_activation_audit(store.events()).unwrap()[0].active);
     }
 
@@ -250,28 +297,57 @@ mod tests {
     fn missing_config_mismatched_sequence_and_redundant_decisions_fail_before_append() {
         let mut unconfigured = MemoryEventStore::default();
         let error = append_tool_provider_activation_decision_checked(
-            &mut unconfigured, PROVIDER, 1, ProviderActivationDecision::Activate
-        ).unwrap_err();
+            &mut unconfigured,
+            PROVIDER,
+            1,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap_err();
         assert!(error.contains("no prior durable"));
         assert!(unconfigured.events().is_empty());
 
         let (mut store, config_seq) = setup();
         let before = store.events().len();
-        assert!(append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq + 1, ProviderActivationDecision::Activate
-        ).unwrap_err().contains("immutable configuration"));
+        assert!(
+            append_tool_provider_activation_decision_checked(
+                &mut store,
+                PROVIDER,
+                config_seq + 1,
+                ProviderActivationDecision::Activate
+            )
+            .unwrap_err()
+            .contains("immutable configuration")
+        );
         assert_eq!(store.events().len(), before);
-        assert!(append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Deactivate
-        ).unwrap_err().contains("redundant"));
+        assert!(
+            append_tool_provider_activation_decision_checked(
+                &mut store,
+                PROVIDER,
+                config_seq,
+                ProviderActivationDecision::Deactivate
+            )
+            .unwrap_err()
+            .contains("redundant")
+        );
         assert_eq!(store.events().len(), before);
         append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Activate
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            config_seq,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
         let before = store.events().len();
-        assert!(append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Activate
-        ).unwrap_err().contains("redundant"));
+        assert!(
+            append_tool_provider_activation_decision_checked(
+                &mut store,
+                PROVIDER,
+                config_seq,
+                ProviderActivationDecision::Activate
+            )
+            .unwrap_err()
+            .contains("redundant")
+        );
         assert_eq!(store.events().len(), before);
     }
 
@@ -279,8 +355,12 @@ mod tests {
     fn corrupted_activation_payload_is_rejected_during_replay() {
         let (mut store, config_seq) = setup();
         record_tool_provider_activation_decision(
-            &mut store, PROVIDER, config_seq, ProviderActivationDecision::Activate
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            config_seq,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
         let latest = store.events().last().unwrap().clone();
         let mut corrupted = store.events().to_vec();
         corrupted.last_mut().unwrap().payload = latest.payload.replace("\"user\"", "\"model\"");
