@@ -424,6 +424,39 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_preview_requires_approval_and_preserves_optional_cursor() {
+        let operation = MCP_LIST_TOOLS_OPERATION;
+        let approved = configured_call(operation, operation, r#"{"cursor":"opaque-next"}"#, true);
+        let before = approved.events().len();
+        let preview = preview_stdio_tool_invocation(approved.events(), CALL).unwrap();
+        let request: Value = serde_json::from_str(&preview.request_frame).unwrap();
+        assert_eq!(request["method"], "tools/list");
+        assert_eq!(request["id"], CALL.get());
+        assert_eq!(request["params"]["cursor"], "opaque-next");
+        assert!(request["params"].get("name").is_none());
+        assert_eq!(approved.events().len(), before);
+
+        let first_page = configured_call(operation, operation, "{}", true);
+        let request: Value = serde_json::from_str(
+            &preview_stdio_tool_invocation(first_page.events(), CALL)
+                .unwrap()
+                .request_frame,
+        )
+        .unwrap();
+        assert_eq!(request["method"], "tools/list");
+        assert!(request["params"].get("cursor").is_none());
+
+        let unapproved = configured_call(operation, operation, "{}", false);
+        assert!(preview_stdio_tool_invocation(unapproved.events(), CALL).is_err());
+        let not_allowlisted = configured_call(operation, "other", "{}", true);
+        assert!(preview_stdio_tool_invocation(not_allowlisted.events(), CALL).is_err());
+        for bad in [r#"{"cursor":12}"#, r#"{"extra":"unreviewed"}"#, r#"{"cursor":""}"#] {
+            let store = configured_call(operation, operation, bad, true);
+            assert!(preview_stdio_tool_invocation(store.events(), CALL).is_err());
+        }
+    }
+
+    #[test]
     fn requires_explicit_user_approval_and_exact_allowlist() {
         let not_approved = configured_call("hello", "hello", "{}", false);
         assert!(
