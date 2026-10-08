@@ -469,14 +469,11 @@ mod tests {
         use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
         let frame = encode_stdio_frame(
             &tools_call_request(88, "fixture.nohost", &serde_json::json!({})).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         for forbidden in ["/etc/passwd", "/home"] {
-            let error = run_one_shot(
-                "/usr/bin/stat",
-                &[forbidden.to_owned()],
-                &frame,
-                88,
-            ).unwrap_err();
+            let error =
+                run_one_shot("/usr/bin/stat", &[forbidden.to_owned()], &frame, 88).unwrap_err();
             assert!(
                 error.contains("No such file or directory"),
                 "forbidden host path {forbidden} produced unexpected sandbox error: {error}"

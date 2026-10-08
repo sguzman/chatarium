@@ -3371,7 +3371,9 @@ impl ChatariumApp {
                     let status = replay_tool_call_outcome_audit(&self.events)
                         .ok()
                         .and_then(|outcomes| {
-                            outcomes.into_iter().find(|outcome| outcome.call_id == call_id)
+                            outcomes
+                                .into_iter()
+                                .find(|outcome| outcome.call_id == call_id)
                         })
                         .map(|outcome| match outcome.kind {
                             ToolCallOutcomeKind::Result => "completed",
