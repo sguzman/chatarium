@@ -148,6 +148,33 @@ Official protocol: [MCP 2026-07-28 specification](https://modelcontextprotocol.i
 The current revision changes transport assumptions materially; do not invent a
 2025-style protocol session for new adapters.
 
+### Inert stdio provider configuration
+
+The first transport *configuration* substrate is landed in
+`crates/core/src/tool.rs` and
+`crates/store/src/tool_transport_config_audit.rs`.
+It adds a durable `ToolProviderTransportConfigured` event, but deliberately
+**does not spawn or activate a server**.
+
+A configuration holds one absolute Linux executable path, a bounded argv
+vector (not a shell command line), and an exact operation allowlist.
+Validation rejects relative/parent-traversal executable paths, control
+characters, excessive arguments, duplicate/empty operations, and oversized
+individual values. The selected program's existence and trust are **not**
+asserted by storing the path. The transport implementation must separately
+verify and enforce those properties before any future launch.
+
+The provider must be registered and have a durable routing endpoint first.
+Configuration is one-shot immutable in this first audit version, and it
+cannot be applied retroactively to a provider with already-recorded calls.
+The special `chatarium.builtin` identity cannot acquire an external stdio
+executable. Archive integrity replays this separate audit fail-closed.
+
+Transport configuration does **not** grant invocation, process, file,
+network, or inference context permissions. In particular, a configured
+operation allowlist is necessary but never sufficient to consume a
+`DispatchPermit`.
+
 ### Next transport implementation
 
 The first real transport should remain Linux-native and cost-free. Two
