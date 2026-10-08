@@ -196,6 +196,11 @@ use chatarium_store::tool_provider_audit::{
     record_tool_provider_endpoint_bound, record_tool_provider_registered,
     replay_tool_provider_audit,
 };
+use chatarium_store::tool_result_context_audit::{
+    MAX_CONTEXT_TOOL_RESULT_BYTES, ToolResultContextDecision,
+    append_tool_result_context_decision_checked, replay_admitted_tool_results,
+    replay_tool_result_context_audit, tool_outcome_owning_conversation,
+};
 use chatarium_store::worker_audit::{
     WorkerAuditRecord, WorkerControlTransitionProvenance, record_worker_control_transition,
     record_worker_goal_assigned, record_worker_transition, replay_worker_audit,
@@ -296,6 +301,11 @@ enum PersistCommand {
     },
     DispatchBuiltinHello {
         route_id: RouteId,
+    },
+    DecideToolResultContext {
+        call_id: ToolCallId,
+        conversation_id: LocalConversationId,
+        decision: ToolResultContextDecision,
     },
     RecordLocalMemory {
         memory_id: LocalMemoryId,
@@ -567,6 +577,10 @@ enum PersistNotice {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
     },
+    ToolResultContextDecisionUpdated {
+        call_id: ToolCallId,
+        event: EventEnvelope,
+    },
     LocalMemoryArtifactRecorded {
         memory_id: LocalMemoryId,
         event: EventEnvelope,
@@ -806,6 +820,7 @@ struct PendingInferenceIntent {
     instructions: Option<String>,
     developer_context: String,
     routed_context: Vec<context_composer::TranscriptMessage>,
+    tool_result_context: Vec<context_composer::TranscriptMessage>,
     local_memory_context: Vec<context_composer::TranscriptMessage>,
     controller_result_context: Vec<context_composer::TranscriptMessage>,
     controller_coordination_result_context: Vec<context_composer::TranscriptMessage>,
@@ -2682,6 +2697,16 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                let tool_result_context = match admitted_tool_result_context_messages(
+                    &self.events,
+                    self.local_conversation_id,
+                ) {
+                    Ok(messages) => messages,
+                    Err(error) => {
+                        self.status = format!("cannot snapshot admitted tool results: {error}");
+                        return;
+                    }
+                };
                 let local_memory_context = match admitted_local_memory_messages(
                     &self.events,
                     self.local_conversation_id,
@@ -2746,6 +2771,7 @@ impl ChatariumApp {
                             .then(|| self.conversation_instructions.clone()),
                         developer_context: self.conversation_developer_context.clone(),
                         routed_context,
+                        tool_result_context,
                         local_memory_context,
                         controller_result_context,
                         controller_coordination_result_context,
@@ -2840,6 +2866,7 @@ impl ChatariumApp {
                                     message.conversation_id,
                                 ));
                             transcript.extend(intent.routed_context);
+                            transcript.extend(intent.tool_result_context);
                             transcript.extend(intent.local_memory_context);
                             if one_shot_selection_sequence.is_some() {
                                 match one_shot_local_memory_messages_for_turn(
@@ -3281,6 +3308,14 @@ impl ChatariumApp {
                         route_id.get(),
                         count,
                         if count == 1 { "" } else { "s" },
+                    );
+                }
+                PersistNotice::ToolResultContextDecisionUpdated { call_id, event } => {
+                    self.events.push(event);
+                    self.tool_command_pending = false;
+                    self.status = format!(
+                        "tool call {} context admission durably updated",
+                        call_id.get()
                     );
                 }
                 PersistNotice::LocalMemoryArtifactRecorded { memory_id, event } => {
@@ -4530,6 +4565,37 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue tool route decision: {error}");
+            }
+        }
+    }
+
+    fn decide_tool_result_context(
+        &mut self,
+        call_id: ToolCallId,
+        decision: ToolResultContextDecision,
+    ) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot update tool result context: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideToolResultContext {
+            call_id,
+            conversation_id: self.local_conversation_id,
+            decision,
+        }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "recording tool call {} context {} decision…",
+                    call_id.get(),
+                    decision.stable_name()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue tool result context decision: {error}");
             }
         }
     }
@@ -8622,6 +8688,22 @@ impl eframe::App for ChatariumApp {
                                                         None
                                                     }
                                                 };
+                                            let tool_context_records =
+                                                match replay_tool_result_context_audit(&self.events) {
+                                                    Ok(records) => Some(records),
+                                                    Err(error) => {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "tool result context projection blocked: {error}"
+                                                            ))
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            )),
+                                                        );
+                                                        None
+                                                    }
+                                                };
                                             egui::ScrollArea::vertical()
                                                 .id_salt("tool-call-audit")
                                                 .max_height(240.0)
@@ -8815,6 +8897,67 @@ impl eframe::App for ChatariumApp {
                                                                         );
                                                                     },
                                                                 );
+                                                                if let Some(records) = &tool_context_records {
+                                                                    match tool_outcome_owning_conversation(&self.events, outcome) {
+                                                                        Ok(Some(owner))
+                                                                            if owner == self.local_conversation_id =>
+                                                                        {
+                                                                            let latest = records
+                                                                                .iter()
+                                                                                .find(|record| record.call_id == call.call_id)
+                                                                                .map(|record| record.decision);
+                                                                            ui.horizontal_wrapped(|ui| {
+                                                                                ui.label(
+                                                                                    egui::RichText::new(
+                                                                                        match latest {
+                                                                                            Some(ToolResultContextDecision::Admit) => "CONTEXT: ADMITTED",
+                                                                                            Some(ToolResultContextDecision::Exclude) => "CONTEXT: EXCLUDED",
+                                                                                            None => "CONTEXT: EXCLUDED · DEFAULT",
+                                                                                        }
+                                                                                    )
+                                                                                    .monospace()
+                                                                                    .size(9.0),
+                                                                                );
+                                                                                let can_change =
+                                                                                    !self.tool_command_pending
+                                                                                    && self.persist_tx.is_some();
+                                                                                if ui.add_enabled(
+                                                                                    can_change
+                                                                                        && outcome.text.len() <= MAX_CONTEXT_TOOL_RESULT_BYTES
+                                                                                        && latest != Some(ToolResultContextDecision::Admit),
+                                                                                    egui::Button::new("Admit result"),
+                                                                                ).clicked() {
+                                                                                    self.decide_tool_result_context(
+                                                                                        call.call_id,
+                                                                                        ToolResultContextDecision::Admit,
+                                                                                    );
+                                                                                }
+                                                                                if ui.add_enabled(
+                                                                                    can_change
+                                                                                        && latest == Some(ToolResultContextDecision::Admit),
+                                                                                    egui::Button::new("Exclude result"),
+                                                                                ).clicked() {
+                                                                                    self.decide_tool_result_context(
+                                                                                        call.call_id,
+                                                                                        ToolResultContextDecision::Exclude,
+                                                                                    );
+                                                                                }
+                                                                            });
+                                                                            if outcome.text.len() > MAX_CONTEXT_TOOL_RESULT_BYTES {
+                                                                                ui.label("Result is too large for context admission; exact audit remains available.");
+                                                                            }
+                                                                        }
+                                                                        Ok(Some(_)) => {
+                                                                            ui.label("Tool result belongs to another local conversation.");
+                                                                        }
+                                                                        Ok(None) => {
+                                                                            ui.label("Tool result has no local conversation owner; context admission disabled.");
+                                                                        }
+                                                                        Err(error) => {
+                                                                            ui.label(format!("tool result ownership blocked: {error}"));
+                                                                        }
+                                                                    }
+                                                                }
                                                             } else if route.is_some_and(|route| {
                                                                 route.gate_state.is_dispatched()
                                                             }) {
@@ -11365,6 +11508,21 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                             }
+                            match admitted_tool_result_context_messages(
+                                &self.events,
+                                self.local_conversation_id,
+                            ) {
+                                Ok(tool_results) => transcript.extend(tool_results),
+                                Err(error) => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "tool result context composition blocked: {error}"
+                                        ))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
+                                    );
+                                }
+                            }
                             match admitted_local_memory_messages(
                                 &self.events,
                                 self.local_conversation_id,
@@ -11459,11 +11617,13 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted local memor{} · {} next-request-only memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted tool result{} · {} admitted local memor{} · {} next-request-only memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     context_plan.routed_context_count(),
                                     if context_plan.routed_context_count() == 1 { "" } else { "s" },
+                                    context_plan.tool_result_count(),
+                                    if context_plan.tool_result_count() == 1 { "" } else { "s" },
                                     context_plan.local_memory_count(),
                                     if context_plan.local_memory_count() == 1 { "y" } else { "ies" },
                                     context_plan.local_memory_one_shot_count(),
@@ -16349,6 +16509,34 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::DecideToolResultContext {
+                call_id,
+                conversation_id,
+                decision,
+            } => {
+                match append_tool_result_context_decision_checked(
+                    &mut store,
+                    call_id,
+                    conversation_id,
+                    decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ToolResultContextDecisionUpdated {
+                            call_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool result context decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::RecordLocalMemory {
                 memory_id,
                 source_conversation_id,
@@ -18533,6 +18721,28 @@ fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::Tran
         .collect()
 }
 
+fn admitted_tool_result_context_messages(
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+) -> Result<Vec<context_composer::TranscriptMessage>, String> {
+    Ok(replay_admitted_tool_results(events, conversation_id)?
+        .into_iter()
+        .map(|outcome| {
+            let record = outcome.record;
+            context_composer::TranscriptMessage::tool_result(
+                outcome.text.as_str(),
+                record.call_id.get(),
+                record.route_id.get(),
+                record.provider_id.get(),
+                record.source_session_id.get(),
+                record.outcome_sequence,
+                record.last_decision_sequence,
+                record.outcome_kind.stable_name(),
+            )
+        })
+        .collect())
+}
+
 fn admitted_routed_context_messages(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
@@ -19839,6 +20049,9 @@ mod tests {
             PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
             PersistNotice::ToolCallRoutePolicyUpdated { .. } => "tool_call_route_policy_updated",
             PersistNotice::BuiltinHelloDispatched { .. } => "builtin_hello_dispatched",
+            PersistNotice::ToolResultContextDecisionUpdated { .. } => {
+                "tool_result_context_decision_updated"
+            }
             PersistNotice::LocalMemoryArtifactRecorded { .. } => "local_memory_artifact_recorded",
             PersistNotice::LocalMemoryContextDecisionUpdated { .. } => {
                 "local_memory_context_decision_updated"
