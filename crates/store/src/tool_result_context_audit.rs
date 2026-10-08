@@ -385,7 +385,10 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat_container_audit::record_chat_container_created;
+    use crate::chat_container_audit::{
+        record_chat_container_created, record_chat_session_lifecycle_transition,
+        record_chat_session_successor_bound,
+    };
     use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
     use crate::routing_audit::{
         RouteUserDecision, record_route_dispatched, record_route_proposed,
@@ -398,7 +401,10 @@ mod tests {
         record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
     use crate::MemoryEventStore;
-    use chatarium_core::chat_container::ChatContainerId;
+    use chatarium_core::chat_container::{
+        ChatContainerId, ContextHandoffId, SessionLifecyclePhase,
+        SessionLifecycleTransition, SessionSuccessorBinding,
+    };
     use chatarium_core::routing::{
         RouteClass, RouteEndpointId, RouteGate, RoutePolicy, RouteRequest,
     };
@@ -480,12 +486,144 @@ mod tests {
         assert_eq!(store.events().len(), before);
 
         let mut store = MemoryEventStore::default();
-        delivered(&mut store, LocalConversationId::new(), &"a".repeat(MAX_CONTEXT_TOOL_RESULT_BYTES + 1));
+        let owner = LocalConversationId::new();
+        delivered(
+            &mut store,
+            owner,
+            &"a".repeat(MAX_CONTEXT_TOOL_RESULT_BYTES + 1),
+        );
         let before = store.events().len();
         let error = append_tool_result_context_decision_checked(
-            &mut store, CALL, LocalConversationId::new(), ToolResultContextDecision::Admit
-        ).unwrap_err();
-        assert!(error.contains("different/no ownership") || error.contains("context cap"));
+            &mut store,
+            CALL,
+            owner,
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap_err();
+        assert!(error.contains("context cap"));
+        assert_eq!(store.events().len(), before);
+    }
+
+    #[test]
+    fn original_owner_may_admit_after_session_rollover() {
+        let mut store = MemoryEventStore::default();
+        let owner = LocalConversationId::new();
+        delivered(&mut store, owner, "predecessor tool output");
+        let terminal = replay_tool_call_outcome_audit(store.events()).unwrap().remove(0);
+        assert_eq!(
+            tool_outcome_owning_conversation(store.events(), &terminal).unwrap(),
+            Some(owner)
+        );
+
+        record_chat_session_lifecycle_transition(
+            &mut store,
+            ChatContainerId::new(1),
+            SessionLifecycleTransition::new(
+                SESSION,
+                SessionLifecyclePhase::Healthy,
+                SessionLifecyclePhase::Saturated,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let successor = SessionId::new(2);
+        record_local_session_registered(&mut store, successor).unwrap();
+        record_chat_session_successor_bound(
+            &mut store,
+            SessionSuccessorBinding::new(
+                ChatContainerId::new(1),
+                SESSION,
+                successor,
+                ContextHandoffId::new(1),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        append_tool_result_context_decision_checked(
+            &mut store,
+            CALL,
+            owner,
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap();
+        let admitted = replay_admitted_tool_results(store.events(), owner).unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].text, "predecessor tool output");
+        assert_eq!(admitted[0].record.source_session_id, SESSION);
+    }
+
+    #[test]
+    fn later_conversation_binding_cannot_retroactively_claim_outcome() {
+        let mut store = MemoryEventStore::default();
+        record_local_session_registered(&mut store, SESSION).unwrap();
+        record_session_endpoint_bound(
+            &mut store,
+            SessionEndpointBinding::new(SESSION, SOURCE),
+        )
+        .unwrap();
+        record_tool_provider_registered(
+            &mut store,
+            PROVIDER,
+            &ToolProviderName::new("chatarium.builtin").unwrap(),
+        )
+        .unwrap();
+        record_tool_provider_endpoint_bound(
+            &mut store,
+            ToolProviderEndpointBinding::new(PROVIDER, DEST),
+        )
+        .unwrap();
+        record_tool_call(
+            &mut store,
+            CALL,
+            SESSION,
+            PROVIDER,
+            &ToolOperationName::new("hello").unwrap(),
+            "{}",
+        )
+        .unwrap();
+        let route = RouteRequest {
+            id: ROUTE,
+            source: SOURCE,
+            destination: DEST,
+            class: RouteClass::ToolCall,
+        };
+        record_route_proposed(&mut store, route, RoutePolicy::RequireApproval).unwrap();
+        record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
+        record_route_user_decision(&mut store, ROUTE, RouteUserDecision::Allow).unwrap();
+        let mut gate = RouteGate::new(route, RoutePolicy::RequireApproval);
+        gate.user_allow().unwrap();
+        record_route_dispatched(
+            &mut store,
+            gate.authorize_dispatch(ROUTE).unwrap(),
+        )
+        .unwrap();
+        record_tool_call_outcome(
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Result,
+            "orphan",
+        )
+        .unwrap();
+        let owner = LocalConversationId::new();
+        record_chat_container_created(&mut store, ChatContainerId::new(1), SESSION).unwrap();
+        record_local_conversation_chat_container_bound(
+            &mut store,
+            owner,
+            ChatContainerId::new(1),
+        )
+        .unwrap();
+
+        let before = store.events().len();
+        let error = append_tool_result_context_decision_checked(
+            &mut store,
+            CALL,
+            owner,
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap_err();
+        assert!(error.contains("different/no ownership"));
         assert_eq!(store.events().len(), before);
     }
 
