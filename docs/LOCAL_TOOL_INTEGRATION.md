@@ -398,6 +398,43 @@ correct MCP 2026 headers and SSE handling, with no inferred trust from a URL
 or provider name. No shell command interpolation or inherited secret dumping
 is permitted for any future transport.
 
+## Manually approved provider catalog inspection (MCP 2026)
+
+A configured, activated provider can advertise its actual tools using
+`tools/list`, but Chatarium must not mistake that untrusted description for
+permission to execute anything. A reserved **Chatarium-local operation**
+`chatarium.internal.tools-list` maps to the MCP 2026-07-28 `tools/list` RPC,
+**not** to a provider tool named `chatarium.internal.tools-list`.
+
+To permit inspection, explicitly include that exact local operation in the
+provider's **immutable operation allowlist before configuration/activation**.
+The user selects the provider, clicks **Prepare approved tools/list inspection**
+(which only fills an editable `{}` draft), then follows the existing
+**Record call → Allow → review wire request → Run sandboxed MCP tool** flow.
+No process executes before the separately clicked Run. The root-owned
+provider runs with exactly the same Linux bubblewrap/prlimit confinement,
+bounded I/O, real namespace preflight, durable one-shot reservation, and
+audit as any other approved call. Configured tools that omit the local
+operation remain ineligible for catalog inspection.
+
+The response must be a correlated MCP `resultType: complete` envelope
+containing a `tools` array with at most 128 entries; each tool must have a
+distinct bounded name and JSON-object `inputSchema`. Invalid schemas,
+duplicate names, malformed JSON or over-budget responses fail closed and
+produce an audited adapter error rather than a purported catalog. Catalog
+entries and optional descriptions remain **untrusted provider output**.
+Chatarium does not evaluate arbitrary JSON Schema or infer tool safety,
+install providers, modify the immutable allowlist, create calls for listed
+tools, or admit the results into model context.
+
+The desktop **Tool call audit** can display the advertised names and
+descriptions separately from the exact immutable response. If the server
+includes `nextCursor`, **Prepare next catalog page** only fills a fresh
+draft containing the exact opaque cursor. Pagination never happens
+automatically: each page requires its **own new user-approved route and Run**.
+The server can mutate its advertised list between requests; this catalog
+is an observation at one point in time, not a source of authority.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select
