@@ -85,7 +85,12 @@ jobs:
       - name: Install Linux MCP isolation tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap util-linux
+          sudo apt-get install -y bubblewrap util-linux apparmor-profiles apparmor-utils
+          # Ubuntu restricts user namespaces for unconfined programs. Grant
+          # only bwrap's packaged userns-restrict profile; never disable the
+          # host-wide AppArmor restriction or expose host networking.
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       - name: Smoke isolated MCP stdio transport
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
