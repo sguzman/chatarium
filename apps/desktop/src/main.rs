@@ -10,9 +10,9 @@ mod local_inference_settings;
 mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
-mod mcp_output_audit;
 #[cfg(test)]
 mod mcp_async_tests;
+mod mcp_output_audit;
 mod offline_reader;
 mod siwc_bridge;
 

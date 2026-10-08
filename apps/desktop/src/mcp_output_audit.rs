@@ -1,12 +1,12 @@
 //! Read-only MCP result comparison against exact earlier tools/list observations.
 //! The UI never treats a refreshed catalog as authority for an earlier call.
 
-use chatarium_store::EventEnvelope;
 use chatarium_core::LocalConversationId;
 use chatarium_protocol::mcp_output_inspection::{
     McpOutputInspection, inspect_structured_tool_output,
 };
 use chatarium_protocol::mcp_wire::{McpResponse, decode_stdio_response, parse_tools_list_page};
+use chatarium_store::EventEnvelope;
 use chatarium_store::tool_call_audit::ToolCallAuditRecord;
 use chatarium_store::tool_outcome_audit::{ToolCallOutcomeKind, ToolCallOutcomeRecord};
 use chatarium_store::tool_result_context_audit::tool_outcome_owning_conversation;
@@ -44,11 +44,9 @@ pub fn inspect_prior_catalog_snapshot(
     {
         return Err("catalog and tool result have inconsistent durable identities".to_owned());
     }
-    let catalog_response = decode_stdio_response(
-        catalog_outcome.text.as_str(),
-        catalog_call.call_id.get(),
-    )
-    .map_err(|error| format!("recorded catalog MCP frame rejected: {error:?}"))?;
+    let catalog_response =
+        decode_stdio_response(catalog_outcome.text.as_str(), catalog_call.call_id.get())
+            .map_err(|error| format!("recorded catalog MCP frame rejected: {error:?}"))?;
     let McpResponse::Complete(catalog_result) = catalog_response else {
         return Err("recorded catalog is not a complete MCP response".to_owned());
     };
@@ -61,11 +59,8 @@ pub fn inspect_prior_catalog_snapshot(
     else {
         return Ok(None);
     };
-    let response = decode_stdio_response(
-        target_outcome.text.as_str(),
-        target_call.call_id.get(),
-    )
-    .map_err(|error| format!("recorded tool MCP frame rejected: {error:?}"))?;
+    let response = decode_stdio_response(target_outcome.text.as_str(), target_call.call_id.get())
+        .map_err(|error| format!("recorded tool MCP frame rejected: {error:?}"))?;
     let McpResponse::Complete(result) = response else {
         return Err("recorded tool result is not a complete MCP response".to_owned());
     };
@@ -179,7 +174,13 @@ mod tests {
     use chatarium_protocol::mcp_output_inspection::McpOutputVerdict;
     use serde_json::{Value, json};
 
-    fn call(id: u64, operation: &str, provider: u64, session: u64, sequence: u64) -> ToolCallAuditRecord {
+    fn call(
+        id: u64,
+        operation: &str,
+        provider: u64,
+        session: u64,
+        sequence: u64,
+    ) -> ToolCallAuditRecord {
         ToolCallAuditRecord {
             call_id: ToolCallId::new(id),
             source_session_id: SessionId::new(session),
@@ -199,8 +200,7 @@ mod tests {
             provider_id: call.provider_id,
             source_session_id: call.source_session_id,
             kind: ToolCallOutcomeKind::Result,
-            text: json!({"jsonrpc":"2.0","id":call.call_id.get(),"result":result})
-                .to_string(),
+            text: json!({"jsonrpc":"2.0","id":call.call_id.get(),"result":result}).to_string(),
             call_recorded_sequence: call.recorded_sequence,
             route_bound_sequence: call.recorded_sequence + 1,
             dispatch_sequence: call.recorded_sequence + 2,
@@ -220,11 +220,15 @@ mod tests {
 
     fn target(value: Value) -> (ToolCallAuditRecord, ToolCallOutcomeRecord) {
         let call = call(12, "weather.read", 3, 7, 30);
-        let result = outcome(&call, 35, json!({
-            "resultType":"complete",
-            "content":[{"type":"text","text":"untrusted"}],
-            "structuredContent":value
-        }));
+        let result = outcome(
+            &call,
+            35,
+            json!({
+                "resultType":"complete",
+                "content":[{"type":"text","text":"untrusted"}],
+                "structuredContent":value
+            }),
+        );
         (call, result)
     }
 
@@ -236,14 +240,24 @@ mod tests {
         })));
         let (target_call, target_result) = target(json!({"temperature":25}));
         let check = inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &catalog_call, &catalog_result
-        ).unwrap().unwrap();
+            &target_call,
+            &target_result,
+            &catalog_call,
+            &catalog_result,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(check.verdict, McpOutputVerdict::PassedSupportedChecks);
 
         let (target_call, target_result) = target(json!({"temperature":"wrong"}));
         let check = inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &catalog_call, &catalog_result
-        ).unwrap().unwrap();
+            &target_call,
+            &target_result,
+            &catalog_call,
+            &catalog_result,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(check.verdict, McpOutputVerdict::Mismatch);
     }
 
@@ -253,19 +267,35 @@ mod tests {
         let (target_call, target_result) = target(json!({}));
         let mut different_provider = catalog_call.clone();
         different_provider.provider_id = ToolProviderId::new(99);
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &different_provider, &catalog_result
-        ).unwrap().is_none());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &target_call,
+                &target_result,
+                &different_provider,
+                &catalog_result
+            )
+            .unwrap()
+            .is_none()
+        );
         let mut different_session = catalog_call.clone();
         different_session.source_session_id = SessionId::new(99);
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &different_session, &catalog_result
-        ).unwrap().is_none());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &target_call,
+                &target_result,
+                &different_session,
+                &catalog_result
+            )
+            .unwrap()
+            .is_none()
+        );
         let mut future = catalog_result.clone();
         future.observed_sequence = target_call.recorded_sequence + 1;
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &catalog_call, &future
-        ).unwrap().is_none());
+        assert!(
+            inspect_prior_catalog_snapshot(&target_call, &target_result, &catalog_call, &future)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -273,14 +303,26 @@ mod tests {
         let (catalog_call, catalog_result) = catalog(None);
         let (target_call, target_result) = target(json!({}));
         let verdict = inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &catalog_call, &catalog_result
-        ).unwrap().unwrap();
+            &target_call,
+            &target_result,
+            &catalog_call,
+            &catalog_result,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(verdict.verdict, McpOutputVerdict::NoAdvertisedSchema);
         let mut unlisted_call = target_call.clone();
         unlisted_call.operation = ToolOperationName::new("other.read").unwrap();
-        assert!(inspect_prior_catalog_snapshot(
-            &unlisted_call, &target_result, &catalog_call, &catalog_result
-        ).unwrap().is_none());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &unlisted_call,
+                &target_result,
+                &catalog_call,
+                &catalog_result
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]
@@ -288,14 +330,26 @@ mod tests {
         let (catalog_call, mut catalog_result) = catalog(Some(json!({"type":"object"})));
         let (target_call, target_result) = target(json!({}));
         catalog_result.text = "not json".to_owned();
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &target_result, &catalog_call, &catalog_result
-        ).is_err());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &target_call,
+                &target_result,
+                &catalog_call,
+                &catalog_result
+            )
+            .is_err()
+        );
         let (catalog_call, catalog_result) = catalog(Some(json!({"type":"object"})));
         let mut bad_result = target_result.clone();
         bad_result.call_id = ToolCallId::new(88);
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &bad_result, &catalog_call, &catalog_result
-        ).is_err());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &target_call,
+                &bad_result,
+                &catalog_call,
+                &catalog_result
+            )
+            .is_err()
+        );
     }
 }
