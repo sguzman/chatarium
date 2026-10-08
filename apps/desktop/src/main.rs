@@ -187,6 +187,7 @@ use chatarium_store::supervision_audit::{
 use chatarium_store::tool_call_audit::{
     record_tool_call, record_tool_call_route_bound, replay_tool_call_audit,
 };
+use chatarium_store::tool_outcome_audit::replay_tool_call_outcome_audit;
 use chatarium_store::tool_provider_audit::{
     record_tool_provider_endpoint_bound, record_tool_provider_registered,
     replay_tool_provider_audit,
@@ -8532,6 +8533,22 @@ impl eframe::App for ChatariumApp {
                                         Ok(calls) => {
                                             let routes =
                                                 replay_routing_audit(&self.events).ok();
+                                            let outcomes =
+                                                match replay_tool_call_outcome_audit(&self.events) {
+                                                    Ok(outcomes) => Some(outcomes),
+                                                    Err(error) => {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "tool outcome projection blocked: {error}"
+                                                            ))
+                                                            .size(9.0)
+                                                            .color(egui::Color32::from_rgb(
+                                                                186, 108, 108,
+                                                            )),
+                                                        );
+                                                        None
+                                                    }
+                                                };
                                             egui::ScrollArea::vertical()
                                                 .id_salt("tool-call-audit")
                                                 .max_height(240.0)
@@ -8672,6 +8689,43 @@ impl eframe::App for ChatariumApp {
                                                                     }
                                                                 },
                                                             );
+                                                            if let Some(outcome) = outcomes
+                                                                .as_ref()
+                                                                .and_then(|outcomes| {
+                                                                    outcomes.iter().find(|outcome| {
+                                                                        outcome.call_id == call.call_id
+                                                                    })
+                                                                })
+                                                            {
+                                                                ui.collapsing(
+                                                                    format!(
+                                                                        "ADAPTER {} · route {} · dispatched #{} · observed #{} · {} bytes",
+                                                                        outcome.kind.stable_name(),
+                                                                        outcome.route_id.get(),
+                                                                        outcome.dispatch_sequence,
+                                                                        outcome.observed_sequence,
+                                                                        outcome.text.len(),
+                                                                    ),
+                                                                    |ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                outcome.text.as_str(),
+                                                                            )
+                                                                            .size(10.0),
+                                                                        );
+                                                                    },
+                                                                );
+                                                            } else if route.is_some_and(|route| {
+                                                                route.gate_state.is_dispatched()
+                                                            }) {
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        "DISPATCHED · NO OBSERVED ADAPTER OUTCOME",
+                                                                    )
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                            }
                                                             ui.label(
                                                                 egui::RichText::new(
                                                                     "EXECUTION DISABLED · approval is durable policy only; no MCP/tool adapter or recovered XML wire envelope is attached.",
