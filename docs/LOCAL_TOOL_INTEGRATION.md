@@ -550,7 +550,16 @@ Unrepresentable numeric exponents, possible precision loss, oversized
 unique-item arrays (more than 16 entries), or exhausted comparison budgets
 produce `Inconclusive`. A malformed or nonpositive `multipleOf` divisor
 also produces `Inconclusive`, even when hidden under an absent property.
-The `uniqueItems: false` constraint is an inert no-op. Unsupported dialects
+The `uniqueItems: false` constraint is an inert no-op. The bounded subset
+also supports `propertyNames`, which applies a schema to every object key,
+including keys already declared in `properties`. It supports draft 2020-12
+`prefixItems` tuple positions and applies `items` only to any remaining
+array elements; without `prefixItems`, `items` still applies to every
+element. A tuple schema need not match the array's length unless separately
+constrained by `minItems`/`maxItems`. Malformed or empty `prefixItems`
+arrays and unsupported nested constraints remain `Inconclusive` even
+when their instance branches are not visited. These additions reuse the
+existing bounded schema preflight and node-count budgets. Unsupported dialects
 and oversized/deep specimens are inconclusive. Only fixed, bounded
 diagnostic strings are emitted; arbitrary provider-supplied fields are
 not copied into diagnostics.

@@ -194,8 +194,17 @@ fn inspect_schema_subset(
                     return Err(InspectionIssue::Unsupported);
                 }
             }
-            "items" | "additionalProperties" => {
+            "items" | "additionalProperties" | "propertyNames" => {
                 inspect_schema_subset(value, depth + 1, budget)?;
+            }
+            "prefixItems" => {
+                let entries = value.as_array().ok_or(InspectionIssue::Unsupported)?;
+                if entries.is_empty() || entries.len() > MAX_INSPECTION_COLLECTION {
+                    return Err(InspectionIssue::Unsupported);
+                }
+                for entry in entries {
+                    inspect_schema_subset(entry, depth + 1, budget)?;
+                }
             }
             "minLength" | "maxLength" | "minItems" | "maxItems" | "minProperties"
             | "maxProperties" => {
@@ -617,10 +626,23 @@ fn inspect_value(
             if extra.is_some_and(|value| !value.is_boolean() && !value.is_object()) {
                 return Err(InspectionIssue::Unsupported);
             }
+            let names = spec.get("propertyNames");
+            if names.is_some_and(|value| !value.is_boolean() && !value.is_object()) {
+                return Err(InspectionIssue::Unsupported);
+            }
             let items = spec.get("items");
             if items.is_some_and(|value| !value.is_boolean() && !value.is_object()) {
                 return Err(InspectionIssue::Unsupported);
             }
+            let prefix_items = match spec.get("prefixItems") {
+                None => None,
+                Some(Value::Array(entries)) if !entries.is_empty()
+                    && entries.len() <= MAX_INSPECTION_COLLECTION =>
+                {
+                    Some(entries)
+                }
+                _ => return Err(InspectionIssue::Unsupported),
+            };
             if let Some(object) = value.as_object() {
                 if object.len() > MAX_INSPECTION_COLLECTION {
                     return Err(InspectionIssue::Unsupported);
@@ -634,6 +656,16 @@ fn inspect_value(
                     }
                 }
                 for (name, member) in object {
+                    // propertyNames independently validates every key,
+                    // including names also listed in properties.
+                    if let Some(names) = names {
+                        inspect_value(
+                            names,
+                            &Value::String(name.to_owned()),
+                            depth + 1,
+                            budget,
+                        )?;
+                    }
                     if let Some(child) = props.and_then(|props| props.get(name)) {
                         inspect_value(child, member, depth + 1, budget)?;
                     } else if let Some(extra) = extra {
@@ -649,8 +681,16 @@ fn inspect_value(
                 if spec.get("uniqueItems").is_some_and(|flag| flag == true) {
                     check_unique_items(array, depth + 1, budget)?;
                 }
+                if let Some(prefix_items) = prefix_items {
+                    for (member, schema) in array.iter().zip(prefix_items) {
+                        inspect_value(schema, member, depth + 1, budget)?;
+                    }
+                }
                 if let Some(items) = items {
-                    for member in array {
+                    // Draft 2020-12: items only applies *after* prefixItems.
+                    // Without prefixItems it applies to the entire array.
+                    let start = prefix_items.map_or(0, Vec::len);
+                    for member in array.iter().skip(start) {
                         inspect_value(items, member, depth + 1, budget)?;
                     }
                 }
@@ -1178,6 +1218,142 @@ mod tests {
                     &complete(json!({})),
                 )
                 .unwrap().verdict,
+                McpOutputVerdict::Inconclusive,
+            );
+        }
+    }
+
+    #[test]
+    fn property_names_validates_every_key_independently_of_properties() {
+        for (schema, value) in [
+            (json!({"propertyNames":{"minLength":2}}), json!({"ab":1,"cd":2})),
+            (json!({"propertyNames":{"enum":["first","second"]}}), json!({"first":true})),
+            (json!({"propertyNames":false}), json!({})),
+            (json!({"type":"array","propertyNames":false}), json!([1,2])),
+            (json!({"properties":{"x":{"type":"integer"}},"propertyNames":{"const":"x"}}), json!({"x":1})),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict,
+                McpOutputVerdict::PassedSupportedChecks,
+            );
+        }
+        for (schema, value) in [
+            (json!({"propertyNames":{"minLength":2}}), json!({"a":1})),
+            (json!({"propertyNames":false}), json!({"x":1})),
+            (json!({"properties":{"x":true},"propertyNames":{"const":"y"}}), json!({"x":1})),
+            (json!({"propertyNames":{"type":"integer"}}), json!({"123":1})),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict,
+                McpOutputVerdict::Mismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_items_apply_positionally_and_items_only_to_the_tail() {
+        let prefix = json!({
+            "type":"array",
+            "prefixItems":[{"type":"string"},{"type":"integer"}],
+            "items":{"type":"boolean"}
+        });
+        for value in [
+            json!([]),
+            json!(["start"]),
+            json!(["start",2]),
+            json!(["start",2,true,false]),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(prefix.clone())),
+                    &complete(value),
+                )
+                .unwrap()
+                .verdict,
+                McpOutputVerdict::PassedSupportedChecks,
+            );
+        }
+        for value in [
+            json!([2]),
+            json!(["start","wrong"]),
+            json!(["start",2,"bad tail"]),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(prefix.clone())),
+                    &complete(value),
+                )
+                .unwrap()
+                .verdict,
+                McpOutputVerdict::Mismatch,
+            );
+        }
+        // The tuple prefix alone does not constrain the remainder.
+        for (schema, value, expected) in [
+            (
+                json!({"prefixItems":[{"type":"integer"}]}),
+                json!([1,"unconstrained",{}]),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
+            (
+                json!({"prefixItems":[{"type":"integer"}],"items":false}),
+                json!([1,2]),
+                McpOutputVerdict::Mismatch,
+            ),
+            (
+                json!({"prefixItems":[{"type":"integer"}],"items":false}),
+                json!([1]),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
+            (
+                json!({"items":false}),
+                json!([1]),
+                McpOutputVerdict::Mismatch,
+            ),
+            (
+                json!({"prefixItems":[true,true],"minItems":2}),
+                json!([1]),
+                McpOutputVerdict::Mismatch,
+            ),
+            (
+                json!({"prefixItems":[true],"items":{"type":"boolean"},"uniqueItems":true}),
+                json!([1,1]),
+                McpOutputVerdict::Mismatch,
+            ),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict,
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_or_unsupported_unvisited_tuple_and_property_names_fail_closed() {
+        for schema in [
+            json!({"prefixItems":[]}),
+            json!({"prefixItems":{}}),
+            json!({"prefixItems":[{"type":"number","pattern":"unsupported"}]}),
+            json!({"prefixItems":[true,{"$ref":"#/definitions/no"}]}),
+            json!({"prefixItems": vec![true;129]}),
+            json!({"propertyNames":1}),
+            json!({"propertyNames":{"pattern":"^x$"}}),
+            json!({"properties":{"absent":{"propertyNames":{"$ref":"#/$defs/x"}}}}),
+            json!({"properties":{"absent":{"prefixItems":[{"oneOf":[true]}]}}}),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(schema)),
+                    &complete(json!({})),
+                )
+                .unwrap()
+                .verdict,
                 McpOutputVerdict::Inconclusive,
             );
         }
