@@ -30,12 +30,12 @@ pub fn find_match<'a>(
 // projection as the native conversation view, but scans journal history only
 // once rather than once per visible sidebar row, and caches unchanged frames.
 use super::{DisplayMessage, projected_display_messages};
-use eframe::egui;
 use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{
     DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope,
 };
+use eframe::egui;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
