@@ -68,7 +68,7 @@ The user already has an XML-oriented format used in the Braizen concept and in a
 
 Chatarium should **reuse or adapt that existing XML envelope where practical rather than inventing an unrelated tool-call language by default**.
 
-The exact schema is not yet imported into this repository, so its details remain an external design dependency until the existing format is recovered and versioned here.
+The original XML-like shim envelope has now been recovered from `sguzman/chatgpt-tool-shim` and ported as a bounded, strict, pure Rust compatibility layer in `crates/protocol/src/tool_envelope.rs`. See [LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). This is a legacy pseudo-MCP representation, not native MCP tool execution or inherent route permission.
 
 When formalized, the format should preserve at least:
 
