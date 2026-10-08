@@ -382,26 +382,21 @@ Only the separate explicit one-shot Run action can start a process. It is
 confined, not a terminal, shell, arbitrary host-command editor, or automatic
 model tool loop. The confined server has no host network or home access.
 
-### Next transport implementation
+### Transport scope and future extensions
 
-The first real transport should remain Linux-native and cost-free. Two
-standard options exist:
-
-- **stdio**, which requires an explicitly user-selected, already installed
-  local server executable and an audited subprocess-launch policy; no shell
-  string interpolation, inherited secret dumping, or implicit provider
-  execution;
-- **Streamable HTTP**, which requires user-configured endpoint and auth
-  material, correct 2026 `Mcp-*` headers and SSE handling. Do not infer
-  that a URL or provider name is trustworthy.
-
-The initial **Linux stdio** transport is available behind the strict
-isolated one-shot Run action; it is limited to root-owned canonical /usr/bin
-executables and requires bwrap/prlimit and working namespaces. The more
-permissive stdio policy and Streamable HTTP are **not** implemented.
-Each call requires immutable configuration, allowed operation, explicit
-activation, route Allow, a separate Run click, bounded I/O and timeout.
+The initial **Linux stdio** transport is available behind the strict isolated
+one-shot Run action. It is limited to root-owned canonical `/usr/bin`
+executables and requires `bwrap`, `prlimit`, and working namespaces.
+Each call requires immutable configuration, an allowed operation, explicit
+activation, route Allow, a separate Run click, bounded I/O, and timeout.
 Interrupted calls remain unresolved and are never automatically retried.
+
+User-writable provider binaries, arbitrary host subprocesses, provider
+network access, and **Streamable HTTP** are **not** implemented.
+Any future HTTP adapter requires separately authorized endpoint credentials,
+correct MCP 2026 headers and SSE handling, with no inferred trust from a URL
+or provider name. No shell command interpolation or inherited secret dumping
+is permitted for any future transport.
 
 ## External MCP one-shot workflow (strict Linux sandbox)
 
@@ -416,11 +411,13 @@ immutable arguments, and explicitly Allow its approval route. Expand the
 **Activation-aware MCP preview**, read the exact wire request and sandbox
 limits, and separately click **Run sandboxed MCP tool · one shot**. If
 prlimit/bwrap is missing or untrusted, preflight refuses **before** consuming
-the permit. Linux kernel namespace policy is tested only by the actual
-sandbox launch: it may fail **after** the permit has been durably consumed,
-in which case a checked Error observation is stored and the call cannot
-be automatically rerun. Upon acceptance the journal records dispatch
-**before** spawning, the UI shows the permanent dispatch, and a terminal
+the permit. A separate harmless real-process namespace probe additionally
+tests the host's current isolation capability before reservation. An
+unsupported host fails without consuming approval. The later provider launch
+may still fail despite a successful probe (for example, after the host policy
+changes); that result becomes a checked Error observation after dispatch
+and cannot be automatically rerun. Upon acceptance the journal records
+dispatch **before** spawning, the UI shows the permanent dispatch, and a terminal
 observation is separately committed. A crash or failed append remains
 unresolved, with no Retry control.
 
@@ -485,24 +482,21 @@ adapter-output text inside a Chatarium provenance envelope. It never becomes
 authored transcript history, instructions, or a privileged tool role. The
 feature does not automatically propose or execute any tool.
 
-## Next implementation boundary
+## Extension invariants
 
-A real adapter must establish the following in order:
+The current adapter already has durable provider identity, bounded legacy and
+native MCP framing, immutable call/route correlation, user-authorized one-shot
+dispatch, a bounded asynchronous Linux runner, exact terminal outcome auditing,
+and separately authorized context admission. These are prerequisites for any
+additional adapter, not features to reimplement as another execution pipeline.
 
-- an explicit configured provider transport with no implicit executable or
-  filesystem authority;
-- an adapter binding the recovered, bounded legacy envelope to durable
-  provider/call/route identities and correlated responses;
-- a persistence-worker dispatch path that revalidates current call/provider
-  addressability and the **explicit user-approved RouteGate** immediately
-  before consuming exactly one permit;
-- a bounded, asynchronous adapter invocation that records either an exact
-  result or an exact error, leaving interrupted/ambiguous outcomes unresolved
-  rather than retrying state-changing calls blindly;
-- preservation of the existing explicitly controlled, provenance-bearing
-  tool-result context-admission policy for every additional adapter.
+The next compatibility work should prioritize *actual host constraints*:
+independent EndeavourOS/Arch namespace tests, user-visible failures, and
+supported root-owned provider executables. Expanding to other executable
+locations or HTTP transports requires a new reviewed security policy rather
+than silently bypassing the existing restricted launcher.
 
-Neither route approval nor call recording is permission to execute before a
-trusted adapter is installed and explicitly activated. No arbitrary shell
-command execution, automatic model-proposed tool calls, or background tool
-execution should be introduced as a shortcut.
+Neither route approval nor call recording is permission to execute without a
+trusted, explicitly activated adapter and an individual Run action. Do not add
+arbitrary shell execution, automatic model-proposed tool dispatch, or hidden
+model-facing tool-result admission as a shortcut.
