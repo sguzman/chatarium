@@ -663,9 +663,12 @@ an **Inspect bounded result preview** expansion, limited to a UTF-8-safe
 4 KiB prefix with an explicit truncation label. This is only a preview;
 the complete exact observation remains in the historical audit. Inside this
 expansion, **Admit** and **Exclude** are separate deliberate, reversible,
-durably checked context decisions; no admission occurs on inspection. Results
-larger than the existing 65,536-byte context limit cannot be admitted, even
-as truncated previews. Approval, dispatch, and result-context admission
+durably checked context decisions; no admission occurs on inspection. Focused
+admission is disabled when the preview is truncated: the complete exact
+observation must be inspected through the historical tool audit before a
+separate decision. Exclusion of an already admitted result remains available
+without reviewing the body. Results larger than the existing 65,536-byte
+context limit cannot be admitted, even as truncated previews. Approval, dispatch, and result-context admission
 remain independent gates. This focus cannot launch, replay, or retry a tool.
 
 ## Focused call review (desktop)
