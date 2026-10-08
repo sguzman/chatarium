@@ -37,6 +37,11 @@ The current Rust and desktop implementation has these separate layers:
    are correlated to the immutable call, provider, source session, route
    binding, dispatch event, and observation event. Each call/route has at most
    one terminal outcome.
+6. **Separate context-admission decision.** A terminal tool outcome is
+   context-excluded by default. A locally owning conversation may explicitly
+   Admit or Exclude the exact `ToolCallId` outcome through a reversible durable
+   `ToolResultContextDecisionRecorded` event. This grants only inference
+   evidence visibility; it never grants tool execution authority.
 
 A tool call with no observed terminal result stays unresolved. A durable route
 dispatch does not imply actual execution or success, and a generic
@@ -52,7 +57,8 @@ Archive integrity validates all tool/provider/call/outcome journals.
 The new tool outcome audit is also the storage contract for future adapters.
 The builtin hello adapter produces a real deterministic result after its
 one-shot dispatch; all other providers remain inert. No tool result is
-silently entered into ordinary transcript, shared memory, or Context Composer.
+silently entered into ordinary transcript or shared memory. Tool context enters
+Context Composer only after a separate durable user Admit decision.
 
 ## Recovered legacy tool-envelope compatibility
 
@@ -130,6 +136,11 @@ In the desktop tool area:
    one-shot dispatch authority.
 5. Inspect the exact terminal `<tool_result>` in **Tool call audit**, with
    route, dispatch sequence, and outcome sequence.
+6. To use the result as later model evidence, explicitly click **Admit result**
+   on a terminal outcome belonging to the current conversation. The default is
+   excluded. **Exclude result** reverses admission without removing the
+   original result or its execution audit. Open **Exact next-request context**
+   to inspect the user-role provenance envelope before sending.
 
 Any failed pre-dispatch validation leaves the journal unchanged. After durable
 dispatch, a crash before outcome is **unresolved**, not automatically retried.
@@ -139,6 +150,24 @@ This is a deliberate local smoke test of the control plane, not a claim that
 the system hosts arbitrary MCP providers or offers an automatic agent tool
 loop. A separate adapter and execution policy is still required for every
 future nontrivial tool.
+
+## Tool-result context safety
+
+`crates/store/src/tool_result_context_audit.rs` independently replays
+completion, route/provider/session provenance, and local-conversation ownership
+at the original outcome event. A later conversation binding cannot retroactively
+claim another session's tool result.
+
+Exact tool result text is **not copied into admission events**. Reversible
+Admit/Exclude decisions reference the immutable call, route, outcome sequence,
+and owning conversation. Results larger than 64 KiB remain inspectable but
+cannot enter inference context; this boundary rejects rather than truncates.
+
+The active admitted set is frozen when the user clicks Send. Context Composer
+serializes it at user trust level as untrusted evidence with the exact
+adapter-output text inside a Chatarium provenance envelope. It never becomes
+authored transcript history, instructions, or a privileged tool role. The
+feature does not automatically propose or execute any tool.
 
 ## Next implementation boundary
 
@@ -154,8 +183,8 @@ A real adapter must establish the following in order:
 - a bounded, asynchronous adapter invocation that records either an exact
   result or an exact error, leaving interrupted/ambiguous outcomes unresolved
   rather than retrying state-changing calls blindly;
-- a separately user-controlled rule for admitting tool results to inference
-  context, at non-privileged trust level with source and call provenance.
+- preservation of the existing explicitly controlled, provenance-bearing
+  tool-result context-admission policy for every additional adapter.
 
 Neither route approval nor call recording is permission to execute before a
 trusted adapter is installed and explicitly activated. No arbitrary shell
