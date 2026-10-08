@@ -376,8 +376,11 @@ Record the tool call from a locally addressable conversation, review its
 immutable arguments, and explicitly Allow its approval route. Expand the
 **Activation-aware MCP preview**, read the exact wire request and sandbox
 limits, and separately click **Run sandboxed MCP tool · one shot**. If
-prlimit/bwrap or Linux namespace confinement is unavailable, preflight refuses
-before consuming the permit. Upon acceptance the journal records dispatch
+prlimit/bwrap is missing or untrusted, preflight refuses **before** consuming
+the permit. Linux kernel namespace policy is tested only by the actual
+sandbox launch: it may fail **after** the permit has been durably consumed,
+in which case a checked Error observation is stored and the call cannot
+be automatically rerun. Upon acceptance the journal records dispatch
 **before** spawning, the UI shows the permanent dispatch, and a terminal
 observation is separately committed. A crash or failed append remains
 unresolved, with no Retry control.
