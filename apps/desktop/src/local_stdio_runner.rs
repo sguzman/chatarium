@@ -320,7 +320,6 @@ fn run_one_shot(
             return Err("sandbox MCP call exceeded its 10-second wall-time limit".to_owned());
         }
         let status = status.map_err(|e| format!("sandbox wait failed: {e}"))?;
-        wrote.map_err(|e| format!("sandbox request write failed: {e}"))?;
         if output.len() > MAX_MCP_FRAME_BYTES || stderr.len() > MAX_STDERR_BYTES as usize {
             return Err("sandbox MCP stdout/stderr exceeded byte budget".to_owned());
         }
@@ -330,6 +329,9 @@ fn run_one_shot(
                 "isolated MCP process exited unsuccessfully: {status}; bounded stderr: {diagnostic}"
             ));
         }
+        // A child may exit before reading stdin. Preserve its bounded
+        // nonzero-status stderr instead of masking it with BrokenPipe.
+        wrote.map_err(|e| format!("sandbox request write failed: {e}"))?;
         let text = std::str::from_utf8(&output)
             .map_err(|_| "sandbox MCP stdout was not UTF-8".to_owned())?;
         let response = decode_stdio_response(text, request_id)
@@ -460,6 +462,30 @@ mod tests {
             assert!(result.is_ok());
         } else {
             assert!(result.is_err());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_sandbox_denies_host_etc_and_home_paths() {
+        if std::env::var_os("CHATARIUM_TEST_LINUX_MCP_SANDBOX").is_none() {
+            return;
+        }
+        use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
+        let frame = encode_stdio_frame(
+            &tools_call_request(88, "fixture.nohost", &serde_json::json!({})).unwrap(),
+        ).unwrap();
+        for forbidden in ["/etc/passwd", "/home"] {
+            let error = run_one_shot(
+                "/usr/bin/stat",
+                &[forbidden.to_owned()],
+                &frame,
+                88,
+            ).unwrap_err();
+            assert!(
+                error.contains("No such file or directory"),
+                "forbidden host path {forbidden} produced unexpected sandbox error: {error}"
+            );
         }
     }
 
