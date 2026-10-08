@@ -506,8 +506,10 @@ system-wide namespace or LSM security merely to make Chatarium pass**.
 A passing check only proves the isolation fixture could run at that moment:
 it does not attest a provider executable, grant execution authority, or
 guarantee that a later launch will succeed. Actual EndeavourOS/Arch host
-validation remains an operator-side milestone and cannot be inferred from
-GitHub's Ubuntu CI.
+validation must use Chatarium-owned automated QA on that host; it cannot be
+inferred from GitHub's Ubuntu CI. Routine host-regression work is not a
+manual operator task, and the principal's personal browser environment
+remains outside this diagnostic.
 
 ## MCP tools/call result-shape validation
 
