@@ -255,6 +255,24 @@ pub fn replay_tool_result_context_audit(
     Ok(result)
 }
 
+/// Resolve the local conversation that owned the source session *when* a
+/// validated terminal outcome was observed. Returns None for standalone
+/// sessions not attached to a local chat container at that time.
+pub fn tool_outcome_owning_conversation(
+    events: &[EventEnvelope],
+    outcome: &ToolCallOutcomeRecord,
+) -> Result<Option<LocalConversationId>, String> {
+    let position = events.iter().position(|item| {
+        item.sequence == outcome.observed_sequence
+            && item.kind == EventKind::ToolCallOutcomeObserved
+    }).ok_or_else(|| format!(
+        "tool call {} terminal outcome sequence {} is absent",
+        outcome.call_id.get(),
+        outcome.observed_sequence
+    ))?;
+    conversation_for_outcome_session(&events[..=position], outcome.source_session_id)
+}
+
 /// Exact, explicitly admitted outcomes for one local conversation only.
 pub fn replay_admitted_tool_results(
     events: &[EventEnvelope],
