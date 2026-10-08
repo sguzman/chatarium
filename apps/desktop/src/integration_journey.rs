@@ -48,7 +48,11 @@ const CALL: ToolCallId = ToolCallId::new(5);
 const ROUTE: RouteId = RouteId::new(7);
 const RESULT: &str = "QA_TOOL_EVIDENCE_UNIQUE exact result";
 
-fn author(store: &mut impl EventStore, conversation: LocalConversationId, text: &str) -> LocalTurnId {
+fn author(
+    store: &mut impl EventStore,
+    conversation: LocalConversationId,
+    text: &str,
+) -> LocalTurnId {
     let turn = LocalTurnId::new();
     commit_user_message(
         store,
@@ -61,11 +65,17 @@ fn author(store: &mut impl EventStore, conversation: LocalConversationId, text: 
 fn prepared_context(
     store: &impl EventStore,
     owner: LocalConversationId,
-) -> (context_composer::ContextPlan, Vec<context_composer::ContextSource>) {
+) -> (
+    context_composer::ContextPlan,
+    Vec<context_composer::ContextSource>,
+) {
     let mut transcript =
         context_transcript(&projected_local_display_messages(store.events(), owner));
     let tools = admitted_tool_result_context_messages(store.events(), owner).unwrap();
-    let frozen = tools.iter().map(|item| item.source.clone()).collect::<Vec<_>>();
+    let frozen = tools
+        .iter()
+        .map(|item| item.source.clone())
+        .collect::<Vec<_>>();
     transcript.extend(tools);
     transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
     let plan = context_composer::ContextPlan::compose(
@@ -102,7 +112,10 @@ fn dispatch(
 fn observe_reply(store: &mut impl EventStore, turn: LocalTurnId) {
     for (kind, text) in [
         (EventKind::RemoteAcceptanceObserved, None),
-        (EventKind::AssistantCompletionObserved, Some("synthetic assistant response")),
+        (
+            EventKind::AssistantCompletionObserved,
+            Some("synthetic assistant response"),
+        ),
     ] {
         store
             .append_scoped(
@@ -125,11 +138,8 @@ fn tool_route(store: &mut impl EventStore, owner: LocalConversationId) -> RouteR
         &ToolProviderName::new("qa-fixture").unwrap(),
     )
     .unwrap();
-    record_tool_provider_endpoint_bound(
-        store,
-        ToolProviderEndpointBinding::new(PROVIDER, DEST),
-    )
-    .unwrap();
+    record_tool_provider_endpoint_bound(store, ToolProviderEndpointBinding::new(PROVIDER, DEST))
+        .unwrap();
     record_tool_call(
         store,
         CALL,
@@ -201,7 +211,11 @@ fn integration_journey_durable_tool_admission_followup_revocation_and_restart() 
         )
         .expect("approved tool outcome is checked before persistence");
         assert_eq!(outcome.kind, EventKind::ToolCallOutcomeObserved);
-        assert!(replay_admitted_tool_results(store.events(), owner).unwrap().is_empty());
+        assert!(
+            replay_admitted_tool_results(store.events(), owner)
+                .unwrap()
+                .is_empty()
+        );
 
         let count_before_foreign = store.events().len();
         assert!(
@@ -227,13 +241,7 @@ fn integration_journey_durable_tool_admission_followup_revocation_and_restart() 
         assert_eq!(second_plan.tool_result_count(), 1);
         assert_eq!(second_frozen.len(), 1);
         assert!(second_plan.input_json().to_string().contains(RESULT));
-        second_dispatch = dispatch(
-            &mut store,
-            owner,
-            second_turn,
-            &second_plan,
-            &second_frozen,
-        );
+        second_dispatch = dispatch(&mut store, owner, second_turn, &second_plan, &second_frozen);
         observe_reply(&mut store, second_turn);
 
         append_tool_result_context_decision_checked(
@@ -272,8 +280,17 @@ fn integration_journey_durable_tool_admission_followup_revocation_and_restart() 
         let reopened = JsonlEventStore::open(&path).expect("replay after process restart");
         assert_eq!(reopened.events().len(), expected_events);
         assert_eq!(derive_authored_turns(reopened.events()).unwrap().len(), 3);
-        assert_eq!(replay_tool_call_outcome_audit(reopened.events()).unwrap().len(), 1);
-        assert!(replay_admitted_tool_results(reopened.events(), owner).unwrap().is_empty());
+        assert_eq!(
+            replay_tool_call_outcome_audit(reopened.events())
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            replay_admitted_tool_results(reopened.events(), owner)
+                .unwrap()
+                .is_empty()
+        );
         let history = mcp_dispatch_manifest::dispatch_history(reopened.events(), owner).unwrap();
         assert_eq!(history[1].sequence, second_dispatch);
         assert_eq!(history[1].included_total, 1);
@@ -330,14 +347,8 @@ fn integration_journey_send_click_snapshot_survives_later_revoke() {
     let owner = LocalConversationId::new();
     let route = tool_route(&mut store, owner);
     approve(&mut store, route);
-    append_tool_call_outcome_checked(
-        &mut store,
-        CALL,
-        ROUTE,
-        ToolCallOutcomeKind::Result,
-        RESULT,
-    )
-    .unwrap();
+    append_tool_call_outcome_checked(&mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, RESULT)
+        .unwrap();
     append_tool_result_context_decision_checked(
         &mut store,
         CALL,

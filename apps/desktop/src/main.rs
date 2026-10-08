@@ -3,6 +3,8 @@ mod behavior_profile;
 mod capability_probes;
 mod context_composer;
 mod diagnostics;
+#[cfg(test)]
+mod integration_journey;
 mod local_archive_search;
 mod local_conversations;
 mod local_inference_contract;
@@ -11,8 +13,6 @@ mod local_stdio_host_diagnostics;
 mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
-#[cfg(test)]
-mod integration_journey;
 #[cfg(test)]
 mod mcp_async_tests;
 mod mcp_call_review;
