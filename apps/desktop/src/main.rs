@@ -207,7 +207,9 @@ use chatarium_store::tool_result_context_audit::{
     append_tool_result_context_decision_checked, replay_admitted_tool_results,
     replay_tool_result_context_audit, tool_outcome_owning_conversation,
 };
-use chatarium_store::tool_stdio_dispatch::replay_unresolved_external_tool_dispatches;
+use chatarium_store::tool_stdio_dispatch::{
+    replay_unresolved_external_tool_dispatches, reserve_activated_stdio_tool_dispatch,
+};
 use chatarium_store::tool_stdio_preflight::preview_activated_stdio_tool_invocation;
 use chatarium_store::tool_transport_config_audit::{
     append_tool_transport_config_checked, replay_tool_transport_config_audit,
@@ -321,6 +323,9 @@ enum PersistCommand {
     },
     DispatchBuiltinHello {
         route_id: RouteId,
+    },
+    ExecuteApprovedStdioTool {
+        call_id: ToolCallId,
     },
     DecideToolResultContext {
         call_id: ToolCallId,
@@ -596,6 +601,14 @@ enum PersistNotice {
     BuiltinHelloDispatched {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    StdioToolDispatchReserved {
+        call_id: ToolCallId,
+        event: EventEnvelope,
+    },
+    StdioToolDispatchFinished {
+        call_id: ToolCallId,
+        event: EventEnvelope,
     },
     ToolResultContextDecisionUpdated {
         call_id: ToolCallId,
@@ -3345,6 +3358,21 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
+                PersistNotice::StdioToolDispatchReserved { call_id, event } => {
+                    self.events.push(event);
+                    self.status = format!(
+                        "external MCP call {} durably dispatched; no retries…",
+                        call_id.get()
+                    );
+                }
+                PersistNotice::StdioToolDispatchFinished { call_id, event } => {
+                    self.events.push(event);
+                    self.tool_command_pending = false;
+                    self.status = format!(
+                        "external MCP call {} recorded terminal observation",
+                        call_id.get()
+                    );
+                }
                 PersistNotice::ToolResultContextDecisionUpdated { call_id, event } => {
                     self.events.push(event);
                     self.tool_command_pending = false;
@@ -4619,6 +4647,28 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue tool call proposal: {error}");
+            }
+        }
+    }
+
+    fn execute_approved_stdio_tool(&mut self, call_id: ToolCallId) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot execute external tool: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::ExecuteApprovedStdioTool { call_id }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "checking sandbox and reserving one-shot tool call {}…",
+                    call_id.get()
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue external tool execution: {error}");
             }
         }
     }
@@ -16769,6 +16819,57 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::ExecuteApprovedStdioTool { call_id } => {
+                // Refuse unavailable confinement BEFORE consuming an irreversible route.
+                let prepared = preview_activated_stdio_tool_invocation(store.events(), call_id)
+                    .and_then(|preview| {
+                        local_stdio_runner::preflight_confined_stdio_launch(
+                            preview.invocation.executable.as_str(),
+                            &preview.invocation.argv,
+                        )
+                    })
+                    .and_then(|()| reserve_activated_stdio_tool_dispatch(&mut store, call_id));
+                match prepared {
+                    Ok(reservation) => {
+                        // Durable dispatch precedes all process effects.
+                        if let Some(event) = store.events().last().cloned() {
+                            let _ = notices.send(PersistNotice::StdioToolDispatchReserved {
+                                call_id,
+                                event,
+                            });
+                        }
+                        match local_stdio_runner::execute_reserved_stdio_tool_call(
+                            &mut store, reservation,
+                        ) {
+                            Ok(event) => {
+                                let _ = notices.send(PersistNotice::StdioToolDispatchFinished {
+                                    call_id,
+                                    event,
+                                });
+                            }
+                            Err(error) => {
+                                // The consumed route remains UNRESOLVED; never retry.
+                                let _ = notices.send(PersistNotice::Failed {
+                                    operation: "tool isolated stdio execution (unresolved)",
+                                    revision: None,
+                                    request_id: None,
+                                    turn_id: None,
+                                    error,
+                                });
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool isolated stdio preflight",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::DispatchBuiltinHello { route_id } => {
                 match append_builtin_hello_checked(&mut store, route_id) {
                     Ok(appended_events) => {
@@ -20328,6 +20429,8 @@ mod tests {
             PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
             PersistNotice::ToolCallRoutePolicyUpdated { .. } => "tool_call_route_policy_updated",
             PersistNotice::BuiltinHelloDispatched { .. } => "builtin_hello_dispatched",
+            PersistNotice::StdioToolDispatchReserved { .. } => "stdio_tool_dispatch_reserved",
+            PersistNotice::StdioToolDispatchFinished { .. } => "stdio_tool_dispatch_finished",
             PersistNotice::ToolResultContextDecisionUpdated { .. } => {
                 "tool_result_context_decision_updated"
             }
