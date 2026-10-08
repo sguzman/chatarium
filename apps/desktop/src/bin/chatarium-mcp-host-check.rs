@@ -4,6 +4,10 @@
 #[path = "../local_stdio_runner.rs"]
 #[allow(dead_code)]
 mod local_stdio_runner;
+#[path = "../local_stdio_host_diagnostics.rs"]
+mod local_stdio_host_diagnostics;
+
+use local_stdio_host_diagnostics::failure_category;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -19,28 +23,6 @@ fn parse_mode(args: &[String]) -> Result<Mode, &'static str> {
         [flag] if flag == "--json" => Ok(Mode::Json),
         [flag] if flag == "--help" || flag == "-h" => Ok(Mode::Help),
         _ => Err("unknown or conflicting arguments"),
-    }
-}
-
-// Only our own control-flow stages are classified. Do not infer a specific
-// kernel, distribution, or AppArmor fault from a provider/launcher string.
-fn failure_category(error: &str) -> &'static str {
-    if error.starts_with("Linux MCP confinement is unsupported") {
-        "unsupported_platform"
-    } else if error.contains("failed metadata inspection")
-        || error.starts_with("cannot stat executable")
-        || error.starts_with("cannot inspect ")
-        || error.starts_with("restricted runner refuses")
-    {
-        "launcher_trust_check_failed"
-    } else if error.starts_with("isolated host-readiness probe could not start") {
-        "probe_spawn_failed"
-    } else if error.starts_with("isolated host-readiness probe timed out") {
-        "probe_timed_out"
-    } else if error.starts_with("isolated host-readiness probe exited") {
-        "sandbox_probe_rejected"
-    } else {
-        "probe_failed"
     }
 }
 
