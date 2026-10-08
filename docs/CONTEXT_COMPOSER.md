@@ -173,6 +173,33 @@ conversation, the included/eligible distinction, bounded evidence identities,
 and whether a later remote-acceptance observation exists. Legacy attempts
 without a manifest are not retrospectively invented.
 
+### Reverse MCP result provenance
+
+Under **Context & inference controls → Recent outgoing context snapshots →
+Reverse MCP provenance**, enter an immutable numeric tool-call ID or choose
+one of the recent IDs found in manifested dispatches. Chatarium projects the
+recorded requests in the *selected local conversation* and distinguishes
+three materially different cases: **INCLUDED** in the composed input,
+**admitted but OMITTED**, and **UNKNOWN because the 32-result manifest detail
+list was truncated**. Complete manifests that do not name the call are
+counted separately as **not eligible at that request snapshot**; the viewer
+does not flood the list with ordinary negative matches.
+
+The lookup validates that a call retains its exact route, provider, source
+session, terminal outcome sequence and outcome kind across requests. A
+later explicit readmission may legitimately change the admission decision
+sequence without changing that immutable terminal result. Contradictory
+identity or mixed-conversation input fails closed.
+
+The result view is paginated, newest-first, and every positive or
+truncated-unknown request links its dispatch sequence and transport
+observation status. **Copy this lookup as JSON** exports a versioned,
+content-free report with counts, exact matches and unresolved truncated
+coverage. Only manifested requests are covered: requests predating the
+manifest feature remain unknown rather than inferred. An INCLUDED
+disposition is evidence about the locally composed request, not proof of
+delivery, model attention or a successful remote answer.
+
 ### Correlated transport history and navigation
 
 The manifest history inspector replays journal events **once in chronological

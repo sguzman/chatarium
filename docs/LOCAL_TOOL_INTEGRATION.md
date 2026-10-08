@@ -725,6 +725,26 @@ frozen per attempt, unlike the live admitted-evidence inventory. Old
 dispatches without this format remain unmanifested; no speculative
 retrospective reconstruction is attempted.
 
+### Reverse lookup by MCP result
+
+The **Reverse MCP provenance** inspector beside outgoing-request history
+accepts a tool call ID (or a recent ID shortcut) and answers which
+historical manifested dispatches actually **included** that exact terminal
+result in the composed model input. It separately reports explicitly
+admitted-but-omitted requests, requests where a complete manifest shows the
+result was not eligible, and **unknown** requests where the identity was
+outside the manifest's bounded 32-row detail list. Missing entries in a
+truncated manifest are never treated as negative evidence.
+
+The projection checks immutable call/provider/route/session/outcome identity
+across requests and excludes other conversations. A different admission
+sequence for a later readmission is permitted. Mismatched identity blocks
+the read-only lookup. The expandable matching history is paginated and
+can be copied as a versioned JSON evidence report, without raw tool or
+message text. This is a reconstruction of **manifested local prepared
+requests only**; pre-feature attempts, remote receipt and actual model
+attention cannot be established by this lookup.
+
 ### Transport correlation and complete history
 
 The outgoing-context inspector now uses a single journal pass rather than

@@ -642,6 +642,325 @@ pub fn portable_audit_json(item: &RecordedDispatchManifest) -> Value {
     })
 }
 
+/// Exact per-request inference evidence for a single historical tool result.
+/// When a manifest's detail list is truncated, absence is UNKNOWN, not proof
+/// that a result was omitted from the composed input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolProvenanceDisposition {
+    Included,
+    AdmittedButOmitted,
+    UnknownBecauseManifestTruncated,
+}
+
+impl ToolProvenanceDisposition {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Included => "INCLUDED in composed request",
+            Self::AdmittedButOmitted => "ADMITTED but OMITTED from request",
+            Self::UnknownBecauseManifestTruncated => "UNKNOWN · manifest details truncated",
+        }
+    }
+}
+
+pub struct ToolProvenanceEntry<'a> {
+    pub dispatch: &'a RecordedDispatchManifest,
+    pub disposition: ToolProvenanceDisposition,
+}
+
+pub struct ToolProvenanceReport<'a> {
+    pub call_id: u64,
+    pub included: usize,
+    pub admitted_but_omitted: usize,
+    pub uncertain_truncated: usize,
+    pub not_eligible_in_complete_manifests: usize,
+    pub identity: Option<&'a ListedToolEvidence>,
+    /// Newest dispatches first; only direct evidence or uncertain truncated
+    /// coverage is listed. Full negative coverage is counted, not guessed.
+    pub entries: Vec<ToolProvenanceEntry<'a>>,
+}
+
+/// Pure reverse lookup across the historically replayed conversation, without
+/// consulting today's live admission state. The same immutable call must
+/// retain provider, route, source session and terminal outcome identity.
+pub fn reverse_tool_provenance(
+    history: &[RecordedDispatchManifest],
+    call_id: u64,
+) -> Result<ToolProvenanceReport<'_>, String> {
+    if call_id == 0 {
+        return Err("tool call ID must be a nonzero integer".to_owned());
+    }
+    let mut included = 0;
+    let mut admitted_but_omitted = 0;
+    let mut uncertain_truncated = 0;
+    let mut not_eligible_in_complete_manifests = 0;
+    let mut identity: Option<&ListedToolEvidence> = None;
+    let mut entries = Vec::new();
+    let mut owner: Option<&str> = None;
+    for dispatch in history {
+        if let Some(existing) = owner {
+            if existing != dispatch.conversation_id {
+                return Err("reverse lookup input mixes local conversations".to_owned());
+            }
+        } else {
+            owner = Some(dispatch.conversation_id.as_str());
+        }
+        if let Some(evidence) = dispatch.listed.iter().find(|row| row.call_id == call_id) {
+            if let Some(existing) = identity {
+                if existing.route_id != evidence.route_id
+                    || existing.provider_id != evidence.provider_id
+                    || existing.source_session_id != evidence.source_session_id
+                    || existing.outcome_sequence != evidence.outcome_sequence
+                    || existing.outcome_kind != evidence.outcome_kind
+                {
+                    return Err(format!(
+                        "tool call {call_id} has contradictory immutable identity across dispatches"
+                    ));
+                }
+            } else {
+                identity = Some(evidence);
+            }
+            let disposition = if evidence.included {
+                included += 1;
+                ToolProvenanceDisposition::Included
+            } else {
+                admitted_but_omitted += 1;
+                ToolProvenanceDisposition::AdmittedButOmitted
+            };
+            entries.push(ToolProvenanceEntry {
+                dispatch,
+                disposition,
+            });
+        } else if dispatch.truncated {
+            uncertain_truncated += 1;
+            entries.push(ToolProvenanceEntry {
+                dispatch,
+                disposition: ToolProvenanceDisposition::UnknownBecauseManifestTruncated,
+            });
+        } else {
+            not_eligible_in_complete_manifests += 1;
+        }
+    }
+    Ok(ToolProvenanceReport {
+        call_id,
+        included,
+        admitted_but_omitted,
+        uncertain_truncated,
+        not_eligible_in_complete_manifests,
+        identity,
+        entries,
+    })
+}
+
+/// A portable and content-free reverse provenance report. Entries include
+/// every positive or uncertain match; nothing from prompts or tool bodies.
+/// Missing pre-manifest history cannot be retroactively reconstructed.
+pub fn reverse_tool_provenance_json(report: &ToolProvenanceReport<'_>) -> Value {
+    json!({
+        "schema": "chatarium-tool-reverse-provenance-export",
+        "version": 1,
+        "call_id": report.call_id,
+        "coverage": "manifested dispatches for the selected conversation only",
+        "counts": {
+            "included": report.included,
+            "admitted_but_omitted": report.admitted_but_omitted,
+            "unknown_due_to_truncation": report.uncertain_truncated,
+            "not_eligible_in_complete_manifests": report.not_eligible_in_complete_manifests,
+        },
+        "tool_identity": report.identity.map(|row| json!({
+            "route_id": row.route_id,
+            "provider_id": row.provider_id,
+            "source_session_id": row.source_session_id,
+            "outcome_sequence": row.outcome_sequence,
+            "outcome_kind": row.outcome_kind,
+        })),
+        "dispatches": report.entries.iter().map(|entry| {
+            json!({
+                "conversation_id": entry.dispatch.conversation_id,
+                "turn_id": entry.dispatch.turn_id,
+                "request_class": entry.dispatch.request_class,
+                "dispatch_sequence": entry.dispatch.sequence,
+                "disposition": match entry.disposition {
+                    ToolProvenanceDisposition::Included => "included",
+                    ToolProvenanceDisposition::AdmittedButOmitted => "admitted_but_omitted",
+                    ToolProvenanceDisposition::UnknownBecauseManifestTruncated => "unknown_truncated",
+                },
+                "remote_outcome_observation": entry.dispatch.transport.status(),
+            })
+        }).collect::<Vec<_>>(),
+        "limits": {
+            "legacy_unmanifested_requests_are_unknown": true,
+            "manifest_detail_rows_per_request": MAX_MANIFEST_TOOL_ROWS,
+            "remote_model_attention_cannot_be_inferred": true,
+        },
+    })
+}
+
+const REVERSE_PROVENANCE_PAGE_SIZE: usize = 12;
+
+fn render_reverse_tool_provenance(
+    ui: &mut egui::Ui,
+    rows: &[RecordedDispatchManifest],
+    conversation_id: LocalConversationId,
+) {
+    ui.collapsing("Reverse MCP provenance · find requests using a result", |ui| {
+        ui.label("Look up one immutable MCP call ID across this conversation's manifested requests. 'Included' describes the composed input, not proof of remote receipt or model attention.");
+        let input_id = ui
+            .id()
+            .with(("reverse-mcp-call-query", conversation_id.to_string()));
+        let mut query = ui
+            .ctx()
+            .data_mut(|data| data.get_temp::<String>(input_id).unwrap_or_default());
+        ui.horizontal(|ui| {
+            ui.label("Call ID");
+            ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .desired_width(125.0)
+                    .hint_text("e.g. 42"),
+            );
+            if ui.button("Clear").clicked() {
+                query.clear();
+            }
+        });
+
+        // Shortcuts are derived only from the already verified historical
+        // manifest rows. Manual entry still reaches any older call ID.
+        let mut suggested = BTreeSet::new();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Recent recorded calls:");
+            for dispatch in rows.iter() {
+                for evidence in &dispatch.listed {
+                    if suggested.insert(evidence.call_id) {
+                        if ui
+                            .selectable_label(
+                                query == evidence.call_id.to_string(),
+                                format!("#{}", evidence.call_id),
+                            )
+                            .clicked()
+                        {
+                            query = evidence.call_id.to_string();
+                        }
+                        if suggested.len() >= 8 {
+                            break;
+                        }
+                    }
+                }
+                if suggested.len() >= 8 {
+                    break;
+                }
+            }
+            if suggested.is_empty() {
+                ui.label("none in recorded manifest details");
+            }
+        });
+        ui.ctx().data_mut(|data| data.insert_temp(input_id, query.clone()));
+        if query.trim().is_empty() {
+            ui.label("Select a recorded call or enter its numeric ID to inspect historical use.");
+            return;
+        }
+        let call_id = match query.trim().parse::<u64>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                ui.label("Enter a nonzero decimal tool call ID.");
+                return;
+            }
+        };
+        let report = match reverse_tool_provenance(rows, call_id) {
+            Ok(report) => report,
+            Err(error) => {
+                ui.label(format!("Reverse provenance blocked: {error}"));
+                return;
+            }
+        };
+        ui.label(format!(
+            "Manifested attempts · {} INCLUDED · {} admitted but OMITTED · {} UNKNOWN (truncated) · {} NOT ELIGIBLE (complete manifests)",
+            report.included,
+            report.admitted_but_omitted,
+            report.uncertain_truncated,
+            report.not_eligible_in_complete_manifests,
+        ));
+        if let Some(identity) = report.identity {
+            ui.label(format!(
+                "Terminal outcome #{} · provider {} · session {} · route {} · {}",
+                identity.outcome_sequence,
+                identity.provider_id,
+                identity.source_session_id,
+                identity.route_id,
+                identity.outcome_kind,
+            ));
+        } else {
+            ui.label("Call identity not present in retained manifest details. This is not proof that the result was never used.");
+        }
+        ui.label("Older requests predating context manifests cannot be reconstructed. A truncated manifest hides the disposition of unlisted calls.");
+        if ui.button("Copy this lookup as JSON").clicked() {
+            let export = reverse_tool_provenance_json(&report);
+            if let Ok(json) = serde_json::to_string_pretty(&export) {
+                ui.ctx().copy_text(json);
+            }
+        }
+        if report.entries.is_empty() {
+            ui.label("No positive or truncated-unknown matches in manifested history.");
+            return;
+        }
+        let page_id = ui
+            .id()
+            .with(("reverse-mcp-call-page", conversation_id.to_string(), call_id));
+        let mut page = ui
+            .ctx()
+            .data_mut(|data| data.get_temp::<usize>(page_id).unwrap_or(0));
+        let total_pages = report.entries.len().div_ceil(REVERSE_PROVENANCE_PAGE_SIZE);
+        page = page.min(total_pages - 1);
+        ui.horizontal(|ui| {
+            if ui.add_enabled(page > 0, egui::Button::new("Newer")).clicked() {
+                page -= 1;
+            }
+            ui.label(format!(
+                "Page {} / {} · {} direct or uncertain attempts",
+                page + 1,
+                total_pages,
+                report.entries.len(),
+            ));
+            if ui
+                .add_enabled(page + 1 < total_pages, egui::Button::new("Older"))
+                .clicked()
+            {
+                page += 1;
+            }
+        });
+        ui.ctx().data_mut(|data| data.insert_temp(page_id, page));
+        for entry in report
+            .entries
+            .iter()
+            .skip(page * REVERSE_PROVENANCE_PAGE_SIZE)
+            .take(REVERSE_PROVENANCE_PAGE_SIZE)
+        {
+            ui.collapsing(
+                format!(
+                    "Dispatch #{} · {} · {}",
+                    entry.dispatch.sequence,
+                    entry.dispatch.request_class,
+                    entry.disposition.label(),
+                ),
+                |ui| {
+                    ui.label(format!("Local turn {}", entry.dispatch.turn_id));
+                    ui.label(format!(
+                        "Transport status: {}",
+                        entry.dispatch.transport.status()
+                    ));
+                    if entry.disposition == ToolProvenanceDisposition::UnknownBecauseManifestTruncated {
+                        ui.label("No per-call determination is possible from this truncated manifest. Check other evidence before drawing conclusions.");
+                    }
+                    if ui.button("Copy request audit as JSON").clicked() {
+                        let export = portable_audit_json(entry.dispatch);
+                        if let Ok(json) = serde_json::to_string_pretty(&export) {
+                            ui.ctx().copy_text(json);
+                        }
+                    }
+                },
+            );
+        }
+    });
+}
+
 /// The journal is append-only while Chatarium is running. A transient UI
 /// cache may reuse this validated projection only when its owner and
 /// journal's observed high-water are unchanged; it never survives restart.
@@ -726,6 +1045,7 @@ pub fn render_dispatches(
         }
         Ok(rows) => {
             ui.label("Journaled request-preparation evidence, not proof of remote receipt or model attention. Transport outcomes are correlated by exact turn, request ID and durable sequence.");
+            render_reverse_tool_provenance(ui, rows, conversation_id);
             let page_id = ui
                 .id()
                 .with(("mcp-dispatch-history-page", conversation_id.to_string()));
@@ -882,6 +1202,165 @@ mod tests {
                 outcome_kind.as_str(),
             )],
         )
+    }
+
+    fn manifest_for_reverse_test(
+        sequence: u64,
+        owner: LocalConversationId,
+        mut listed: Vec<ListedToolEvidence>,
+        truncated: bool,
+    ) -> RecordedDispatchManifest {
+        if truncated {
+            // Real truncated manifests retain exactly 32 listed identities.
+            // The queried call can be absent while eligible, included or
+            // omitted among the unlisted frozen admissions.
+            let mut next = 1000;
+            while listed.len() < MAX_MANIFEST_TOOL_ROWS {
+                listed.push(reverse_evidence(next, next + 5000, false));
+                next += 1;
+            }
+        }
+        RecordedDispatchManifest {
+            sequence,
+            turn_id: format!("turn-{sequence}"),
+            request_class: "authored".to_owned(),
+            conversation_id: owner.to_string(),
+            eligible_total: listed.len() + usize::from(truncated) * 10,
+            included_total: listed.iter().filter(|evidence| evidence.included).count(),
+            omitted_total: listed.iter().filter(|evidence| !evidence.included).count()
+                + usize::from(truncated) * 10,
+            included_items: 1,
+            omitted_items: 0,
+            included_bytes: 10,
+            listed,
+            truncated,
+            transport: DispatchTransportTrace::default(),
+        }
+    }
+
+    fn reverse_evidence(call_id: u64, admitted_sequence: u64, included: bool) -> ListedToolEvidence {
+        ListedToolEvidence {
+            call_id,
+            route_id: call_id + 100,
+            provider_id: 9,
+            source_session_id: 4,
+            outcome_sequence: call_id + 200,
+            admitted_sequence,
+            outcome_kind: "result".to_owned(),
+            included,
+        }
+    }
+
+    #[test]
+    fn reverse_lookup_distinguishes_included_omitted_and_complete_negative() {
+        let owner = LocalConversationId::new();
+        let history = [
+            manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false),
+            manifest_for_reverse_test(30, owner, vec![reverse_evidence(7, 25, false)], false),
+            manifest_for_reverse_test(20, owner, vec![reverse_evidence(8, 15, true)], false),
+            manifest_for_reverse_test(10, owner, vec![], false),
+        ];
+        let report = reverse_tool_provenance(&history, 7).unwrap();
+        assert_eq!(report.included, 1);
+        assert_eq!(report.admitted_but_omitted, 1);
+        assert_eq!(report.not_eligible_in_complete_manifests, 2);
+        assert_eq!(report.uncertain_truncated, 0);
+        assert_eq!(report.entries.len(), 2);
+        assert_eq!(report.entries[0].dispatch.sequence, 40);
+        assert_eq!(report.entries[0].disposition, ToolProvenanceDisposition::Included);
+        assert_eq!(
+            report.entries[1].disposition,
+            ToolProvenanceDisposition::AdmittedButOmitted
+        );
+    }
+
+    #[test]
+    fn truncated_absence_is_unknown_even_with_other_known_results() {
+        let owner = LocalConversationId::new();
+        let history = [
+            manifest_for_reverse_test(25, owner, vec![reverse_evidence(8, 20, true)], true),
+            manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 15, true)], false),
+            manifest_for_reverse_test(15, owner, vec![], true),
+            manifest_for_reverse_test(10, owner, vec![], false),
+        ];
+        let report = reverse_tool_provenance(&history, 7).unwrap();
+        assert_eq!(report.included, 1);
+        assert_eq!(report.admitted_but_omitted, 0);
+        assert_eq!(report.uncertain_truncated, 2);
+        assert_eq!(report.not_eligible_in_complete_manifests, 1);
+        assert_eq!(report.entries.len(), 3);
+        assert_eq!(
+            report.entries[0].disposition,
+            ToolProvenanceDisposition::UnknownBecauseManifestTruncated
+        );
+        assert_eq!(report.entries[0].dispatch.sequence, 25);
+        assert_eq!(report.entries[1].disposition, ToolProvenanceDisposition::Included);
+        assert_eq!(report.entries[2].dispatch.sequence, 15);
+    }
+
+    #[test]
+    fn exact_result_identity_must_match_across_dispatches_but_readmission_can_change() {
+        let owner = LocalConversationId::new();
+        let first = manifest_for_reverse_test(10, owner, vec![reverse_evidence(7, 19, false)], false);
+        let second = manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 25, true)], false);
+        assert!(reverse_tool_provenance(&[second, first], 7).is_ok());
+        let mut corrupted = reverse_evidence(7, 30, true);
+        corrupted.source_session_id = 999;
+        let bad = manifest_for_reverse_test(30, owner, vec![corrupted], false);
+        let consistent = manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false);
+        assert!(reverse_tool_provenance(&[consistent, bad], 7).is_err());
+        let mut corrupted = reverse_evidence(7, 30, true);
+        corrupted.outcome_sequence += 1;
+        let bad = manifest_for_reverse_test(30, owner, vec![corrupted], false);
+        let consistent = manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false);
+        assert!(reverse_tool_provenance(&[consistent, bad], 7).is_err());
+    }
+
+    #[test]
+    fn reverse_lookup_rejects_mixed_conversation_and_zero_call() {
+        let first = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let history = [
+            manifest_for_reverse_test(20, first, vec![reverse_evidence(7, 15, true)], false),
+            manifest_for_reverse_test(10, other, vec![reverse_evidence(7, 5, true)], false),
+        ];
+        assert!(reverse_tool_provenance(&history, 7).is_err());
+        assert!(reverse_tool_provenance(&history, 0).is_err());
+    }
+
+    #[test]
+    fn reverse_json_explicitly_preserves_unknown_and_legacy_caveats_without_bodies() {
+        let owner = LocalConversationId::new();
+        let history = [
+            manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 14, true)], false),
+            manifest_for_reverse_test(10, owner, vec![reverse_evidence(8, 4, true)], true),
+        ];
+        let report = reverse_tool_provenance(&history, 7).unwrap();
+        let json = reverse_tool_provenance_json(&report);
+        assert_eq!(json["call_id"], 7);
+        assert_eq!(json["counts"]["included"], 1);
+        assert_eq!(json["counts"]["unknown_due_to_truncation"], 1);
+        assert_eq!(json["dispatches"][0]["disposition"], "included");
+        assert_eq!(json["dispatches"][1]["disposition"], "unknown_truncated");
+        assert_eq!(json["limits"]["legacy_unmanifested_requests_are_unknown"], true);
+        let serialized = json.to_string();
+        assert!(!serialized.contains("secret adapter bytes"));
+        assert!(!serialized.contains("historically typed user message"));
+    }
+
+    #[test]
+    fn unknown_call_without_truncated_manifest_is_not_falsely_reported_included() {
+        let owner = LocalConversationId::new();
+        let history = [
+            manifest_for_reverse_test(12, owner, vec![], false),
+            manifest_for_reverse_test(8, owner, vec![reverse_evidence(9, 4, true)], false),
+        ];
+        let report = reverse_tool_provenance(&history, 99).unwrap();
+        assert_eq!(report.included, 0);
+        assert_eq!(report.admitted_but_omitted, 0);
+        assert_eq!(report.not_eligible_in_complete_manifests, 2);
+        assert!(report.entries.is_empty());
+        assert!(report.identity.is_none());
     }
 
     #[test]
