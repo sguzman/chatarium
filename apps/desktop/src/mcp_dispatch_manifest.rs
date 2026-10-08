@@ -1529,9 +1529,17 @@ mod tests {
     fn capture_explains_included_and_non_selected_tool_results() {
         let owner = LocalConversationId::new();
         let source = admitted_source(17);
-        let included = capture(owner, "authored", &[source.clone()], &plan_with_tool(&source))
-            .unwrap();
-        assert_eq!(included["listed_tool_results"][0]["composition_reason"], "included");
+        let included = capture(
+            owner,
+            "authored",
+            &[source.clone()],
+            &plan_with_tool(&source),
+        )
+        .unwrap();
+        assert_eq!(
+            included["listed_tool_results"][0]["composition_reason"],
+            "included"
+        );
         let not_selected = capture(
             owner,
             "controller_coordination",
@@ -1585,7 +1593,11 @@ mod tests {
             manifest["listed_tool_results"][0]["composition_reason"],
             "excluded_by_policy"
         );
-        assert!(!manifest.to_string().contains("tool output remains excluded"));
+        assert!(
+            !manifest
+                .to_string()
+                .contains("tool output remains excluded")
+        );
     }
 
     #[test]
@@ -1628,8 +1640,13 @@ mod tests {
     fn older_manifest_without_composition_reason_remains_readable() {
         let owner = LocalConversationId::new();
         let source = admitted_source(7);
-        let mut manifest = capture(owner, "authored", &[source.clone()], &plan_with_tool(&source))
-            .unwrap();
+        let mut manifest = capture(
+            owner,
+            "authored",
+            &[source.clone()],
+            &plan_with_tool(&source),
+        )
+        .unwrap();
         manifest["listed_tool_results"][0]
             .as_object_mut()
             .unwrap()
@@ -1639,7 +1656,8 @@ mod tests {
                 "schema":"chatarium-responses-turn-observation",
                 "version":1,
                 "details":{"local_turn_id":"old-turn","request_id":"old-turn"}
-            }).to_string(),
+            })
+            .to_string(),
             manifest,
         )
         .unwrap();
@@ -1659,16 +1677,26 @@ mod tests {
     fn contradictory_or_unknown_composition_reason_blocks_manifest_replay() {
         let owner = LocalConversationId::new();
         let source = admitted_source(7);
-        for reason in ["not_selected_for_dispatch", "nonsense", "excluded_by_policy"] {
-            let mut manifest =
-                capture(owner, "authored", &[source.clone()], &plan_with_tool(&source)).unwrap();
+        for reason in [
+            "not_selected_for_dispatch",
+            "nonsense",
+            "excluded_by_policy",
+        ] {
+            let mut manifest = capture(
+                owner,
+                "authored",
+                &[source.clone()],
+                &plan_with_tool(&source),
+            )
+            .unwrap();
             manifest["listed_tool_results"][0]["composition_reason"] = json!(reason);
             let payload = attach_to_dispatch_payload(
                 json!({
                     "schema":"chatarium-responses-turn-observation",
                     "version":1,
                     "details":{"local_turn_id":"turn-1","request_id":"turn-1"}
-                }).to_string(),
+                })
+                .to_string(),
                 manifest,
             )
             .unwrap();
