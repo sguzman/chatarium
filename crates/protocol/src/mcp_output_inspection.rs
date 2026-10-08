@@ -80,8 +80,7 @@ pub fn inspect_structured_tool_output(
     };
     let schema_bytes = serde_json::to_vec(schema).map_err(|_| McpWireError::InvalidResponse)?;
     let output_bytes = serde_json::to_vec(value).map_err(|_| McpWireError::InvalidResponse)?;
-    if schema_bytes.len() > MAX_INSPECTION_SCHEMA_BYTES
-        || output_bytes.len() > MAX_MCP_FRAME_BYTES
+    if schema_bytes.len() > MAX_INSPECTION_SCHEMA_BYTES || output_bytes.len() > MAX_MCP_FRAME_BYTES
     {
         return Ok(report(
             McpOutputVerdict::Inconclusive,
@@ -282,17 +281,16 @@ mod tests {
             ),
             (
                 json!({"type":"array","items":{"type":"integer"}}),
-                json!([1,2,3]),
+                json!([1, 2, 3]),
             ),
             (json!({"type":"string"}), json!("ok")),
             (json!({"type":"null"}), Value::Null),
             (json!(true), json!({"anything":"allowed"})),
         ];
         for (schema, value) in cases {
-            let inspection = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value)
-            )
-            .unwrap();
+            let inspection =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap();
             assert_eq!(inspection.verdict, McpOutputVerdict::PassedSupportedChecks);
         }
     }
@@ -303,14 +301,19 @@ mod tests {
             "type":"array",
             "items":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}
         })));
-        for bad in [json!([{"id":4}]), json!([{"wrong":"field"}]), json!({"id":"x"})] {
+        for bad in [
+            json!([{"id":4}]),
+            json!([{"wrong":"field"}]),
+            json!({"id":"x"}),
+        ] {
             let inspection = inspect_structured_tool_output(&tool, &complete(bad)).unwrap();
             assert_eq!(inspection.verdict, McpOutputVerdict::Mismatch);
         }
         let never = inspected_tool(Some(json!(false)));
         assert_eq!(
             inspect_structured_tool_output(&never, &complete(json!(1)))
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
             McpOutputVerdict::Mismatch
         );
     }
@@ -319,27 +322,45 @@ mod tests {
     fn missing_schema_missing_content_and_tool_error_are_distinct() {
         let none = inspected_tool(None);
         assert_eq!(
-            inspect_structured_tool_output(&none, &complete(json!(1))).unwrap().verdict,
+            inspect_structured_tool_output(&none, &complete(json!(1)))
+                .unwrap()
+                .verdict,
             McpOutputVerdict::NoAdvertisedSchema
         );
         let declared = inspected_tool(Some(json!({"type":"object"})));
         assert_eq!(
-            inspect_structured_tool_output(&declared, &json!({
-                "resultType":"complete","content":[]
-            })).unwrap().verdict,
+            inspect_structured_tool_output(
+                &declared,
+                &json!({
+                    "resultType":"complete","content":[]
+                })
+            )
+            .unwrap()
+            .verdict,
             McpOutputVerdict::NoStructuredContent
         );
         assert_eq!(
-            inspect_structured_tool_output(&declared, &json!({
-                "resultType":"complete","content":[],
-                "isError":true,
-                "structuredContent":{"error":"bad"}
-            })).unwrap().verdict,
+            inspect_structured_tool_output(
+                &declared,
+                &json!({
+                    "resultType":"complete","content":[],
+                    "isError":true,
+                    "structuredContent":{"error":"bad"}
+                })
+            )
+            .unwrap()
+            .verdict,
             McpOutputVerdict::ToolReportedError
         );
-        assert!(inspect_structured_tool_output(&declared, &json!({
-            "resultType":"complete","content":[{"type":"text"}]
-        })).is_err());
+        assert!(
+            inspect_structured_tool_output(
+                &declared,
+                &json!({
+                    "resultType":"complete","content":[{"type":"text"}]
+                })
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -356,8 +377,10 @@ mod tests {
             json!({"type":"object","$schema":"http://json-schema.org/draft-07/schema#"}),
         ] {
             let check = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(json!("hello"))
-            ).unwrap();
+                &inspected_tool(Some(schema)),
+                &complete(json!("hello")),
+            )
+            .unwrap();
             assert_eq!(check.verdict, McpOutputVerdict::Inconclusive);
         }
     }
@@ -368,7 +391,8 @@ mod tests {
         let values = vec![json!({}); MAX_INSPECTION_COLLECTION + 1];
         assert_eq!(
             inspect_structured_tool_output(&tool, &complete(json!(values)))
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
             McpOutputVerdict::Inconclusive
         );
         let mut schema = json!({"type":"string"});
@@ -379,7 +403,8 @@ mod tests {
         }
         assert_eq!(
             inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
             McpOutputVerdict::Inconclusive
         );
     }

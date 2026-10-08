@@ -5,8 +5,8 @@
 pub mod conversation_fetch;
 pub mod conversation_fetch_request;
 pub mod conversation_list;
-pub mod mcp_schema_draft;
 pub mod mcp_output_inspection;
+pub mod mcp_schema_draft;
 pub mod mcp_wire;
 pub mod read;
 pub mod sse;
