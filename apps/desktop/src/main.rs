@@ -10,6 +10,7 @@ mod local_inference_settings;
 mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
+mod mcp_output_audit;
 #[cfg(test)]
 mod mcp_async_tests;
 mod offline_reader;
@@ -9441,6 +9442,15 @@ impl eframe::App for ChatariumApp {
                                                                         }
                                                                     });
                                                                 }
+                                                                mcp_output_audit::render_snapshot_comparisons(
+                                                                    ui,
+                                                                    &self.events,
+                                                                    &calls,
+                                                                    outcomes.as_deref().unwrap_or(&[]),
+                                                                    call,
+                                                                    outcome,
+                                                                    self.local_conversation_id,
+                                                                );
                                                                 if let Some(records) = &tool_context_records {
                                                                     match tool_outcome_owning_conversation(&self.events, outcome) {
                                                                         Ok(Some(owner))

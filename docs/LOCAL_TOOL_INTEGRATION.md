@@ -540,10 +540,20 @@ The comparison does not perform network requests, fetch resource links,
 load reference schemas, execute tools, authorize calls, or admit a result to
 inference context. The caller must correlate the exact recorded call,
 provider, conversation, catalog observation, and output itself. Catalogs
-can change between observations. This protocol substrate is not yet a
-desktop result-inspection control or an automatic pre-admission gate; future
-UI work must preserve the snapshot boundary and make provisional results
-visibly distinct from verified JSON Schema validation.
+can change between observations. The desktop **Tool call audit** now exposes a read-only **Compare with
+earlier MCP catalog snapshot** expander. Each verdict names its immutable
+catalog-observation sequence and source call. The projection only compares
+completed catalog observations from the **same provider and source session**,
+owned by the same current local conversation and recorded **before** the
+target tool call was recorded. Later catalogs cannot retroactively validate
+earlier results. Multiple historical catalogs remain separate observations,
+never silently replaced by current provider testimony.
+
+The inspection runs only when expanded, leaves the exact journal unchanged,
+and cannot grant tool execution, provider activation, approval, or context
+admission. Missing, invalid, out-of-scope, or unsupported schema observations
+cannot produce a passing verdict. This is a deliberately limited schema-subset
+inspection, not full JSON Schema validation or an automatic admission gate.
 
 ## External MCP one-shot workflow (strict Linux sandbox)
 
