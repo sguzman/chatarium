@@ -19950,10 +19950,9 @@ mod tests {
             .pop()
             .unwrap();
         assert_eq!(outcome.kind, ToolCallOutcomeKind::Result);
-        let wire = chatarium_protocol::tool_envelope::parse_legacy_tool_result(
-            outcome.text.as_str(),
-        )
-        .unwrap();
+        let wire =
+            chatarium_protocol::tool_envelope::parse_legacy_tool_result(outcome.text.as_str())
+                .unwrap();
         assert_eq!(wire.id, "legacy-test");
         assert_eq!(wire.payload["message"], "hello");
 
