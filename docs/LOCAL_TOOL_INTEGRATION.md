@@ -497,7 +497,14 @@ provider, consume any approval, or use the host network. It exits zero for a
 successful readiness observation; otherwise it exits nonzero and prints a
 bounded diagnostic. When the launcher itself reports a failure, at most
 4 KiB of sanitized stderr is used; raw arbitrary process output is not
-forwarded. The desktop's existing check uses the same probe.
+forwarded. The desktop's **Tools / MCP** panel now retains the latest manual
+host-check result until another host check starts. It displays **READY** or
+**NOT READY**, the same stable failure category as the standalone CLI, a
+fixed human-readable explanation, and a collapsed bounded detail view.
+This panel is a transient UI observation, not a journal event, a cached
+host permit, or proof that an unrelated provider is executable. Later
+provider calls still repeat all preflight, sandbox and route checks.
+The desktop's existing check uses the same probe.
 
 Common blockers include missing/untrusted `/usr/bin/prlimit` or
 `/usr/bin/bwrap`, disallowed unprivileged user namespaces, and AppArmor/LSM
