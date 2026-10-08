@@ -46,6 +46,7 @@ use chatarium_core::{
     LocalTurnId, RemoteEvidence, TurnEvidence,
 };
 use chatarium_protocol::conversation_list::ConversationListItem;
+use chatarium_protocol::mcp_schema_draft::draft_required_arguments;
 use chatarium_protocol::mcp_wire::{McpResponse, decode_stdio_response, parse_tools_list_page};
 use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
 use chatarium_store::archive_maintenance::{
@@ -9318,6 +9319,35 @@ impl eframe::App for ChatariumApp {
                                                                             Ok(McpResponse::Complete(result)) => match parse_tools_list_page(&result) {
                                                                                 Ok(page) => {
                                                                                     ui.label(format!("{} advertised tools in this page; no permissions or allowlist changes", page.tools.len()));
+                                                                                    let inspection_owned_here =
+                                                                                        tool_outcome_owning_conversation(&self.events, outcome)
+                                                                                            .ok()
+                                                                                            .flatten()
+                                                                                            == Some(self.local_conversation_id);
+                                                                                    let currently_active =
+                                                                                        replay_tool_provider_activation_audit(&self.events)
+                                                                                            .ok()
+                                                                                            .is_some_and(|records| {
+                                                                                                records.iter().any(|record| {
+                                                                                                    record.provider_id == call.provider_id
+                                                                                                        && record.active
+                                                                                                })
+                                                                                            });
+                                                                                    let configured_operations =
+                                                                                        replay_tool_transport_config_audit(&self.events)
+                                                                                            .ok()
+                                                                                            .and_then(|records| {
+                                                                                                records
+                                                                                                    .into_iter()
+                                                                                                    .find(|record| record.provider_id == call.provider_id)
+                                                                                            })
+                                                                                            .map(|record| {
+                                                                                                record.config.allowed_operations()
+                                                                                                    .iter()
+                                                                                                    .map(|operation| operation.as_str().to_owned())
+                                                                                                    .collect::<BTreeSet<_>>()
+                                                                                            })
+                                                                                            .unwrap_or_default();
                                                                                     for advertised in &page.tools {
                                                                                         ui.label(egui::RichText::new(format!(
                                                                                             "{} · {}",
@@ -9327,6 +9357,55 @@ impl eframe::App for ChatariumApp {
                                                                                         if let Some(description) = &advertised.description {
                                                                                             ui.label(description.as_str());
                                                                                         }
+                                                                                        ui.collapsing(
+                                                                                            format!("Review required-field JSON draft · {}", advertised.name),
+                                                                                            |ui| {
+                                                                                                match draft_required_arguments(&advertised.input_schema) {
+                                                                                                    Ok(draft) => {
+                                                                                                        ui.label("Only required properties are included. Placeholders are NOT validated values; edit and review before recording.");
+                                                                                                        ui.label(egui::RichText::new(draft.arguments_json.as_str()).monospace());
+                                                                                                        for note in &draft.review_notes {
+                                                                                                            ui.label(note.as_str());
+                                                                                                        }
+                                                                                                        let allowed_operation =
+                                                                                                            ToolOperationName::new(advertised.name.clone())
+                                                                                                                .is_ok()
+                                                                                                                && configured_operations.contains(advertised.name.as_str());
+                                                                                                        let can_prepare = inspection_owned_here
+                                                                                                            && source_addressable
+                                                                                                            && currently_active
+                                                                                                            && allowed_operation
+                                                                                                            && !self.tool_command_pending;
+                                                                                                        if ui.add_enabled(
+                                                                                                            can_prepare,
+                                                                                                            egui::Button::new("Fill editable tool-call draft · no execution"),
+                                                                                                        ).on_hover_text(
+                                                                                                            "Copies only bounded required-field placeholders into the local draft. Requires same owning conversation, current provider activation, and an existing immutable operation allowlist entry. Record, Allow and Run remain separate.",
+                                                                                                        ).clicked() {
+                                                                                                            self.tool_selected_provider = Some(call.provider_id);
+                                                                                                            self.tool_operation_draft = advertised.name.clone();
+                                                                                                            self.tool_arguments_draft = draft.arguments_json;
+                                                                                                            self.status = format!(
+                                                                                                                "drafted {} from untrusted catalog; review {} placeholders, then Record / Allow / Run separately",
+                                                                                                                advertised.name,
+                                                                                                                draft.review_notes.len(),
+                                                                                                            );
+                                                                                                        }
+                                                                                                        if !allowed_operation {
+                                                                                                            ui.label("Unavailable: this tool is not in the provider's immutable allowed operations.");
+                                                                                                        } else if !inspection_owned_here || !source_addressable {
+                                                                                                            ui.label("Unavailable: catalog and active source conversation must match.");
+                                                                                                        } else if !currently_active {
+                                                                                                            ui.label("Unavailable: provider is not currently active.");
+                                                                                                        }
+                                                                                                    }
+                                                                                                    Err(reason) => {
+                                                                                                        ui.label(format!("Cannot construct bounded JSON draft: {reason}"));
+                                                                                                        ui.label("You may still manually author an exact JSON object for a separately allowlisted operation.");
+                                                                                                    }
+                                                                                                }
+                                                                                            },
+                                                                                        );
                                                                                     }
                                                                                     if let Some(cursor) = &page.next_cursor {
                                                                                         ui.label("Another page is advertised; continuation is NEVER automatic.");
