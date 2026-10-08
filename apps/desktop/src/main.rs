@@ -9252,8 +9252,32 @@ impl eframe::App for ChatariumApp {
                                                                 });
                                                             }
                                                             mcp_call_review::CallReviewStage::ApprovedForSeparateReview => {
-                                                                ui.label("User Allow is recorded. Inspect the exact wire request before a separate one-shot Run.");
-                                                                ui.collapsing("Review approved wire request and choose Run", |ui| {
+                                                                let builtin_hello = providers.iter().find(|provider| {
+                                                                    provider.provider_id == call.provider_id
+                                                                }).is_some_and(|provider| {
+                                                                    local_tool_adapter::supports_hello(
+                                                                        provider.name.as_str(),
+                                                                        call.operation.as_str(),
+                                                                    )
+                                                                });
+                                                                if builtin_hello {
+                                                                    ui.label("User Allow is recorded for the side-effect-free builtin hello. Run is a separate deliberate action.");
+                                                                    if ui.add_enabled(
+                                                                        matches!(
+                                                                            route.gate_state,
+                                                                            RouteGateState::Allowed {
+                                                                                by: DecisionAuthority::User,
+                                                                            }
+                                                                        )
+                                                                            && !self.tool_command_pending
+                                                                            && self.persist_tx.is_some(),
+                                                                        egui::Button::new("Run approved local hello · once"),
+                                                                    ).clicked() {
+                                                                        self.dispatch_builtin_hello(route.request.id);
+                                                                    }
+                                                                } else {
+                                                                    ui.label("User Allow is recorded. Inspect the exact wire request before a separate one-shot Run.");
+                                                                    ui.collapsing("Review approved wire request and choose Run", |ui| {
                                                                     match preview_activated_stdio_tool_invocation(
                                                                         &self.events, call.call_id
                                                                     ) {
@@ -9290,7 +9314,8 @@ impl eframe::App for ChatariumApp {
                                                                             ui.label(format!("Run not eligible: {error}"));
                                                                         }
                                                                     }
-                                                                });
+                                                                    });
+                                                                }
                                                             }
                                                             _ => {}
                                                         }
