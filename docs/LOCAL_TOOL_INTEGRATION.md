@@ -256,6 +256,35 @@ the authoritative journal by the persistence worker, which remains responsive
 to other writes while the sandbox runs. A failed durable outcome append leaves
 the route unresolved; it is **never retried automatically**.
 
+### Linux host-readiness gate
+
+A configured provider and a valid executable path do **not** prove that the
+current host permits the required user, PID, mount, and network namespaces.
+The desktop therefore performs an additional, real but **non-provider** sandbox
+probe before consuming the ToolCall route permit. On a separate, bounded
+process thread, Chatarium launches only the fixed root-owned
+`/usr/bin/true` through the *same* `prlimit → bwrap` namespace and mount
+policy as an actual request, with a three-second deadline, empty environment,
+no stdin, and discarded stdout/stderr. Nothing from the configured provider
+is launched. The persistence worker remains free to accept unrelated writes.
+
+If a missing binary, incompatible namespace policy, AppArmor/LSM rule, or
+probe timeout prevents this fixed process from succeeding, the desktop reports
+a preflight error **without recording RouteDispatched**. If the probe succeeds,
+the journal worker revalidates provider activation, call provenance, current
+route Allow, exact configuration and executable metadata **again** before
+consuming one permit. Probe success is never stored as an authority token;
+later process-launch failures still remain possible and are audited under
+at-most-once rules after reservation.
+
+On Arch/EndeavourOS, the host tool packages are `bubblewrap` (bwrap) and
+`util-linux` (prlimit). Install missing packages through the distribution's
+normal package manager (for example, `sudo pacman -S --needed bubblewrap
+util-linux`). Chatarium neither installs packages nor disables host security
+policy automatically. A user-installed, writable executable outside the
+current root-owned `/usr/bin` allowlist is still refused; the probe does
+not broaden tool execution authority.
+
 The first hardened launch policy is intentionally narrow:
 
 - Linux only; no Windows implementation or unsafe host-command fallback.
