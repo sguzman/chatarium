@@ -435,20 +435,35 @@ mod tests {
         let (target_call, target_result) = target(json!({}));
         let mut wrong_route = target_result.clone();
         wrong_route.route_id = RouteId::new(999);
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &wrong_route, &catalog_call, &catalog_result
-        ).is_err());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &target_call,
+                &wrong_route,
+                &catalog_call,
+                &catalog_result
+            )
+            .is_err()
+        );
         let mut wrong_dispatch = target_result.clone();
         wrong_dispatch.dispatch_sequence = target_result.observed_sequence;
-        assert!(inspect_prior_catalog_snapshot(
-            &target_call, &wrong_dispatch, &catalog_call, &catalog_result
-        ).is_err());
+        assert!(
+            inspect_prior_catalog_snapshot(
+                &target_call,
+                &wrong_dispatch,
+                &catalog_call,
+                &catalog_result
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn output_schema_preview_bounds_utf8_and_labels_truncation() {
         let small = json!({"type":"object"});
-        assert_eq!(schema_preview(&small), serde_json::to_string_pretty(&small).unwrap());
+        assert_eq!(
+            schema_preview(&small),
+            serde_json::to_string_pretty(&small).unwrap()
+        );
         let large = json!({"description":"é".repeat(SCHEMA_PREVIEW_BYTES)});
         let preview = schema_preview(&large);
         assert!(preview.contains("PREVIEW TRUNCATED"));
