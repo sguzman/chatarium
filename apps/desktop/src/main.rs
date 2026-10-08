@@ -9380,11 +9380,11 @@ impl eframe::App for ChatariumApp {
                                                                                 mcp_result_review::preview(outcome.text.as_str());
                                                                             ui.label(egui::RichText::new(preview).monospace());
                                                                             if truncated {
-                                                                                ui.label("PREVIEW TRUNCATED · review the full exact outcome in the historical audit before admission.");
+                                                                                ui.label("PREVIEW TRUNCATED · focused admission disabled. Review the full exact outcome in the historical audit to make an explicit decision.");
                                                                             }
                                                                             let can_decide =
                                                                                 !self.tool_command_pending && self.persist_tx.is_some();
-                                                                            if focus.stage.may_admit()
+                                                                            if focus.stage.may_admit_from_preview(truncated)
                                                                                 && ui.add_enabled(
                                                                                     can_decide,
                                                                                     egui::Button::new("Explicitly admit exact result to conversation context"),
