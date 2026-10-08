@@ -450,7 +450,11 @@ mod tests {
         assert!(preview_stdio_tool_invocation(unapproved.events(), CALL).is_err());
         let not_allowlisted = configured_call(operation, "other", "{}", true);
         assert!(preview_stdio_tool_invocation(not_allowlisted.events(), CALL).is_err());
-        for bad in [r#"{"cursor":12}"#, r#"{"extra":"unreviewed"}"#, r#"{"cursor":""}"#] {
+        for bad in [
+            r#"{"cursor":12}"#,
+            r#"{"extra":"unreviewed"}"#,
+            r#"{"cursor":""}"#,
+        ] {
             let store = configured_call(operation, operation, bad, true);
             assert!(preview_stdio_tool_invocation(store.events(), CALL).is_err());
         }
