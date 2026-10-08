@@ -113,6 +113,60 @@ The model-facing request shape, if any, must separately respect the ready
 Local Inference Contract for the active SIWC profile/model. Native capability
 availability is not permission authority to run a tool.
 
+## Native MCP 2026-07-28 wire boundary
+
+`crates/protocol/src/mcp_wire.rs` is now a second, distinct pure protocol
+surface. It targets the published **2026-07-28** MCP revision, not the older
+stateful 2025 handshake. It does not implement an MCP transport or execute a
+call.
+
+The 2026 revision has no `initialize`/`initialized` handshake or
+protocol-level session. Requests such as `server/discover`, `tools/list`, and
+`tools/call` carry `io.modelcontextprotocol/protocolVersion`,
+`io.modelcontextprotocol/clientCapabilities`, and client identity in their
+own `params._meta`. These fields are protocol metadata, not Chatarium route
+permission.
+
+The pure codec provides:
+
+- deterministic, bounded JSON-RPC request building and one-frame stdio
+  serialization with escaped embedded newlines;
+- exact numeric request-ID correlation for responses and structured errors;
+- strict rejection of unsolicited/batched/multi-frame/oversized responses;
+- explicit refusal of `inputRequired` multi-round-trip requests: no model
+  or server output can silently cause follow-up execution;
+- argument and tool-name validation before any later execution adapter could
+  consume a route permit.
+
+**Two separate representations remain intentional:** legacy Tool Shim
+`<tool_call>`/`<tool_result>` XML-like envelopes are compatibility artifacts;
+native MCP 2026 messages are JSON-RPC. An adapter must explicitly correlate the
+legacy envelope identity with Chatarium's durable `ToolCallId` and the MCP
+request ID; these identities must not be guessed to be equivalent.
+
+Official protocol: [MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28).
+The current revision changes transport assumptions materially; do not invent a
+2025-style protocol session for new adapters.
+
+### Next transport implementation
+
+The first real transport should remain Linux-native and cost-free. Two
+standard options exist:
+
+- **stdio**, which requires an explicitly user-selected, already installed
+  local server executable and an audited subprocess-launch policy; no shell
+  string interpolation, inherited secret dumping, or implicit provider
+  execution;
+- **Streamable HTTP**, which requires user-configured endpoint and auth
+  material, correct 2026 `Mcp-*` headers and SSE handling. Do not infer
+  that a URL or provider name is trustworthy.
+
+Neither transport is currently enabled. Before any network/process action,
+persist a user-reviewed provider configuration with an explicit operation
+allowlist, apply a bounded timeout and output cap, and require the existing
+one-shot explicitly approved `ToolCall` route for each invocation. Interrupted
+requests remain ambiguous and must not be blindly retried.
+
 ## Builtin hello smoke workflow (Linux-native, no new dependencies)
 
 The small adapter in `apps/desktop/src/local_tool_adapter.rs` reuses the
