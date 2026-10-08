@@ -525,12 +525,17 @@ non-executing comparison** between one inspected `McpListedTool` and one
 already-correlated complete `tools/call` result. It distinguishes:
 no advertised schema, no `structuredContent`, tool-reported error,
 definite mismatch, inconclusive inspection, and passing the explicitly
-limited checks. It checks basic JSON types, required object properties,
-nested `properties`, `additionalProperties`, and homogeneous array
-`items` with bounded recursion and item counts. JSON Schema features
-such as `$ref`, `$defs`, composition, `enum`, `const`, `format`, range,
-length, and pattern restrictions are **not yet evaluated**: these produce
-`Inconclusive`, never a false claim of conformance. Unsupported dialects
+limited checks. It checks basic JSON types (including bounded `type` unions), required
+object properties, nested `properties`, `additionalProperties`,
+homogeneous array `items`, Unicode-code-point `minLength`/`maxLength`,
+array `minItems`/`maxItems`, and object `minProperties`/`maxProperties`.
+A separate bounded **whole-schema preflight** screens every nested schema,
+including constraints beneath absent output properties, before any verdict
+can pass the supported subset. Unsupported or malformed constraints yield
+`Inconclusive`, even if not reached by this particular output. JSON Schema
+features such as `$ref`, `$defs`, composition, `enum`, `const`, `format`,
+numeric ranges, and regex `pattern` are **not yet evaluated**: these also
+produce `Inconclusive`, never a false claim of conformance. Unsupported dialects
 and oversized/deep specimens are inconclusive. Only fixed, bounded
 diagnostic strings are emitted; arbitrary provider-supplied fields are
 not copied into diagnostics.

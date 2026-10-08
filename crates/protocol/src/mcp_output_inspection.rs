@@ -87,6 +87,16 @@ pub fn inspect_structured_tool_output(
             "The advertised schema or structured output exceeds the inspection budget.",
         ));
     }
+    // Review the *entire* advertised schema before inspecting the value.
+    // Otherwise unsupported constraints hidden behind absent properties
+    // could be skipped and mistakenly reported as a supported-subset pass.
+    let mut schema_budget = InspectionBudget::default();
+    if inspect_schema_subset(schema, 0, &mut schema_budget).is_err() {
+        return Ok(report(
+            McpOutputVerdict::Inconclusive,
+            "The schema contains unsupported, malformed, or over-budget assertions; no conformance claim was made.",
+        ));
+    }
     let mut budget = InspectionBudget::default();
     match inspect_value(schema, value, 0, &mut budget) {
         Ok(()) => Ok(report(
@@ -111,6 +121,124 @@ const fn report(verdict: McpOutputVerdict, explanation: &'static str) -> McpOutp
     }
 }
 
+/// Validate every schema node, even those not reached by the particular
+/// output. Unsupported assertion keywords anywhere yield Inconclusive.
+fn inspect_schema_subset(
+    schema: &Value,
+    depth: usize,
+    budget: &mut InspectionBudget,
+) -> Result<(), InspectionIssue> {
+    budget.visit(depth)?;
+    let Value::Object(spec) = schema else {
+        return if schema.is_boolean() {
+            Ok(())
+        } else {
+            Err(InspectionIssue::Unsupported)
+        };
+    };
+    for (key, value) in spec {
+        match key.as_str() {
+            "$schema" => {
+                if !matches!(
+                    value.as_str(),
+                    Some("https://json-schema.org/draft/2020-12/schema")
+                        | Some("https://json-schema.org/draft/2020-12/schema#")
+                ) {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "$id" | "$comment" | "title" | "description" => {
+                if !value.is_string() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "deprecated" | "readOnly" | "writeOnly" => {
+                if !value.is_boolean() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "examples" => {
+                if !value.is_array() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "default" => {}
+            "type" => {
+                let types = declared_types(value)?;
+                if types.is_empty() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "properties" => {
+                let properties = value.as_object().ok_or(InspectionIssue::Unsupported)?;
+                if properties.len() > MAX_INSPECTION_COLLECTION {
+                    return Err(InspectionIssue::Unsupported);
+                }
+                for nested in properties.values() {
+                    inspect_schema_subset(nested, depth + 1, budget)?;
+                }
+            }
+            "required" => {
+                let names = value.as_array().ok_or(InspectionIssue::Unsupported)?;
+                if names.len() > MAX_INSPECTION_COLLECTION
+                    || names.iter().any(|name| name.as_str().is_none())
+                {
+                    return Err(InspectionIssue::Unsupported);
+                }
+                let unique = names.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>();
+                if unique.len() != names.len() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "items" | "additionalProperties" => {
+                inspect_schema_subset(value, depth + 1, budget)?;
+            }
+            "minLength" | "maxLength" | "minItems" | "maxItems"
+            | "minProperties" | "maxProperties" => {
+                if value.as_u64().is_none() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            _ => return Err(InspectionIssue::Unsupported),
+        }
+    }
+    Ok(())
+}
+
+fn declared_types(value: &Value) -> Result<Vec<&str>, InspectionIssue> {
+    let names = match value {
+        Value::String(name) => vec![name.as_str()],
+        Value::Array(names) if !names.is_empty() && names.len() <= 7 => {
+            names.iter().map(|item| item.as_str().ok_or(InspectionIssue::Unsupported))
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        _ => return Err(InspectionIssue::Unsupported),
+    };
+    if names.iter().any(|name| !matches!(
+        *name, "null" | "boolean" | "object" | "array" | "number" | "integer" | "string"
+    )) || names.iter().collect::<BTreeSet<_>>().len() != names.len() {
+        return Err(InspectionIssue::Unsupported);
+    }
+    Ok(names)
+}
+
+fn matches_json_type(kind: &str, value: &Value) -> bool {
+    match kind {
+        "null" => value.is_null(),
+        "boolean" => value.is_boolean(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "number" => value.is_number(),
+        "integer" => value.as_number().is_some_and(|number| {
+            number.is_i64()
+                || number.is_u64()
+                || number.as_f64().is_some_and(|number| number.fract() == 0.0)
+        }),
+        "string" => value.is_string(),
+        _ => false,
+    }
+}
+
 fn inspect_value(
     schema: &Value,
     value: &Value,
@@ -122,66 +250,15 @@ fn inspect_value(
         Value::Bool(true) => return Ok(()),
         Value::Bool(false) => return Err(InspectionIssue::Mismatch),
         Value::Object(spec) => {
-            // Fail closed on *any* constraint we do not interpret. Annotation
-            // keywords are not assertions. $ref, composition, format, pattern,
-            // conditionals, unevaluated*, and arbitrary extension keywords
-            // cannot be silently treated as validated.
-            for name in spec.keys() {
-                if !matches!(
-                    name.as_str(),
-                    "$schema"
-                        | "$id"
-                        | "$comment"
-                        | "title"
-                        | "description"
-                        | "default"
-                        | "examples"
-                        | "deprecated"
-                        | "readOnly"
-                        | "writeOnly"
-                        | "type"
-                        | "properties"
-                        | "required"
-                        | "items"
-                        | "additionalProperties"
-                ) {
-                    return Err(InspectionIssue::Unsupported);
-                }
-            }
-            if let Some(dialect) = spec.get("$schema") {
-                if !matches!(
-                    dialect.as_str(),
-                    Some("https://json-schema.org/draft/2020-12/schema")
-                        | Some("https://json-schema.org/draft/2020-12/schema#")
-                ) {
-                    return Err(InspectionIssue::Unsupported);
-                }
-            }
             if let Some(kind) = spec.get("type") {
-                let kind = kind.as_str().ok_or(InspectionIssue::Unsupported)?;
-                if !matches!(
-                    kind,
-                    "null" | "boolean" | "object" | "array" | "number" | "integer" | "string"
-                ) {
-                    return Err(InspectionIssue::Unsupported);
-                }
-                let matches = match kind {
-                    "null" => value.is_null(),
-                    "boolean" => value.is_boolean(),
-                    "object" => value.is_object(),
-                    "array" => value.is_array(),
-                    "number" => value.is_number(),
-                    "integer" => value.as_number().is_some_and(|number| {
-                        number.is_i64()
-                            || number.is_u64()
-                            || number.as_f64().is_some_and(|number| number.fract() == 0.0)
-                    }),
-                    "string" => value.is_string(),
-                    _ => return Err(InspectionIssue::Unsupported),
-                };
-                if !matches {
+                let kinds = declared_types(kind)?;
+                if !kinds.iter().any(|kind| matches_json_type(kind, value)) {
                     return Err(InspectionIssue::Mismatch);
                 }
+            }
+            if let Some(text) = value.as_str() {
+                let length = text.chars().count() as u64;
+                check_count(spec, "minLength", "maxLength", length)?;
             }
             let props = match spec.get("properties") {
                 None => None,
@@ -216,6 +293,7 @@ fn inspect_value(
                 if object.len() > MAX_INSPECTION_COLLECTION {
                     return Err(InspectionIssue::Unsupported);
                 }
+                check_count(spec, "minProperties", "maxProperties", object.len() as u64)?;
                 if let Some(required) = required {
                     for name in required {
                         if !object.contains_key(name) {
@@ -235,6 +313,7 @@ fn inspect_value(
                 if array.len() > MAX_INSPECTION_COLLECTION {
                     return Err(InspectionIssue::Unsupported);
                 }
+                check_count(spec, "minItems", "maxItems", array.len() as u64)?;
                 if let Some(items) = items {
                     for member in array {
                         inspect_value(items, member, depth + 1, budget)?;
@@ -245,6 +324,20 @@ fn inspect_value(
         }
         _ => Err(InspectionIssue::Unsupported),
     }
+}
+
+fn check_count(
+    schema: &serde_json::Map<String, Value>,
+    min_key: &str,
+    max_key: &str,
+    actual: u64,
+) -> Result<(), InspectionIssue> {
+    if schema.get(min_key).is_some_and(|limit| limit.as_u64().is_some_and(|min| actual < min))
+        || schema.get(max_key).is_some_and(|limit| limit.as_u64().is_some_and(|max| actual > max))
+    {
+        return Err(InspectionIssue::Mismatch);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -370,8 +463,8 @@ mod tests {
             json!({"type":"string","enum":["safe"]}),
             json!({"$ref":"https://untrusted.example/schema.json"}),
             json!({"oneOf":[{"type":"number"},{"type":"string"}]}),
-            json!({"type":["string","number"]}),
-            json!({"type":"array","minItems":1}),
+            json!({"type":["string","string"]}),
+            json!({"type":"array","minItems":-1}),
             json!({"type":"number","minimum":0}),
             json!({"type":"object","unevaluatedProperties":false}),
             json!({"type":"object","$schema":"http://json-schema.org/draft-07/schema#"}),
@@ -383,6 +476,65 @@ mod tests {
             .unwrap();
             assert_eq!(check.verdict, McpOutputVerdict::Inconclusive);
         }
+    }
+
+    #[test]
+    fn supported_length_and_cardinality_keywords_use_json_schema_semantics() {
+        let cases = [
+            (json!({"type":"string","minLength":2,"maxLength":3}), json!("é🙂")),
+            (json!({"type":["string","null"],"minLength":2}), Value::Null),
+            (json!({"type":"array","minItems":1,"maxItems":2,"items":{"type":"integer"}}), json!([1,2])),
+            (json!({"type":"object","minProperties":1,"maxProperties":2}), json!({"k":true})),
+        ];
+        for (schema, value) in cases {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(value),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::PassedSupportedChecks);
+        }
+        let failures = [
+            (json!({"minLength":2}), json!("é")),
+            (json!({"maxLength":1}), json!("😊x")),
+            (json!({"minItems":2}), json!([1])),
+            (json!({"maxItems":0}), json!([1])),
+            (json!({"minProperties":2}), json!({"only":1})),
+            (json!({"maxProperties":0}), json!({"extra":1})),
+            (json!({"type":["object","array"]}), json!("wrong")),
+        ];
+        for (schema, value) in failures {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(value),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::Mismatch);
+        }
+    }
+
+    #[test]
+    fn unsupported_keywords_in_unvisited_properties_must_never_pass() {
+        for schema in [
+            json!({"type":"object","properties":{"absent":{"type":"string","pattern":"^x$"}}}),
+            json!({"type":"object","properties":{"absent":{"$ref":"https://example.org/unsafe"}}}),
+            json!({"type":"array","items":{"enum":[1,2]}}),
+            json!({"type":"string","minLength":"two"}),
+            json!({"type":"object","properties":{"unused":{"type":["string","string"]}}}),
+            json!({"type":"object","required":["x","x"]}),
+            json!({"type":"object","properties":{"a":{"minimum":1}}}),
+        ] {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(json!({})),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::Inconclusive);
+        }
+    }
+
+    #[test]
+    fn annotation_types_are_checked_even_without_applicable_assertions() {
+        let tool = inspected_tool(Some(json!({"title":42})));
+        assert_eq!(
+            inspect_structured_tool_output(&tool, &complete(json!({})))
+                .unwrap().verdict,
+            McpOutputVerdict::Inconclusive,
+        );
     }
 
     #[test]
