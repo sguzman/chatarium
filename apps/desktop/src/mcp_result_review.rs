@@ -97,6 +97,12 @@ impl ResultReviewStage {
         matches!(self, Self::Admitted)
     }
 
+    /// A bounded preview must never be mistaken for full-result review.
+    /// Larger admissible results remain available through the exact audit.
+    pub const fn may_admit_from_preview(self, truncated: bool) -> bool {
+        self.may_admit() && !truncated
+    }
+
     /// Prefer previously undecided outcomes without changing journal state.
     pub const fn focus_priority(self) -> u8 {
         match self {
@@ -176,6 +182,20 @@ mod tests {
             assert!(!stage.may_exclude());
         }
         assert!(classify(None, MAX_CONTEXT_TOOL_RESULT_BYTES).may_admit());
+    }
+
+    #[test]
+    fn truncated_preview_never_offers_full_result_admission() {
+        assert!(
+            ResultReviewStage::ExcludedByDefault.may_admit_from_preview(false)
+        );
+        assert!(
+            !ResultReviewStage::ExcludedByDefault.may_admit_from_preview(true)
+        );
+        assert!(!ResultReviewStage::Admitted.may_admit_from_preview(false));
+        assert!(!ResultReviewStage::TooLargeToAdmit.may_admit_from_preview(false));
+        // A previously admitted result can still be excluded without reading it.
+        assert!(ResultReviewStage::Admitted.may_exclude());
     }
 
     #[test]
