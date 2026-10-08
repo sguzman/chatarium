@@ -49,6 +49,7 @@ use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
 use crate::tool_provider_activation_audit::replay_tool_provider_activation_audit;
 use crate::tool_provider_audit::replay_tool_provider_audit;
 use crate::tool_result_context_audit::replay_tool_result_context_audit;
+use crate::tool_stdio_dispatch::replay_unresolved_external_tool_dispatches;
 use crate::tool_transport_config_audit::replay_tool_transport_config_audit;
 use crate::{EventEnvelope, inspect_jsonl_journal};
 use chatarium_protocol::conversation_list::ConversationListItem;
@@ -191,6 +192,7 @@ pub fn check_archive(
     replay_tool_result_context_audit(&events).map_err(err)?;
     replay_tool_transport_config_audit(&events).map_err(err)?;
     replay_tool_provider_activation_audit(&events).map_err(err)?;
+    replay_unresolved_external_tool_dispatches(&events).map_err(err)?;
     replay_validated_control_admissions(&events).map_err(err)?;
     replay_control_provenance_audit(&events).map_err(err)?;
     replay_control_route_audit(&events).map_err(err)?;

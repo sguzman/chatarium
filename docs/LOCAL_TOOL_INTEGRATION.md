@@ -238,6 +238,10 @@ an error/result. Only an adapter's correlated terminal observation can
 resolve a dispatched call. This is deliberate at-most-once attempt semantics,
 not a guarantee of exactly-once side effects.
 
+Archive integrity checking also replays unresolved external dispatches and
+their historical permission evidence. A malformed history cannot silently
+become a purportedly recoverable tool call.
+
 This milestone is the journal-to-runner handoff; no desktop execution action
 has been enabled by it. Before external tool execution is exposed, the Linux
 runner must separately enforce race-aware executable identity, process
