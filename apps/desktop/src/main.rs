@@ -326,6 +326,7 @@ enum PersistCommand {
     DispatchBuiltinHello {
         route_id: RouteId,
     },
+    CheckSandboxHostReadiness,
     ExecuteApprovedStdioTool {
         call_id: ToolCallId,
     },
@@ -609,6 +610,9 @@ enum PersistNotice {
     BuiltinHelloDispatched {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    SandboxHostChecked {
+        result: Result<(), String>,
     },
     StdioToolDispatchReserved {
         call_id: ToolCallId,
@@ -3373,6 +3377,13 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                 }
+                PersistNotice::SandboxHostChecked { result } => {
+                    self.tool_command_pending = false;
+                    self.status = match result {
+                        Ok(()) => "Linux confinement host probe passed. No tool provider launched and no route permit consumed.".to_owned(),
+                        Err(error) => format!("Linux confinement host probe blocked: {error}"),
+                    };
+                }
                 PersistNotice::StdioToolDispatchReserved { call_id, event } => {
                     self.events.push(event);
                     self.status = format!(
@@ -4674,6 +4685,25 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue tool call proposal: {error}");
+            }
+        }
+    }
+
+    fn check_sandbox_host_readiness(&mut self) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot check host confinement: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::CheckSandboxHostReadiness) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = "checking real Linux namespace sandbox with a fixed harmless process…".to_owned();
+            }
+            Err(error) => {
+                self.status = format!("failed to queue host-readiness check: {error}");
             }
         }
     }
@@ -8581,12 +8611,22 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Tools / MCP · restricted local adapter", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Durable provider/call identities, explicit approval, and the recovered legacy tool envelope. Only manually approved chatarium.builtin hello can execute; general MCP, browser, filesystem, process, and network tools remain disabled.",
+                                    "Durable provider/call identities, explicit approval, and the recovered legacy tool envelope. The builtin hello adapter and explicitly approved, sandboxed Linux MCP stdio calls can execute; unrestricted host processes, browser, filesystem, automatic tools, and network access remain disabled.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
 
+                            if ui.add_enabled(
+                                cfg!(target_os = "linux")
+                                    && !self.tool_command_pending
+                                    && self.persist_tx.is_some(),
+                                egui::Button::new("Check Linux sandbox host · no tool call"),
+                            ).on_hover_text(
+                                "Runs only the fixed root-owned /usr/bin/true under the actual network-isolated namespace and resource-limit policy. No configured provider launches; no journal dispatch or permission is consumed.",
+                            ).clicked() {
+                                self.check_sandbox_host_readiness();
+                            }
                             match replay_tool_provider_audit(&self.events) {
                                 Err(error) => {
                                     ui.label(
@@ -8750,7 +8790,7 @@ impl eframe::App for ChatariumApp {
                                                                     .find(|r| r.provider_id == provider_id)
                                                                     .is_some_and(|r| r.active);
                                                                 ui.label(if active {
-                                                                    "ACTIVATED (external execution still disabled)"
+                                                                    "ACTIVATED (individual calls still require Allow and one-shot Run)"
                                                                 } else {
                                                                     "INACTIVE (execution disabled)"
                                                                 });
@@ -16870,6 +16910,23 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::CheckSandboxHostReadiness => {
+                let notices_from_probe = notices.clone();
+                let launched = thread::Builder::new()
+                    .name("chatarium-mcp-host-check".to_owned())
+                    .spawn(move || {
+                        let result = std::panic::catch_unwind(
+                            local_stdio_runner::probe_confined_stdio_host,
+                        )
+                        .unwrap_or_else(|_| Err("Linux sandbox host probe panicked".to_owned()));
+                        let _ = notices_from_probe.send(PersistNotice::SandboxHostChecked { result });
+                    });
+                if let Err(error) = launched {
+                    let _ = notices.send(PersistNotice::SandboxHostChecked {
+                        result: Err(format!("cannot start sandbox host probe: {error}")),
+                    });
+                }
+            }
             PersistCommand::ExecuteApprovedStdioTool { call_id } => {
                 // Do the read-only call and executable checks first. The real
                 // namespace probe runs off the journal worker, *before* the
@@ -20599,6 +20656,7 @@ mod tests {
             PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
             PersistNotice::ToolCallRoutePolicyUpdated { .. } => "tool_call_route_policy_updated",
             PersistNotice::BuiltinHelloDispatched { .. } => "builtin_hello_dispatched",
+            PersistNotice::SandboxHostChecked { .. } => "sandbox_host_checked",
             PersistNotice::StdioToolDispatchReserved { .. } => "stdio_tool_dispatch_reserved",
             PersistNotice::StdioToolDispatchFinished { .. } => "stdio_tool_dispatch_finished",
             PersistNotice::ToolResultContextDecisionUpdated { .. } => {
