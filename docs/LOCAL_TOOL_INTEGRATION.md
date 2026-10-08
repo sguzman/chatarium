@@ -247,9 +247,8 @@ become a purportedly recoverable tool call.
 ### Confined Linux MCP runner (available with explicit desktop approval)
 
 `apps/desktop/src/local_stdio_runner.rs` contains an opt-in, bounded
-one-shot executor that **only accepts a move-only reserved dispatch**.
-It accepts only a move-only reserved dispatch, uses an exact single JSON-RPC
-request frame, and decodes the single matching MCP reply. The subprocess
+one-shot executor accepting only a move-only reserved dispatch, using an
+exact single JSON-RPC request frame, and decoding the matching MCP reply. The subprocess
 executes on its own worker thread, never on the persistence worker. The
 terminal observation is returned as a bounded typed message and appended to
 the authoritative journal by the persistence worker, which remains responsive
@@ -268,8 +267,14 @@ policy as an actual request, with a three-second deadline, empty environment,
 no stdin, and discarded stdout/stderr. Nothing from the configured provider
 is launched. The persistence worker remains free to accept unrelated writes.
 
+In **Context & inference controls → Tools / MCP**, the desktop also offers
+**Check Linux sandbox host · no tool call**. This user-triggered diagnostic
+runs the same harmless probe without requiring any provider configuration,
+approval, or tool-call record. The result is a transient status message, not
+permission or a durable tool outcome.
+
 If a missing binary, incompatible namespace policy, AppArmor/LSM rule, or
-probe timeout prevents this fixed process from succeeding, the desktop reports
+probe timeout prevents the fixed process from succeeding, the desktop reports
 a preflight error **without recording RouteDispatched**. If the probe succeeds,
 the journal worker revalidates provider activation, call provenance, current
 route Allow, exact configuration and executable metadata **again** before
