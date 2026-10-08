@@ -4700,7 +4700,9 @@ impl ChatariumApp {
         match sender.send(PersistCommand::CheckSandboxHostReadiness) {
             Ok(()) => {
                 self.tool_command_pending = true;
-                self.status = "checking real Linux namespace sandbox with a fixed harmless process…".to_owned();
+                self.status =
+                    "checking real Linux namespace sandbox with a fixed harmless process…"
+                        .to_owned();
             }
             Err(error) => {
                 self.status = format!("failed to queue host-readiness check: {error}");
@@ -16915,11 +16917,13 @@ fn persistence_worker(
                 let launched = thread::Builder::new()
                     .name("chatarium-mcp-host-check".to_owned())
                     .spawn(move || {
-                        let result = std::panic::catch_unwind(
-                            local_stdio_runner::probe_confined_stdio_host,
-                        )
-                        .unwrap_or_else(|_| Err("Linux sandbox host probe panicked".to_owned()));
-                        let _ = notices_from_probe.send(PersistNotice::SandboxHostChecked { result });
+                        let result =
+                            std::panic::catch_unwind(local_stdio_runner::probe_confined_stdio_host)
+                                .unwrap_or_else(|_| {
+                                    Err("Linux sandbox host probe panicked".to_owned())
+                                });
+                        let _ =
+                            notices_from_probe.send(PersistNotice::SandboxHostChecked { result });
                     });
                 if let Err(error) = launched {
                     let _ = notices.send(PersistNotice::SandboxHostChecked {
