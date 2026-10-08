@@ -14,6 +14,7 @@ mod local_tool_provider_control;
 #[cfg(test)]
 mod mcp_async_tests;
 mod mcp_output_audit;
+mod mcp_provider_workflow;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -8755,6 +8756,72 @@ impl eframe::App for ChatariumApp {
                                                     );
                                                 }
                                             });
+
+                                        // Setup advice is observational: failed projections cannot
+                                        // silently claim any permission or readiness.
+                                        if let Some(selected) = self.tool_selected_provider.and_then(|id| {
+                                            providers.iter().find(|provider| provider.provider_id == id)
+                                        }) {
+                                            let builtin = selected.name.as_str()
+                                                == local_tool_adapter::BUILTIN_PROVIDER_NAME;
+                                            let setup = if builtin {
+                                                Some(mcp_provider_workflow::ProviderWorkflowFacts {
+                                                    builtin: true,
+                                                    endpoint_bound: selected.endpoint_binding.is_some(),
+                                                    transport_configured: false,
+                                                    activated: false,
+                                                    source_addressable: false,
+                                                    catalog_inspection_allowlisted: false,
+                                                })
+                                            } else {
+                                                match (
+                                                    replay_tool_transport_config_audit(&self.events),
+                                                    replay_tool_provider_activation_audit(&self.events),
+                                                    replay_local_routing_directory(&self.events),
+                                                ) {
+                                                    (Ok(configs), Ok(activations), Ok(directory)) => {
+                                                        let config = configs.iter().find(|record| {
+                                                            record.provider_id == selected.provider_id
+                                                        });
+                                                        Some(mcp_provider_workflow::ProviderWorkflowFacts {
+                                                            builtin: false,
+                                                            endpoint_bound: selected.endpoint_binding.is_some(),
+                                                            transport_configured: config.is_some(),
+                                                            activated: activations.iter().find(|record| {
+                                                                record.provider_id == selected.provider_id
+                                                            }).is_some_and(|record| record.active),
+                                                            source_addressable: directory.iter().any(|entry| {
+                                                                entry.conversation_id == self.local_conversation_id
+                                                                    && entry.current_session_phase.accepts_ordinary_turns()
+                                                            }),
+                                                            catalog_inspection_allowlisted: config.is_some_and(|record| {
+                                                                record.config.allowed_operations().iter().any(|operation| {
+                                                                    operation.as_str() == MCP_LIST_TOOLS_OPERATION
+                                                                })
+                                                            }),
+                                                        })
+                                                    }
+                                                    _ => None,
+                                                }
+                                            };
+                                            ui.group(|ui| {
+                                                ui.label(egui::RichText::new("Selected provider · setup guidance (read-only)").strong());
+                                                if let Some(facts) = setup {
+                                                    let step = mcp_provider_workflow::next_step(facts);
+                                                    ui.label(egui::RichText::new(step.heading()).strong());
+                                                    ui.label(step.instruction());
+                                                    let note = mcp_provider_workflow::catalog_note(facts);
+                                                    if !note.is_empty() {
+                                                        ui.label(egui::RichText::new(note).small());
+                                                    }
+                                                } else {
+                                                    ui.label("Setup guidance unavailable: a provider, activation, or routing audit could not be replayed. Review the detailed audit errors below.");
+                                                }
+                                                ui.label(egui::RichText::new(
+                                                    "Guidance does not bind endpoints, activate providers, record calls, approve routes, or execute MCP tools."
+                                                ).small());
+                                            });
+                                        }
 
                                         ui.collapsing("Provider registry", |ui| {
                                             for provider in &providers {
