@@ -673,6 +673,33 @@ does not write records directly. There is no bulk approval, automatic
 admission, tool launch or retry. The full recorded result is never
 rewritten or implicitly granted instruction authority.
 
+## Admitted MCP evidence inventory (desktop)
+
+The conversation's **Context & inference controls → Admitted MCP evidence**
+panel now lists *all currently admitted* tool results for that local
+conversation, across providers, historical source sessions, and beyond the
+16-observation per-provider review window. It derives its evidence from the
+same fail-closed `replay_admitted_tool_results` projection that normal-turn
+Context Composer consumes. The view joins immutable call metadata, verifies
+conversation ownership, admission chronology and exact call/route identity,
+and refuses to offer revocation controls if the full inventory is inconsistent.
+
+Entries appear newest-admission-first in a bounded-height, virtualized list.
+The count and raw UTF-8 byte total cover the **entire** admitted set, not
+just visible rows. Every entry identifies the tool operation, call, provider,
+adapter result/error, byte size and latest admission event. Each has a
+separate **Revoke** action that records a checked, durable Exclude decision
+for exactly one result. No bulk action, process execution, journal erasure,
+or implicit permission change is possible. The historical Tools / MCP audit
+retains excluded outcomes, and the existing per-result review can admit an
+eligible outcome again.
+
+These admissions are **eligible for the next normal conversation request**,
+not a guarantee that every specialized controller/worker dispatch carries
+the same context. **Exact next-request context** remains the authoritative
+preview of the composed request. The inventory is a control surface for
+audited evidence selection, not an alternative source of model instructions.
+
 ## Focused call review (desktop)
 
 Above the bounded historical **Tool call audit**, the desktop surfaces the
