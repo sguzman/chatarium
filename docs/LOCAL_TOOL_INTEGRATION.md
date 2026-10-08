@@ -261,6 +261,12 @@ The first hardened launch policy is intentionally narrow:
   root-owned executables. Missing binaries or unavailable kernel user
   namespaces cause an error, never unsandboxed execution. These tools
   are free Linux packages, but they are not presumed installed.
+- Ubuntu AppArmor policies may block `bubblewrap` network-namespace
+  setup with `loopback: Failed RTM_NEWADDR: Operation not permitted`.
+  CI loads Ubuntu's targeted `bwrap-userns-restrict` AppArmor profile
+  rather than disabling the host-wide namespace restriction or sharing
+  the host network. Other Linux hosts must independently support the
+  same isolation policy; lack of support remains a hard launch error.
 - `prlimit` enforces 512 MiB address space, 8 CPU seconds, 8 MiB max
   individual output file size, and 64 open descriptors. The runner adds
   a 10-second wall-clock timeout, a 1 MiB stdout frame ceiling and
