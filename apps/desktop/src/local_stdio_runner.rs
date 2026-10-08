@@ -138,6 +138,23 @@ pub fn plan_confined_stdio_launch(
     })
 }
 
+/// Fail-closed launch readiness check on the persistence worker, before
+/// consuming a durable one-shot route. Never call this from the render loop.
+/// The runner checks executable metadata again immediately before spawning.
+pub fn preflight_confined_stdio_launch(
+    executable: &str,
+    argv: &[String],
+) -> Result<(), String> {
+    let _plan = plan_confined_stdio_launch(executable, argv)?;
+    #[cfg(target_os = "linux")]
+    {
+        for path in [PRLIMIT, BWRAP, executable] {
+            validate_trusted_binary(path)?;
+        }
+    }
+    Ok(())
+}
+
 /// Check each launched program's on-disk metadata immediately before spawn.
 /// This cannot attest authenticity in the presence of root compromise, and
 /// it does not replace the separate *durable* activation and route checks.
@@ -205,13 +222,8 @@ fn run_one_shot(
     if !frame.ends_with('\n') || frame.len() > MAX_MCP_FRAME_BYTES {
         return Err("refused an unbounded or malformed MCP request frame".to_owned());
     }
+    preflight_confined_stdio_launch(executable, argv)?;
     let plan = plan_confined_stdio_launch(executable, argv)?;
-    #[cfg(target_os = "linux")]
-    {
-        for path in [PRLIMIT, BWRAP, executable] {
-            validate_trusted_binary(path)?;
-        }
-    }
     #[cfg(not(target_os = "linux"))]
     {
         return Err("external MCP stdio execution is Linux-only".to_owned());
