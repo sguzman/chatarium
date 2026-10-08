@@ -1184,7 +1184,10 @@ mod tests {
         assert_eq!(export["request"]["conversation_id"], owner.to_string());
         assert_eq!(export["tool_results"]["listed"][0]["source_session_id"], 40);
         assert_eq!(export["tool_results"]["listed"][0]["outcome_sequence"], 50);
-        assert_eq!(export["tool_results"]["listed"][0]["disposition"], "included");
+        assert_eq!(
+            export["tool_results"]["listed"][0]["disposition"],
+            "included"
+        );
         assert!(export["transport"]["accepted_sequence"].is_number());
         let serialized = export.to_string();
         assert!(!serialized.contains("secret adapter bytes"));
