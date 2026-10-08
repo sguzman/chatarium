@@ -6257,6 +6257,16 @@ impl eframe::App for ChatariumApp {
                             let Some(match_kind) = match_kind else {
                                 continue;
                             };
+                            let native_excerpt = if match_kind
+                                == native_conversation_search::NativeSearchMatch::Message
+                            {
+                                native_conversation_search::matching_message_preview(
+                                    messages.iter().map(|message| message.text.as_str()),
+                                    &self.local_conversation_search_query,
+                                )
+                            } else {
+                                None
+                            };
                             visible_native_search_matches += 1;
                             let result_index = native_search_matches.len();
                             native_search_matches.push(entry.id);
@@ -6312,6 +6322,17 @@ impl eframe::App for ChatariumApp {
                                             );
                                         }
                                     });
+                                    if let Some(excerpt) = native_excerpt.as_deref() {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(excerpt)
+                                                    .italics()
+                                                    .size(10.0)
+                                                    .color(egui::Color32::from_rgb(170, 174, 184)),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
                                 });
                             ui.add_space(4.0);
                         }
@@ -7050,10 +7071,10 @@ impl eframe::App for ChatariumApp {
                     );
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-                    select_local_requested = self
-                        .local_conversation_search_selection
-                        .and_then(|index| native_search_matches.get(index).copied())
-                        .or_else(|| native_search_matches.first().copied());
+                    select_local_requested = native_conversation_search::activate_selection(
+                        &native_search_matches,
+                        self.local_conversation_search_selection,
+                    );
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                     self.local_conversation_search_query.clear();

@@ -220,27 +220,57 @@ pub fn activate_selection(
         .or_else(|| results.first().cloned())
 }
 
+/// Extract a bounded local excerpt around a case-folded match.
+///
+/// Unicode lowercasing may expand or contextualize characters, so folded
+/// offsets must never be used to slice the original UTF-8 text directly.
 pub fn local_snippet(text: &str, folded_query: &str) -> Option<String> {
     if folded_query.is_empty() {
         return None;
     }
     let folded_text = text.to_lowercase();
-    let byte_start = folded_text.find(folded_query)?;
-    let byte_end = byte_start + folded_query.len();
-    let start = text[..byte_start]
+    let match_start = folded_text.find(folded_query)?;
+    let match_end = match_start + folded_query.len();
+
+    let mut folded_offset = 0;
+    let mut original_start = None;
+    let mut original_end = None;
+    for (byte_start, ch) in text.char_indices() {
+        let byte_end = byte_start + ch.len_utf8();
+        for lower in ch.to_lowercase() {
+            let folded_end = folded_offset + lower.len_utf8();
+            if original_start.is_none() && match_start < folded_end {
+                original_start = Some(byte_start);
+            }
+            if folded_offset < match_end {
+                original_end = Some(byte_end);
+            }
+            folded_offset = folded_end;
+        }
+        if folded_offset >= match_end {
+            break;
+        }
+    }
+    let (Some(original_start), Some(original_end)) = (original_start, original_end) else {
+        return None;
+    };
+    let start = text[..original_start]
         .char_indices()
         .rev()
         .nth(48)
-        .map(|(index, _)| index)
+        .map(|(offset, _)| offset)
         .unwrap_or(0);
-    let end = text[byte_end..]
+    let end = text[original_end..]
         .char_indices()
         .nth(96)
-        .map(|(index, _)| byte_end + index)
+        .map(|(offset, _)| original_end + offset)
         .unwrap_or(text.len());
     let prefix = if start > 0 { "…" } else { "" };
     let suffix = if end < text.len() { "…" } else { "" };
-    Some(format!("{prefix}{}{suffix}", &text[start..end]))
+    let excerpt = text[start..end]
+        .replace('\r', "")
+        .replace('\n', " ↵ ");
+    Some(format!("{prefix}{excerpt}{suffix}"))
 }
 
 impl fmt::Display for ArchiveSearchMode {
@@ -374,6 +404,29 @@ mod tests {
                 ArchiveStateFilter::All
             )
         );
+    }
+
+    #[test]
+    fn unicode_expanding_lowercase_never_slices_interior_utf8() {
+        assert_eq!(
+            local_snippet("İstanbul is busy", "i"),
+            Some("İstanbul is busy".to_owned())
+        );
+        assert_eq!(
+            local_snippet("EL NIÑO\nsueña", "niño"),
+            Some("EL NIÑO ↵ sueña".to_owned())
+        );
+        assert!(local_snippet("México", "other").is_none());
+    }
+
+    #[test]
+    fn long_snippets_omit_remote_neighbors_and_bound_context() {
+        let text = format!("{}MIDDLE{}!", "a".repeat(150), "z".repeat(300));
+        let excerpt = local_snippet(&text, "middle").unwrap();
+        assert!(excerpt.contains("MIDDLE"));
+        assert!(excerpt.starts_with('…'));
+        assert!(excerpt.ends_with('…'));
+        assert!(excerpt.chars().count() < 180);
     }
 
     #[test]

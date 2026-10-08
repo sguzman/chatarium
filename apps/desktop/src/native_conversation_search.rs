@@ -2,6 +2,16 @@
 //! Search only locally projected user/assistant text and the local workspace title.
 //! The journal and metadata catalog remain authoritative; the query is ephemeral.
 
+use super::{DisplayMessage, projected_display_messages};
+use chatarium_core::{EventKind, LocalConversationId};
+use chatarium_store::EventEnvelope;
+use chatarium_store::authored::{
+    DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope,
+};
+use eframe::egui;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeSearchMatch {
     Title,
@@ -26,19 +36,37 @@ pub fn find_match<'a>(
         .then_some(NativeSearchMatch::Message)
 }
 
+/// Select a native conversation by keyboard result position. The same
+/// activation contract applies to Enter with no highlighted row (first
+/// result) and to a stale index after the filter changed.
+pub fn activate_selection(
+    matches: &[LocalConversationId],
+    selection: Option<usize>,
+) -> Option<LocalConversationId> {
+    selection
+        .and_then(|index| matches.get(index))
+        .or_else(|| matches.first())
+        .copied()
+}
+
+/// A bounded preview from only the selected conversation's projected
+/// user/assistant messages. Uses the same UTF-8-safe local archive excerpt.
+pub fn matching_message_preview<'a>(
+    messages: impl IntoIterator<Item = &'a str>,
+    query: &str,
+) -> Option<String> {
+    let folded = query.trim().to_lowercase();
+    if folded.is_empty() {
+        return None;
+    }
+    messages
+        .into_iter()
+        .find_map(|message| super::local_archive_search::local_snippet(message, &folded))
+}
+
 // The index reuses the same typed authored ownership and display-message
 // projection as the native conversation view, but scans journal history only
 // once rather than once per visible sidebar row, and caches unchanged frames.
-use super::{DisplayMessage, projected_display_messages};
-use chatarium_core::{EventKind, LocalConversationId};
-use chatarium_store::EventEnvelope;
-use chatarium_store::authored::{
-    DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope,
-};
-use eframe::egui;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct JournalRevision {
     event_count: usize,
@@ -293,6 +321,47 @@ mod tests {
         let later = cached_index(&ctx, store.events());
         assert!(!Arc::ptr_eq(&first, &later));
         assert_eq!(later.messages(owner).len(), 1);
+    }
+
+    #[test]
+    fn native_search_enter_targets_selection_or_first_match_safely() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        assert_eq!(activate_selection(&[], None), None);
+        assert_eq!(activate_selection(&[first, second], None), Some(first));
+        assert_eq!(activate_selection(&[first, second], Some(1)), Some(second));
+        assert_eq!(activate_selection(&[first, second], Some(99)), Some(first));
+    }
+
+    #[test]
+    fn snippet_is_bounded_to_matching_context_and_handles_unicode_case_folding() {
+        let long = format!("{}find MIDDLE HERE{}", "p".repeat(150), "s".repeat(300));
+        let snippet = matching_message_preview([long.as_str()], "middle").unwrap();
+        assert!(snippet.contains("MIDDLE"));
+        assert!(snippet.starts_with('…'));
+        assert!(snippet.ends_with('…'));
+        assert!(snippet.chars().count() < 180);
+
+        let unicode = "İstanbul is a city";
+        assert_eq!(
+            matching_message_preview([unicode], "i"),
+            Some(unicode.to_owned())
+        );
+        assert_eq!(
+            matching_message_preview(["EL NIÑO\nsueña"], "niño"),
+            Some("EL NIÑO ↵ sueña".to_owned())
+        );
+        assert!(matching_message_preview(["Private other conversation"], "absent").is_none());
+        assert!(matching_message_preview(["Hello"], "  ").is_none());
+    }
+
+    #[test]
+    fn snippets_scan_only_supplied_messages_not_tool_or_other_conversation_bodies() {
+        assert_eq!(
+            matching_message_preview(["unrelated", "SECOND owner match"], "match"),
+            Some("SECOND owner match".to_owned())
+        );
+        assert!(matching_message_preview(["safe native message"], "tool secret").is_none());
     }
 
     #[test]

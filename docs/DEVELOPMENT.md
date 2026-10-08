@@ -58,6 +58,12 @@ Native search retains Ctrl+Shift+K focus and adds Up/Down selection with
 Enter to open the highlighted local conversation. Changing or clearing the
 query resets that selection; Escape clears query and focus. Selection is
 transient and cannot change journal history or tool permissions.
+For message-text matches, the sidebar displays a bounded excerpt around the
+matching term, drawn exclusively from the indexed local user/assistant
+messages for that conversation. Unicode case-folding can change byte
+length; the excerpt uses original-character boundaries so accented and
+multilingual searches never slice invalid UTF-8. No raw tool result or
+remote-mirror content is searched or surfaced through this control.
 
 ## Automated QA ownership
 
