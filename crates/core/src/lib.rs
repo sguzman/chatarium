@@ -276,6 +276,7 @@ impl TurnEvidence {
             | EventKind::ToolProviderEndpointBound
             | EventKind::ToolCallRecorded
             | EventKind::ToolCallRouteBound
+            | EventKind::ToolCallOutcomeObserved
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
@@ -405,6 +406,8 @@ pub enum EventKind {
     ToolCallRecorded,
     /// One immutable tool-call intent was correlated to a ToolCall route.
     ToolCallRouteBound,
+    /// An adapter-observed terminal result/error for one dispatched tool call.
+    ToolCallOutcomeObserved,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
     /// One local conversation was durably correlated to an orchestration worker identity.
@@ -532,6 +535,7 @@ impl EventKind {
             Self::ToolProviderEndpointBound => "tool_provider_endpoint_bound",
             Self::ToolCallRecorded => "tool_call_recorded",
             Self::ToolCallRouteBound => "tool_call_route_bound",
+            Self::ToolCallOutcomeObserved => "tool_call_outcome_observed",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
@@ -635,6 +639,7 @@ impl EventKind {
             "tool_provider_endpoint_bound" => Some(Self::ToolProviderEndpointBound),
             "tool_call_recorded" => Some(Self::ToolCallRecorded),
             "tool_call_route_bound" => Some(Self::ToolCallRouteBound),
+            "tool_call_outcome_observed" => Some(Self::ToolCallOutcomeObserved),
             "route_result_observed" => Some(Self::RouteResultObserved),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
