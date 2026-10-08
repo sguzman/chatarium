@@ -8,6 +8,7 @@ pub mod conversation_list;
 pub mod read;
 pub mod sse;
 pub mod stability;
+pub mod tool_envelope;
 
 /// Newest protocol observation revision against which this crate has been validated.
 ///
