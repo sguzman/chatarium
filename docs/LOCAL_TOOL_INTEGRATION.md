@@ -462,6 +462,35 @@ immutable call, **Allow** its route, and separately **Run** its one-shot sandbox
 execution. The provider's catalog cannot change execution permissions, and
 schema drafting never launches or contacts a server.
 
+## Standalone Linux host compatibility check (no provider or journal)
+
+Before preparing an external MCP call, or when the desktop's **Check Linux
+sandbox host · no tool call** diagnostic fails, run this optional check from a
+local Chatarium repository checkout:
+
+```sh
+cargo run -p chatarium-desktop --bin chatarium-mcp-host-check
+```
+
+It executes only the fixed root-owned `/usr/bin/true` fixture through the
+**same production** prlimit + bubblewrap isolation policy. It does not read
+Chatarium's conversation journal, authenticate, configure or invoke an MCP
+provider, consume any approval, or use the host network. It exits zero for a
+successful readiness observation; otherwise it exits nonzero and prints a
+bounded diagnostic. When the launcher itself reports a failure, at most
+4 KiB of sanitized stderr is used; raw arbitrary process output is not
+forwarded. The desktop's existing check uses the same probe.
+
+Common blockers include missing/untrusted `/usr/bin/prlimit` or
+`/usr/bin/bwrap`, disallowed unprivileged user namespaces, and AppArmor/LSM
+restrictions. Inspect the reported host-specific cause; **do not disable
+system-wide namespace or LSM security merely to make Chatarium pass**.
+A passing check only proves the isolation fixture could run at that moment:
+it does not attest a provider executable, grant execution authority, or
+guarantee that a later launch will succeed. Actual EndeavourOS/Arch host
+validation remains an operator-side milestone and cannot be inferred from
+GitHub's Ubuntu CI.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select

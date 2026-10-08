@@ -95,6 +95,8 @@ jobs:
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
         run: cargo test -p chatarium-desktop live_confined_host_readiness_probe -- --nocapture
+      - name: Verify standalone MCP host-check entry point
+        run: cargo run -p chatarium-desktop --bin chatarium-mcp-host-check
       - name: Smoke isolated MCP stdio transport
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"

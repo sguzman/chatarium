@@ -24,6 +24,7 @@ const BWRAP: &str = "/usr/bin/bwrap";
 const MAX_STDERR_BYTES: u64 = 16 * 1024;
 const WALL_TIMEOUT: Duration = Duration::from_secs(10);
 const HOST_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_HOST_PROBE_STDERR_BYTES: usize = 4 * 1024;
 const LIMIT_AS_BYTES: &str = "--as=536870912";
 const LIMIT_CPU_SECONDS: &str = "--cpu=8";
 const LIMIT_FSIZE_BYTES: &str = "--fsize=8388608";
@@ -178,25 +179,34 @@ pub fn probe_confined_stdio_host() -> Result<(), String> {
             .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("isolated host-readiness probe could not start: {e}"))?;
+        // The fixed root-owned launcher is the only producer of this stderr.
+        // Drain concurrently so diagnostics cannot deadlock a blocked writer,
+        // and never retain more than the explicitly bounded evidence budget.
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "isolated host-readiness probe stderr unavailable".to_owned())?;
+        let reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr
+                .take(MAX_HOST_PROBE_STDERR_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map(|_| bytes)
+        });
         let start = Instant::now();
-        loop {
+        let status = loop {
             match child.try_wait() {
-                Ok(Some(status)) if status.success() => return Ok(()),
-                Ok(Some(status)) => {
-                    return Err(format!(
-                        "isolated host-readiness probe exited {status}; verify bubblewrap user namespaces and local AppArmor/LSM policy; no tool-call dispatch was consumed"
-                    ));
-                }
+                Ok(Some(status)) => break Ok(status),
                 Ok(None) if start.elapsed() < HOST_PROBE_TIMEOUT => {
                     thread::sleep(Duration::from_millis(10));
                 }
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(
+                    break Err(
                         "isolated host-readiness probe timed out; no tool-call dispatch was consumed"
                             .to_owned(),
                     );
@@ -204,13 +214,46 @@ pub fn probe_confined_stdio_host() -> Result<(), String> {
                 Err(e) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
+                    break Err(format!(
                         "isolated host-readiness probe failed to wait: {e}; no tool-call dispatch was consumed"
                     ));
                 }
             }
+        };
+        let stderr = reader
+            .join()
+            .map_err(|_| "isolated host-readiness stderr reader panicked".to_owned())?
+            .map_err(|e| format!("isolated host-readiness stderr read failed: {e}"))?;
+        match status {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format_host_probe_rejection(&status.to_string(), &stderr)),
+            Err(error) => Err(error),
         }
     }
+}
+
+/// Host diagnostics are *evidence*, not shell text or executable instructions.
+/// Normalize control characters and cap what reaches the desktop or terminal.
+fn format_host_probe_rejection(status: &str, stderr: &[u8]) -> String {
+    let bounded = &stderr[..stderr.len().min(MAX_HOST_PROBE_STDERR_BYTES)];
+    let clean = String::from_utf8_lossy(bounded)
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let truncated = if stderr.len() > MAX_HOST_PROBE_STDERR_BYTES {
+        " [truncated]"
+    } else {
+        ""
+    };
+    let diagnostic = if clean.is_empty() {
+        String::new()
+    } else {
+        format!("; bounded launcher stderr: {clean}{truncated}")
+    };
+    format!(
+        "isolated host-readiness probe exited {status}{diagnostic}; check bubblewrap user namespaces and local AppArmor/LSM policy without disabling host security; no tool-call dispatch was consumed"
+    )
 }
 
 /// Check each launched program's on-disk metadata immediately before spawn.
@@ -433,6 +476,22 @@ fn run_one_shot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_host_probe_exposes_only_bounded_sanitized_launcher_diagnostics() {
+        let error = format_host_probe_rejection(
+            "exit status: 1",
+            b"bwrap: user namespaces denied\x1b[31m\r\n",
+        );
+        assert!(error.contains("bwrap: user namespaces denied"));
+        assert!(!error.contains('\x1b'));
+        assert!(error.contains("no tool-call dispatch was consumed"));
+
+        let oversized = vec![b'a'; MAX_HOST_PROBE_STDERR_BYTES + 1];
+        let error = format_host_probe_rejection("exit status: 1", &oversized);
+        assert!(error.contains("[truncated]"));
+        assert!(error.len() < MAX_HOST_PROBE_STDERR_BYTES + 400);
+    }
 
     #[test]
     fn argv_remains_exact_and_separate_from_sandbox_options() {
