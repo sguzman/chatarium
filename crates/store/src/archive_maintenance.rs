@@ -47,6 +47,7 @@ use crate::supervision_audit::replay_supervision_audit;
 use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
 use crate::tool_provider_audit::replay_tool_provider_audit;
+use crate::tool_result_context_audit::replay_tool_result_context_audit;
 use crate::{EventEnvelope, inspect_jsonl_journal};
 use chatarium_protocol::conversation_list::ConversationListItem;
 use serde_json::{Value, json};
@@ -185,6 +186,7 @@ pub fn check_archive(
     replay_tool_provider_audit(&events).map_err(err)?;
     replay_tool_call_audit(&events).map_err(err)?;
     replay_tool_call_outcome_audit(&events).map_err(err)?;
+    replay_tool_result_context_audit(&events).map_err(err)?;
     replay_validated_control_admissions(&events).map_err(err)?;
     replay_control_provenance_audit(&events).map_err(err)?;
     replay_control_route_audit(&events).map_err(err)?;
