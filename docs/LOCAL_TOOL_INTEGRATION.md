@@ -435,6 +435,33 @@ automatically: each page requires its **own new user-approved route and Run**.
 The server can mutate its advertised list between requests; this catalog
 is an observation at one point in time, not a source of authority.
 
+### Conservative schema-assisted argument drafting
+
+Within a completed `tools/list` audit, each advertised tool exposes a
+**Review required-field JSON draft** expander. The pure Rust module
+`crates/protocol/src/mcp_schema_draft.rs` inspects only bounded structural
+parts of the advertised `inputSchema` and produces **editable JSON text**.
+It includes *required* properties only, recursively up to a small depth,
+using clearly marked placeholders for basic types (empty string, zero,
+false, empty array/object). Optional properties are intentionally omitted.
+The generator **never uses provider-supplied default, const, enum, example,
+description, or expression content as an argument value**. Unsupported
+nested schema references/compositions produce an explicit `null` placeholder
+and review note; unsupported root schemas, malformed required structures,
+excessive size/depth, and missing property definitions are refused.
+
+The separate **Fill editable tool-call draft · no execution** button is only
+enabled when the inspected catalog belongs to the **current conversation**,
+the source still accepts calls, the provider is **currently activated**, and
+the advertised name is already present in that provider's **immutable
+configured allowlist**. The generated template does not validate the server's
+full JSON Schema, may contain placeholders that the server would reject, and
+is **never silently accepted as complete or safe**. Review/edit it in the
+ordinary call-intent form; the user must still explicitly **Record** the
+immutable call, **Allow** its route, and separately **Run** its one-shot sandboxed
+execution. The provider's catalog cannot change execution permissions, and
+schema drafting never launches or contacts a server.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select
