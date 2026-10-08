@@ -86,7 +86,10 @@ mod tests {
 
     #[test]
     fn preserves_legacy_xml_correlation_and_exact_shim_hello_payload() {
-        let call = call("hello", "<tool_call id=\"legacy-42\" name=\"hello\">\n{}\n</tool_call>");
+        let call = call(
+            "hello",
+            "<tool_call id=\"legacy-42\" name=\"hello\">\n{}\n</tool_call>",
+        );
         let response = prepare_hello_response(&call).unwrap();
         let parsed = parse_legacy_tool_result(&response).unwrap();
         assert_eq!(parsed.id, "legacy-42");
@@ -108,10 +111,13 @@ mod tests {
         assert!(prepare_hello_response(&call("hello", "{\"path\":\"/home\"}")).is_err());
         assert!(prepare_hello_response(&call("hello", "[1]")).is_err());
         assert!(prepare_hello_response(&call("clock", "{}")).is_err());
-        assert!(prepare_hello_response(&call(
-            "hello",
-            "<tool_call name=\"clock.now\">{}</tool_call>"
-        )).is_err());
+        assert!(
+            prepare_hello_response(&call(
+                "hello",
+                "<tool_call name=\"clock.now\">{}</tool_call>"
+            ))
+            .is_err()
+        );
         assert!(prepare_hello_response(&call("hello", "garbage")).is_err());
     }
 
