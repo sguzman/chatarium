@@ -2,6 +2,7 @@ mod account_bridge;
 mod behavior_profile;
 mod capability_probes;
 mod context_composer;
+mod conversation_keybindings;
 mod diagnostics;
 #[cfg(test)]
 mod integration_journey;
@@ -12840,7 +12841,12 @@ impl eframe::App for ChatariumApp {
                     && self.commit_in_flight.is_none()
                     && remote_ready_for_send
                     && !self.draft.trim().is_empty();
-                let commit_shortcut = can_commit
+                let composer_shortcut_ready =
+                    conversation_keybindings::may_submit_composer_shortcut(
+                        can_commit,
+                        response.has_focus(),
+                    );
+                let commit_shortcut = composer_shortcut_ready
                     && ctx.input_mut(|input| {
                         input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
                     });
@@ -12941,26 +12947,28 @@ impl eframe::App for ChatariumApp {
         let mut next_reader_hit = false;
         let mut previous_reader_hit = false;
         let transcript_scroll_id = egui::Id::new("transcript-reader-scroll");
-        ctx.input_mut(|input| {
-            if input.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
-                next_reader_hit = true;
-            }
-            if input.consume_key(egui::Modifiers::CTRL, egui::Key::P) {
-                previous_reader_hit = true;
-            }
-            if input.consume_key(egui::Modifiers::NONE, egui::Key::PageDown) {
-                adjust_reader_scroll(ctx, transcript_scroll_id, 480.0);
-            }
-            if input.consume_key(egui::Modifiers::NONE, egui::Key::PageUp) {
-                adjust_reader_scroll(ctx, transcript_scroll_id, -480.0);
-            }
-            if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
-                set_reader_scroll(ctx, transcript_scroll_id, 0.0);
-            }
-            if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
-                set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
-            }
-        });
+        if conversation_keybindings::may_consume_reader_navigation(ctx.text_edit_focused()) {
+            ctx.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
+                    next_reader_hit = true;
+                }
+                if input.consume_key(egui::Modifiers::CTRL, egui::Key::P) {
+                    previous_reader_hit = true;
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::PageDown) {
+                    adjust_reader_scroll(ctx, transcript_scroll_id, 480.0);
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::PageUp) {
+                    adjust_reader_scroll(ctx, transcript_scroll_id, -480.0);
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
+                    set_reader_scroll(ctx, transcript_scroll_id, 0.0);
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
+                    set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+                }
+            });
+        }
         if next_reader_hit {
             self.reader_search_hit =
                 offline_reader::next_hit(self.reader_search_hit, reader_hit_targets.len(), false);

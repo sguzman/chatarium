@@ -123,6 +123,20 @@ If a browser prototype fails two focused live validations at the same architectu
 
 Keep egui rendering cheap. The app should display immutable/cheap snapshots of state and emit commands. Persistence, networking, capture parsing, indexing, and reconciliation run elsewhere.
 
+### Keyboard focus ownership
+
+Ctrl+Enter commits a message **only while the message composer has keyboard
+focus**. The Send / Commit locally button remains separately accessible.
+Other focused inputs (archive search, settings, conversation rename) must
+not accidentally send a draft.
+
+Reader-navigation keys (Home, End, PageUp, PageDown, Ctrl+N, Ctrl+P) are
+handled by the transcript reader only if no text input currently requests
+keyboard input. This ensures multiline editing, search, and settings fields
+retain their standard editing/navigation keys. Pure focus-boundary tests
+live in `apps/desktop/src/conversation_keybindings.rs`. Native visual
+QA of actual focus transitions is distinct from CI keyboard-policy tests.
+
 ## Commit shape
 
 When practical, keep evidence + documentation + adaptation atomic. A good protocol maintenance commit can say exactly which observation changed and how the implementation was updated in response.
