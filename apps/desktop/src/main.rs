@@ -9324,6 +9324,15 @@ impl eframe::App for ChatariumApp {
                                                                                             .ok()
                                                                                             .flatten()
                                                                                             == Some(self.local_conversation_id);
+                                                                                    let source_accepts_calls =
+                                                                                        replay_local_routing_directory(&self.events)
+                                                                                            .ok()
+                                                                                            .is_some_and(|directory| {
+                                                                                                directory.iter().any(|entry| {
+                                                                                                    entry.conversation_id == self.local_conversation_id
+                                                                                                        && entry.current_session_phase.accepts_ordinary_turns()
+                                                                                                })
+                                                                                            });
                                                                                     let currently_active =
                                                                                         replay_tool_provider_activation_audit(&self.events)
                                                                                             .ok()
@@ -9372,7 +9381,7 @@ impl eframe::App for ChatariumApp {
                                                                                                                 .is_ok()
                                                                                                                 && configured_operations.contains(advertised.name.as_str());
                                                                                                         let can_prepare = inspection_owned_here
-                                                                                                            && source_addressable
+                                                                                                            && source_accepts_calls
                                                                                                             && currently_active
                                                                                                             && allowed_operation
                                                                                                             && !self.tool_command_pending;
@@ -9393,7 +9402,7 @@ impl eframe::App for ChatariumApp {
                                                                                                         }
                                                                                                         if !allowed_operation {
                                                                                                             ui.label("Unavailable: this tool is not in the provider's immutable allowed operations.");
-                                                                                                        } else if !inspection_owned_here || !source_addressable {
+                                                                                                        } else if !inspection_owned_here || !source_accepts_calls {
                                                                                                             ui.label("Unavailable: catalog and active source conversation must match.");
                                                                                                         } else if !currently_active {
                                                                                                             ui.label("Unavailable: provider is not currently active.");
