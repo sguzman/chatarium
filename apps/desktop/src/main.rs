@@ -1256,7 +1256,7 @@ impl ChatariumApp {
                         route_dispatch_command_pending: false,
                         route_context_command_pending: false,
                         tool_command_pending: false,
-            last_sandbox_host_check: None,
+                        last_sandbox_host_check: None,
                         tool_provider_name_draft: String::new(),
                         tool_selected_provider: None,
                         tool_stdio_executable_draft: String::new(),
