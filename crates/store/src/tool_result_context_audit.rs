@@ -70,7 +70,13 @@ pub fn record_tool_result_context_decision(
     conversation_id: LocalConversationId,
     decision: ToolResultContextDecision,
 ) -> std::io::Result<u64> {
-    let payload = event_value(call_id, route_id, outcome_sequence, conversation_id, decision);
+    let payload = event_value(
+        call_id,
+        route_id,
+        outcome_sequence,
+        conversation_id,
+        decision,
+    );
     store.append_scoped(
         Some(context_scope(conversation_id, call_id)),
         EventKind::ToolResultContextDecisionRecorded,
@@ -88,7 +94,12 @@ pub fn append_tool_result_context_decision_checked(
     let outcome = replay_tool_call_outcome_audit(store.events())?
         .into_iter()
         .find(|item| item.call_id == call_id)
-        .ok_or_else(|| format!("tool call {} has no observed terminal outcome", call_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "tool call {} has no observed terminal outcome",
+                call_id.get()
+            )
+        })?;
     if let Some(existing) = replay_tool_result_context_audit(store.events())?
         .into_iter()
         .find(|item| item.call_id == call_id)
@@ -162,15 +173,29 @@ pub fn replay_tool_result_context_audit(
         let route_id = RouteId::new(required_u64(&value, "route_id")?);
         let outcome_sequence = required_u64(&value, "outcome_sequence")?;
         let conversation_id =
-            LocalConversationId::from_str(required_string(&value, "conversation_id")?)
-                .map_err(|error| format!("tool result context at #{} has invalid conversation: {error}", event.sequence))?;
+            LocalConversationId::from_str(required_string(&value, "conversation_id")?).map_err(
+                |error| {
+                    format!(
+                        "tool result context at #{} has invalid conversation: {error}",
+                        event.sequence
+                    )
+                },
+            )?;
         let decision = match required_string(&value, "decision")? {
             "admit" => ToolResultContextDecision::Admit,
             "exclude" => ToolResultContextDecision::Exclude,
-            other => return Err(format!("tool result context at #{} has unsupported decision '{other}'", event.sequence)),
+            other => {
+                return Err(format!(
+                    "tool result context at #{} has unsupported decision '{other}'",
+                    event.sequence
+                ));
+            }
         };
         if event.scope.as_deref() != Some(context_scope(conversation_id, call_id).as_str()) {
-            return Err(format!("tool result context at #{} has invalid scope", event.sequence));
+            return Err(format!(
+                "tool result context at #{} has invalid scope",
+                event.sequence
+            ));
         }
 
         let prior = &events[..index];
@@ -180,7 +205,8 @@ pub fn replay_tool_result_context_audit(
             .ok_or_else(|| {
                 format!(
                     "tool result context at #{} references call {} before terminal outcome",
-                    event.sequence, call_id.get()
+                    event.sequence,
+                    call_id.get()
                 )
             })?;
         if route_id != outcome.route_id || outcome_sequence != outcome.observed_sequence {
@@ -196,10 +222,8 @@ pub fn replay_tool_result_context_audit(
             .iter()
             .position(|item| item.sequence == outcome.observed_sequence)
             .ok_or_else(|| "tool outcome sequence not found in journal prefix".to_owned())?;
-        let owner = conversation_for_outcome_session(
-            &events[..=outcome_index],
-            outcome.source_session_id,
-        )?;
+        let owner =
+            conversation_for_outcome_session(&events[..=outcome_index], outcome.source_session_id)?;
         if owner != Some(conversation_id) {
             return Err(format!(
                 "tool result context at #{} cannot admit tool call {} to conversation {}: source session {} has different/no ownership at outcome time",
@@ -262,14 +286,19 @@ pub fn tool_outcome_owning_conversation(
     events: &[EventEnvelope],
     outcome: &ToolCallOutcomeRecord,
 ) -> Result<Option<LocalConversationId>, String> {
-    let position = events.iter().position(|item| {
-        item.sequence == outcome.observed_sequence
-            && item.kind == EventKind::ToolCallOutcomeObserved
-    }).ok_or_else(|| format!(
-        "tool call {} terminal outcome sequence {} is absent",
-        outcome.call_id.get(),
-        outcome.observed_sequence
-    ))?;
+    let position = events
+        .iter()
+        .position(|item| {
+            item.sequence == outcome.observed_sequence
+                && item.kind == EventKind::ToolCallOutcomeObserved
+        })
+        .ok_or_else(|| {
+            format!(
+                "tool call {} terminal outcome sequence {} is absent",
+                outcome.call_id.get(),
+                outcome.observed_sequence
+            )
+        })?;
     conversation_for_outcome_session(&events[..=position], outcome.source_session_id)
 }
 
@@ -290,7 +319,10 @@ pub fn replay_admitted_tool_results(
             continue;
         }
         let outcome = outcomes.get(&record.call_id).ok_or_else(|| {
-            format!("admitted tool call {} has no terminal outcome", record.call_id.get())
+            format!(
+                "admitted tool call {} has no terminal outcome",
+                record.call_id.get()
+            )
         })?;
         if outcome.observed_sequence != record.outcome_sequence
             || outcome.route_id != record.route_id
@@ -298,7 +330,10 @@ pub fn replay_admitted_tool_results(
             || outcome.provider_id != record.provider_id
             || outcome.kind != record.outcome_kind
         {
-            return Err(format!("tool call {} outcome changed after admission", record.call_id.get()));
+            return Err(format!(
+                "tool call {} outcome changed after admission",
+                record.call_id.get()
+            ));
         }
         result.push(AdmittedToolResult {
             record,
@@ -317,9 +352,20 @@ fn conversation_for_outcome_session(
     let bindings = replay_local_conversation_chat_container_bindings(events)?;
     let mut owner = None;
     for binding in bindings {
-        let container = containers.iter().find(|item| item.container_id == binding.container_id)
-            .ok_or_else(|| format!("tool result owner references absent chat container {}", binding.container_id.get()))?;
-        if container.sessions.iter().any(|item| item.session_id == source_session) {
+        let container = containers
+            .iter()
+            .find(|item| item.container_id == binding.container_id)
+            .ok_or_else(|| {
+                format!(
+                    "tool result owner references absent chat container {}",
+                    binding.container_id.get()
+                )
+            })?;
+        if container
+            .sessions
+            .iter()
+            .any(|item| item.session_id == source_session)
+        {
             if owner.replace(binding.conversation_id).is_some() {
                 return Err(format!(
                     "source session {} is claimed by multiple local conversations",
@@ -356,8 +402,12 @@ fn event_value(
 }
 
 fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
-    let value: Value = serde_json::from_str(&event.payload)
-        .map_err(|error| format!("malformed tool result context at #{}: {error}", event.sequence))?;
+    let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
+        format!(
+            "malformed tool result context at #{}: {error}",
+            event.sequence
+        )
+    })?;
     if value.get("schema").and_then(Value::as_str) != Some(SCHEMA)
         || value.get("version").and_then(Value::as_u64) != Some(VERSION)
         || value.get("record").and_then(Value::as_str) != Some("tool_result_context_decision")
@@ -371,11 +421,15 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
 }
 
 fn required_u64(value: &Value, key: &str) -> Result<u64, String> {
-    value.get(key).and_then(Value::as_u64)
+    value
+        .get(key)
+        .and_then(Value::as_u64)
         .ok_or_else(|| format!("tool result context missing unsigned '{key}'"))
 }
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
-    value.get(key).and_then(Value::as_str)
+    value
+        .get(key)
+        .and_then(Value::as_str)
         .ok_or_else(|| format!("tool result context missing string '{key}'"))
 }
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
@@ -385,6 +439,7 @@ fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MemoryEventStore;
     use crate::chat_container_audit::{
         record_chat_container_created, record_chat_session_lifecycle_transition,
         record_chat_session_successor_bound,
@@ -400,18 +455,15 @@ mod tests {
     use crate::tool_provider_audit::{
         record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
-    use crate::MemoryEventStore;
     use chatarium_core::chat_container::{
-        ChatContainerId, ContextHandoffId, SessionLifecyclePhase,
-        SessionLifecycleTransition, SessionSuccessorBinding,
+        ChatContainerId, ContextHandoffId, SessionLifecyclePhase, SessionLifecycleTransition,
+        SessionSuccessorBinding,
     };
     use chatarium_core::routing::{
         RouteClass, RouteEndpointId, RouteGate, RoutePolicy, RouteRequest,
     };
     use chatarium_core::session::SessionEndpointBinding;
-    use chatarium_core::tool::{
-        ToolOperationName, ToolProviderEndpointBinding, ToolProviderName,
-    };
+    use chatarium_core::tool::{ToolOperationName, ToolProviderEndpointBinding, ToolProviderName};
 
     const SESSION: SessionId = SessionId::new(1);
     const SOURCE: RouteEndpointId = RouteEndpointId::new(10);
@@ -423,17 +475,38 @@ mod tests {
     fn delivered(store: &mut impl EventStore, conversation: LocalConversationId, text: &str) {
         record_local_session_registered(store, SESSION).unwrap();
         record_chat_container_created(store, ChatContainerId::new(1), SESSION).unwrap();
-        record_local_conversation_chat_container_bound(store, conversation, ChatContainerId::new(1)).unwrap();
+        record_local_conversation_chat_container_bound(
+            store,
+            conversation,
+            ChatContainerId::new(1),
+        )
+        .unwrap();
         record_session_endpoint_bound(store, SessionEndpointBinding::new(SESSION, SOURCE)).unwrap();
-        record_tool_provider_registered(store, PROVIDER, &ToolProviderName::new("chatarium.builtin").unwrap()).unwrap();
+        record_tool_provider_registered(
+            store,
+            PROVIDER,
+            &ToolProviderName::new("chatarium.builtin").unwrap(),
+        )
+        .unwrap();
         record_tool_provider_endpoint_bound(
-            store, ToolProviderEndpointBinding::new(PROVIDER, DEST)
-        ).unwrap();
+            store,
+            ToolProviderEndpointBinding::new(PROVIDER, DEST),
+        )
+        .unwrap();
         record_tool_call(
-            store, CALL, SESSION, PROVIDER, &ToolOperationName::new("hello").unwrap(), "{}"
-        ).unwrap();
+            store,
+            CALL,
+            SESSION,
+            PROVIDER,
+            &ToolOperationName::new("hello").unwrap(),
+            "{}",
+        )
+        .unwrap();
         let route = RouteRequest {
-            id: ROUTE, source: SOURCE, destination: DEST, class: RouteClass::ToolCall
+            id: ROUTE,
+            source: SOURCE,
+            destination: DEST,
+            class: RouteClass::ToolCall,
         };
         record_route_proposed(store, route, RoutePolicy::RequireApproval).unwrap();
         record_tool_call_route_bound(store, CALL, ROUTE).unwrap();
@@ -450,11 +523,19 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let conversation = LocalConversationId::new();
         delivered(&mut store, conversation, " exact tool result\n ");
-        assert!(replay_admitted_tool_results(store.events(), conversation).unwrap().is_empty());
+        assert!(
+            replay_admitted_tool_results(store.events(), conversation)
+                .unwrap()
+                .is_empty()
+        );
 
         let admission = append_tool_result_context_decision_checked(
-            &mut store, CALL, conversation, ToolResultContextDecision::Admit
-        ).unwrap();
+            &mut store,
+            CALL,
+            conversation,
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap();
         assert_eq!(admission.kind, EventKind::ToolResultContextDecisionRecorded);
         let current = replay_admitted_tool_results(store.events(), conversation).unwrap();
         assert_eq!(current.len(), 1);
@@ -462,15 +543,35 @@ mod tests {
         assert_eq!(current[0].record.source_session_id, SESSION);
         assert_eq!(current[0].record.route_id, ROUTE);
 
-        assert!(append_tool_result_context_decision_checked(
-            &mut store, CALL, conversation, ToolResultContextDecision::Admit
-        ).unwrap_err().contains("already has"));
+        assert!(
+            append_tool_result_context_decision_checked(
+                &mut store,
+                CALL,
+                conversation,
+                ToolResultContextDecision::Admit
+            )
+            .unwrap_err()
+            .contains("already has")
+        );
 
         append_tool_result_context_decision_checked(
-            &mut store, CALL, conversation, ToolResultContextDecision::Exclude
-        ).unwrap();
-        assert!(replay_admitted_tool_results(store.events(), conversation).unwrap().is_empty());
-        assert_eq!(replay_tool_call_outcome_audit(store.events()).unwrap().len(), 1);
+            &mut store,
+            CALL,
+            conversation,
+            ToolResultContextDecision::Exclude,
+        )
+        .unwrap();
+        assert!(
+            replay_admitted_tool_results(store.events(), conversation)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -480,8 +581,12 @@ mod tests {
         delivered(&mut store, conversation, "result");
         let before = store.events().len();
         let error = append_tool_result_context_decision_checked(
-            &mut store, CALL, LocalConversationId::new(), ToolResultContextDecision::Admit
-        ).unwrap_err();
+            &mut store,
+            CALL,
+            LocalConversationId::new(),
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap_err();
         assert!(error.contains("different/no ownership"));
         assert_eq!(store.events().len(), before);
 
@@ -509,7 +614,9 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let owner = LocalConversationId::new();
         delivered(&mut store, owner, "predecessor tool output");
-        let terminal = replay_tool_call_outcome_audit(store.events()).unwrap().remove(0);
+        let terminal = replay_tool_call_outcome_audit(store.events())
+            .unwrap()
+            .remove(0);
         assert_eq!(
             tool_outcome_owning_conversation(store.events(), &terminal).unwrap(),
             Some(owner)
@@ -557,11 +664,8 @@ mod tests {
     fn later_conversation_binding_cannot_retroactively_claim_outcome() {
         let mut store = MemoryEventStore::default();
         record_local_session_registered(&mut store, SESSION).unwrap();
-        record_session_endpoint_bound(
-            &mut store,
-            SessionEndpointBinding::new(SESSION, SOURCE),
-        )
-        .unwrap();
+        record_session_endpoint_bound(&mut store, SessionEndpointBinding::new(SESSION, SOURCE))
+            .unwrap();
         record_tool_provider_registered(
             &mut store,
             PROVIDER,
@@ -593,11 +697,7 @@ mod tests {
         record_route_user_decision(&mut store, ROUTE, RouteUserDecision::Allow).unwrap();
         let mut gate = RouteGate::new(route, RoutePolicy::RequireApproval);
         gate.user_allow().unwrap();
-        record_route_dispatched(
-            &mut store,
-            gate.authorize_dispatch(ROUTE).unwrap(),
-        )
-        .unwrap();
+        record_route_dispatched(&mut store, gate.authorize_dispatch(ROUTE).unwrap()).unwrap();
         record_tool_call_outcome(
             &mut store,
             CALL,
@@ -608,12 +708,8 @@ mod tests {
         .unwrap();
         let owner = LocalConversationId::new();
         record_chat_container_created(&mut store, ChatContainerId::new(1), SESSION).unwrap();
-        record_local_conversation_chat_container_bound(
-            &mut store,
-            owner,
-            ChatContainerId::new(1),
-        )
-        .unwrap();
+        record_local_conversation_chat_container_bound(&mut store, owner, ChatContainerId::new(1))
+            .unwrap();
 
         let before = store.events().len();
         let error = append_tool_result_context_decision_checked(
@@ -631,8 +727,12 @@ mod tests {
     fn cannot_admit_unknown_or_undispatched_call() {
         let mut store = MemoryEventStore::default();
         let err = append_tool_result_context_decision_checked(
-            &mut store, CALL, LocalConversationId::new(), ToolResultContextDecision::Admit
-        ).unwrap_err();
+            &mut store,
+            CALL,
+            LocalConversationId::new(),
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap_err();
         assert!(err.contains("no observed terminal outcome"));
     }
 }
