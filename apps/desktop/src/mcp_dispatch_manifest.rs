@@ -158,14 +158,10 @@ pub fn capture(
 /// Embed the manifest in the *same* durable DispatchAttempted observation as
 /// the request intent. The original schema, kind, scope and turn correlation
 /// remain unchanged for older recovery and transport consumers.
-pub fn attach_to_dispatch_payload(
-    payload: String,
-    manifest: Value,
-) -> Result<String, String> {
+pub fn attach_to_dispatch_payload(payload: String, manifest: Value) -> Result<String, String> {
     let mut value: Value = serde_json::from_str(&payload)
         .map_err(|error| format!("dispatch payload is not JSON: {error}"))?;
-    if value.get("schema").and_then(Value::as_str)
-        != Some("chatarium-responses-turn-observation")
+    if value.get("schema").and_then(Value::as_str) != Some("chatarium-responses-turn-observation")
         || value.get("version").and_then(Value::as_u64) != Some(1)
         || value.pointer("/details/context_evidence").is_some()
     {
@@ -205,9 +201,13 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
     let Some(manifest) = payload.pointer("/details/context_evidence") else {
         return Ok(None);
     };
-    let error = || format!("invalid dispatch context manifest at event #{}", event.sequence);
-    if payload.get("schema").and_then(Value::as_str)
-        != Some("chatarium-responses-turn-observation")
+    let error = || {
+        format!(
+            "invalid dispatch context manifest at event #{}",
+            event.sequence
+        )
+    };
+    if payload.get("schema").and_then(Value::as_str) != Some("chatarium-responses-turn-observation")
         || payload.get("version").and_then(Value::as_u64) != Some(1)
         || manifest.get("schema").and_then(Value::as_str) != Some(SCHEMA)
         || manifest.get("version").and_then(Value::as_u64) != Some(VERSION)
@@ -237,7 +237,10 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         .get("request_class")
         .and_then(Value::as_str)
         .filter(|class| {
-            matches!(*class, "authored" | "controller_coordination" | "worker_continuation")
+            matches!(
+                *class,
+                "authored" | "controller_coordination" | "worker_continuation"
+            )
         })
         .ok_or_else(error)?;
     let count = |key: &str| -> Result<usize, String> {
@@ -270,15 +273,26 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
     let mut result_rows = Vec::with_capacity(listed.len());
     let mut listed_included = 0;
     for item in listed {
-        let number = |key| item.get(key).and_then(Value::as_u64).filter(|n| *n > 0).ok_or_else(error);
+        let number = |key| {
+            item.get(key)
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0)
+                .ok_or_else(error)
+        };
         let call_id = number("call_id")?;
         let provider_id = number("provider_id")?;
         let route_id = number("route_id")?;
         let _session = number("source_session_id")?;
         let outcome_seq = number("outcome_sequence")?;
         let admission_seq = number("admitted_sequence")?;
-        let kind = item.get("outcome_kind").and_then(Value::as_str).ok_or_else(error)?;
-        let disposition = item.get("disposition").and_then(Value::as_str).ok_or_else(error)?;
+        let kind = item
+            .get("outcome_kind")
+            .and_then(Value::as_str)
+            .ok_or_else(error)?;
+        let disposition = item
+            .get("disposition")
+            .and_then(Value::as_str)
+            .ok_or_else(error)?;
         if !seen.insert(call_id)
             || admission_seq <= outcome_seq
             || kind.is_empty()
@@ -331,7 +345,10 @@ pub fn recent_dispatches(
             continue;
         }
         if !seen.insert(manifest.turn_id.clone()) {
-            return Err(format!("duplicate manifested dispatch for turn {}", manifest.turn_id));
+            return Err(format!(
+                "duplicate manifested dispatch for turn {}",
+                manifest.turn_id
+            ));
         }
         manifest.remote_acceptance_observed = events.iter().any(|later| {
             later.sequence > event.sequence
@@ -404,7 +421,9 @@ pub fn render_dispatches(
             }
         }
         Err(error) => {
-            ui.label(format!("Dispatch-context history blocked by invalid journal evidence: {error}"));
+            ui.label(format!(
+                "Dispatch-context history blocked by invalid journal evidence: {error}"
+            ));
         }
     }
 }
@@ -465,7 +484,10 @@ mod tests {
         let manifest = capture(owner, "authored", &[source], &plan).unwrap();
         assert_eq!(manifest["eligible_tool_results"], 1);
         assert_eq!(manifest["included_tool_results"], 1);
-        assert_eq!(manifest["listed_tool_results"][0]["disposition"], "included");
+        assert_eq!(
+            manifest["listed_tool_results"][0]["disposition"],
+            "included"
+        );
         assert_eq!(manifest["context_included_items"], 3 - 2); // one tool; no instructions or developer text
         assert!(!manifest.to_string().contains("secret adapter bytes"));
     }
@@ -474,13 +496,8 @@ mod tests {
     fn specialized_dispatch_reports_admitted_but_not_included() {
         let owner = LocalConversationId::new();
         let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", []);
-        let manifest = capture(
-            owner,
-            "worker_continuation",
-            &[admitted_source(12)],
-            &plan,
-        )
-        .unwrap();
+        let manifest =
+            capture(owner, "worker_continuation", &[admitted_source(12)], &plan).unwrap();
         assert_eq!(manifest["eligible_tool_results"], 1);
         assert_eq!(manifest["included_tool_results"], 0);
         assert_eq!(manifest["omitted_tool_results"], 1);
@@ -505,7 +522,10 @@ mod tests {
         let manifest = capture(owner, "controller_coordination", &sources, &plan).unwrap();
         assert_eq!(manifest["eligible_tool_results"], 40);
         assert_eq!(manifest["omitted_tool_results"], 40);
-        assert_eq!(manifest["listed_tool_results"].as_array().unwrap().len(), 32);
+        assert_eq!(
+            manifest["listed_tool_results"].as_array().unwrap().len(),
+            32
+        );
         assert_eq!(manifest["list_truncated"], true);
     }
 
@@ -524,7 +544,8 @@ mod tests {
             "schema":"chatarium-responses-turn-observation",
             "version":1,
             "details":{"local_turn_id":turn,"request_id":turn}
-        }).to_string();
+        })
+        .to_string();
         let payload = attach_to_dispatch_payload(payload, manifest).unwrap();
         let mut event = EventEnvelope {
             sequence: 9,

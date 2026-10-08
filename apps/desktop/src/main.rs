@@ -2984,7 +2984,8 @@ impl ChatariumApp {
                             ) {
                                 Ok(manifest) => manifest,
                                 Err(error) => {
-                                    self.status = format!("cannot record exact outgoing context: {error}");
+                                    self.status =
+                                        format!("cannot record exact outgoing context: {error}");
                                     continue;
                                 }
                             };
@@ -3000,7 +3001,8 @@ impl ChatariumApp {
                             ) {
                                 Ok(payload) => payload,
                                 Err(error) => {
-                                    self.status = format!("cannot journal outgoing context: {error}");
+                                    self.status =
+                                        format!("cannot journal outgoing context: {error}");
                                     continue;
                                 }
                             };
@@ -5518,7 +5520,10 @@ impl ChatariumApp {
             &coordination_prefix,
             self.local_conversation_id,
         ) {
-            Ok(results) => results.into_iter().map(|item| item.source).collect::<Vec<_>>(),
+            Ok(results) => results
+                .into_iter()
+                .map(|item| item.source)
+                .collect::<Vec<_>>(),
             Err(error) => {
                 self.status = format!("cannot audit coordination tool eligibility: {error}");
                 return;
@@ -5781,7 +5786,10 @@ impl ChatariumApp {
             &execution_prefix,
             self.local_conversation_id,
         ) {
-            Ok(results) => results.into_iter().map(|item| item.source).collect::<Vec<_>>(),
+            Ok(results) => results
+                .into_iter()
+                .map(|item| item.source)
+                .collect::<Vec<_>>(),
             Err(error) => {
                 self.status = format!("cannot audit continuation tool eligibility: {error}");
                 return;
