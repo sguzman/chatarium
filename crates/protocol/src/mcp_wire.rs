@@ -121,10 +121,7 @@ pub fn encode_stdio_frame(message: &Value) -> Result<String, McpWireError> {
 /// multi-frame input, malformed JSON, and unknown result types fail closed.
 /// In-band multi-round-trip `inputRequired` is explicit unsupported state: it
 /// must never trigger an automatic additional tool invocation.
-pub fn decode_stdio_response(
-    frame: &str,
-    expected_id: u64,
-) -> Result<McpResponse, McpWireError> {
+pub fn decode_stdio_response(frame: &str, expected_id: u64) -> Result<McpResponse, McpWireError> {
     if frame.is_empty() {
         return Err(McpWireError::Empty);
     }
@@ -145,18 +142,21 @@ pub fn decode_stdio_response(
     }
 
     match (obj.get("result"), obj.get("error")) {
-        (Some(Value::Object(result)), None) => match result
-            .get("resultType")
-            .and_then(Value::as_str)
-        {
-            Some("complete") => Ok(McpResponse::Complete(Value::Object(result.clone()))),
-            Some("inputRequired") => Err(McpWireError::InputRequiredUnsupported),
-            _ => Err(McpWireError::InvalidResponse),
-        },
+        (Some(Value::Object(result)), None) => {
+            match result.get("resultType").and_then(Value::as_str) {
+                Some("complete") => Ok(McpResponse::Complete(Value::Object(result.clone()))),
+                Some("inputRequired") => Err(McpWireError::InputRequiredUnsupported),
+                _ => Err(McpWireError::InvalidResponse),
+            }
+        }
         (None, Some(Value::Object(error))) => {
-            let code = error.get("code").and_then(Value::as_i64)
+            let code = error
+                .get("code")
+                .and_then(Value::as_i64)
                 .ok_or(McpWireError::InvalidResponse)?;
-            let message = error.get("message").and_then(Value::as_str)
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .ok_or(McpWireError::InvalidResponse)?;
             Ok(McpResponse::Error {
@@ -202,7 +202,10 @@ mod tests {
                 message["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"],
                 MCP_PROTOCOL_VERSION,
             );
-            assert!(message["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"].is_object());
+            assert!(
+                message["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"]
+                    .is_object()
+            );
             assert_eq!(
                 message["params"]["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
                 "chatarium"
@@ -267,19 +270,19 @@ mod tests {
             Err(McpWireError::InvalidResponse),
         );
         assert_eq!(
-            decode_stdio_response(r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"unknown"}}"#,1),
+            decode_stdio_response(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"unknown"}}"#,
+                1
+            ),
             Err(McpWireError::InvalidResponse),
         );
         assert_eq!(
-            decode_stdio_response(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call"}"#,1),
+            decode_stdio_response(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call"}"#, 1),
             Err(McpWireError::InvalidResponse),
         );
-        assert_eq!(
-            decode_stdio_response("", 1),
-            Err(McpWireError::Empty),
-        );
-        assert!(tools_call_request(1,"bad\nname", &json!({})).is_err());
-        assert!(tools_call_request(1,"good", &json!([1])).is_err());
+        assert_eq!(decode_stdio_response("", 1), Err(McpWireError::Empty),);
+        assert!(tools_call_request(1, "bad\nname", &json!({})).is_err());
+        assert!(tools_call_request(1, "good", &json!([1])).is_err());
     }
 
     #[test]
@@ -289,9 +292,9 @@ mod tests {
             tools_call_request(1, "tool", &oversized),
             Err(McpWireError::TooLarge),
         );
-        let oversized_frame = "x".repeat(MAX_MCP_FRAME_BYTES+1);
+        let oversized_frame = "x".repeat(MAX_MCP_FRAME_BYTES + 1);
         assert_eq!(
-            decode_stdio_response(&oversized_frame,1),
+            decode_stdio_response(&oversized_frame, 1),
             Err(McpWireError::TooLarge),
         );
     }
