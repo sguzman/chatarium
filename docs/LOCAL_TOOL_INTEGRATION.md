@@ -267,24 +267,29 @@ The first hardened launch policy is intentionally narrow:
   rather than disabling the host-wide namespace restriction or sharing
   the host network. Other Linux hosts must independently support the
   same isolation policy; lack of support remains a hard launch error.
-- `prlimit` enforces 512 MiB address space, 8 CPU seconds, 8 MiB max
-  individual output file size, and 64 open descriptors. The runner adds
-  a 10-second wall-clock timeout, a 1 MiB stdout frame ceiling and
+- `prlimit` enforces 512 MiB address space, 8 CPU seconds,
+  an 8 MiB per-file limit, 64 open descriptors, 256 processes (subject
+  to Linux real-UID accounting), and no core dumps. These are process
+  resource limits, not a whole-system cgroup quota. The runner adds a
+  10-second wall-clock timeout, a 1 MiB stdout frame ceiling and
   a 16 KiB stderr ceiling.
-- `bubblewrap --unshare-all` creates isolated namespaces (including
-  network and PID), with read-only `/usr`, synthetic `/dev` and `/proc`,
-  scratch `/tmp`, no home mount, cleared environment, a new session,
-  and parent-death cleanup. It never constructs a shell command.
+- `bubblewrap --unshare-all --disable-userns` creates isolated namespaces
+  (including network and PID) and denies further nested user namespaces,
+  with read-only `/usr`, synthetic `/dev` and `/proc`, a **32 MiB**
+  scratch `/tmp` tmpfs, no home mount, cleared environment, a new
+  session, and parent-death cleanup. It never constructs a shell command.
 
 **Important limits:** Filesystem metadata checks are not cryptographic
 executable attestation; root compromise and race conditions are beyond
 this first policy. The runner cannot make arbitrary native code intrinsically
-benign. Namespace support depends on the Linux host, and the live
-bubblewrap path is not yet covered by a hosted integration test. This
-module is compiled and its argument/permission/error boundaries are unit
-tested, but no visible desktop action can launch it. A separate execution
-control and deliberate sandbox smoke validation are required before
-enabling it for daily use.
+benign. Namespace support depends on the Linux host. GitHub's
+Ubuntu CI now runs an actual isolated stdio MCP request/response fixture
+after loading a **targeted** AppArmor bwrap profile; it never relaxes the
+host-wide AppArmor restriction or enables host networking. Both the
+argument/permission boundaries and the live sandbox path are tested,
+but **no visible desktop action can launch an external process**. A
+separate explicit execution control, local prerequisites validation, and
+an updated security review remain necessary before daily use.
 
 This milestone is the journal-to-runner handoff; no desktop execution action
 has been enabled by it. Before external tool execution is exposed, the Linux
