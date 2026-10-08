@@ -105,7 +105,11 @@ pub fn parse_legacy_tool_result(text: &str) -> Result<LegacyToolResult, LegacyEn
                 .and_then(Value::as_object)
                 .ok_or(LegacyEnvelopeError::InvalidResult)?;
             for field in ["code", "message"] {
-                if !error.get(field).and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
+                if !error
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+                {
                     return Err(LegacyEnvelopeError::InvalidResult);
                 }
             }
@@ -165,8 +169,8 @@ fn format_result_envelope(
 ) -> Result<String, LegacyEnvelopeError> {
     validate_attribute_value(id).map_err(|_| LegacyEnvelopeError::MissingId)?;
     validate_attribute_value(name).map_err(|_| LegacyEnvelopeError::MissingName)?;
-    let body = serde_json::to_string_pretty(&payload)
-        .map_err(|_| LegacyEnvelopeError::InvalidResult)?;
+    let body =
+        serde_json::to_string_pretty(&payload).map_err(|_| LegacyEnvelopeError::InvalidResult)?;
     let text = format!("<tool_result name=\"{name}\" id=\"{id}\">\n{body}\n</tool_result>");
     if text.len() > MAX_ENVELOPE_BYTES {
         return Err(LegacyEnvelopeError::TooLarge);
@@ -193,10 +197,15 @@ fn parse_element<'a>(
     let rest = rest
         .strip_suffix(suffix.as_str())
         .ok_or(LegacyEnvelopeError::UnexpectedEnvelope)?;
-    let tag_end = rest.find('>').ok_or(LegacyEnvelopeError::UnexpectedEnvelope)?;
+    let tag_end = rest
+        .find('>')
+        .ok_or(LegacyEnvelopeError::UnexpectedEnvelope)?;
     let attribute_text = &rest[..tag_end];
     if !attribute_text.is_empty()
-        && !attribute_text.chars().next().is_some_and(char::is_whitespace)
+        && !attribute_text
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
     {
         return Err(LegacyEnvelopeError::InvalidAttributes);
     }
@@ -232,13 +241,14 @@ fn parse_attributes(text: &str) -> Result<BTreeMap<String, String>, LegacyEnvelo
             .find('"')
             .ok_or(LegacyEnvelopeError::InvalidAttributes)?;
         let value = &remainder[..quote];
-        if attributes.insert(key.to_owned(), value.to_owned()).is_some() {
+        if attributes
+            .insert(key.to_owned(), value.to_owned())
+            .is_some()
+        {
             return Err(LegacyEnvelopeError::InvalidAttributes);
         }
         remainder = &remainder[quote + 1..];
-        if !remainder.is_empty()
-            && !remainder.chars().next().is_some_and(char::is_whitespace)
-        {
+        if !remainder.is_empty() && !remainder.chars().next().is_some_and(char::is_whitespace) {
             return Err(LegacyEnvelopeError::InvalidAttributes);
         }
     }
@@ -248,7 +258,9 @@ fn validate_attribute_value(value: &str) -> Result<(), ()> {
     if value.is_empty()
         || value.trim() != value
         || value.len() > 128
-        || value.chars().any(|c| c.is_control() || matches!(c, '"' | '<' | '>' | '&'))
+        || value
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '"' | '<' | '>' | '&'))
     {
         Err(())
     } else {
@@ -273,8 +285,8 @@ mod tests {
 
     #[test]
     fn parses_original_clock_now_call_and_generates_legacy_id() {
-        let call = parse_legacy_tool_call("<tool_call name=\"clock.now\">\n{}\n</tool_call>")
-            .unwrap();
+        let call =
+            parse_legacy_tool_call("<tool_call name=\"clock.now\">\n{}\n</tool_call>").unwrap();
         assert_eq!(call.name, "clock.now");
         assert_eq!(call.arguments, json!({}));
         assert_eq!(call.id, shim_hash_id("clock.now:{}"));
@@ -305,7 +317,10 @@ mod tests {
             "<tool_call name=\"clock.now\" other=\"x\">{}</tool_call>",
             "<tool_call name=\"clock.now\">not json</tool_call>",
         ] {
-            assert!(parse_legacy_tool_call(input).is_err(), "unexpected accept: {input}");
+            assert!(
+                parse_legacy_tool_call(input).is_err(),
+                "unexpected accept: {input}"
+            );
         }
     }
 
@@ -330,8 +345,8 @@ mod tests {
         assert_eq!(parsed.payload["ok"], true);
         assert_eq!(parsed.payload["now"], "2026-05-08");
 
-        let error = format_legacy_tool_error("call_abc", "local.mcp.call", "denied", "No access")
-            .unwrap();
+        let error =
+            format_legacy_tool_error("call_abc", "local.mcp.call", "denied", "No access").unwrap();
         let parsed = parse_legacy_tool_result(&error).unwrap();
         assert_eq!(parsed.payload["ok"], false);
         assert_eq!(parsed.payload["error"]["code"], "denied");
@@ -341,9 +356,12 @@ mod tests {
     fn never_accepts_result_attribute_injection_or_ok_override() {
         assert!(format_legacy_tool_success("id", "hello", json!({"ok":false})).is_err());
         assert!(format_legacy_tool_success("x\" y=", "hello", json!({})).is_err());
-        assert!(parse_legacy_tool_result(
-            "<tool_result name=\"hello\" id=\"id\">{\"ok\":false}</tool_result>"
-        ).is_err());
+        assert!(
+            parse_legacy_tool_result(
+                "<tool_result name=\"hello\" id=\"id\">{\"ok\":false}</tool_result>"
+            )
+            .is_err()
+        );
     }
 
     #[test]
