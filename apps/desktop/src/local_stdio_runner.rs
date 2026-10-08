@@ -95,6 +95,7 @@ pub fn plan_confined_stdio_launch(
         "--".to_owned(),
         BWRAP.to_owned(),
         "--unshare-all".to_owned(),
+        "--unshare-user".to_owned(),
         "--disable-userns".to_owned(),
         "--die-with-parent".to_owned(),
         "--new-session".to_owned(),
@@ -348,6 +349,7 @@ mod tests {
                 &["with spaces", "--flag=;\\$HOME"],
             );
             assert!(plan.args().contains(&"--unshare-all".to_owned()));
+            assert!(plan.args().contains(&"--unshare-user".to_owned()));
             assert!(plan.args().contains(&"--disable-userns".to_owned()));
             assert!(plan.args().contains(&LIMIT_PROCESSES.to_owned()));
             assert!(plan.args().contains(&LIMIT_CORE_DUMPS.to_owned()));
