@@ -116,9 +116,15 @@ mod tests {
             "/chatarium-nonexistent-stdio-executable-928474/not-here",
         ));
         #[cfg(target_os = "linux")]
-        assert_eq!(checked, Err(StdioExecutableInspectionError::PathUnavailable));
+        assert_eq!(
+            checked,
+            Err(StdioExecutableInspectionError::PathUnavailable)
+        );
         #[cfg(not(target_os = "linux"))]
-        assert_eq!(checked, Err(StdioExecutableInspectionError::UnsupportedPlatform));
+        assert_eq!(
+            checked,
+            Err(StdioExecutableInspectionError::UnsupportedPlatform)
+        );
     }
 
     #[cfg(target_os = "linux")]
