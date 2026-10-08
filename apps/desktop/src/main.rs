@@ -8,6 +8,7 @@ mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_tool_adapter;
+mod local_tool_provider_control;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -34,7 +35,8 @@ use chatarium_core::session::{
 };
 use chatarium_core::supervision::{ControllerDesignation, ControllerWorkerBinding};
 use chatarium_core::tool::{
-    ToolCallId, ToolOperationName, ToolProviderEndpointBinding, ToolProviderId, ToolProviderName,
+    StdioToolProviderConfig, ToolCallId, ToolOperationName, ToolProviderEndpointBinding,
+    ToolProviderId, ToolProviderName,
 };
 use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
@@ -196,6 +198,13 @@ use chatarium_store::tool_provider_audit::{
     record_tool_provider_endpoint_bound, record_tool_provider_registered,
     replay_tool_provider_audit,
 };
+use chatarium_store::tool_provider_activation_audit::{
+    ProviderActivationDecision, replay_tool_provider_activation_audit,
+};
+use chatarium_store::tool_transport_config_audit::{
+    append_tool_transport_config_checked, replay_tool_transport_config_audit,
+};
+use chatarium_store::tool_stdio_preflight::preview_activated_stdio_tool_invocation;
 use chatarium_store::tool_result_context_audit::{
     MAX_CONTEXT_TOOL_RESULT_BYTES, ToolResultContextDecision,
     append_tool_result_context_decision_checked, replay_admitted_tool_results,
@@ -286,6 +295,15 @@ enum PersistCommand {
     BindToolProviderEndpoint {
         provider_id: ToolProviderId,
         endpoint_id: RouteEndpointId,
+    },
+    ConfigureToolProviderTransport {
+        provider_id: ToolProviderId,
+        config: StdioToolProviderConfig,
+    },
+    DecideToolProviderActivation {
+        provider_id: ToolProviderId,
+        configured_sequence: u64,
+        decision: ProviderActivationDecision,
     },
     ProposeToolCall {
         call_id: ToolCallId,
@@ -922,6 +940,9 @@ struct ChatariumApp {
     tool_command_pending: bool,
     tool_provider_name_draft: String,
     tool_selected_provider: Option<ToolProviderId>,
+    tool_stdio_executable_draft: String,
+    tool_stdio_argv_draft: String,
+    tool_stdio_operations_draft: String,
     tool_operation_draft: String,
     tool_arguments_draft: String,
     local_memory_command_pending: bool,
@@ -1195,6 +1216,9 @@ impl ChatariumApp {
                         tool_command_pending: false,
                         tool_provider_name_draft: String::new(),
                         tool_selected_provider: None,
+                        tool_stdio_executable_draft: String::new(),
+                        tool_stdio_argv_draft: String::new(),
+                        tool_stdio_operations_draft: String::new(),
                         tool_operation_draft: String::new(),
                         tool_arguments_draft: String::new(),
                         local_memory_command_pending: false,
@@ -1385,6 +1409,9 @@ impl ChatariumApp {
             tool_command_pending: false,
             tool_provider_name_draft: String::new(),
             tool_selected_provider: None,
+            tool_stdio_executable_draft: String::new(),
+            tool_stdio_argv_draft: String::new(),
+            tool_stdio_operations_draft: String::new(),
             tool_operation_draft: String::new(),
             tool_arguments_draft: String::new(),
             local_memory_command_pending: false,
@@ -3268,11 +3295,17 @@ impl ChatariumApp {
                 }
                 PersistNotice::ToolProviderUpdated { provider_id, event } => {
                     let registered = event.kind == EventKind::ToolProviderRegistered;
+                    let configured = event.kind == EventKind::ToolProviderTransportConfigured;
                     self.events.push(event);
                     self.tool_command_pending = false;
                     self.tool_selected_provider = Some(provider_id);
                     if registered {
                         self.tool_provider_name_draft.clear();
+                    }
+                    if configured {
+                        self.tool_stdio_executable_draft.clear();
+                        self.tool_stdio_argv_draft.clear();
+                        self.tool_stdio_operations_draft.clear();
                     }
                     self.status = format!("tool provider {} durably updated", provider_id.get());
                 }
@@ -4466,6 +4499,58 @@ impl ChatariumApp {
             Err(error) => {
                 self.status = format!("failed to queue tool endpoint binding: {error}");
             }
+        }
+    }
+
+    fn configure_stdio_tool_provider(&mut self, provider_id: ToolProviderId) {
+        if self.tool_command_pending {
+            return;
+        }
+        let config = match local_tool_provider_control::parse_stdio_config_draft(
+            &self.tool_stdio_executable_draft,
+            &self.tool_stdio_argv_draft,
+            &self.tool_stdio_operations_draft,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                self.status = format!("cannot configure tool provider: {error}");
+                return;
+            }
+        };
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot configure provider: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::ConfigureToolProviderTransport { provider_id, config }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!("recording inert stdio configuration for provider {}…", provider_id.get());
+            }
+            Err(error) => self.status = format!("failed to queue tool configuration: {error}"),
+        }
+    }
+
+    fn decide_stdio_provider_activation(
+        &mut self,
+        provider_id: ToolProviderId,
+        configured_sequence: u64,
+        decision: ProviderActivationDecision,
+    ) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot change activation: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DecideToolProviderActivation {
+            provider_id, configured_sequence, decision,
+        }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!("recording explicit {:?} for provider {}…", decision, provider_id.get());
+            }
+            Err(error) => self.status = format!("failed to queue tool activation: {error}"),
         }
     }
 
@@ -8547,6 +8632,91 @@ impl eframe::App for ChatariumApp {
                                             }
                                         });
 
+                                        ui.collapsing("External MCP stdio · configure / activate", |ui| {
+                                            match (
+                                                replay_tool_transport_config_audit(&self.events),
+                                                replay_tool_provider_activation_audit(&self.events),
+                                            ) {
+                                                (Ok(configs), Ok(activations)) => {
+                                                    if let Some(provider_id) = self.tool_selected_provider {
+                                                        if let Some(provider) = providers.iter().find(|p| p.provider_id == provider_id) {
+                                                            if provider.name.as_str() == local_tool_adapter::BUILTIN_PROVIDER_NAME {
+                                                                ui.label("Builtin hello cannot use external transport.");
+                                                            } else if provider.endpoint_binding.is_none() {
+                                                                ui.label("Bind this provider's routing endpoint first.");
+                                                            } else if let Some(configured) = configs.iter().find(|r| r.provider_id == provider_id) {
+                                                                ui.label(egui::RichText::new(format!(
+                                                                    "Executable: {}", configured.config.executable()
+                                                                )).monospace());
+                                                                ui.label(egui::RichText::new(format!(
+                                                                    "argv: {:?}", configured.config.args()
+                                                                )).monospace());
+                                                                ui.label(egui::RichText::new(format!(
+                                                                    "Allowlist: {}", configured.config.allowed_operations().iter()
+                                                                        .map(|op| op.as_str()).collect::<Vec<_>>().join(", ")
+                                                                )).monospace());
+                                                                let active = activations.iter()
+                                                                    .find(|r| r.provider_id == provider_id)
+                                                                    .is_some_and(|r| r.active);
+                                                                ui.label(if active {
+                                                                    "ACTIVATED (external execution still disabled)"
+                                                                } else {
+                                                                    "INACTIVE (execution disabled)"
+                                                                });
+                                                                if ui.add_enabled(
+                                                                    !self.tool_command_pending && self.persist_tx.is_some(),
+                                                                    egui::Button::new(if active {
+                                                                        "Deactivate provider"
+                                                                    } else {
+                                                                        "Activate · inspect Linux executable"
+                                                                    }),
+                                                                ).on_hover_text(
+                                                                    "Explicit user decision with Linux metadata inspection on the persistence worker. No process is spawned or tool call dispatched.",
+                                                                ).clicked() {
+                                                                    self.decide_stdio_provider_activation(
+                                                                        provider_id,
+                                                                        configured.configured_sequence,
+                                                                        if active {
+                                                                            ProviderActivationDecision::Deactivate
+                                                                        } else {
+                                                                            ProviderActivationDecision::Activate
+                                                                        },
+                                                                    );
+                                                                }
+                                                            } else {
+                                                                ui.label("Configure immutable Linux stdio transport. No execution occurs.");
+                                                                ui.label("Executable · absolute Linux path:");
+                                                                ui.add(egui::TextEdit::singleline(
+                                                                    &mut self.tool_stdio_executable_draft
+                                                                ).desired_width(330.0).hint_text("/usr/bin/example-mcp"));
+                                                                ui.label("argv · one exact argument per line (no shell):");
+                                                                ui.add(egui::TextEdit::multiline(
+                                                                    &mut self.tool_stdio_argv_draft
+                                                                ).desired_width(330.0).desired_rows(2));
+                                                                ui.label("Allowed operations · one name per line:");
+                                                                ui.add(egui::TextEdit::multiline(
+                                                                    &mut self.tool_stdio_operations_draft
+                                                                ).desired_width(330.0).desired_rows(2).hint_text("search"));
+                                                                if ui.add_enabled(
+                                                                    !self.tool_command_pending
+                                                                        && self.persist_tx.is_some()
+                                                                        && !self.tool_stdio_executable_draft.is_empty()
+                                                                        && !self.tool_stdio_operations_draft.is_empty(),
+                                                                    egui::Button::new("Save inert stdio configuration"),
+                                                                ).clicked() {
+                                                                    self.configure_stdio_tool_provider(provider_id);
+                                                                }
+                                                                ui.label("One-shot immutable configuration; activation is a separate approval.");
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                (Err(error), _) | (_, Err(error)) => {
+                                                    ui.label(format!("External provider audit blocked: {error}"));
+                                                }
+                                            }
+                                        });
+
                                         let provider_addressable = self
                                             .tool_selected_provider
                                             .and_then(|provider_id| {
@@ -8762,6 +8932,27 @@ impl eframe::App for ChatariumApp {
                                                                         .size(9.0),
                                                                     );
 
+                                                                    if !local_tool_adapter::supports_hello(
+                                                                        provider_label.as_str(),
+                                                                        call.operation.as_str(),
+                                                                    ) && route.dispatch_sequence.is_none() {
+                                                                        ui.collapsing("Activation-aware MCP preview (inert)", |ui| {
+                                                                            match preview_activated_stdio_tool_invocation(&self.events, call.call_id) {
+                                                                                Ok(preview) => {
+                                                                                    ui.label(format!(
+                                                                                        "Active provider · activation #{} · approved route {}",
+                                                                                        preview.activation_sequence,
+                                                                                        preview.invocation.route_id.get(),
+                                                                                    ));
+                                                                                    ui.label(egui::RichText::new(
+                                                                                        preview.invocation.request_frame.as_str()
+                                                                                    ).monospace());
+                                                                                    ui.label("This preview grants NO execution authority.");
+                                                                                }
+                                                                                Err(error) => { ui.label(format!("Not eligible: {error}")); }
+                                                                            }
+                                                                        });
+                                                                    }
                                                                     let can_decide =
                                                                         !self.tool_command_pending
                                                                             && !route
@@ -16434,6 +16625,36 @@ fn persistence_worker(
                             request_id: None,
                             turn_id: None,
                             error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::ConfigureToolProviderTransport { provider_id, config } => {
+                match append_tool_transport_config_checked(&mut store, provider_id, &config) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool transport configuration",
+                            revision: None, request_id: None, turn_id: None, error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DecideToolProviderActivation {
+                provider_id, configured_sequence, decision,
+            } => {
+                match local_tool_provider_control::append_activation_with_inspection(
+                    &mut store, provider_id, configured_sequence, decision,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool provider activation",
+                            revision: None, request_id: None, turn_id: None, error,
                         });
                     }
                 }
