@@ -21,6 +21,7 @@ const PRLIMIT: &str = "/usr/bin/prlimit";
 const BWRAP: &str = "/usr/bin/bwrap";
 const MAX_STDERR_BYTES: u64 = 16 * 1024;
 const WALL_TIMEOUT: Duration = Duration::from_secs(10);
+const HOST_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const LIMIT_AS_BYTES: &str = "--as=536870912";
 const LIMIT_CPU_SECONDS: &str = "--cpu=8";
 const LIMIT_FSIZE_BYTES: &str = "--fsize=8388608";
@@ -149,6 +150,65 @@ pub fn preflight_confined_stdio_launch(executable: &str, argv: &[String]) -> Res
         }
     }
     Ok(())
+}
+
+/// Exercise the actual Linux namespace policy before an irreversible dispatch.
+///
+/// This is intentionally a fixed, non-provider smoke process: /usr/bin/true
+/// receives no input, no caller-controlled argv or environment, and no access
+/// to host home or network. The caller must run this on a separate thread,
+/// never on the desktop render thread or journal worker. Success is only a
+/// current-host capability observation, not a cached execution permit.
+pub fn probe_confined_stdio_host() -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        return Err("Linux MCP confinement is unsupported on this platform".to_owned());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        const FIXTURE: &str = "/usr/bin/true";
+        for binary in [PRLIMIT, BWRAP, FIXTURE] {
+            validate_trusted_binary(binary)?;
+        }
+        let plan = plan_confined_stdio_launch(FIXTURE, &[])?;
+        let mut child = Command::new(plan.program)
+            .args(&plan.args)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("isolated host-readiness probe could not start: {e}"))?;
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) => {
+                    return Err(format!(
+                        "isolated host-readiness probe exited {status}; verify bubblewrap user namespaces and local AppArmor/LSM policy; no tool-call dispatch was consumed"
+                    ));
+                }
+                Ok(None) if start.elapsed() < HOST_PROBE_TIMEOUT => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(
+                        "isolated host-readiness probe timed out; no tool-call dispatch was consumed"
+                            .to_owned(),
+                    );
+                }
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "isolated host-readiness probe failed to wait: {e}; no tool-call dispatch was consumed"
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Check each launched program's on-disk metadata immediately before spawn.
@@ -445,6 +505,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(returned, format!("{reply}\n"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_confined_host_readiness_probe() {
+        if std::env::var_os("CHATARIUM_TEST_LINUX_MCP_SANDBOX").is_none() {
+            return;
+        }
+        probe_confined_stdio_host().unwrap();
     }
 
     #[cfg(target_os = "linux")]
