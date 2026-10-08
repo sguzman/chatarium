@@ -37,11 +37,16 @@ pub fn focus_recent_result<'a>(
         .collect::<Vec<_>>();
     candidate_outcomes.sort_unstable_by_key(|outcome| std::cmp::Reverse(outcome.observed_sequence));
     let mut focus: Option<FocusedResult<'a>> = None;
-    for outcome in candidate_outcomes.into_iter().take(RECENT_RESULT_CANDIDATES) {
+    for outcome in candidate_outcomes
+        .into_iter()
+        .take(RECENT_RESULT_CANDIDATES)
+    {
         if owning_conversation(outcome)? != Some(conversation_id) {
             continue;
         }
-        let record = decisions.iter().find(|record| record.call_id == outcome.call_id);
+        let record = decisions
+            .iter()
+            .find(|record| record.call_id == outcome.call_id);
         if let Some(record) = record {
             if record.conversation_id != conversation_id
                 || record.outcome_sequence != outcome.observed_sequence
@@ -50,7 +55,9 @@ pub fn focus_recent_result<'a>(
                 || record.source_session_id != outcome.source_session_id
                 || record.outcome_kind != outcome.kind
             {
-                return Err("result context does not match the historically owned outcome".to_owned());
+                return Err(
+                    "result context does not match the historically owned outcome".to_owned(),
+                );
             }
         }
         let stage = classify(record.map(|record| record.decision), outcome.text.len());
@@ -210,13 +217,13 @@ mod tests {
             sample_outcome(2, 7, 9),
             sample_outcome(3, 8, 10),
         ];
-        let chosen = focus_recent_result(
-            &outcomes,
-            &[],
-            ToolProviderId::new(7),
-            own,
-            |outcome| Ok(Some(if outcome.call_id.get() == 2 { other } else { own })),
-        )
+        let chosen = focus_recent_result(&outcomes, &[], ToolProviderId::new(7), own, |outcome| {
+            Ok(Some(if outcome.call_id.get() == 2 {
+                other
+            } else {
+                own
+            }))
+        })
         .unwrap()
         .unwrap();
         assert_eq!(chosen.outcome.call_id.get(), 1);
@@ -227,13 +234,9 @@ mod tests {
     fn ownership_failure_blocks_entire_focus_without_fallback() {
         let own = LocalConversationId::new();
         let outcomes = vec![sample_outcome(1, 7, 8)];
-        let err = focus_recent_result(
-            &outcomes,
-            &[],
-            ToolProviderId::new(7),
-            own,
-            |_| Err("historical owner projection rejected".to_owned()),
-        );
+        let err = focus_recent_result(&outcomes, &[], ToolProviderId::new(7), own, |_| {
+            Err("historical owner projection rejected".to_owned())
+        });
         assert!(matches!(err, Err(ref msg) if msg.contains("projection rejected")));
     }
 
