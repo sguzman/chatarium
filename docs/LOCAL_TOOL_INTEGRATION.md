@@ -736,6 +736,14 @@ result was not eligible, and **unknown** requests where the identity was
 outside the manifest's bounded 32-row detail list. Missing entries in a
 truncated manifest are never treated as negative evidence.
 
+A **Where used?** control in the conversation-wide admitted-evidence
+inventory and a **Find historical use** control in the focused MCP
+result-review queue set the reverse inspector's selected call directly.
+The selection is transient, scoped by the historically verified owning
+conversation, and purely navigational. It cannot admit data or authorize
+tool execution. Open **Recent outgoing context snapshots** to inspect the
+selection.
+
 The projection checks immutable call/provider/route/session/outcome identity
 across requests and excludes other conversations. A different admission
 sequence for a later readmission is permitted. Mismatched identity blocks

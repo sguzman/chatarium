@@ -143,6 +143,23 @@ pub fn render_inventory(
             for row in &rows[range] {
                 let record = &row.admitted.record;
                 ui.horizontal(|ui| {
+                    if ui.small_button("Where used?").clicked() {
+                        crate::mcp_dispatch_manifest::select_reverse_provenance(
+                            ui.ctx(),
+                            record.conversation_id,
+                            record.call_id.get(),
+                        );
+                    }
+                    if ui
+                        .add_enabled(
+                            can_revoke && revoke.is_none(),
+                            egui::Button::new("Revoke"),
+                        )
+                        .on_hover_text("Explicitly exclude this exact admitted result from future normal conversation context. Its audit history remains.")
+                        .clicked()
+                    {
+                        revoke = Some(record.call_id);
+                    }
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(format!(
@@ -159,19 +176,10 @@ pub fn render_inventory(
                         )
                         .truncate(),
                     );
-                    if ui
-                        .add_enabled(
-                            can_revoke && revoke.is_none(),
-                            egui::Button::new("Revoke"),
-                        )
-                        .on_hover_text("Explicitly exclude this exact admitted result from future normal conversation context. Its audit history remains.")
-                        .clicked()
-                    {
-                        revoke = Some(record.call_id);
-                    }
                 });
             }
         });
+    ui.label("Where used? selects a historical call for the reverse lookup under Recent outgoing context snapshots.");
     ui.label("Only currently admitted results are listed; other completed and revoked calls remain in the Tools / MCP audit.");
     revoke
 }

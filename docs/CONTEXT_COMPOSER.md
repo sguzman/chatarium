@@ -185,6 +185,13 @@ list was truncated**. Complete manifests that do not name the call are
 counted separately as **not eligible at that request snapshot**; the viewer
 does not flood the list with ordinary negative matches.
 
+The **Admitted MCP evidence** inventory and the per-provider **Recent MCP
+results** review rows also offer **Where used? / Find historical use**
+shortcuts. These select the verified call ID for the reverse inspector
+without admitting a result, changing permissions or rerunning the tool.
+Open the **Recent outgoing context snapshots** panel to see the selected
+call's history; manual numeric lookup remains available for older calls.
+
 The lookup validates that a call retains its exact route, provider, source
 session, terminal outcome sequence and outcome kind across requests. A
 later explicit readmission may legitimately change the admission decision

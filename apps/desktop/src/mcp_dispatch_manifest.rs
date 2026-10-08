@@ -795,6 +795,24 @@ pub fn reverse_tool_provenance_json(report: &ToolProvenanceReport<'_>) -> Value 
     })
 }
 
+/// Cross-panel selection uses a conversation-scoped, transient UI key.
+/// It never modifies the durable evidence journal or admission decisions.
+pub fn reverse_query_id(conversation_id: LocalConversationId) -> egui::Id {
+    egui::Id::new(("chatarium-reverse-mcp-query", conversation_id.to_string()))
+}
+
+pub fn select_reverse_provenance(
+    ctx: &egui::Context,
+    conversation_id: LocalConversationId,
+    call_id: u64,
+) {
+    if call_id > 0 {
+        ctx.data_mut(|data| {
+            data.insert_temp(reverse_query_id(conversation_id), call_id.to_string())
+        });
+    }
+}
+
 const REVERSE_PROVENANCE_PAGE_SIZE: usize = 12;
 
 fn render_reverse_tool_provenance(
@@ -804,9 +822,7 @@ fn render_reverse_tool_provenance(
 ) {
     ui.collapsing("Reverse MCP provenance · find requests using a result", |ui| {
         ui.label("Look up one immutable MCP call ID across this conversation's manifested requests. 'Included' describes the composed input, not proof of remote receipt or model attention.");
-        let input_id = ui
-            .id()
-            .with(("reverse-mcp-call-query", conversation_id.to_string()));
+        let input_id = reverse_query_id(conversation_id);
         let mut query = ui
             .ctx()
             .data_mut(|data| data.get_temp::<String>(input_id).unwrap_or_default());
@@ -1363,6 +1379,14 @@ mod tests {
         let serialized = json.to_string();
         assert!(!serialized.contains("secret adapter bytes"));
         assert!(!serialized.contains("historically typed user message"));
+    }
+
+    #[test]
+    fn reverse_provenance_selection_identity_is_conversation_scoped() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        assert_eq!(reverse_query_id(first), reverse_query_id(first));
+        assert_ne!(reverse_query_id(first), reverse_query_id(second));
     }
 
     #[test]

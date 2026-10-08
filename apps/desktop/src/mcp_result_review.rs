@@ -17,6 +17,8 @@ pub const RECENT_RESULT_CANDIDATES: usize = 16;
 pub struct FocusedResult<'a> {
     pub outcome: &'a ToolCallOutcomeRecord,
     pub stage: ResultReviewStage,
+    /// Verified at the historical outcome boundary, not the current UI route.
+    pub conversation_id: LocalConversationId,
 }
 
 /// Build a bounded, read-only review queue for one provider and conversation.
@@ -68,6 +70,7 @@ pub fn recent_result_queue<'a>(
         queue.push(FocusedResult {
             outcome,
             stage: classify(record.map(|record| record.decision), outcome.text.len()),
+            conversation_id,
         });
     }
     // Prioritize undecided results, but preserve newest-first chronology
@@ -184,6 +187,14 @@ pub fn render_result_queue(
                             outcome.route_id.get(),
                         ));
                         ui.label(egui::RichText::new(item.stage.label()).strong());
+                        if ui.small_button("Find historical use").clicked() {
+                            crate::mcp_dispatch_manifest::select_reverse_provenance(
+                                ui.ctx(),
+                                item.conversation_id,
+                                outcome.call_id.get(),
+                            );
+                        }
+                        ui.label("Historical lookup is under Context & inference controls → Recent outgoing context snapshots.");
                         if item.stage == ResultReviewStage::TooLargeToAdmit {
                             ui.label("Over context-admission size limit. The full result remains in the historical audit; no truncated portion can be admitted.");
                         }
@@ -470,6 +481,7 @@ mod tests {
         assert_eq!(queue[0].stage, ResultReviewStage::ExcludedByDefault);
         assert_eq!(queue[1].stage, ResultReviewStage::Admitted);
         assert_eq!(queue[2].stage, ResultReviewStage::ExplicitlyExcluded);
+        assert!(queue.iter().all(|item| item.conversation_id == own));
         assert!(queue[0].stage.may_admit_from_preview(false));
         assert!(!queue[1].stage.may_admit());
         assert!(!queue[2].stage.may_exclude());
