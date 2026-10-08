@@ -4,7 +4,6 @@
 //! external side effect. No subprocess is spawned here. A crash after this
 //! durable boundary must remain unresolved and must never auto-retry a call.
 
-use crate::{EventEnvelope, EventStore};
 use crate::routing_audit::{RouteUserDecision, record_route_dispatched, replay_routing_audit};
 use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
@@ -13,9 +12,8 @@ use crate::tool_stdio_preflight::{
     ActivatedStdioToolInvocationPreview, preview_activated_stdio_tool_invocation,
 };
 use crate::tool_transport_config_audit::replay_tool_transport_config_audit;
-use chatarium_core::routing::{
-    DecisionAuthority, RouteGate, RouteGateState, RouteId, RoutePolicy,
-};
+use crate::{EventEnvelope, EventStore};
+use chatarium_core::routing::{DecisionAuthority, RouteGate, RouteGateState, RouteId, RoutePolicy};
 use chatarium_core::tool::{ToolCallId, ToolProviderId};
 
 /// Move-only proof that the one-shot route authority was durably consumed.
@@ -143,18 +141,21 @@ pub fn replay_unresolved_external_tool_dispatches(
         let Some(route_id) = call.route_id else {
             continue;
         };
-        let route = routes.iter()
+        let route = routes
+            .iter()
             .find(|record| record.request.id == route_id)
             .ok_or_else(|| format!("external tool route {} disappeared", route_id.get()))?;
         let Some(dispatch_sequence) = route.dispatch_sequence else {
             continue;
         };
-        if outcomes.iter().any(|record| {
-            record.call_id == call.call_id || record.route_id == route_id
-        }) {
+        if outcomes
+            .iter()
+            .any(|record| record.call_id == call.call_id || record.route_id == route_id)
+        {
             continue;
         }
-        let prefix = events.iter()
+        let prefix = events
+            .iter()
             .filter(|event| event.sequence < dispatch_sequence)
             .cloned()
             .collect::<Vec<_>>();
@@ -313,30 +314,52 @@ mod tests {
         assert_eq!(projected[0].call_id, CALL);
         assert_eq!(projected[0].route_id, ROUTE);
         assert_eq!(projected[0].provider_id, PROVIDER);
-        assert_eq!(projected[0].dispatch_sequence, reservation.dispatch_sequence());
+        assert_eq!(
+            projected[0].dispatch_sequence,
+            reservation.dispatch_sequence()
+        );
         // Replaying the same journal cannot reinterpret the missing result.
-        assert_eq!(projected, replay_unresolved_external_tool_dispatches(store.events()).unwrap());
+        assert_eq!(
+            projected,
+            replay_unresolved_external_tool_dispatches(store.events()).unwrap()
+        );
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn terminal_observation_closes_unresolved_projection_once() {
-        use crate::tool_outcome_audit::{append_tool_call_outcome_checked, ToolCallOutcomeKind};
+        use crate::tool_outcome_audit::{ToolCallOutcomeKind, append_tool_call_outcome_checked};
         let mut store = fixture("/usr/bin/true", true);
         reserve_activated_stdio_tool_dispatch(&mut store, CALL).unwrap();
-        assert_eq!(replay_unresolved_external_tool_dispatches(store.events()).unwrap().len(), 1);
+        assert_eq!(
+            replay_unresolved_external_tool_dispatches(store.events())
+                .unwrap()
+                .len(),
+            1
+        );
         append_tool_call_outcome_checked(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result,
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Result,
             "{\"resultType\":\"complete\",\"content\":[]}",
-        ).unwrap();
-        assert!(replay_unresolved_external_tool_dispatches(store.events()).unwrap().is_empty());
+        )
+        .unwrap();
+        assert!(
+            replay_unresolved_external_tool_dispatches(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn unapproved_external_calls_are_not_misreported_as_dispatched() {
         let store = fixture("/usr/bin/true", false);
-        assert!(replay_unresolved_external_tool_dispatches(store.events())
-            .unwrap().is_empty());
+        assert!(
+            replay_unresolved_external_tool_dispatches(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
