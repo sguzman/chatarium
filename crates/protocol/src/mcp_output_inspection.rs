@@ -1071,12 +1071,9 @@ mod tests {
             "optional":{"type":"number","multipleOf":0.25}
         }});
         assert_eq!(
-            inspect_structured_tool_output(
-                &inspected_tool(Some(schema)),
-                &complete(json!({})),
-            )
-            .unwrap()
-            .verdict,
+            inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})),)
+                .unwrap()
+                .verdict,
             McpOutputVerdict::PassedSupportedChecks,
         );
     }
