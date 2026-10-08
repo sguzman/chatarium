@@ -1,8 +1,9 @@
 # Local tool integration
 
-Status: **ACTIVE SUBSTRATE**. One side-effect-free builtin `hello` smoke adapter
-is enabled. General MCP, arbitrary local process, filesystem, and network tool
-execution remain disabled.
+Status: **ACTIVE SUBSTRATE**. The side-effect-free builtin `hello` adapter
+and deliberately confined, user-approved Linux one-shot MCP stdio execution
+are enabled. General host-process, filesystem, network, and automatic
+model-driven tool execution remain disabled.
 
 This is Chatarium's local tool-call control plane, not a second invisible
 function-execution pipeline. The authoritative state is the append-only journal.
@@ -26,10 +27,10 @@ The current Rust and desktop implementation has these separate layers:
    decisions are durable and cannot be inferred from call text.
 4. **One-shot route dispatch authority.** The existing typed
    `RouteGate`/`DispatchPermit` is the only permissible dispatch boundary.
-   Tool calls default to inert. The **only** currently enabled execution path
-   is a side-effect-free builtin `hello` proof requiring exact provider name,
-   operation, JSON argument validation, explicit Allow, and a separate user
-   click to dispatch. No other call/provider is executable.
+   Tool calls default to inert. The two deliberately enabled execution paths
+   are the side-effect-free builtin `hello` proof and the confined Linux
+   external stdio adapter. Both require explicit user Allow and separate
+   one-shot Run/Dispatch; no model output grants execution authority.
 5. **Terminal adapter-result audit.** `ToolCallOutcomeObserved` is an
    independent exact-text result/error fact. Replay requires the call to be
    correlated to the exact `ToolCall` route and requires that route to have
@@ -55,8 +56,9 @@ the entire prospective result before mutating the authoritative journal.
 Archive integrity validates all tool/provider/call/outcome journals.
 
 The new tool outcome audit is also the storage contract for future adapters.
-The builtin hello adapter produces a real deterministic result after its
-one-shot dispatch; all other providers remain inert. No tool result is
+The builtin hello adapter produces a deterministic result; external stdio
+providers can run only inside the constrained Linux one-shot sandbox after
+activation, user approval, and a separate Run action. No tool result is
 silently entered into ordinary transcript or shared memory. Tool context enters
 Context Composer only after a separate durable user Admit decision.
 
@@ -242,14 +244,17 @@ Archive integrity checking also replays unresolved external dispatches and
 their historical permission evidence. A malformed history cannot silently
 become a purportedly recoverable tool call.
 
-### Confined Linux MCP runner (not exposed in the desktop yet)
+### Confined Linux MCP runner (available with explicit desktop approval)
 
 `apps/desktop/src/local_stdio_runner.rs` contains an opt-in, bounded
 one-shot executor that **only accepts a move-only reserved dispatch**.
-It rejects stale journal-tip reservations, uses an exact single JSON-RPC
-request frame, decodes the single matching MCP reply, and appends a
-checked terminal Result or Error observation. A failed durable outcome
-append leaves the route unresolved; it is **never retried automatically**.
+It accepts only a move-only reserved dispatch, uses an exact single JSON-RPC
+request frame, and decodes the single matching MCP reply. The subprocess
+executes on its own worker thread, never on the persistence worker. The
+terminal observation is returned as a bounded typed message and appended to
+the authoritative journal by the persistence worker, which remains responsive
+to other writes while the sandbox runs. A failed durable outcome append leaves
+the route unresolved; it is **never retried automatically**.
 
 The first hardened launch policy is intentionally narrow:
 
