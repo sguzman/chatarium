@@ -564,6 +564,18 @@ and oversized/deep specimens are inconclusive. Only fixed, bounded
 diagnostic strings are emitted; arbitrary provider-supplied fields are
 not copied into diagnostics.
 
+The audit now identifies the **first recognized failing constraint** with a
+fixed, code-owned diagnostic. Messages distinguish `type`, `required`,
+`const`, `enum`, string and collection limits, numeric bounds,
+`multipleOf`, `uniqueItems`, and directly forbidding boolean-false schemas
+under `properties`, `additionalProperties`, `propertyNames`,
+`prefixItems`, or `items`. Nested supported failures keep their own
+constraint name. No provider-supplied property name, schema value, result
+text, or output path is copied into diagnostic messages. A mismatch reports
+one detected failure, not an exhaustive error listing; whole-schema
+unsupported or malformed assertions still take precedence and yield
+`Inconclusive` rather than a misleading specific mismatch.
+
 **Passing supported checks is not full JSON Schema 2020-12 validation.**
 The comparison does not perform network requests, fetch resource links,
 load reference schemas, execute tools, authorize calls, or admit a result to
