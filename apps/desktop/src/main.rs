@@ -39,8 +39,8 @@ use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
 };
-use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
 use chatarium_protocol::conversation_list::ConversationListItem;
+use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
 use chatarium_store::archive_maintenance::{
     check_archive, create_backup, restore_backup, verify_backup,
 };
