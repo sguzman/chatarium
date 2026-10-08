@@ -9186,16 +9186,23 @@ impl eframe::App for ChatariumApp {
                                             if let (Some(routes), Some(outcomes)) =
                                                 (&routes, &outcomes)
                                             {
+                                                // Build bounded per-frame lookups once. The
+                                                // focus must not compare every call to every
+                                                // historical outcome while rendering.
+                                                let indexed_routes: BTreeMap<_, _> = routes
+                                                    .iter()
+                                                    .map(|route| (route.request.id, route))
+                                                    .collect();
+                                                let observed_calls: BTreeSet<_> = outcomes
+                                                    .iter()
+                                                    .map(|outcome| outcome.call_id)
+                                                    .collect();
                                                 let next_review = calls.iter().filter(
                                                     |call| self.tool_selected_provider == Some(call.provider_id),
                                                 ).filter_map(|call| {
                                                     let route_id = call.route_id?;
-                                                    let route = routes.iter().find(|route| {
-                                                        route.request.id == route_id
-                                                    })?;
-                                                    let observed = outcomes.iter().any(|outcome| {
-                                                        outcome.call_id == call.call_id
-                                                    });
+                                                    let route = indexed_routes.get(&route_id).copied()?;
+                                                    let observed = observed_calls.contains(&call.call_id);
                                                     let stage = mcp_call_review::classify(
                                                         call.route_bound_sequence.is_some(),
                                                         route.latest_user_decision,
