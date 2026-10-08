@@ -274,6 +274,7 @@ impl TurnEvidence {
             | EventKind::LocalMemoryTurnSelectionRecorded
             | EventKind::ToolProviderRegistered
             | EventKind::ToolProviderEndpointBound
+            | EventKind::ToolProviderTransportConfigured
             | EventKind::ToolCallRecorded
             | EventKind::ToolCallRouteBound
             | EventKind::ToolCallOutcomeObserved
@@ -403,6 +404,8 @@ pub enum EventKind {
     ToolProviderRegistered,
     /// One registered tool/provider was correlated to a routing endpoint.
     ToolProviderEndpointBound,
+    /// An inert, explicit transport configuration was recorded for a provider.
+    ToolProviderTransportConfigured,
     /// One immutable local tool-call intent was recorded.
     ToolCallRecorded,
     /// One immutable tool-call intent was correlated to a ToolCall route.
@@ -536,6 +539,7 @@ impl EventKind {
             Self::LocalMemoryTurnSelectionRecorded => "local_memory_turn_selection_recorded",
             Self::ToolProviderRegistered => "tool_provider_registered",
             Self::ToolProviderEndpointBound => "tool_provider_endpoint_bound",
+            Self::ToolProviderTransportConfigured => "tool_provider_transport_configured",
             Self::ToolCallRecorded => "tool_call_recorded",
             Self::ToolCallRouteBound => "tool_call_route_bound",
             Self::ToolCallOutcomeObserved => "tool_call_outcome_observed",
@@ -641,6 +645,9 @@ impl EventKind {
             "local_memory_turn_selection_recorded" => Some(Self::LocalMemoryTurnSelectionRecorded),
             "tool_provider_registered" => Some(Self::ToolProviderRegistered),
             "tool_provider_endpoint_bound" => Some(Self::ToolProviderEndpointBound),
+            "tool_provider_transport_configured" => {
+                Some(Self::ToolProviderTransportConfigured)
+            }
             "tool_call_recorded" => Some(Self::ToolCallRecorded),
             "tool_call_route_bound" => Some(Self::ToolCallRouteBound),
             "tool_call_outcome_observed" => Some(Self::ToolCallOutcomeObserved),
