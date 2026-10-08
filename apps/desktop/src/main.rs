@@ -7036,20 +7036,18 @@ impl eframe::App for ChatariumApp {
             let mut clear_focus = false;
             ctx.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                    self.local_conversation_search_selection =
-                        local_archive_search::move_selection(
-                            self.local_conversation_search_selection,
-                            native_search_matches.len(),
-                            1,
-                        );
+                    self.local_conversation_search_selection = local_archive_search::move_selection(
+                        self.local_conversation_search_selection,
+                        native_search_matches.len(),
+                        1,
+                    );
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                    self.local_conversation_search_selection =
-                        local_archive_search::move_selection(
-                            self.local_conversation_search_selection,
-                            native_search_matches.len(),
-                            -1,
-                        );
+                    self.local_conversation_search_selection = local_archive_search::move_selection(
+                        self.local_conversation_search_selection,
+                        native_search_matches.len(),
+                        -1,
+                    );
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
                     select_local_requested = self

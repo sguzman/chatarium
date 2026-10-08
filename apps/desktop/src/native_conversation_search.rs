@@ -26,11 +26,11 @@ pub fn find_match<'a>(
         .then_some(NativeSearchMatch::Message)
 }
 
-
 // The index reuses the same typed authored ownership and display-message
 // projection as the native conversation view, but scans journal history only
 // once rather than once per visible sidebar row, and caches unchanged frames.
 use super::{DisplayMessage, projected_display_messages};
+use eframe::egui;
 use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{
@@ -86,21 +86,26 @@ impl NativeConversationSearchIndex {
             BTreeMap::new();
         for event in events {
             let owner = match event.kind {
-                EventKind::UserMessageCommitted => {
-                    match decode_user_message_commit(event) {
-                        Ok(Some(DecodedUserMessageCommit::Typed(message))) => {
-                            Some(message.conversation_id)
-                        }
-                        _ => None,
+                EventKind::UserMessageCommitted => match decode_user_message_commit(event) {
+                    Ok(Some(DecodedUserMessageCommit::Typed(message))) => {
+                        Some(message.conversation_id)
                     }
-                }
+                    _ => None,
+                },
                 EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => {
-                    event.scope.as_deref().and_then(|scope| owners.get(scope)).copied()
+                    event
+                        .scope
+                        .as_deref()
+                        .and_then(|scope| owners.get(scope))
+                        .copied()
                 }
                 _ => None,
             };
             if let Some(owner) = owner {
-                by_conversation.entry(owner).or_default().push(event.clone());
+                by_conversation
+                    .entry(owner)
+                    .or_default()
+                    .push(event.clone());
             }
         }
 
@@ -221,7 +226,10 @@ mod tests {
             assert_eq!(actual.len(), reference.len());
             assert_eq!(
                 actual.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(),
-                reference.iter().map(|m| m.text.as_str()).collect::<Vec<_>>()
+                reference
+                    .iter()
+                    .map(|m| m.text.as_str())
+                    .collect::<Vec<_>>()
             );
             assert_eq!(
                 actual.iter().map(|m| m.sequence).collect::<Vec<_>>(),
@@ -240,11 +248,19 @@ mod tests {
         assert!(!first_text.contains("second answer private"));
         assert!(!first_text.contains("SECRET RESULT"));
         assert_eq!(
-            find_match("RUST", "", index.messages(first).iter().map(|m| m.text.as_str())),
+            find_match(
+                "RUST",
+                "",
+                index.messages(first).iter().map(|m| m.text.as_str())
+            ),
             Some(NativeSearchMatch::Message)
         );
         assert_eq!(
-            find_match("RUST", "", index.messages(second).iter().map(|m| m.text.as_str())),
+            find_match(
+                "RUST",
+                "",
+                index.messages(second).iter().map(|m| m.text.as_str())
+            ),
             None
         );
     }
