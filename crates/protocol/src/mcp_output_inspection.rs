@@ -292,16 +292,12 @@ fn json_equal(
 ) -> Result<bool, InspectionIssue> {
     budget.visit(depth)?;
     match (left, right) {
-        (Value::Number(a), Value::Number(b)) => {
-            Ok(compare_numbers(a, b)? == Ordering::Equal)
-        }
+        (Value::Number(a), Value::Number(b)) => Ok(compare_numbers(a, b)? == Ordering::Equal),
         (Value::Null, Value::Null) => Ok(true),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
         (Value::String(a), Value::String(b)) => Ok(a == b),
         (Value::Array(a), Value::Array(b)) => {
-            if a.len() > MAX_INSPECTION_COLLECTION
-                || b.len() > MAX_INSPECTION_COLLECTION
-            {
+            if a.len() > MAX_INSPECTION_COLLECTION || b.len() > MAX_INSPECTION_COLLECTION {
                 return Err(InspectionIssue::Unsupported);
             }
             if a.len() != b.len() {
@@ -315,9 +311,7 @@ fn json_equal(
             Ok(true)
         }
         (Value::Object(a), Value::Object(b)) => {
-            if a.len() > MAX_INSPECTION_COLLECTION
-                || b.len() > MAX_INSPECTION_COLLECTION
-            {
+            if a.len() > MAX_INSPECTION_COLLECTION || b.len() > MAX_INSPECTION_COLLECTION {
                 return Err(InspectionIssue::Unsupported);
             }
             if a.len() != b.len() {
@@ -752,14 +746,21 @@ mod tests {
     #[test]
     fn const_and_enum_compare_nested_json_semantically() {
         for (schema, value) in [
-            (json!({"const": {"kind":"sample","sizes":[1,2.0]}}), json!({"sizes":[1.0,2],"kind":"sample"})),
-            (json!({"enum":[null,true,{"count":1}]}), json!({"count":1.0})),
+            (
+                json!({"const": {"kind":"sample","sizes":[1,2.0]}}),
+                json!({"sizes":[1.0,2],"kind":"sample"}),
+            ),
+            (
+                json!({"enum":[null,true,{"count":1}]}),
+                json!({"count":1.0}),
+            ),
             (json!({"type":"number","const":1}), json!(1.0)),
             (json!({"type":"string","enum":["x","y"]}), json!("y")),
         ] {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::PassedSupportedChecks);
         }
         for (schema, value) in [
@@ -768,9 +769,10 @@ mod tests {
             (json!({"enum":[1,2]}), json!(3)),
             (json!({"const":true}), json!(false)),
         ] {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::Mismatch);
         }
     }
@@ -778,20 +780,53 @@ mod tests {
     #[test]
     fn numeric_bounds_handle_inclusive_exclusive_and_fractional_values() {
         let cases = [
-            (json!({"minimum":1}), json!(1), McpOutputVerdict::PassedSupportedChecks),
-            (json!({"exclusiveMinimum":1}), json!(1), McpOutputVerdict::Mismatch),
-            (json!({"maximum":2}), json!(2), McpOutputVerdict::PassedSupportedChecks),
-            (json!({"exclusiveMaximum":2}), json!(2), McpOutputVerdict::Mismatch),
-            (json!({"minimum":-3,"maximum":3}), json!(-2), McpOutputVerdict::PassedSupportedChecks),
-            (json!({"exclusiveMinimum":0.25}), json!(0.5), McpOutputVerdict::PassedSupportedChecks),
-            (json!({"maximum":0.25}), json!(0.5), McpOutputVerdict::Mismatch),
+            (
+                json!({"minimum":1}),
+                json!(1),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
+            (
+                json!({"exclusiveMinimum":1}),
+                json!(1),
+                McpOutputVerdict::Mismatch,
+            ),
+            (
+                json!({"maximum":2}),
+                json!(2),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
+            (
+                json!({"exclusiveMaximum":2}),
+                json!(2),
+                McpOutputVerdict::Mismatch,
+            ),
+            (
+                json!({"minimum":-3,"maximum":3}),
+                json!(-2),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
+            (
+                json!({"exclusiveMinimum":0.25}),
+                json!(0.5),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
+            (
+                json!({"maximum":0.25}),
+                json!(0.5),
+                McpOutputVerdict::Mismatch,
+            ),
             (json!({"minimum":-1}), json!(-2), McpOutputVerdict::Mismatch),
-            (json!({"exclusiveMaximum":10}), json!("not a number"), McpOutputVerdict::PassedSupportedChecks),
+            (
+                json!({"exclusiveMaximum":10}),
+                json!("not a number"),
+                McpOutputVerdict::PassedSupportedChecks,
+            ),
         ];
         for (schema, value, expected) in cases {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, expected);
         }
     }
@@ -806,9 +841,10 @@ mod tests {
             (json!({"maximum":1e100}), json!(1e100)),
         ];
         for (schema, value) in cases {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::Inconclusive);
         }
         // Two large integral JSON tokens can still be compared exactly.
@@ -817,7 +853,9 @@ mod tests {
             inspect_structured_tool_output(
                 &inspected_tool(Some(json!({"minimum":9_007_199_254_740_994_u64}))),
                 &complete(large),
-            ).unwrap().verdict,
+            )
+            .unwrap()
+            .verdict,
             McpOutputVerdict::PassedSupportedChecks,
         );
     }
@@ -830,9 +868,10 @@ mod tests {
             json!({"properties":{"absent":{"enum":"not an array"}}}),
             json!({"properties":{"absent":{"multipleOf":2}}}),
         ] {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(json!({})),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::Inconclusive);
         }
     }
