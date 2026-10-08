@@ -223,6 +223,13 @@ conservative Linux executable path inspection and the exact user-approved
 event before returning any reservation. Duplicate reservations, unapproved
 calls, and absent executables fail without consuming authority.
 
+The recovery projection `replay_unresolved_external_tool_dispatches`
+reconstructs dispatched-but-unresolved external calls from historical journal
+prefixes and cross-checks their activation and user approval **as of dispatch**,
+not against the current session. The desktop Tool call audit now displays
+**UNRESOLVED EXTERNAL DISPATCHES**, including exact call, route, provider and
+dispatch sequence; there is intentionally no Retry control.
+
 A reserved call has **not necessarily started**. If Chatarium crashes after
 the durable dispatch but before a subprocess is launched, or while a
 subprocess may have been running, recovery must present an **unresolved**

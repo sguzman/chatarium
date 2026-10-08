@@ -207,6 +207,7 @@ use chatarium_store::tool_result_context_audit::{
     replay_tool_result_context_audit, tool_outcome_owning_conversation,
 };
 use chatarium_store::tool_stdio_preflight::preview_activated_stdio_tool_invocation;
+use chatarium_store::tool_stdio_dispatch::replay_unresolved_external_tool_dispatches;
 use chatarium_store::tool_transport_config_audit::{
     append_tool_transport_config_checked, replay_tool_transport_config_audit,
 };
@@ -8852,6 +8853,37 @@ impl eframe::App for ChatariumApp {
                                             );
                                         }
                                         Ok(calls) => {
+                                            match replay_unresolved_external_tool_dispatches(&self.events) {
+                                                Ok(unresolved) if !unresolved.is_empty() => {
+                                                    ui.collapsing(
+                                                        format!("UNRESOLVED EXTERNAL DISPATCHES · {}", unresolved.len()),
+                                                        |ui| {
+                                                            ui.label(
+                                                                "A route permit was durably consumed, but no tool outcome is recorded. A process may or may not have run. No automatic retries.",
+                                                            );
+                                                            for item in &unresolved {
+                                                                ui.label(
+                                                                    egui::RichText::new(format!(
+                                                                        "call {} · route {} · provider {} · dispatched #{}",
+                                                                        item.call_id.get(),
+                                                                        item.route_id.get(),
+                                                                        item.provider_id.get(),
+                                                                        item.dispatch_sequence,
+                                                                    ))
+                                                                    .monospace()
+                                                                    .size(9.0),
+                                                                );
+                                                            }
+                                                        },
+                                                    );
+                                                }
+                                                Err(error) => {
+                                                    ui.label(format!(
+                                                        "Unresolved tool dispatch audit blocked: {error}"
+                                                    ));
+                                                }
+                                                Ok(_) => {}
+                                            }
                                             let routes =
                                                 replay_routing_audit(&self.events).ok();
                                             let outcomes =
