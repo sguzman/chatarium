@@ -273,7 +273,7 @@ The first hardened launch policy is intentionally narrow:
   resource limits, not a whole-system cgroup quota. The runner adds a
   10-second wall-clock timeout, a 1 MiB stdout frame ceiling and
   a 16 KiB stderr ceiling.
-- `bubblewrap --unshare-all --disable-userns` creates isolated namespaces
+- `bubblewrap --unshare-all --unshare-user --disable-userns` creates isolated namespaces
   (including network and PID) and denies further nested user namespaces,
   with read-only `/usr`, synthetic `/dev` and `/proc`, a **32 MiB**
   scratch `/tmp` tmpfs, no home mount, cleared environment, a new
