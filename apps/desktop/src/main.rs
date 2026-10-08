@@ -8,7 +8,6 @@ mod diagnostics;
 mod integration_journey;
 mod local_archive_search;
 mod local_conversations;
-mod native_conversation_search;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
@@ -23,6 +22,7 @@ mod mcp_dispatch_manifest;
 mod mcp_output_audit;
 mod mcp_provider_workflow;
 mod mcp_result_review;
+mod native_conversation_search;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -1227,7 +1227,7 @@ impl ChatariumApp {
                         ),
                         local_conversation_catalog,
                         show_archived_local_conversations: false,
-            local_conversation_search_query: String::new(),
+                        local_conversation_search_query: String::new(),
                         events: events.clone(),
                         historical_catalog,
                         selected_historical_conversation: None,

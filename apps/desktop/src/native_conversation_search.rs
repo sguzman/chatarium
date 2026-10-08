@@ -51,7 +51,11 @@ mod tests {
     #[test]
     fn searches_only_passed_local_user_and_assistant_messages() {
         assert_eq!(
-            find_match("permission", "Archive", ["Hello", "Explicit PERMISSION granted"]),
+            find_match(
+                "permission",
+                "Archive",
+                ["Hello", "Explicit PERMISSION granted"]
+            ),
             Some(NativeSearchMatch::Message)
         );
         assert_eq!(find_match("permission", "Archive", ["Hello"]), None);
