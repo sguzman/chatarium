@@ -178,6 +178,18 @@ fn validate_trusted_binary(path: &str) -> Result<(), String> {
             "restricted runner refuses non-root-owned executable {path}"
         ));
     }
+    // Even a root-owned executable can be swapped by the owner of an
+    // ancestor directory. The initial runner permits only fixed root-owned
+    // /usr/bin ancestry, not caller-owned directories with mode 0755.
+    for parent in ["/", "/usr", "/usr/bin"] {
+        let parent_meta = std::fs::symlink_metadata(parent)
+            .map_err(|error| format!("cannot inspect {parent}: {error}"))?;
+        if !parent_meta.is_dir() || parent_meta.uid() != 0 {
+            return Err(format!(
+                "restricted runner refuses non-root-owned executable directory {parent}"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -431,6 +443,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(returned, format!("{reply}\n"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_owned_usr_bin_ancestry_is_required_for_trusted_launcher() {
+        // The hosted Linux worker uses root-owned /usr and /usr/bin.
+        // If its filesystem ownership differs, the policy must refuse.
+        let result = validate_trusted_binary("/usr/bin/true");
+        if std::fs::symlink_metadata("/usr/bin")
+            .is_ok_and(|metadata| {
+                use std::os::unix::fs::MetadataExt;
+                metadata.uid() == 0
+            })
+        {
+            assert!(result.is_ok());
+        } else {
+            assert!(result.is_err());
+        }
     }
 
     #[cfg(target_os = "linux")]
