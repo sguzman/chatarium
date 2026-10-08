@@ -329,6 +329,9 @@ enum PersistCommand {
     ExecuteApprovedStdioTool {
         call_id: ToolCallId,
     },
+    ReserveApprovedStdioToolAfterProbe {
+        call_id: ToolCallId,
+    },
     RecordExternalStdioOutcome {
         observation: local_stdio_runner::ConfinedStdioObservation,
     },
@@ -4687,7 +4690,7 @@ impl ChatariumApp {
             Ok(()) => {
                 self.tool_command_pending = true;
                 self.status = format!(
-                    "checking sandbox and reserving one-shot tool call {}…",
+                    "checking Linux namespace confinement before reserving one-shot tool call {}…",
                     call_id.get()
                 );
             }
@@ -16868,7 +16871,72 @@ fn persistence_worker(
                 }
             }
             PersistCommand::ExecuteApprovedStdioTool { call_id } => {
-                // Reserve and journal the irreversible dispatch before process effects.
+                // Do the read-only call and executable checks first. The real
+                // namespace probe runs off the journal worker, *before* the
+                // irreversible RouteDispatched event is recorded.
+                let prepared = preview_activated_stdio_tool_invocation(store.events(), call_id)
+                    .and_then(|preview| {
+                        local_stdio_runner::preflight_confined_stdio_launch(
+                            preview.invocation.executable.as_str(),
+                            &preview.invocation.argv,
+                        )
+                    });
+                match prepared {
+                    Ok(()) => {
+                        let completion_tx = completion_tx.clone();
+                        let failure_notices = notices.clone();
+                        let launched = thread::Builder::new()
+                            .name(format!("chatarium-mcp-probe-{}", call_id.get()))
+                            .spawn(move || {
+                                let result = std::panic::catch_unwind(
+                                    local_stdio_runner::probe_confined_stdio_host,
+                                )
+                                .unwrap_or_else(|_| {
+                                    Err("Linux sandbox host-readiness probe panicked; no dispatch was consumed".to_owned())
+                                });
+                                match result {
+                                    Ok(()) => {
+                                        let _ = completion_tx.send(
+                                            PersistCommand::ReserveApprovedStdioToolAfterProbe {
+                                                call_id,
+                                            },
+                                        );
+                                    }
+                                    Err(error) => {
+                                        let _ = failure_notices.send(PersistNotice::Failed {
+                                            operation: "tool isolated stdio host preflight",
+                                            revision: None,
+                                            request_id: None,
+                                            turn_id: None,
+                                            error,
+                                        });
+                                    }
+                                }
+                            });
+                        if let Err(error) = launched {
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "tool isolated stdio host preflight",
+                                revision: None,
+                                request_id: None,
+                                turn_id: None,
+                                error: format!("could not start host-readiness probe: {error}; no dispatch was consumed"),
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool isolated stdio preflight",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::ReserveApprovedStdioToolAfterProbe { call_id } => {
+                // Probe success is never a cached permit: revalidate all live
+                // policy before recording the one-shot dispatch.
                 let prepared = preview_activated_stdio_tool_invocation(store.events(), call_id)
                     .and_then(|preview| {
                         local_stdio_runner::preflight_confined_stdio_launch(
