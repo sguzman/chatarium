@@ -91,6 +91,10 @@ jobs:
           # host-wide AppArmor restriction or expose host networking.
           sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+      - name: Verify actual Linux sandbox readiness without consuming a tool route
+        env:
+          CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
+        run: cargo test -p chatarium-desktop live_confined_host_readiness_probe -- --nocapture
       - name: Smoke isolated MCP stdio transport
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
