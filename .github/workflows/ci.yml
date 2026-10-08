@@ -80,3 +80,5 @@ jobs:
         run: cargo check -p chatarium-desktop
       - name: Test Linux desktop
         run: cargo test -p chatarium-desktop
+      - name: Test Linux stdio tool safety
+        run: cargo test -p chatarium-store tool_stdio_
