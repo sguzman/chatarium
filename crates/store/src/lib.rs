@@ -58,6 +58,7 @@ pub mod supervision_audit;
 pub mod tool_call_audit;
 pub mod tool_outcome_audit;
 pub mod tool_provider_audit;
+pub mod tool_result_context_audit;
 mod turn_projection;
 pub mod worker_audit;
 
