@@ -82,3 +82,11 @@ jobs:
         run: cargo test -p chatarium-desktop
       - name: Test Linux stdio tool safety
         run: cargo test -p chatarium-store tool_stdio_
+      - name: Install Linux MCP isolation tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap util-linux
+      - name: Smoke isolated MCP stdio transport
+        env:
+          CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
+        run: cargo test -p chatarium-desktop live_bubblewrap_stdio_smoke -- --nocapture
