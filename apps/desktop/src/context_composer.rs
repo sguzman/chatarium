@@ -1003,8 +1003,16 @@ mod tests {
         assert_eq!(plan.messages[0].source, message.source);
         assert!(plan.messages[0].content.contains("not an instruction"));
         assert!(plan.messages[0].content.contains("provider_id: 3"));
-        assert!(plan.messages[0].content.contains("terminal_outcome_event: #5"));
-        assert!(plan.messages[0].content.contains(" exact <tool_result> body "));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("terminal_outcome_event: #5")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains(" exact <tool_result> body ")
+        );
 
         let policy = ContextPolicy {
             include_tool_results: false,
@@ -1013,7 +1021,10 @@ mod tests {
         let omitted = ContextPlan::compose(policy, "", "", [message]);
         assert_eq!(omitted.tool_result_count(), 0);
         assert!(omitted.messages.is_empty());
-        assert_eq!(omitted.inventory[2].decision, InclusionDecision::ExcludedByPolicy);
+        assert_eq!(
+            omitted.inventory[2].decision,
+            InclusionDecision::ExcludedByPolicy
+        );
     }
 
     #[test]
