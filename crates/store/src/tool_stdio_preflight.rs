@@ -18,7 +18,11 @@ use chatarium_core::routing::{
 };
 use chatarium_core::session::SessionId;
 use chatarium_core::tool::{ToolCallId, ToolProviderId};
-use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
+use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request, tools_list_request};
+
+/// Explicitly allowlisted internal *inspection* operation, not a server tool.
+/// It maps to MCP tools/list, never to tools/call. No automatic pagination.
+pub const MCP_LIST_TOOLS_OPERATION: &str = "chatarium.internal.tools-list";
 use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
 use serde_json::Value;
 
@@ -159,13 +163,30 @@ pub fn preview_stdio_tool_invocation(
     }
 
     let args = parse_exact_arguments(&call.arguments_text, call.operation.as_str())?;
-    let request =
+    let request = if call.operation.as_str() == MCP_LIST_TOOLS_OPERATION {
+        // A catalogue request is still a manually approved, durably
+        // dispatched call. Only {} or {"cursor":"..."} is supported.
+        let obj = args
+            .as_object()
+            .ok_or_else(|| "tools/list arguments must be an object".to_owned())?;
+        if obj.keys().any(|key| key != "cursor") {
+            return Err("tools/list only accepts an optional cursor field".to_owned());
+        }
+        let cursor = match obj.get("cursor") {
+            Some(Value::String(cursor)) => Some(cursor.as_str()),
+            None => None,
+            _ => return Err("tools/list cursor must be a string".to_owned()),
+        };
+        tools_list_request(call_id.get(), cursor)
+            .map_err(|error| format!("tools/list request rejected: {error:?}"))?
+    } else {
         tools_call_request(call_id.get(), call.operation.as_str(), &args).map_err(|error| {
             format!(
                 "tool call {} cannot encode MCP request: {error:?}",
                 call_id.get()
             )
-        })?;
+        })?
+    };
     let request_frame = encode_stdio_frame(&request).map_err(|error| {
         format!(
             "tool call {} cannot frame MCP request: {error:?}",
