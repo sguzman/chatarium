@@ -112,9 +112,7 @@ pub struct McpToolCallResultShape {
 /// successful transport observation. The outer JSON-RPC request ID is checked
 /// separately. Unknown content block variants fail closed; extra provider
 /// metadata stays untrusted and is never interpreted as instructions.
-pub fn validate_tools_call_result(
-    result: &Value,
-) -> Result<McpToolCallResultShape, McpWireError> {
+pub fn validate_tools_call_result(result: &Value) -> Result<McpToolCallResultShape, McpWireError> {
     let object = result.as_object().ok_or(McpWireError::InvalidResponse)?;
     if object.get("resultType").and_then(Value::as_str) != Some("complete") {
         return Err(McpWireError::InvalidResponse);
@@ -153,9 +151,7 @@ pub fn validate_tools_call_result(
                 .is_some_and(|resource| {
                     has_nonempty_string(resource, "uri")
                         && (has_string(resource, "text") || has_string(resource, "blob"))
-                        && resource
-                            .get("mimeType")
-                            .is_none_or(Value::is_string)
+                        && resource.get("mimeType").is_none_or(Value::is_string)
                 }),
             _ => false,
         };

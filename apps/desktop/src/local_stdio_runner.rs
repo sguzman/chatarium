@@ -459,9 +459,8 @@ fn run_one_shot(
                     // The 2026 protocol requires a content array even if the
                     // provider also supplies structuredContent. This is shape
                     // validation, not an endorsement of untrusted content.
-                    validate_tools_call_result(&result).map_err(|e| {
-                        format!("sandbox MCP tools/call result rejected: {e:?}")
-                    })?;
+                    validate_tools_call_result(&result)
+                        .map_err(|e| format!("sandbox MCP tools/call result rejected: {e:?}"))?;
                 }
                 if method == "tools/list" {
                     // The catalogue is untrusted provider testimony. Reject
@@ -622,7 +621,11 @@ mod tests {
         let invalid = r#"{"jsonrpc":"2.0","id":74,"result":{"resultType":"complete","content":[{"type":"text"}]}}"#;
         let error = run_one_shot(
             "/usr/bin/sed",
-            &["-n".to_owned(), "-e".to_owned(), format!("s/.*/{invalid}/p")],
+            &[
+                "-n".to_owned(),
+                "-e".to_owned(),
+                format!("s/.*/{invalid}/p"),
+            ],
             &frame,
             74,
         )
