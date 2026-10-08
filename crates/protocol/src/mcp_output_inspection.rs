@@ -120,11 +120,16 @@ pub fn inspect_structured_tool_output(
 // Fixed diagnostic strings are intentional: provider keys, instance paths and
 // values may contain private data or terminal-control characters. Report the
 // first recognized failing keyword, not untrusted provider-authored content.
-const fn mismatch_explanation(keyword: &str) -> &'static str {
+fn mismatch_explanation(keyword: &str) -> &'static str {
     match keyword {
         "false schema" => "A boolean false schema rejects the structured output.",
         "type" => "Constraint type failed: the structured output has an unexpected JSON type.",
         "required" => "Constraint required failed: a required object property is missing.",
+        "properties" => "Constraint properties failed: a declared property is forbidden by a false schema.",
+        "additionalProperties" => "Constraint additionalProperties failed: an extra object property is forbidden.",
+        "propertyNames" => "Constraint propertyNames failed: an object key is forbidden.",
+        "prefixItems" => "Constraint prefixItems failed: a tuple element is forbidden.",
+        "items" => "Constraint items failed: an array element is forbidden.",
         "const" => "Constraint const failed: the structured output differs from the declared constant.",
         "enum" => "Constraint enum failed: the structured output matches no declared option.",
         "minLength" => "Constraint minLength failed: a string is too short.",
@@ -592,6 +597,23 @@ fn matches_json_type(kind: &str, value: &Value) -> bool {
     }
 }
 
+// Attribute a directly rejecting boolean-false child to its enclosing
+// code-owned constraint. Nested mismatches keep their original keyword.
+fn inspect_child(
+    schema: &Value,
+    value: &Value,
+    depth: usize,
+    budget: &mut InspectionBudget,
+    keyword: &'static str,
+) -> Result<(), InspectionIssue> {
+    match inspect_value(schema, value, depth, budget) {
+        Err(InspectionIssue::Mismatch("false schema")) if schema == &Value::Bool(false) => {
+            Err(InspectionIssue::Mismatch(keyword))
+        }
+        other => other,
+    }
+}
+
 fn inspect_value(
     schema: &Value,
     value: &Value,
@@ -601,7 +623,7 @@ fn inspect_value(
     budget.visit(depth)?;
     match schema {
         Value::Bool(true) => return Ok(()),
-        Value::Bool(false) => return Err(InspectionIssue::Mismatch("false schema"),
+        Value::Bool(false) => return Err(InspectionIssue::Mismatch("false schema")),
         Value::Object(spec) => {
             if let Some(kind) = spec.get("type") {
                 let kinds = declared_types(kind)?;
@@ -687,12 +709,12 @@ fn inspect_value(
                     // propertyNames independently validates every key,
                     // including names also listed in properties.
                     if let Some(names) = names {
-                        inspect_value(names, &Value::String(name.to_owned()), depth + 1, budget)?;
+                        inspect_child(names, &Value::String(name.to_owned()), depth + 1, budget, "propertyNames")?;
                     }
                     if let Some(child) = props.and_then(|props| props.get(name)) {
-                        inspect_value(child, member, depth + 1, budget)?;
+                        inspect_child(child, member, depth + 1, budget, "properties")?;
                     } else if let Some(extra) = extra {
-                        inspect_value(extra, member, depth + 1, budget)?;
+                        inspect_child(extra, member, depth + 1, budget, "additionalProperties")?;
                     }
                 }
             }
@@ -706,7 +728,7 @@ fn inspect_value(
                 }
                 if let Some(prefix_items) = prefix_items {
                     for (member, schema) in array.iter().zip(prefix_items) {
-                        inspect_value(schema, member, depth + 1, budget)?;
+                        inspect_child(schema, member, depth + 1, budget, "prefixItems")?;
                     }
                 }
                 if let Some(items) = items {
@@ -714,7 +736,7 @@ fn inspect_value(
                     // Without prefixItems it applies to the entire array.
                     let start = prefix_items.map_or(0, Vec::len);
                     for member in array.iter().skip(start) {
-                        inspect_value(items, member, depth + 1, budget)?;
+                        inspect_child(items, member, depth + 1, budget, "items")?;
                     }
                 }
             }
@@ -1405,6 +1427,11 @@ mod tests {
         let cases = [
             (json!(false), json!(1), "boolean false schema"),
             (json!({"type":"string"}), json!(1), "type"),
+            (json!({"properties":{"PRIVATE-PROVIDER-KEY":false}}), json!({"PRIVATE-PROVIDER-KEY":1}), "properties"),
+            (json!({"additionalProperties":false}), json!({"PRIVATE-PROVIDER-KEY":1}), "additionalProperties"),
+            (json!({"propertyNames":false}), json!({"PRIVATE-PROVIDER-KEY":1}), "propertyNames"),
+            (json!({"prefixItems":[false]}), json!([1]), "prefixItems"),
+            (json!({"items":false}), json!([1]), "items"),
             (json!({"required":["PRIVATE-PROVIDER-KEY"]}), json!({}), "required"),
             (json!({"const":{"PRIVATE-PROVIDER-KEY":1}}), json!({}), "const"),
             (json!({"enum":["PRIVATE-PROVIDER-KEY"]}), json!("other"), "enum"),
