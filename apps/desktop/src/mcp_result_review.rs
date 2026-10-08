@@ -78,7 +78,8 @@ pub fn recent_result_queue<'a>(
             .focus_priority()
             .cmp(&left.stage.focus_priority())
             .then_with(|| {
-                right.outcome
+                right
+                    .outcome
                     .observed_sequence
                     .cmp(&left.outcome.observed_sequence)
             })
@@ -365,13 +366,9 @@ mod tests {
             sample_outcome(2, 7, 12),
             sample_outcome(3, 7, 11),
         ];
-        let queue = recent_result_queue(
-            &outcomes,
-            &[],
-            ToolProviderId::new(7),
-            own,
-            |_| Ok(Some(own)),
-        )
+        let queue = recent_result_queue(&outcomes, &[], ToolProviderId::new(7), own, |_| {
+            Ok(Some(own))
+        })
         .unwrap();
         assert_eq!(
             queue
@@ -388,17 +385,20 @@ mod tests {
         let outcomes = (1..=RECENT_RESULT_CANDIDATES + 3)
             .map(|number| sample_outcome(number as u64, 7, number as u64))
             .collect::<Vec<_>>();
-        let queue = recent_result_queue(
-            &outcomes,
-            &[],
-            ToolProviderId::new(7),
-            own,
-            |_| Ok(Some(own)),
-        )
+        let queue = recent_result_queue(&outcomes, &[], ToolProviderId::new(7), own, |_| {
+            Ok(Some(own))
+        })
         .unwrap();
         assert_eq!(queue.len(), RECENT_RESULT_CANDIDATES);
-        assert_eq!(queue[0].outcome.observed_sequence, (RECENT_RESULT_CANDIDATES + 3) as u64);
-        assert!(queue.iter().all(|entry| entry.outcome.observed_sequence >= 4));
+        assert_eq!(
+            queue[0].outcome.observed_sequence,
+            (RECENT_RESULT_CANDIDATES + 3) as u64
+        );
+        assert!(
+            queue
+                .iter()
+                .all(|entry| entry.outcome.observed_sequence >= 4)
+        );
     }
 
     #[test]
@@ -409,22 +409,22 @@ mod tests {
         let mut wrong = good;
         wrong.route_id = chatarium_core::routing::RouteId::new(999);
         let outcomes = vec![outcome];
-        assert!(recent_result_queue(
-            &outcomes,
-            &[wrong],
-            ToolProviderId::new(7),
-            own,
-            |_| Ok(Some(own)),
-        )
-        .is_err());
-        assert!(recent_result_queue(
-            &outcomes,
-            &[good, good],
-            ToolProviderId::new(7),
-            own,
-            |_| Ok(Some(own)),
-        )
-        .is_err());
+        assert!(
+            recent_result_queue(&outcomes, &[wrong], ToolProviderId::new(7), own, |_| Ok(
+                Some(own)
+            ),)
+            .is_err()
+        );
+        assert!(
+            recent_result_queue(
+                &outcomes,
+                &[good, good],
+                ToolProviderId::new(7),
+                own,
+                |_| Ok(Some(own)),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -433,30 +433,22 @@ mod tests {
         let mut oversized = sample_outcome(2, 7, 11);
         oversized.text = "x".repeat(MAX_CONTEXT_TOOL_RESULT_BYTES + 1);
         let outcomes = vec![sample_outcome(1, 7, 10), oversized];
-        let queue = recent_result_queue(
-            &outcomes,
-            &[],
-            ToolProviderId::new(7),
-            own,
-            |_| Ok(Some(own)),
-        )
+        let queue = recent_result_queue(&outcomes, &[], ToolProviderId::new(7), own, |_| {
+            Ok(Some(own))
+        })
         .unwrap();
         assert_eq!(queue[1].stage, ResultReviewStage::TooLargeToAdmit);
         assert!(!queue[1].stage.may_admit());
-        assert!(recent_result_queue(
-            &outcomes,
-            &[],
-            ToolProviderId::new(7),
-            own,
-            |outcome| {
+        assert!(
+            recent_result_queue(&outcomes, &[], ToolProviderId::new(7), own, |outcome| {
                 if outcome.call_id.get() == 1 {
                     Err("owner replay failed".to_owned())
                 } else {
                     Ok(Some(own))
                 }
-            },
-        )
-        .is_err());
+            },)
+            .is_err()
+        );
     }
 
     #[test]
