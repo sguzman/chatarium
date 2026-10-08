@@ -9367,6 +9367,7 @@ impl eframe::App for ChatariumApp {
                                                                                         if let Some(description) = &advertised.description {
                                                                                             ui.label(description.as_str());
                                                                                         }
+                                                                                        mcp_output_audit::render_catalog_output_schema(ui, advertised);
                                                                                         ui.collapsing(
                                                                                             format!("Review required-field JSON draft · {}", advertised.name),
                                                                                             |ui| {

@@ -5,13 +5,65 @@ use chatarium_core::LocalConversationId;
 use chatarium_protocol::mcp_output_inspection::{
     McpOutputInspection, inspect_structured_tool_output,
 };
-use chatarium_protocol::mcp_wire::{McpResponse, decode_stdio_response, parse_tools_list_page};
+use chatarium_protocol::mcp_wire::{
+    McpListedTool, McpResponse, decode_stdio_response, parse_tools_list_page,
+};
 use chatarium_store::EventEnvelope;
 use chatarium_store::tool_call_audit::ToolCallAuditRecord;
 use chatarium_store::tool_outcome_audit::{ToolCallOutcomeKind, ToolCallOutcomeRecord};
 use chatarium_store::tool_result_context_audit::tool_outcome_owning_conversation;
 use chatarium_store::tool_stdio_preflight::MCP_LIST_TOOLS_OPERATION;
 use eframe::egui;
+use std::collections::BTreeMap;
+
+const RECENT_CATALOGS: usize = 4;
+const MAX_CATALOGS: usize = 64;
+const SCHEMA_PREVIEW_BYTES: usize = 8 * 1024;
+
+fn schema_preview(schema: &serde_json::Value) -> String {
+    let Ok(json) = serde_json::to_string_pretty(schema) else {
+        return "Schema preview unavailable".to_owned();
+    };
+    if json.len() <= SCHEMA_PREVIEW_BYTES {
+        return json;
+    }
+    let mut end = SCHEMA_PREVIEW_BYTES;
+    while !json.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n[PREVIEW TRUNCATED · exact schema retained in recorded catalog outcome]",
+        &json[..end]
+    )
+}
+
+/// Provider testimony: it does not grant calls or validate an output.
+pub fn render_catalog_output_schema(ui: &mut egui::Ui, tool: &McpListedTool) {
+    let Some(schema) = tool.output_schema.as_ref() else {
+        ui.label("outputSchema: not advertised");
+        return;
+    };
+    ui.collapsing("Review advertised outputSchema · untrusted", |ui| {
+        ui.label("Bounded read-only preview; raw recorded catalog remains authoritative.");
+        ui.label(egui::RichText::new(schema_preview(schema)).monospace());
+    });
+}
+
+/// Exact journal identity and chronology, independent of protocol framing.
+fn outcome_matches_call(call: &ToolCallAuditRecord, outcome: &ToolCallOutcomeRecord) -> bool {
+    let (Some(route), Some(bound)) = (call.route_id, call.route_bound_sequence) else {
+        return false;
+    };
+    outcome.call_id == call.call_id
+        && outcome.route_id == route
+        && outcome.provider_id == call.provider_id
+        && outcome.source_session_id == call.source_session_id
+        && outcome.call_recorded_sequence == call.recorded_sequence
+        && outcome.route_bound_sequence == bound
+        && call.recorded_sequence < bound
+        && bound < outcome.dispatch_sequence
+        && outcome.dispatch_sequence < outcome.observed_sequence
+}
 
 /// Compare only a prior, exact catalog from the same provider and source
 /// session. The caller must independently check the conversation owner.
@@ -31,16 +83,8 @@ pub fn inspect_prior_catalog_snapshot(
     {
         return Ok(None);
     }
-    if target_outcome.call_id != target_call.call_id
-        || target_outcome.provider_id != target_call.provider_id
-        || target_outcome.source_session_id != target_call.source_session_id
-        || target_outcome.call_recorded_sequence != target_call.recorded_sequence
-        || catalog_outcome.call_id != catalog_call.call_id
-        || catalog_outcome.provider_id != catalog_call.provider_id
-        || catalog_outcome.source_session_id != catalog_call.source_session_id
-        || catalog_outcome.call_recorded_sequence != catalog_call.recorded_sequence
-        || catalog_call.recorded_sequence >= catalog_outcome.observed_sequence
-        || target_call.recorded_sequence >= target_outcome.observed_sequence
+    if !outcome_matches_call(target_call, target_outcome)
+        || !outcome_matches_call(catalog_call, catalog_outcome)
     {
         return Err("catalog and tool result have inconsistent durable identities".to_owned());
     }
@@ -88,81 +132,141 @@ pub fn render_snapshot_comparisons(
     ui.collapsing(
         "Compare with earlier MCP catalog snapshot · read-only",
         |ui| {
-            ui.label("Only earlier tools/list observations from the same provider, source session and local conversation qualify. This does not verify a full JSON Schema or change context admission.");
+            ui.label("Historical provider testimony only. Neither full schema validation nor execution permission.");
             if tool_outcome_owning_conversation(events, target_outcome)
                 .ok()
                 .flatten()
                 != Some(conversation_id)
             {
-                ui.label("This tool result is not owned by the current local conversation.");
+                ui.label("Tool result is not owned by this conversation.");
                 return;
             }
-            let mut matching = 0_usize;
-            for catalog_call in calls.iter().rev() {
-                if catalog_call.operation.as_str() != MCP_LIST_TOOLS_OPERATION
-                    || catalog_call.provider_id != target_call.provider_id
-                    || catalog_call.source_session_id != target_call.source_session_id
-                {
-                    continue;
-                }
-                let Some(catalog_outcome) = outcomes.iter().find(|record| {
-                    record.call_id == catalog_call.call_id
-                        && record.kind == ToolCallOutcomeKind::Result
-                        && record.observed_sequence < target_call.recorded_sequence
-                }) else {
-                    continue;
-                };
-                if tool_outcome_owning_conversation(events, catalog_outcome)
-                    .ok()
-                    .flatten()
-                    != Some(conversation_id)
-                {
-                    continue;
-                }
-                match inspect_prior_catalog_snapshot(
-                    target_call,
-                    target_outcome,
-                    catalog_call,
-                    catalog_outcome,
-                ) {
-                    Ok(Some(inspection)) => {
-                        matching += 1;
-                        ui.collapsing(
-                            format!(
-                                "Catalog observed #{} · call {} · {:?}",
-                                catalog_outcome.observed_sequence,
-                                catalog_call.call_id.get(),
-                                inspection.verdict,
-                            ),
-                            |ui| {
-                                ui.label(inspection.explanation);
-                                ui.label(format!(
-                                    "Provider {} · session {} · catalog #{} before call #{} · result #{}",
-                                    target_call.provider_id.get(),
-                                    target_call.source_session_id.get(),
-                                    catalog_outcome.observed_sequence,
-                                    target_call.recorded_sequence,
-                                    target_outcome.observed_sequence,
-                                ));
-                                ui.label("This provisional comparison is not execution approval, current provider testimony, full JSON Schema validation, or context admission.");
-                            },
-                        );
+            let indexed: BTreeMap<_, _> = outcomes
+                .iter()
+                .map(|outcome| (outcome.call_id, outcome))
+                .collect();
+            let candidate_catalogs = calls
+                .iter()
+                .rev()
+                .filter(|call| {
+                    call.operation.as_str() == MCP_LIST_TOOLS_OPERATION
+                        && call.provider_id == target_call.provider_id
+                        && call.source_session_id == target_call.source_session_id
+                })
+                .filter_map(|call| {
+                    let outcome = indexed.get(&call.call_id).copied()?;
+                    if outcome.kind != ToolCallOutcomeKind::Result
+                        || outcome.observed_sequence >= target_call.recorded_sequence
+                    {
+                        return None;
                     }
-                    Ok(None) => {}
-                    Err(reason) => {
-                        matching += 1;
-                        ui.label(format!(
-                            "Catalog observation #{} cannot be compared: {reason}",
-                            catalog_outcome.observed_sequence,
-                        ));
-                    }
-                }
+                    Some((call, outcome))
+                })
+                .take(MAX_CATALOGS + 1)
+                .collect::<Vec<_>>();
+            let shown = candidate_catalogs.len().min(MAX_CATALOGS);
+            if shown == 0 {
+                ui.label("No earlier catalog observations for this provider/session.");
+                return;
             }
-            if matching == 0 {
-                ui.label("No eligible earlier catalog advertises this operation. No output-schema validity is claimed.");
+            let recent = shown.min(RECENT_CATALOGS);
+            ui.label(format!("Recent catalog observations · {recent}"));
+            render_catalog_rows(
+                ui,
+                events,
+                &candidate_catalogs[..recent],
+                target_call,
+                target_outcome,
+                conversation_id,
+            );
+            if shown > recent {
+                ui.collapsing(
+                    format!("Older catalog observations · {}", shown - recent),
+                    |ui| {
+                        render_catalog_rows(
+                            ui,
+                            events,
+                            &candidate_catalogs[recent..shown],
+                            target_call,
+                            target_outcome,
+                            conversation_id,
+                        );
+                    },
+                );
+            }
+            if candidate_catalogs.len() > MAX_CATALOGS {
+                ui.label("Display capped at 64 recent candidate catalogs. Earlier observations remain in the immutable audit and are not assigned verdicts.");
             }
         },
     );
+}
+
+fn render_catalog_rows(
+    ui: &mut egui::Ui,
+    events: &[EventEnvelope],
+    candidates: &[(&ToolCallAuditRecord, &ToolCallOutcomeRecord)],
+    target_call: &ToolCallAuditRecord,
+    target_outcome: &ToolCallOutcomeRecord,
+    conversation_id: LocalConversationId,
+) {
+    let mut visible = 0_usize;
+    for &(catalog_call, catalog_outcome) in candidates {
+        if tool_outcome_owning_conversation(events, catalog_outcome)
+            .ok()
+            .flatten()
+            != Some(conversation_id)
+        {
+            continue;
+        }
+        match inspect_prior_catalog_snapshot(
+            target_call,
+            target_outcome,
+            catalog_call,
+            catalog_outcome,
+        ) {
+            Ok(Some(inspection)) => {
+                visible += 1;
+                let label = match inspection.verdict {
+                    chatarium_protocol::mcp_output_inspection::McpOutputVerdict::PassedSupportedChecks => "SUPPORTED CHECKS PASS · NOT FULL VALIDATION",
+                    chatarium_protocol::mcp_output_inspection::McpOutputVerdict::Mismatch => "DEFINITE MISMATCH",
+                    chatarium_protocol::mcp_output_inspection::McpOutputVerdict::Inconclusive => "INCONCLUSIVE",
+                    chatarium_protocol::mcp_output_inspection::McpOutputVerdict::NoAdvertisedSchema => "NO OUTPUT SCHEMA",
+                    chatarium_protocol::mcp_output_inspection::McpOutputVerdict::NoStructuredContent => "NO STRUCTURED RESULT",
+                    chatarium_protocol::mcp_output_inspection::McpOutputVerdict::ToolReportedError => "TOOL ERROR",
+                };
+                ui.collapsing(
+                    format!("Catalog #{} · {label}", catalog_outcome.observed_sequence),
+                    |ui| {
+                        ui.label(inspection.explanation);
+                        ui.label(format!(
+                            "Catalog call {} · provider {} · session {}",
+                            catalog_call.call_id.get(),
+                            target_call.provider_id.get(),
+                            target_call.source_session_id.get(),
+                        ));
+                        ui.label(format!(
+                            "Catalog observed #{} before call recorded #{} · result #{}",
+                            catalog_outcome.observed_sequence,
+                            target_call.recorded_sequence,
+                            target_outcome.observed_sequence,
+                        ));
+                        ui.label("This comparison grants no authority or context admission.");
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(reason) => {
+                visible += 1;
+                ui.label(format!(
+                    "Catalog #{} · comparison unavailable: {reason}",
+                    catalog_outcome.observed_sequence,
+                ));
+            }
+        }
+    }
+    if visible == 0 {
+        ui.label("None of these catalog pages advertises this tool in this conversation. No validity is inferred.");
+    }
 }
 
 #[cfg(test)]
@@ -323,6 +427,32 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn route_and_dispatch_identity_are_required() {
+        let (catalog_call, catalog_result) = catalog(Some(json!({"type":"object"})));
+        let (target_call, target_result) = target(json!({}));
+        let mut wrong_route = target_result.clone();
+        wrong_route.route_id = RouteId::new(999);
+        assert!(inspect_prior_catalog_snapshot(
+            &target_call, &wrong_route, &catalog_call, &catalog_result
+        ).is_err());
+        let mut wrong_dispatch = target_result.clone();
+        wrong_dispatch.dispatch_sequence = target_result.observed_sequence;
+        assert!(inspect_prior_catalog_snapshot(
+            &target_call, &wrong_dispatch, &catalog_call, &catalog_result
+        ).is_err());
+    }
+
+    #[test]
+    fn output_schema_preview_bounds_utf8_and_labels_truncation() {
+        let small = json!({"type":"object"});
+        assert_eq!(schema_preview(&small), serde_json::to_string_pretty(&small).unwrap());
+        let large = json!({"description":"é".repeat(SCHEMA_PREVIEW_BYTES)});
+        let preview = schema_preview(&large);
+        assert!(preview.contains("PREVIEW TRUNCATED"));
+        assert!(preview.len() < SCHEMA_PREVIEW_BYTES + 110);
     }
 
     #[test]

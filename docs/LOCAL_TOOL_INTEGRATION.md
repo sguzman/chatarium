@@ -555,6 +555,22 @@ admission. Missing, invalid, out-of-scope, or unsupported schema observations
 cannot produce a passing verdict. This is a deliberately limited schema-subset
 inspection, not full JSON Schema validation or an automatic admission gate.
 
+### Catalog review and large audit histories
+
+The catalog lists outputSchema availability and offers an expandable,
+read-only preview of the exact advertised JSON value (maximum 8 KiB displayed).
+Truncation is explicit; the recorded tools/list outcome remains intact and
+readable in the immutable journal.
+
+The result comparison area shows the four newest candidate catalog snapshots
+first, with up to 60 older candidates in a separate collapsed section.
+At most 64 candidate snapshots are displayed per result to keep UI work
+bounded; omitted earlier history remains in the journal and is explicitly
+disclosed. Outcomes are indexed by call identity rather than searched for
+every catalog, and call/route/dispatch chronology is rechecked independently.
+A result passing supported checks is labeled **NOT FULL VALIDATION**.
+No review or expansion action changes execution, permissions, or context.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select
