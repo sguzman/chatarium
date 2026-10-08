@@ -4,20 +4,19 @@
 //! external side effect. No subprocess is spawned here. A crash after this
 //! durable boundary must remain unresolved and must never auto-retry a call.
 
+use crate::{EventEnvelope, EventStore};
 use crate::routing_audit::{RouteUserDecision, record_route_dispatched, replay_routing_audit};
-use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
 use crate::tool_call_audit::replay_tool_call_audit;
+use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
 use crate::tool_stdio_executable_inspection::inspect_stdio_executable;
 use crate::tool_stdio_preflight::{
     ActivatedStdioToolInvocationPreview, preview_activated_stdio_tool_invocation,
 };
 use crate::tool_transport_config_audit::replay_tool_transport_config_audit;
-use crate::{EventEnvelope, EventStore};
 use chatarium_core::routing::{
-    DecisionAuthority, RouteGate, RouteGateState, RoutePolicy,
+    DecisionAuthority, RouteGate, RouteGateState, RouteId, RoutePolicy,
 };
 use chatarium_core::tool::{ToolCallId, ToolProviderId};
-use chatarium_core::routing::RouteId;
 
 /// Move-only proof that the one-shot route authority was durably consumed.
 /// This is not proof of a launched process, a completed operation, or a
@@ -71,7 +70,9 @@ pub fn reserve_activated_stdio_tool_dispatch(
     if route.initial_policy != RoutePolicy::RequireApproval
         || route.latest_user_decision != Some(RouteUserDecision::Allow)
         || route.gate_state
-            != (RouteGateState::Allowed { by: DecisionAuthority::User })
+            != (RouteGateState::Allowed {
+                by: DecisionAuthority::User,
+            })
     {
         return Err("tool route no longer has unconsumed user approval".to_owned());
     }
@@ -83,12 +84,11 @@ pub fn reserve_activated_stdio_tool_dispatch(
     }
 
     let mut gate = RouteGate::new(route.request, route.initial_policy);
-    gate.user_allow().map_err(|error| {
-        format!("cannot reconstruct approved tool route: {error:?}")
-    })?;
-    let permit = gate.authorize_dispatch(route_id).map_err(|error| {
-        format!("cannot consume approved tool route: {error:?}")
-    })?;
+    gate.user_allow()
+        .map_err(|error| format!("cannot reconstruct approved tool route: {error:?}"))?;
+    let permit = gate
+        .authorize_dispatch(route_id)
+        .map_err(|error| format!("cannot consume approved tool route: {error:?}"))?;
     let next_sequence = u64::try_from(store.events().len())
         .map_err(|error| error.to_string())?
         .checked_add(1)
@@ -98,9 +98,7 @@ pub fn reserve_activated_stdio_tool_dispatch(
         .into_iter()
         .find(|record| record.request.id == route_id)
         .ok_or_else(|| "reserved tool route did not replay".to_owned())?;
-    if recorded.dispatch_sequence != Some(next_sequence)
-        || !recorded.gate_state.is_dispatched()
-    {
+    if recorded.dispatch_sequence != Some(next_sequence) || !recorded.gate_state.is_dispatched() {
         return Err("reserved tool route dispatch replay disagrees with journal".to_owned());
     }
     Ok(ReservedStdioToolDispatch {
@@ -186,31 +184,23 @@ mod tests {
     use crate::MemoryEventStore;
     use crate::chat_container_audit::record_chat_container_created;
     use crate::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
-    use crate::routing_audit::{
-        record_route_proposed, record_route_user_decision,
-    };
-    use crate::session_audit::{
-        record_local_session_registered, record_session_endpoint_bound,
-    };
-    use crate::tool_call_audit::{
-        record_tool_call, record_tool_call_route_bound,
-    };
+    use crate::routing_audit::{record_route_proposed, record_route_user_decision};
+    use crate::session_audit::{record_local_session_registered, record_session_endpoint_bound};
+    use crate::tool_call_audit::{record_tool_call, record_tool_call_route_bound};
     use crate::tool_provider_activation_audit::{
         ProviderActivationDecision, append_tool_provider_activation_decision_checked,
     };
     use crate::tool_provider_audit::{
-        record_tool_provider_registered, record_tool_provider_endpoint_bound,
+        record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
     use crate::tool_transport_config_audit::append_tool_transport_config_checked;
     use chatarium_core::LocalConversationId;
     use chatarium_core::chat_container::ChatContainerId;
-    use chatarium_core::routing::{
-        RouteClass, RouteEndpointId, RouteId, RouteRequest,
-    };
+    use chatarium_core::routing::{RouteClass, RouteEndpointId, RouteId, RouteRequest};
     use chatarium_core::session::{SessionEndpointBinding, SessionId};
     use chatarium_core::tool::{
-        StdioToolProviderConfig, ToolOperationName, ToolProviderEndpointBinding,
-        ToolProviderId, ToolProviderName,
+        StdioToolProviderConfig, ToolOperationName, ToolProviderEndpointBinding, ToolProviderId,
+        ToolProviderName,
     };
 
     const SESSION: SessionId = SessionId::new(1);
@@ -225,29 +215,51 @@ mod tests {
         record_local_session_registered(&mut store, SESSION).unwrap();
         record_chat_container_created(&mut store, ChatContainerId::new(1), SESSION).unwrap();
         record_local_conversation_chat_container_bound(
-            &mut store, LocalConversationId::new(), ChatContainerId::new(1),
-        ).unwrap();
+            &mut store,
+            LocalConversationId::new(),
+            ChatContainerId::new(1),
+        )
+        .unwrap();
         record_session_endpoint_bound(
-            &mut store, SessionEndpointBinding::new(SESSION, SOURCE_ENDPOINT),
-        ).unwrap();
+            &mut store,
+            SessionEndpointBinding::new(SESSION, SOURCE_ENDPOINT),
+        )
+        .unwrap();
         record_tool_provider_registered(
-            &mut store, PROVIDER, &ToolProviderName::new("external").unwrap(),
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            &ToolProviderName::new("external").unwrap(),
+        )
+        .unwrap();
         record_tool_provider_endpoint_bound(
-            &mut store, ToolProviderEndpointBinding::new(PROVIDER, DEST_ENDPOINT),
-        ).unwrap();
+            &mut store,
+            ToolProviderEndpointBinding::new(PROVIDER, DEST_ENDPOINT),
+        )
+        .unwrap();
         let config = StdioToolProviderConfig::new(
-            executable, Vec::new(), vec![ToolOperationName::new("hello").unwrap()],
-        ).unwrap();
+            executable,
+            Vec::new(),
+            vec![ToolOperationName::new("hello").unwrap()],
+        )
+        .unwrap();
         let config_event =
             append_tool_transport_config_checked(&mut store, PROVIDER, &config).unwrap();
         append_tool_provider_activation_decision_checked(
-            &mut store, PROVIDER, config_event.sequence, ProviderActivationDecision::Activate,
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            config_event.sequence,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
         record_tool_call(
-            &mut store, CALL, SESSION, PROVIDER,
-            &ToolOperationName::new("hello").unwrap(), "{}",
-        ).unwrap();
+            &mut store,
+            CALL,
+            SESSION,
+            PROVIDER,
+            &ToolOperationName::new("hello").unwrap(),
+            "{}",
+        )
+        .unwrap();
         record_route_proposed(
             &mut store,
             RouteRequest {
@@ -257,12 +269,11 @@ mod tests {
                 class: RouteClass::ToolCall,
             },
             RoutePolicy::RequireApproval,
-        ).unwrap();
+        )
+        .unwrap();
         record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
         if approved {
-            record_route_user_decision(
-                &mut store, ROUTE, RouteUserDecision::Allow,
-            ).unwrap();
+            record_route_user_decision(&mut store, ROUTE, RouteUserDecision::Allow).unwrap();
         }
         store
     }
@@ -282,7 +293,11 @@ mod tests {
             chatarium_core::EventKind::RouteDispatched,
         );
         // No outcome was invented merely because authority was consumed.
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
         let snapshot = store.events().to_vec();
         assert!(reserve_activated_stdio_tool_dispatch(&mut store, CALL).is_err());
         assert_eq!(store.events(), snapshot.as_slice());
@@ -335,12 +350,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn missing_executable_does_not_consume_approval() {
-        let mut store = fixture(
-            "/chatarium-nonexistent-stdio-path-937242/not-found", true,
-        );
+        let mut store = fixture("/chatarium-nonexistent-stdio-path-937242/not-found", true);
         let before = store.events().len();
-        assert!(reserve_activated_stdio_tool_dispatch(&mut store, CALL)
-            .unwrap_err().contains("inspection"));
+        assert!(
+            reserve_activated_stdio_tool_dispatch(&mut store, CALL)
+                .unwrap_err()
+                .contains("inspection")
+        );
         assert_eq!(store.events().len(), before);
     }
 }
