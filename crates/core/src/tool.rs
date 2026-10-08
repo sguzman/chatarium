@@ -144,9 +144,160 @@ impl ToolProviderEndpointBinding {
     }
 }
 
+/// Inert Linux stdio transport configuration for one explicitly registered
+/// external tool provider. It is data only: no process is started by this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StdioToolProviderConfig {
+    executable: String,
+    args: Vec<String>,
+    allowed_operations: Vec<ToolOperationName>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioToolConfigError {
+    NonAbsoluteExecutable,
+    NonCanonicalExecutable,
+    InvalidArgument,
+    TooManyArguments,
+    EmptyOperationAllowlist,
+    TooManyOperations,
+    DuplicateOperation,
+}
+
+impl StdioToolProviderConfig {
+    pub const MAX_ARGUMENTS: usize = 16;
+    pub const MAX_ARGUMENT_BYTES: usize = 1024;
+    pub const MAX_EXECUTABLE_BYTES: usize = 4096;
+    pub const MAX_ALLOWED_OPERATIONS: usize = 32;
+
+    /// Validate an absolute path, bounded individual argv strings, and an
+    /// exact allowlist. This does not check whether the executable exists, is
+    /// safe, trusted, or runnable. That remains a separate activation policy.
+    pub fn new(
+        executable: impl Into<String>,
+        args: Vec<String>,
+        allowed_operations: Vec<ToolOperationName>,
+    ) -> Result<Self, StdioToolConfigError> {
+        let executable = executable.into();
+        if !std::path::Path::new(&executable).is_absolute() {
+            return Err(StdioToolConfigError::NonAbsoluteExecutable);
+        }
+        if executable == "/"
+            || executable.len() > Self::MAX_EXECUTABLE_BYTES
+            || executable.chars().any(char::is_control)
+            || std::path::Path::new(&executable).components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            return Err(StdioToolConfigError::NonCanonicalExecutable);
+        }
+        if args.len() > Self::MAX_ARGUMENTS {
+            return Err(StdioToolConfigError::TooManyArguments);
+        }
+        if args.iter().any(|arg| {
+            arg.len() > Self::MAX_ARGUMENT_BYTES || arg.chars().any(char::is_control)
+        }) {
+            return Err(StdioToolConfigError::InvalidArgument);
+        }
+        if allowed_operations.is_empty() {
+            return Err(StdioToolConfigError::EmptyOperationAllowlist);
+        }
+        if allowed_operations.len() > Self::MAX_ALLOWED_OPERATIONS {
+            return Err(StdioToolConfigError::TooManyOperations);
+        }
+        let distinct = allowed_operations
+            .iter()
+            .map(ToolOperationName::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        if distinct.len() != allowed_operations.len() {
+            return Err(StdioToolConfigError::DuplicateOperation);
+        }
+        Ok(Self {
+            executable,
+            args,
+            allowed_operations,
+        })
+    }
+
+    #[must_use]
+    pub fn executable(&self) -> &str {
+        &self.executable
+    }
+
+    #[must_use]
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    #[must_use]
+    pub fn allowed_operations(&self) -> &[ToolOperationName] {
+        &self.allowed_operations
+    }
+
+    #[must_use]
+    pub fn allows(&self, operation: &ToolOperationName) -> bool {
+        self.allowed_operations.iter().any(|name| name == operation)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdio_transport_config_is_inert_and_bounded() {
+        let op = ToolOperationName::new("search").unwrap();
+        let config = StdioToolProviderConfig::new(
+            "/usr/bin/local-mcp",
+            vec!["--stdio".to_owned()],
+            vec![op.clone()],
+        )
+        .unwrap();
+        assert_eq!(config.executable(), "/usr/bin/local-mcp");
+        assert_eq!(config.args(), &["--stdio"]);
+        assert!(config.allows(&op));
+        assert!(!config.allows(&ToolOperationName::new("write").unwrap()));
+
+        assert_eq!(
+            StdioToolProviderConfig::new(
+                "local-mcp",
+                Vec::new(),
+                vec![op.clone()]
+            ),
+            Err(StdioToolConfigError::NonAbsoluteExecutable)
+        );
+        assert_eq!(
+            StdioToolProviderConfig::new(
+                "/usr/../bin/local-mcp",
+                Vec::new(),
+                vec![op.clone()]
+            ),
+            Err(StdioToolConfigError::NonCanonicalExecutable)
+        );
+        assert_eq!(
+            StdioToolProviderConfig::new(
+                "/usr/bin/local-mcp",
+                vec!["bad\narg".to_owned()],
+                vec![op.clone()]
+            ),
+            Err(StdioToolConfigError::InvalidArgument)
+        );
+        assert_eq!(
+            StdioToolProviderConfig::new("/usr/bin/local-mcp", Vec::new(), Vec::new()),
+            Err(StdioToolConfigError::EmptyOperationAllowlist)
+        );
+        assert_eq!(
+            StdioToolProviderConfig::new(
+                "/usr/bin/local-mcp",
+                Vec::new(),
+                vec![op.clone(), op]
+            ),
+            Err(StdioToolConfigError::DuplicateOperation)
+        );
+    }
 
     #[test]
     fn provider_and_call_ids_remain_distinct_local_domains() {
