@@ -57,6 +57,7 @@ the content. It can therefore distinguish:
 - conversation developer context;
 - durable transcript context;
 - explicitly admitted routed inbox context;
+- explicitly admitted tool result/error evidence;
 - current non-durable draft preview.
 
 Routed context is different from ordinary local provenance: the model must know
@@ -121,6 +122,26 @@ These are intentionally content-size units, **not model-token estimates**.
 Dispatch and preview use separate typed policies. Preview may include the
 current draft, while dispatch mechanically excludes `CurrentDraft` even if a
 future caller accidentally supplies one before the durability gate.
+
+## Explicit tool-result evidence source
+
+An adapter-observed terminal tool result/error is **not** automatically included
+in a subsequent model request. Its original local conversation may explicitly
+Admit or Exclude that outcome after the journal has independently validated
+the one-shot approved ToolCall route and terminal observation.
+
+Context Composer exposes a dedicated typed `ToolResult` source at user-level
+trust. It wraps the exact observed adapter output with call, route, provider,
+source-session, terminal-outcome and context-admission provenance, and identifies
+the content as untrusted tool evidence rather than a user-authored or
+developer/system instruction.
+
+No context decision changes a tool's execution authority or retroactively
+edits the original terminal observation. The current admitted set is frozen at
+Send and the Exact next-request inspector uses the same composition policy.
+Results over 64 KiB are never truncated into model context.
+
+See [LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md).
 
 ## Explicit local memory source
 
@@ -231,7 +252,8 @@ Context Composer does **not** silently introduce:
 - lifecycle state injection;
 - automatic routing;
 - master/worker inheritance;
-- arbitrary tool selection;
+- arbitrary or automatic tool selection/execution (explicit tool-result
+  evidence admission does not perform any tool action);
 - file/image attachment policy;
 - structured-output policy.
 
