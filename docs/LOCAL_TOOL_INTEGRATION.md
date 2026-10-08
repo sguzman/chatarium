@@ -639,6 +639,35 @@ every catalog, and call/route/dispatch chronology is rechecked independently.
 A result passing supported checks is labeled **NOT FULL VALIDATION**.
 No review or expansion action changes execution, permissions, or context.
 
+## Post-execution result review (desktop)
+
+The desktop's **Tools / MCP** panel now exposes a separate, collapsed
+**Recent MCP result · separate context review** area above the historical
+call audit. This is intentionally distinct from the earlier **Next manual
+MCP call review** that controls execution. Results and adapter errors are
+**excluded from inference context by default**, including when a call was
+approved and successfully dispatched. Neither a provider response nor an
+advertised schema grants instruction authority.
+
+The result focus considers at most the 16 most recently recorded terminal
+observations for the selected provider. It verifies the local conversation
+that owned each source session **at outcome time**; a failure to replay this
+ownership or the context-decision audit blocks the focus instead of
+guessing. An undecided result is prioritized over an already admitted or
+explicitly excluded result. Older results remain accessible through the
+complete historical tool audit.
+
+The review shows the immutable call identity, recorded observation sequence,
+adapter result/error kind, and context status. The untrusted body stays behind
+an **Inspect bounded result preview** expansion, limited to a UTF-8-safe
+4 KiB prefix with an explicit truncation label. This is only a preview;
+the complete exact observation remains in the historical audit. Inside this
+expansion, **Admit** and **Exclude** are separate deliberate, reversible,
+durably checked context decisions; no admission occurs on inspection. Results
+larger than the existing 65,536-byte context limit cannot be admitted, even
+as truncated previews. Approval, dispatch, and result-context admission
+remain independent gates. This focus cannot launch, replay, or retry a tool.
+
 ## Focused call review (desktop)
 
 Above the bounded historical **Tool call audit**, the desktop surfaces the
