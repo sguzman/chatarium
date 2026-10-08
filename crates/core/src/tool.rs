@@ -179,20 +179,18 @@ impl StdioToolProviderConfig {
         allowed_operations: Vec<ToolOperationName>,
     ) -> Result<Self, StdioToolConfigError> {
         let executable = executable.into();
-        if !std::path::Path::new(&executable).is_absolute() {
+        // This type deliberately records *Linux* stdio launch configuration.
+        // Validate Unix lexical path syntax even when cargo tests run on Windows.
+        if !executable.starts_with('/') {
             return Err(StdioToolConfigError::NonAbsoluteExecutable);
         }
         if executable == "/"
             || executable.len() > Self::MAX_EXECUTABLE_BYTES
             || executable.chars().any(char::is_control)
-            || std::path::Path::new(&executable)
-                .components()
-                .any(|component| {
-                    matches!(
-                        component,
-                        std::path::Component::CurDir | std::path::Component::ParentDir
-                    )
-                })
+            || executable.contains('\\')
+            || executable[1..]
+                .split('/')
+                .any(|component| component.is_empty() || matches!(component, "." | ".."))
         {
             return Err(StdioToolConfigError::NonCanonicalExecutable);
         }
