@@ -472,6 +472,24 @@ local Chatarium repository checkout:
 cargo run -p chatarium-desktop --bin chatarium-mcp-host-check
 ```
 
+For reproducible, noninteractive diagnostics, use the structured form:
+
+```sh
+cargo run -p chatarium-desktop --bin chatarium-mcp-host-check -- --json
+```
+
+`--json` prints exactly one JSON result object on standard output, with
+`schema_version: 1`, a fixed `check` identifier, `status` (`ready` or
+`not_ready`), a stable `failure_category`, a diagnostic `detail` (null
+on success), and explicit false booleans for tool-route consumption,
+provider execution, journal access, and host network access. Failure categories
+identify the **check stage** (such as untrusted launcher, failed spawn,
+timeout, or sandbox exit), not a proven kernel/LSM root cause. A failure
+detail can include sanitized, bounded launcher stderr; treat it as untrusted
+diagnostic evidence, never commands or permission advice. Exit statuses are
+0 for ready, 1 for not ready, and 2 for malformed CLI arguments. `--help`
+and rejected flags exit without running the fixture.
+
 It executes only the fixed root-owned `/usr/bin/true` fixture through the
 **same production** prlimit + bubblewrap isolation policy. It does not read
 Chatarium's conversation journal, authenticate, configure or invoke an MCP
