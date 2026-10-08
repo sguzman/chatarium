@@ -533,9 +533,15 @@ A separate bounded **whole-schema preflight** screens every nested schema,
 including constraints beneath absent output properties, before any verdict
 can pass the supported subset. Unsupported or malformed constraints yield
 `Inconclusive`, even if not reached by this particular output. JSON Schema
-features such as `$ref`, `$defs`, composition, `enum`, `const`, `format`,
-numeric ranges, and regex `pattern` are **not yet evaluated**: these also
-produce `Inconclusive`, never a false claim of conformance. Unsupported dialects
+features such as `$ref`, `$defs`, composition, `format`, `multipleOf`,
+and regex `pattern` remain **unsupported**, yielding `Inconclusive`.
+The supported subset now includes bounded `enum` and `const` JSON-semantic
+equality (including integer/float equality), plus numeric `minimum`,
+`maximum`, `exclusiveMinimum`, and `exclusiveMaximum`. Exact integer
+comparisons use 128-bit arithmetic; numeric comparisons involving floating
+representations outside the exactly representable integer range (2^53)
+remain `Inconclusive` rather than claiming misleading equality or order.
+Unsupported or ambiguous comparisons never grant additional authority. Unsupported dialects
 and oversized/deep specimens are inconclusive. Only fixed, bounded
 diagnostic strings are emitted; arbitrary provider-supplied fields are
 not copied into diagnostics.

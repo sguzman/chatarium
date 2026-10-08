@@ -6,7 +6,8 @@
 use crate::mcp_wire::{
     MAX_MCP_FRAME_BYTES, McpListedTool, McpWireError, validate_tools_call_result,
 };
-use serde_json::Value;
+use serde_json::{Number, Value};
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 const MAX_INSPECTION_DEPTH: usize = 8;
@@ -202,7 +203,183 @@ fn inspect_schema_subset(
                     return Err(InspectionIssue::Unsupported);
                 }
             }
+            "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" => {
+                if !value.is_number() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "const" => {
+                inspect_json_literal(value, depth + 1, budget)?;
+            }
+            "enum" => {
+                let members = value.as_array().ok_or(InspectionIssue::Unsupported)?;
+                if members.is_empty() || members.len() > MAX_INSPECTION_COLLECTION {
+                    return Err(InspectionIssue::Unsupported);
+                }
+                for member in members {
+                    inspect_json_literal(member, depth + 1, budget)?;
+                }
+            }
             _ => return Err(InspectionIssue::Unsupported),
+        }
+    }
+    Ok(())
+}
+
+/// Literal values inside enum/const are data, not schemas. Bound their
+/// nesting and total nodes without interpreting embedded keys as directives.
+fn inspect_json_literal(
+    value: &Value,
+    depth: usize,
+    budget: &mut InspectionBudget,
+) -> Result<(), InspectionIssue> {
+    budget.visit(depth)?;
+    match value {
+        Value::Array(members) => {
+            if members.len() > MAX_INSPECTION_COLLECTION {
+                return Err(InspectionIssue::Unsupported);
+            }
+            for member in members {
+                inspect_json_literal(member, depth + 1, budget)?;
+            }
+        }
+        Value::Object(members) => {
+            if members.len() > MAX_INSPECTION_COLLECTION {
+                return Err(InspectionIssue::Unsupported);
+            }
+            for member in members.values() {
+                inspect_json_literal(member, depth + 1, budget)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Exact integer comparisons avoid f64 rounding above 2^53. Mixed float /
+/// integer and float / float comparisons are only attempted within that
+/// range; beyond it the result is inconclusive instead of spuriously equal.
+fn compare_numbers(left: &Number, right: &Number) -> Result<Ordering, InspectionIssue> {
+    fn integer(number: &Number) -> Option<i128> {
+        number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from))
+    }
+    if let (Some(a), Some(b)) = (integer(left), integer(right)) {
+        return Ok(a.cmp(&b));
+    }
+    const MAX_EXACT_FLOAT_INT: f64 = 9_007_199_254_740_992.0;
+    let a = left.as_f64().ok_or(InspectionIssue::Unsupported)?;
+    let b = right.as_f64().ok_or(InspectionIssue::Unsupported)?;
+    if !a.is_finite()
+        || !b.is_finite()
+        || a.abs() > MAX_EXACT_FLOAT_INT
+        || b.abs() > MAX_EXACT_FLOAT_INT
+    {
+        return Err(InspectionIssue::Unsupported);
+    }
+    a.partial_cmp(&b).ok_or(InspectionIssue::Unsupported)
+}
+
+/// Recursive JSON-semantic equality, including numeric 1 == 1.0.
+/// Uncertain numeric representations cause an inconclusive verdict.
+fn json_equal(
+    left: &Value,
+    right: &Value,
+    depth: usize,
+    budget: &mut InspectionBudget,
+) -> Result<bool, InspectionIssue> {
+    budget.visit(depth)?;
+    match (left, right) {
+        (Value::Number(a), Value::Number(b)) => {
+            Ok(compare_numbers(a, b)? == Ordering::Equal)
+        }
+        (Value::Null, Value::Null) => Ok(true),
+        (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
+        (Value::String(a), Value::String(b)) => Ok(a == b),
+        (Value::Array(a), Value::Array(b)) => {
+            if a.len() > MAX_INSPECTION_COLLECTION
+                || b.len() > MAX_INSPECTION_COLLECTION
+            {
+                return Err(InspectionIssue::Unsupported);
+            }
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (a, b) in a.iter().zip(b) {
+                if !json_equal(a, b, depth + 1, budget)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            if a.len() > MAX_INSPECTION_COLLECTION
+                || b.len() > MAX_INSPECTION_COLLECTION
+            {
+                return Err(InspectionIssue::Unsupported);
+            }
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (key, a) in a {
+                let Some(b) = b.get(key) else {
+                    return Ok(false);
+                };
+                if !json_equal(a, b, depth + 1, budget)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Enum search never concludes mismatch while an unresolved candidate might
+/// match. Every attempted comparison consumes the same bounded budget.
+fn check_enum(
+    allowed: &[Value],
+    value: &Value,
+    depth: usize,
+    budget: &mut InspectionBudget,
+) -> Result<(), InspectionIssue> {
+    let mut uncertain = false;
+    for candidate in allowed {
+        match json_equal(value, candidate, depth + 1, budget) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(InspectionIssue::Unsupported) => uncertain = true,
+            Err(InspectionIssue::Mismatch) => unreachable!("equality never yields mismatch"),
+        }
+    }
+    if uncertain {
+        Err(InspectionIssue::Unsupported)
+    } else {
+        Err(InspectionIssue::Mismatch)
+    }
+}
+
+fn check_numeric_bounds(
+    spec: &serde_json::Map<String, Value>,
+    actual: &Number,
+) -> Result<(), InspectionIssue> {
+    for (keyword, exclusive, lower) in [
+        ("minimum", false, true),
+        ("maximum", false, false),
+        ("exclusiveMinimum", true, true),
+        ("exclusiveMaximum", true, false),
+    ] {
+        let Some(bound) = spec.get(keyword) else {
+            continue;
+        };
+        let number = bound.as_number().ok_or(InspectionIssue::Unsupported)?;
+        let order = compare_numbers(actual, number)?;
+        if (lower && (order == Ordering::Less || (exclusive && order == Ordering::Equal)))
+            || (!lower && (order == Ordering::Greater || (exclusive && order == Ordering::Equal)))
+        {
+            return Err(InspectionIssue::Mismatch);
         }
     }
     Ok(())
@@ -266,6 +443,17 @@ fn inspect_value(
             if let Some(text) = value.as_str() {
                 let length = text.chars().count() as u64;
                 check_count(spec, "minLength", "maxLength", length)?;
+            }
+            if let Some(actual) = value.as_number() {
+                check_numeric_bounds(spec, actual)?;
+            }
+            if let Some(expected) = spec.get("const") {
+                if !json_equal(value, expected, depth + 1, budget)? {
+                    return Err(InspectionIssue::Mismatch);
+                }
+            }
+            if let Some(allowed) = spec.get("enum").and_then(Value::as_array) {
+                check_enum(allowed, value, depth + 1, budget)?;
             }
             let props = match spec.get("properties") {
                 None => None,
@@ -471,12 +659,12 @@ mod tests {
     fn unknown_assertions_and_reference_schemas_are_never_declared_valid() {
         for schema in [
             json!({"type":"string","pattern":"^hello$"}),
-            json!({"type":"string","enum":["safe"]}),
+            json!({"type":"string","enum":[]}),
             json!({"$ref":"https://untrusted.example/schema.json"}),
             json!({"oneOf":[{"type":"number"},{"type":"string"}]}),
             json!({"type":["string","string"]}),
             json!({"type":"array","minItems":-1}),
-            json!({"type":"number","minimum":0}),
+            json!({"type":"number","minimum":"zero"}),
             json!({"type":"object","unevaluatedProperties":false}),
             json!({"type":"object","$schema":"http://json-schema.org/draft-07/schema#"}),
         ] {
@@ -536,11 +724,11 @@ mod tests {
         for schema in [
             json!({"type":"object","properties":{"absent":{"type":"string","pattern":"^x$"}}}),
             json!({"type":"object","properties":{"absent":{"$ref":"https://example.org/unsafe"}}}),
-            json!({"type":"array","items":{"enum":[1,2]}}),
+            json!({"type":"array","items":{"oneOf":[{"type":"integer"}]}}),
             json!({"type":"string","minLength":"two"}),
             json!({"type":"object","properties":{"unused":{"type":["string","string"]}}}),
             json!({"type":"object","required":["x","x"]}),
-            json!({"type":"object","properties":{"a":{"minimum":1}}}),
+            json!({"type":"object","properties":{"a":{"multipleOf":2}}}),
         ] {
             let verdict =
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
@@ -559,6 +747,94 @@ mod tests {
                 .verdict,
             McpOutputVerdict::Inconclusive,
         );
+    }
+
+    #[test]
+    fn const_and_enum_compare_nested_json_semantically() {
+        for (schema, value) in [
+            (json!({"const": {"kind":"sample","sizes":[1,2.0]}}), json!({"sizes":[1.0,2],"kind":"sample"})),
+            (json!({"enum":[null,true,{"count":1}]}), json!({"count":1.0})),
+            (json!({"type":"number","const":1}), json!(1.0)),
+            (json!({"type":"string","enum":["x","y"]}), json!("y")),
+        ] {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(value),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::PassedSupportedChecks);
+        }
+        for (schema, value) in [
+            (json!({"const":{"x":1}}), json!({"x":2})),
+            (json!({"enum":["x","y"]}), json!("z")),
+            (json!({"enum":[1,2]}), json!(3)),
+            (json!({"const":true}), json!(false)),
+        ] {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(value),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::Mismatch);
+        }
+    }
+
+    #[test]
+    fn numeric_bounds_handle_inclusive_exclusive_and_fractional_values() {
+        let cases = [
+            (json!({"minimum":1}), json!(1), McpOutputVerdict::PassedSupportedChecks),
+            (json!({"exclusiveMinimum":1}), json!(1), McpOutputVerdict::Mismatch),
+            (json!({"maximum":2}), json!(2), McpOutputVerdict::PassedSupportedChecks),
+            (json!({"exclusiveMaximum":2}), json!(2), McpOutputVerdict::Mismatch),
+            (json!({"minimum":-3,"maximum":3}), json!(-2), McpOutputVerdict::PassedSupportedChecks),
+            (json!({"exclusiveMinimum":0.25}), json!(0.5), McpOutputVerdict::PassedSupportedChecks),
+            (json!({"maximum":0.25}), json!(0.5), McpOutputVerdict::Mismatch),
+            (json!({"minimum":-1}), json!(-2), McpOutputVerdict::Mismatch),
+            (json!({"exclusiveMaximum":10}), json!("not a number"), McpOutputVerdict::PassedSupportedChecks),
+        ];
+        for (schema, value, expected) in cases {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(value),
+            ).unwrap().verdict;
+            assert_eq!(verdict, expected);
+        }
+    }
+
+    #[test]
+    fn numeric_precision_uncertainty_never_becomes_mismatch_or_pass() {
+        let huge_integer = json!(9_007_199_254_740_993_u64);
+        let cases = [
+            (json!({"const":9007199254740992.0}), huge_integer.clone()),
+            (json!({"enum":[9007199254740992.0]}), huge_integer.clone()),
+            (json!({"minimum":9007199254740992.0}), huge_integer),
+            (json!({"maximum":1e100}), json!(1e100)),
+        ];
+        for (schema, value) in cases {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(value),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::Inconclusive);
+        }
+        // Two large integral JSON tokens can still be compared exactly.
+        let large = json!(u64::MAX);
+        assert_eq!(
+            inspect_structured_tool_output(
+                &inspected_tool(Some(json!({"minimum":9_007_199_254_740_994_u64}))),
+                &complete(large),
+            ).unwrap().verdict,
+            McpOutputVerdict::PassedSupportedChecks,
+        );
+    }
+
+    #[test]
+    fn malformed_enum_const_and_bounds_hidden_in_unvisited_branches_are_inconclusive() {
+        for schema in [
+            json!({"properties":{"absent":{"enum":[]}}}),
+            json!({"properties":{"absent":{"exclusiveMinimum":"bad"}}}),
+            json!({"properties":{"absent":{"enum":"not an array"}}}),
+            json!({"properties":{"absent":{"multipleOf":2}}}),
+        ] {
+            let verdict = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)), &complete(json!({})),
+            ).unwrap().verdict;
+            assert_eq!(verdict, McpOutputVerdict::Inconclusive);
+        }
     }
 
     #[test]
