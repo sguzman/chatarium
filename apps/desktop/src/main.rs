@@ -19882,6 +19882,82 @@ mod tests {
     }
 
     #[test]
+    fn approved_builtin_hello_dispatch_is_durable_and_one_shot() {
+        let source = LocalConversationId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+        append_local_orchestration_topology_checked(
+            &mut store,
+            source,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
+        append_current_session_route_endpoint_checked(
+            &mut store,
+            source,
+            SessionId::new(1),
+            RouteEndpointId::new(1),
+        )
+        .unwrap();
+        append_tool_provider_registration_checked(
+            &mut store,
+            ToolProviderId::new(1),
+            ToolProviderName::new(local_tool_adapter::BUILTIN_PROVIDER_NAME).unwrap(),
+        )
+        .unwrap();
+        append_tool_provider_endpoint_checked(
+            &mut store,
+            ToolProviderId::new(1),
+            RouteEndpointId::new(2),
+        )
+        .unwrap();
+        append_tool_call_proposal_checked(
+            &mut store,
+            ToolCallId::new(1),
+            RouteId::new(1),
+            source,
+            ToolProviderId::new(1),
+            ToolOperationName::new("hello").unwrap(),
+            "<tool_call id=\"legacy-test\" name=\"hello\">{}\n</tool_call>".to_owned(),
+        )
+        .unwrap();
+
+        let before = store.events().len();
+        assert!(
+            append_builtin_hello_checked(&mut store, RouteId::new(1))
+                .unwrap_err()
+                .contains("requires a fresh explicit user Allow")
+        );
+        assert_eq!(store.events().len(), before);
+        append_tool_call_route_user_decision_checked(
+            &mut store,
+            RouteId::new(1),
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        let events = append_builtin_hello_checked(&mut store, RouteId::new(1)).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, EventKind::RouteDispatched);
+        assert_eq!(events[1].kind, EventKind::ToolCallOutcomeObserved);
+
+        let outcome = replay_tool_call_outcome_audit(store.events())
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(outcome.kind, ToolCallOutcomeKind::Result);
+        let wire = chatarium_protocol::tool_envelope::parse_legacy_tool_result(
+            outcome.text.as_str(),
+        )
+        .unwrap();
+        assert_eq!(wire.id, "legacy-test");
+        assert_eq!(wire.payload["message"], "hello");
+
+        let after = store.events().len();
+        assert!(append_builtin_hello_checked(&mut store, RouteId::new(1)).is_err());
+        assert_eq!(store.events().len(), after);
+    }
+
+    #[test]
     fn checked_local_orchestration_topology_is_durable_and_one_to_one() {
         let conversation_id = LocalConversationId::new();
         let mut store = chatarium_store::MemoryEventStore::default();
