@@ -39,6 +39,7 @@ use chatarium_core::{
     AssistantEvidence, AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId,
     LocalTurnId, RemoteEvidence, TurnEvidence,
 };
+use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
 use chatarium_protocol::conversation_list::ConversationListItem;
 use chatarium_store::archive_maintenance::{
     check_archive, create_backup, restore_backup, verify_backup,
@@ -8475,9 +8476,35 @@ impl eframe::App for ChatariumApp {
                                             .desired_width(360.0)
                                             .desired_rows(3)
                                             .hint_text(
-                                                "Exact opaque arguments/payload text (wire format intentionally unresolved)",
+                                                "Opaque arguments or exact legacy <tool_call> envelope (adapter disabled)",
                                             ),
                                         );
+                                        if self.tool_arguments_draft.trim_start().starts_with("<tool_call")
+                                            && ui
+                                                .add_enabled(
+                                                    !self.tool_command_pending,
+                                                    egui::Button::new("Read legacy envelope"),
+                                                )
+                                                .on_hover_text(
+                                                    "Validate the recovered XML-like tool call and fill its operation name. Keeps exact original text. No durable call or execution occurs.",
+                                                )
+                                                .clicked()
+                                        {
+                                            match parse_legacy_tool_call(&self.tool_arguments_draft) {
+                                                Ok(parsed) => {
+                                                    self.tool_operation_draft = parsed.name;
+                                                    self.status = format!(
+                                                        "legacy tool envelope {} parsed · no call recorded or executed",
+                                                        parsed.id,
+                                                    );
+                                                }
+                                                Err(error) => {
+                                                    self.status = format!(
+                                                        "legacy tool envelope rejected: {error:?}",
+                                                    );
+                                                }
+                                            }
+                                        }
                                         if ui
                                             .add_enabled(
                                                 !self.tool_command_pending
@@ -8728,7 +8755,7 @@ impl eframe::App for ChatariumApp {
                                                             }
                                                             ui.label(
                                                                 egui::RichText::new(
-                                                                    "EXECUTION DISABLED · approval is durable policy only; no MCP/tool adapter or recovered XML wire envelope is attached.",
+                                                                    "EXECUTION DISABLED · legacy XML compatibility is available, but no MCP/tool execution adapter is attached.",
                                                                 )
                                                                 .monospace()
                                                                 .size(9.0)
@@ -13099,6 +13126,17 @@ fn append_tool_call_proposal_checked(
     operation: ToolOperationName,
     arguments_text: String,
 ) -> Result<Vec<EventEnvelope>, String> {
+    if arguments_text.trim_start().starts_with("<tool_call") {
+        let parsed = parse_legacy_tool_call(&arguments_text)
+            .map_err(|error| format!("invalid legacy tool envelope: {error:?}"))?;
+        if parsed.name != operation.as_str() {
+            return Err(format!(
+                "legacy envelope operation {} disagrees with selected operation {}",
+                parsed.name,
+                operation.as_str(),
+            ));
+        }
+    }
     if replay_tool_call_audit(store.events())?
         .iter()
         .any(|record| record.call_id == call_id)
