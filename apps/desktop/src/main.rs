@@ -3368,8 +3368,18 @@ impl ChatariumApp {
                 PersistNotice::StdioToolDispatchFinished { call_id, event } => {
                     self.events.push(event);
                     self.tool_command_pending = false;
+                    let status = replay_tool_call_outcome_audit(&self.events)
+                        .ok()
+                        .and_then(|outcomes| {
+                            outcomes.into_iter().find(|outcome| outcome.call_id == call_id)
+                        })
+                        .map(|outcome| match outcome.kind {
+                            ToolCallOutcomeKind::Result => "completed",
+                            ToolCallOutcomeKind::Error => "returned a sandbox/tool error",
+                        })
+                        .unwrap_or("recorded terminal observation");
                     self.status = format!(
-                        "external MCP call {} recorded terminal observation",
+                        "external MCP call {} {status}; outcome durably recorded",
                         call_id.get()
                     );
                 }
@@ -9031,7 +9041,7 @@ impl eframe::App for ChatariumApp {
                                                                         provider_label.as_str(),
                                                                         call.operation.as_str(),
                                                                     ) && route.dispatch_sequence.is_none() {
-                                                                        ui.collapsing("Activation-aware MCP preview (inert)", |ui| {
+                                                                        ui.collapsing("Activation-aware MCP review and Run", |ui| {
                                                                             match preview_activated_stdio_tool_invocation(&self.events, call.call_id) {
                                                                                 Ok(preview) => {
                                                                                     ui.label(format!(
