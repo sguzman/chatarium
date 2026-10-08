@@ -9042,7 +9042,30 @@ impl eframe::App for ChatariumApp {
                                                                                     ui.label(egui::RichText::new(
                                                                                         preview.invocation.request_frame.as_str()
                                                                                     ).monospace());
-                                                                                    ui.label("This preview grants NO execution authority.");
+                                                                                    ui.label("Preview alone grants NO execution authority.");
+                                                                                    match local_stdio_runner::plan_confined_stdio_launch(
+                                                                                        preview.invocation.executable.as_str(),
+                                                                                        &preview.invocation.argv,
+                                                                                    ) {
+                                                                                        Ok(_) => {
+                                                                                            ui.label(
+                                                                                                "One-shot confinement: private network, no home, read-only /usr, 32 MiB scratch, 10s wall-time, 8s CPU, 512 MiB memory. Requires root-owned /usr/bin executable and installed bubblewrap + prlimit.",
+                                                                                            );
+                                                                                            if ui.add_enabled(
+                                                                                                cfg!(target_os = "linux")
+                                                                                                    && !self.tool_command_pending
+                                                                                                    && self.persist_tx.is_some(),
+                                                                                                egui::Button::new("Run sandboxed MCP tool · one shot"),
+                                                                                            ).on_hover_text(
+                                                                                                "Separate deliberate execution after provider activation and explicit ToolCall Allow. Consumes the route permanently before a sandboxed process can start. No automatic retries.",
+                                                                                            ).clicked() {
+                                                                                                self.execute_approved_stdio_tool(call.call_id);
+                                                                                            }
+                                                                                        }
+                                                                                        Err(reason) => {
+                                                                                            ui.label(format!("Sandbox execution unavailable: {reason}"));
+                                                                                        }
+                                                                                    }
                                                                                 }
                                                                                 Err(error) => { ui.label(format!("Not eligible: {error}")); }
                                                                             }
