@@ -64,6 +64,11 @@ messages for that conversation. Unicode case-folding can change byte
 length; the excerpt uses original-character boundaries so accented and
 multilingual searches never slice invalid UTF-8. No raw tool result or
 remote-mirror content is searched or surfaced through this control.
+Opening a native message hit, by mouse or Enter, passes the exact trimmed
+search query to the existing transcript reader and selects the first hit so
+the matching bubble scrolls into view. A title-only match never fabricates
+a transcript hit. The handoff is local UI state, not an additional
+inference-context admission or durable mutation.
 
 ## Automated QA ownership
 

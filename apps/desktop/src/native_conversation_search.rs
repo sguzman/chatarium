@@ -49,6 +49,20 @@ pub fn activate_selection(
         .copied()
 }
 
+/// Opening a native message hit can seed the local transcript reader's
+/// existing search/highlight controls. Titles and empty queries never claim
+/// a matching message.
+pub fn reader_query_for_result(
+    query: &str,
+    kind: NativeSearchMatch,
+) -> Option<String> {
+    if kind != NativeSearchMatch::Message {
+        return None;
+    }
+    let query = query.trim();
+    (!query.is_empty()).then(|| query.to_owned())
+}
+
 /// A bounded preview from only the selected conversation's projected
 /// user/assistant messages. Uses the same UTF-8-safe local archive excerpt.
 pub fn matching_message_preview<'a>(
@@ -321,6 +335,22 @@ mod tests {
         let later = cached_index(&ctx, store.events());
         assert!(!Arc::ptr_eq(&first, &later));
         assert_eq!(later.messages(owner).len(), 1);
+    }
+
+    #[test]
+    fn title_matches_do_not_invent_reader_hits_but_message_matches_can_jump() {
+        assert_eq!(
+            reader_query_for_result("  México  ", NativeSearchMatch::Message),
+            Some("México".to_owned())
+        );
+        assert_eq!(
+            reader_query_for_result(" query ", NativeSearchMatch::Title),
+            None
+        );
+        assert_eq!(
+            reader_query_for_result("  ", NativeSearchMatch::Message),
+            None
+        );
     }
 
     #[test]

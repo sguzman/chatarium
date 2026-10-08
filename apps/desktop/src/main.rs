@@ -6003,6 +6003,7 @@ impl eframe::App for ChatariumApp {
         let mut create_local_requested = false;
         let mut visible_native_search_matches = 0_usize;
         let mut native_search_matches = Vec::<LocalConversationId>::new();
+        let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
         let mut rename_local_requested = false;
         let mut archive_local_requested = false;
         let mut select_historical_requested = None;
@@ -6257,6 +6258,11 @@ impl eframe::App for ChatariumApp {
                             let Some(match_kind) = match_kind else {
                                 continue;
                             };
+                            if match_kind
+                                == native_conversation_search::NativeSearchMatch::Message
+                            {
+                                native_message_hit_conversations.insert(entry.id);
+                            }
                             let native_excerpt = if match_kind
                                 == native_conversation_search::NativeSearchMatch::Message
                             {
@@ -7147,7 +7153,28 @@ impl eframe::App for ChatariumApp {
         if create_local_requested {
             self.create_local_conversation();
         } else if let Some(local_conversation_id) = select_local_requested {
+            let can_switch = !self.local_conversation_busy();
             self.activate_local_conversation(local_conversation_id);
+            if can_switch
+                && self.local_conversation_id == local_conversation_id
+                && !self.local_conversation_search_query.trim().is_empty()
+            {
+                let kind = if native_message_hit_conversations.contains(&local_conversation_id) {
+                    native_conversation_search::NativeSearchMatch::Message
+                } else {
+                    native_conversation_search::NativeSearchMatch::Title
+                };
+                self.reader_search_query =
+                    native_conversation_search::reader_query_for_result(
+                        &self.local_conversation_search_query,
+                        kind,
+                    )
+                    .unwrap_or_default();
+                self.reader_search_hit = (!self.reader_search_query.is_empty()).then_some(0);
+                if self.reader_search_hit.is_some() {
+                    self.reader_restore_pending = false;
+                }
+            }
         } else if let Some(local_conversation_id) = select_historical_requested {
             self.select_historical_conversation(local_conversation_id);
         } else if let Some(remote_conversation_id) = select_remote_requested {
