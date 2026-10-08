@@ -270,6 +270,14 @@ fn compare_numbers(left: &Number, right: &Number) -> Result<Ordering, Inspection
         return Ok(a.cmp(&b));
     }
     const MAX_EXACT_FLOAT_INT: f64 = 9_007_199_254_740_992.0;
+    const MAX_EXACT_INTEGER: i128 = 9_007_199_254_740_992;
+    if integer(left).is_some_and(|value| !(-MAX_EXACT_INTEGER..=MAX_EXACT_INTEGER).contains(&value))
+        || integer(right).is_some_and(|value| !(-MAX_EXACT_INTEGER..=MAX_EXACT_INTEGER).contains(&value))
+    {
+        // A subsequent f64 conversion would silently round these exact
+        // integers and could make two *different* values compare equal.
+        return Err(InspectionIssue::Unsupported);
+    }
     let a = left.as_f64().ok_or(InspectionIssue::Unsupported)?;
     let b = right.as_f64().ok_or(InspectionIssue::Unsupported)?;
     if !a.is_finite()
@@ -836,6 +844,8 @@ mod tests {
         let huge_integer = json!(9_007_199_254_740_993_u64);
         let cases = [
             (json!({"const":9007199254740992.0}), huge_integer.clone()),
+            (json!({"const":9_007_199_254_740_993_u64}), json!(9007199254740992.0)),
+            (json!({"minimum":-9007199254740992.0}), json!(-9_007_199_254_740_993_i64)),
             (json!({"enum":[9007199254740992.0]}), huge_integer.clone()),
             (json!({"minimum":9007199254740992.0}), huge_integer),
             (json!({"maximum":1e100}), json!(1e100)),
