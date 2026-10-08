@@ -7,6 +7,7 @@ mod local_archive_search;
 mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
+mod local_tool_adapter;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -188,7 +189,9 @@ use chatarium_store::supervision_audit::{
 use chatarium_store::tool_call_audit::{
     record_tool_call, record_tool_call_route_bound, replay_tool_call_audit,
 };
-use chatarium_store::tool_outcome_audit::replay_tool_call_outcome_audit;
+use chatarium_store::tool_outcome_audit::{
+    ToolCallOutcomeKind, append_tool_call_outcome_checked, replay_tool_call_outcome_audit,
+};
 use chatarium_store::tool_provider_audit::{
     record_tool_provider_endpoint_bound, record_tool_provider_registered,
     replay_tool_provider_audit,
@@ -290,6 +293,9 @@ enum PersistCommand {
     DecideToolCallRoute {
         route_id: RouteId,
         decision: RouteUserDecision,
+    },
+    DispatchBuiltinHello {
+        route_id: RouteId,
     },
     RecordLocalMemory {
         memory_id: LocalMemoryId,
@@ -556,6 +562,10 @@ enum PersistNotice {
     ToolCallRoutePolicyUpdated {
         route_id: RouteId,
         event: EventEnvelope,
+    },
+    BuiltinHelloDispatched {
+        route_id: RouteId,
+        appended_events: Vec<EventEnvelope>,
     },
     LocalMemoryArtifactRecorded {
         memory_id: LocalMemoryId,
@@ -3259,6 +3269,20 @@ impl ChatariumApp {
                     self.tool_command_pending = false;
                     self.status = format!("tool route {} policy durably updated", route_id.get());
                 }
+                PersistNotice::BuiltinHelloDispatched {
+                    route_id,
+                    appended_events,
+                } => {
+                    let count = appended_events.len();
+                    self.events.extend(appended_events);
+                    self.tool_command_pending = false;
+                    self.status = format!(
+                        "builtin hello route {} completed · {} durable event{}",
+                        route_id.get(),
+                        count,
+                        if count == 1 { "" } else { "s" },
+                    );
+                }
                 PersistNotice::LocalMemoryArtifactRecorded { memory_id, event } => {
                     self.events.push(event);
                     self.local_memory_command_pending = false;
@@ -4461,6 +4485,28 @@ impl ChatariumApp {
             }
             Err(error) => {
                 self.status = format!("failed to queue tool call proposal: {error}");
+            }
+        }
+    }
+
+    fn dispatch_builtin_hello(&mut self, route_id: RouteId) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot execute builtin hello: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DispatchBuiltinHello { route_id }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "validating approved builtin hello route {} and consuming one-shot dispatch authority…",
+                    route_id.get(),
+                );
+            }
+            Err(error) => {
+                self.status = format!("failed to queue builtin hello dispatch: {error}");
             }
         }
     }
@@ -8678,6 +8724,33 @@ impl eframe::App for ChatariumApp {
                                                                         self.decide_tool_call_route(
                                                                             route.request.id,
                                                                             RouteUserDecision::Deny,
+                                                                        );
+                                                                    }
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            local_tool_adapter::supports_hello(
+                                                                                provider_label.as_str(),
+                                                                                call.operation.as_str(),
+                                                                            )
+                                                                                && matches!(
+                                                                                    route.gate_state,
+                                                                                    RouteGateState::Allowed {
+                                                                                        by: DecisionAuthority::User,
+                                                                                    }
+                                                                                )
+                                                                                && !self.tool_command_pending
+                                                                                && self.persist_tx.is_some(),
+                                                                            egui::Button::new(
+                                                                                "Run local hello",
+                                                                            ),
+                                                                        )
+                                                                        .on_hover_text(
+                                                                            "Side-effect-free builtin hello only. Requires explicit Allow and consumes the route once. No shell, file, network, or arbitrary MCP execution.",
+                                                                        )
+                                                                        .clicked()
+                                                                    {
+                                                                        self.dispatch_builtin_hello(
+                                                                            route.request.id,
                                                                         );
                                                                     }
                                                                 } else {
@@ -13294,6 +13367,101 @@ fn append_tool_call_route_user_decision_checked(
         .ok_or_else(|| "tool route decision append produced no durable event".to_owned())
 }
 
+fn append_builtin_hello_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+) -> Result<Vec<EventEnvelope>, String> {
+    let call = replay_tool_call_audit(store.events())?
+        .into_iter()
+        .find(|call| call.route_id == Some(route_id))
+        .ok_or_else(|| format!("route {} is not bound to a durable tool call", route_id.get()))?;
+    let provider = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|provider| provider.provider_id == call.provider_id)
+        .ok_or_else(|| {
+            format!(
+                "tool call {} references missing provider {}",
+                call.call_id.get(),
+                call.provider_id.get()
+            )
+        })?;
+    if !local_tool_adapter::supports_hello(provider.name.as_str(), call.operation.as_str()) {
+        return Err(format!(
+            "tool call {} is not supported by the restricted local hello adapter",
+            call.call_id.get()
+        ));
+    }
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| format!("tool route {} does not exist", route_id.get()))?;
+    if route.request.class != RouteClass::ToolCall
+        || route.initial_policy != RoutePolicy::RequireApproval
+        || route.gate_state
+            != (RouteGateState::Allowed {
+                by: DecisionAuthority::User,
+            })
+    {
+        return Err(format!(
+            "tool route {} requires a fresh explicit user Allow before builtin execution",
+            route_id.get()
+        ));
+    }
+    if replay_tool_call_outcome_audit(store.events())?
+        .iter()
+        .any(|outcome| outcome.call_id == call.call_id || outcome.route_id == route_id)
+    {
+        return Err(format!(
+            "tool route {} already has a durable terminal outcome",
+            route_id.get()
+        ));
+    }
+
+    let source_fresh = replay_local_routing_directory(store.events())?
+        .into_iter()
+        .any(|entry| {
+            entry.current_session_id == call.source_session_id
+                && entry.endpoint_id == route.request.source
+                && entry.current_session_phase.accepts_ordinary_turns()
+        });
+    if !source_fresh {
+        return Err(format!(
+            "tool route {} source session is no longer the current addressable local leaf",
+            route_id.get()
+        ));
+    }
+    if !provider
+        .endpoint_binding
+        .is_some_and(|binding| binding.endpoint_id() == route.request.destination)
+    {
+        return Err(format!(
+            "tool route {} destination no longer matches the registered provider endpoint",
+            route_id.get()
+        ));
+    }
+
+    // Prepare and validate the pure hello output before consuming any permit.
+    // This function performs no filesystem, process, network, or tool side effects.
+    let result_text = local_tool_adapter::prepare_hello_response(&call)?;
+    let mut gate = route_gate_before_dispatch(&route)?;
+    let permit = gate
+        .authorize_dispatch(route_id)
+        .map_err(|error| format!("tool route {} dispatch denied: {error:?}", route_id.get()))?;
+
+    let before = store.events().len();
+    record_route_dispatched(store, permit).map_err(|error| error.to_string())?;
+    // A crash after durable dispatch and before outcome remains unresolved.
+    // Never automatically re-run a possibly state-changing adapter.
+    append_tool_call_outcome_checked(
+        store,
+        call.call_id,
+        route_id,
+        ToolCallOutcomeKind::Result,
+        result_text,
+    )?;
+    Ok(store.events()[before..].to_vec())
+}
+
 fn commit_message_with_one_shot_memory_checked(
     store: &mut impl EventStore,
     message: &AuthoredUserMessage,
@@ -16145,6 +16313,25 @@ fn persistence_worker(
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "tool route decision",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DispatchBuiltinHello { route_id } => {
+                match append_builtin_hello_checked(&mut store, route_id) {
+                    Ok(appended_events) => {
+                        let _ = notices.send(PersistNotice::BuiltinHelloDispatched {
+                            route_id,
+                            appended_events,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool builtin hello dispatch",
                             revision: None,
                             request_id: None,
                             turn_id: None,
@@ -19642,6 +19829,7 @@ mod tests {
             PersistNotice::ToolProviderUpdated { .. } => "tool_provider_updated",
             PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
             PersistNotice::ToolCallRoutePolicyUpdated { .. } => "tool_call_route_policy_updated",
+            PersistNotice::BuiltinHelloDispatched { .. } => "builtin_hello_dispatched",
             PersistNotice::LocalMemoryArtifactRecorded { .. } => "local_memory_artifact_recorded",
             PersistNotice::LocalMemoryContextDecisionUpdated { .. } => {
                 "local_memory_context_decision_updated"
