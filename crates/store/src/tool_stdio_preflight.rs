@@ -381,7 +381,10 @@ mod tests {
         assert_eq!(value["id"], CALL.get());
         assert_eq!(value["params"]["name"], "hello");
         assert_eq!(value["params"]["arguments"], json!({"text":"ok"}));
-        assert_eq!(store.events().last().unwrap().kind, chatarium_core::EventKind::RouteUserDecisionRecorded);
+        assert_eq!(
+            store.events().last().unwrap().kind,
+            chatarium_core::EventKind::RouteUserDecisionRecorded
+        );
     }
 
     #[test]
