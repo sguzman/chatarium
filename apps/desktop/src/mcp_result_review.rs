@@ -3,11 +3,66 @@
 //! Neither an observed result nor a visible preview grants inference context.
 //! Only the separate durable tool-result-context decision can admit it.
 
+use chatarium_core::LocalConversationId;
+use chatarium_core::tool::ToolProviderId;
+use chatarium_store::tool_outcome_audit::ToolCallOutcomeRecord;
 use chatarium_store::tool_result_context_audit::{
-    MAX_CONTEXT_TOOL_RESULT_BYTES, ToolResultContextDecision,
+    MAX_CONTEXT_TOOL_RESULT_BYTES, ToolResultContextDecision, ToolResultContextRecord,
 };
 
 pub const RESULT_PREVIEW_BYTES: usize = 4 * 1024;
+pub const RECENT_RESULT_CANDIDATES: usize = 16;
+
+/// Borrowed historical evidence, never an admission or tool permission.
+pub struct FocusedResult<'a> {
+    pub outcome: &'a ToolCallOutcomeRecord,
+    pub stage: ResultReviewStage,
+}
+
+/// Resolve historical ownership separately for each recent observation.
+/// A replay failure blocks the entire focus rather than masking an invalid
+/// journal as an empty or authorized queue. Older results stay in the audit.
+pub fn focus_recent_result<'a>(
+    outcomes: &'a [ToolCallOutcomeRecord],
+    decisions: &[ToolResultContextRecord],
+    provider_id: ToolProviderId,
+    conversation_id: LocalConversationId,
+    mut owning_conversation: impl FnMut(
+        &ToolCallOutcomeRecord,
+    ) -> Result<Option<LocalConversationId>, String>,
+) -> Result<Option<FocusedResult<'a>>, String> {
+    let mut candidate_outcomes = outcomes
+        .iter()
+        .filter(|outcome| outcome.provider_id == provider_id)
+        .collect::<Vec<_>>();
+    candidate_outcomes.sort_unstable_by_key(|outcome| std::cmp::Reverse(outcome.observed_sequence));
+    let mut focus: Option<FocusedResult<'a>> = None;
+    for outcome in candidate_outcomes.into_iter().take(RECENT_RESULT_CANDIDATES) {
+        if owning_conversation(outcome)? != Some(conversation_id) {
+            continue;
+        }
+        let record = decisions.iter().find(|record| record.call_id == outcome.call_id);
+        if let Some(record) = record {
+            if record.conversation_id != conversation_id
+                || record.outcome_sequence != outcome.observed_sequence
+                || record.route_id != outcome.route_id
+                || record.provider_id != outcome.provider_id
+                || record.source_session_id != outcome.source_session_id
+                || record.outcome_kind != outcome.kind
+            {
+                return Err("result context does not match the historically owned outcome".to_owned());
+            }
+        }
+        let stage = classify(record.map(|record| record.decision), outcome.text.len());
+        if focus
+            .as_ref()
+            .is_none_or(|current| stage.focus_priority() > current.stage.focus_priority())
+        {
+            focus = Some(FocusedResult { outcome, stage });
+        }
+    }
+    Ok(focus)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultReviewStage {
@@ -125,6 +180,61 @@ mod tests {
         assert!(text.starts_with(prefix));
         assert_eq!(text.len(), RESULT_PREVIEW_BYTES * 2);
         assert_eq!(preview("small"), ("small", false));
+    }
+
+    fn sample_outcome(call_id: u64, provider: u64, sequence: u64) -> ToolCallOutcomeRecord {
+        use chatarium_core::routing::RouteId;
+        use chatarium_core::session::SessionId;
+        use chatarium_core::tool::ToolCallId;
+        use chatarium_store::tool_outcome_audit::ToolCallOutcomeKind;
+        ToolCallOutcomeRecord {
+            call_id: ToolCallId::new(call_id),
+            route_id: RouteId::new(call_id),
+            provider_id: ToolProviderId::new(provider),
+            source_session_id: SessionId::new(1),
+            kind: ToolCallOutcomeKind::Result,
+            text: "untrusted observation".to_owned(),
+            call_recorded_sequence: 1,
+            route_bound_sequence: 2,
+            dispatch_sequence: 3,
+            observed_sequence: sequence,
+        }
+    }
+
+    #[test]
+    fn focus_never_exposes_another_conversation_or_provider() {
+        let own = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let outcomes = vec![
+            sample_outcome(1, 7, 8),
+            sample_outcome(2, 7, 9),
+            sample_outcome(3, 8, 10),
+        ];
+        let chosen = focus_recent_result(
+            &outcomes,
+            &[],
+            ToolProviderId::new(7),
+            own,
+            |outcome| Ok(Some(if outcome.call_id.get() == 2 { other } else { own })),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(chosen.outcome.call_id.get(), 1);
+        assert_eq!(chosen.stage, ResultReviewStage::ExcludedByDefault);
+    }
+
+    #[test]
+    fn ownership_failure_blocks_entire_focus_without_fallback() {
+        let own = LocalConversationId::new();
+        let outcomes = vec![sample_outcome(1, 7, 8)];
+        let err = focus_recent_result(
+            &outcomes,
+            &[],
+            ToolProviderId::new(7),
+            own,
+            |_| Err("historical owner projection rejected".to_owned()),
+        );
+        assert!(matches!(err, Err(ref msg) if msg.contains("projection rejected")));
     }
 
     #[test]
