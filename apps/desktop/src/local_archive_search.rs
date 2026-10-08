@@ -267,9 +267,7 @@ pub fn local_snippet(text: &str, folded_query: &str) -> Option<String> {
         .unwrap_or(text.len());
     let prefix = if start > 0 { "…" } else { "" };
     let suffix = if end < text.len() { "…" } else { "" };
-    let excerpt = text[start..end]
-        .replace('\r', "")
-        .replace('\n', " ↵ ");
+    let excerpt = text[start..end].replace('\r', "").replace('\n', " ↵ ");
     Some(format!("{prefix}{excerpt}{suffix}"))
 }
 
