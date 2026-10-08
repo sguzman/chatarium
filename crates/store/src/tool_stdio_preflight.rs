@@ -12,7 +12,9 @@ use crate::session_audit::replay_session_audit;
 use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_provider_audit::replay_tool_provider_audit;
 use crate::tool_transport_config_audit::replay_tool_transport_config_audit;
-use chatarium_core::routing::{DecisionAuthority, RouteClass, RouteGateState, RouteId, RoutePolicy};
+use chatarium_core::routing::{
+    DecisionAuthority, RouteClass, RouteGateState, RouteId, RoutePolicy,
+};
 use chatarium_core::session::SessionId;
 use chatarium_core::tool::{ToolCallId, ToolProviderId};
 use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
@@ -77,7 +79,10 @@ pub fn preview_stdio_tool_invocation(
     }
 
     let approved_sequence = route.last_sequence;
-    if call.route_bound_sequence.is_none_or(|sequence| sequence >= approved_sequence) {
+    if call
+        .route_bound_sequence
+        .is_none_or(|sequence| sequence >= approved_sequence)
+    {
         return Err(format!(
             "tool call {} route correlation does not predate approval",
             call_id.get()
@@ -153,10 +158,19 @@ pub fn preview_stdio_tool_invocation(
     }
 
     let args = parse_exact_arguments(&call.arguments_text, call.operation.as_str())?;
-    let request = tools_call_request(call_id.get(), call.operation.as_str(), &args)
-        .map_err(|error| format!("tool call {} cannot encode MCP request: {error:?}", call_id.get()))?;
-    let request_frame = encode_stdio_frame(&request)
-        .map_err(|error| format!("tool call {} cannot frame MCP request: {error:?}", call_id.get()))?;
+    let request =
+        tools_call_request(call_id.get(), call.operation.as_str(), &args).map_err(|error| {
+            format!(
+                "tool call {} cannot encode MCP request: {error:?}",
+                call_id.get()
+            )
+        })?;
+    let request_frame = encode_stdio_frame(&request).map_err(|error| {
+        format!(
+            "tool call {} cannot frame MCP request: {error:?}",
+            call_id.get()
+        )
+    })?;
 
     Ok(StdioToolInvocationPreview {
         call_id,
@@ -198,8 +212,8 @@ fn parse_exact_arguments(text: &str, operation: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MemoryEventStore;
     use crate::EventStore;
+    use crate::MemoryEventStore;
     use crate::chat_container_audit::{
         record_chat_container_created, record_chat_session_lifecycle_transition,
         record_chat_session_successor_bound,
@@ -214,14 +228,13 @@ mod tests {
     use crate::tool_transport_config_audit::append_tool_transport_config_checked;
     use chatarium_core::LocalConversationId;
     use chatarium_core::chat_container::{
-        ChatContainerId, ContextHandoffId, SessionLifecyclePhase,
-        SessionLifecycleTransition, SessionSuccessorBinding,
+        ChatContainerId, ContextHandoffId, SessionLifecyclePhase, SessionLifecycleTransition,
+        SessionSuccessorBinding,
     };
     use chatarium_core::routing::{RouteEndpointId, RouteRequest};
     use chatarium_core::session::SessionEndpointBinding;
     use chatarium_core::tool::{
-        StdioToolProviderConfig, ToolOperationName, ToolProviderEndpointBinding,
-        ToolProviderName,
+        StdioToolProviderConfig, ToolOperationName, ToolProviderEndpointBinding, ToolProviderName,
     };
     use serde_json::json;
 
