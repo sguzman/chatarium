@@ -287,15 +287,17 @@ Ubuntu CI now runs an actual isolated stdio MCP request/response fixture
 after loading a **targeted** AppArmor bwrap profile; it never relaxes the
 host-wide AppArmor restriction or enables host networking. Both the
 argument/permission boundaries and the live sandbox path are tested,
-but **no visible desktop action can launch an external process**. A
-separate explicit execution control, local prerequisites validation, and
-an updated security review remain necessary before daily use.
-
-This milestone is the journal-to-runner handoff; no desktop execution action
-has been enabled by it. Before external tool execution is exposed, the Linux
-runner must separately enforce race-aware executable identity, process
-confinement, bounded runtime and I/O, and a child-outcome audit, rather than
-treating reservation or metadata inspection as a process-security proof.
+and the desktop now exposes a separate **Run sandboxed MCP tool · one
+shot** button only after activation and the immutable ToolCall's explicit
+user Allow. Before reservation, the worker confirms the strict confinement
+policy and required binaries. It then durably records RouteDispatched,
+shows the unresolved running call, performs the one-shot isolated execution,
+and separately journals an exact terminal response/error. Failure to
+record an outcome leaves the call **unresolved**. The user must manually
+create a new approved call to try again; Chatarium never auto-retries.
+The kernel-specific sandbox prerequisites, lack of cryptographic executable
+attestation, and container resource-limit constraints remain documented
+security limitations.
 
 ### Explicit provider activation audit (no execution)
 
@@ -328,14 +330,18 @@ and does not require an executable to remain present.
 
 An approved external ToolCall route exposes an **Activation-aware MCP preview**
 showing its exact bounded request or the reason it is ineligible. Previews are
-side-effect-free and computed only when expanded in the UI. No external adapter
-is permitted to consume a DispatchPermit yet. Linux metadata inspection is
-not an authenticity guarantee; a future runner must recheck executable
-identity and safety against TOCTOU races immediately before one-shot dispatch.
+side-effect-free and computed only when expanded in the UI. The
+separately clicked **Run sandboxed MCP tool · one shot** action is the sole
+external execution control. It rechecks configuration, activation, route
+Allow, and sandbox prerequisites on the persistence worker before durably
+consuming a single DispatchPermit. No model-generated or automatic execution
+path exists. Metadata inspection is not an authenticity proof and remains
+subject to executable replacement races.
 
-The configuration/activation UI is intentionally not an arbitrary terminal,
-a shell command editor, or an automatic model tool loop. No shell, process,
-network, or implicit model call becomes executable through these controls.
+Configuration, activation, and permission approval alone launch nothing.
+Only the separate explicit one-shot Run action can start a process. It is
+confined, not a terminal, shell, arbitrary host-command editor, or automatic
+model tool loop. The confined server has no host network or home access.
 
 ### Next transport implementation
 
@@ -350,11 +356,36 @@ standard options exist:
   material, correct 2026 `Mcp-*` headers and SSE handling. Do not infer
   that a URL or provider name is trustworthy.
 
-Neither transport is currently enabled. Before any network/process action,
-persist a user-reviewed provider configuration with an explicit operation
-allowlist, apply a bounded timeout and output cap, and require the existing
-one-shot explicitly approved `ToolCall` route for each invocation. Interrupted
-requests remain ambiguous and must not be blindly retried.
+The initial **Linux stdio** transport is available behind the strict
+isolated one-shot Run action; it is limited to root-owned canonical /usr/bin
+executables and requires bwrap/prlimit and working namespaces. The more
+permissive stdio policy and Streamable HTTP are **not** implemented.
+Each call requires immutable configuration, allowed operation, explicit
+activation, route Allow, a separate Run click, bounded I/O and timeout.
+Interrupted calls remain unresolved and are never automatically retried.
+
+## External MCP one-shot workflow (strict Linux sandbox)
+
+In the desktop tool area, register a provider and bind an endpoint. Select
+it, configure its immutable Linux stdio executable, argv and exact allowed
+operations, then explicitly Activate. An executable must be a root-owned,
+nonsymlinked file under /usr/bin to be eligible for this restricted runner;
+configured paths elsewhere remain inert for execution.
+
+Record the tool call from a locally addressable conversation, review its
+immutable arguments, and explicitly Allow its approval route. Expand the
+**Activation-aware MCP preview**, read the exact wire request and sandbox
+limits, and separately click **Run sandboxed MCP tool · one shot**. If
+prlimit/bwrap or Linux namespace confinement is unavailable, preflight refuses
+before consuming the permit. Upon acceptance the journal records dispatch
+**before** spawning, the UI shows the permanent dispatch, and a terminal
+observation is separately committed. A crash or failed append remains
+unresolved, with no Retry control.
+
+Successful tool-result admission to future context remains a separate
+explicit action and is disabled by default. This workflow is a bounded
+local-process client, not a general executable, network, or filesystem MCP
+runtime.
 
 ## Builtin hello smoke workflow (Linux-native, no new dependencies)
 
