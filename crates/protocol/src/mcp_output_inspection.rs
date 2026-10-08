@@ -636,8 +636,8 @@ fn inspect_value(
             }
             let prefix_items = match spec.get("prefixItems") {
                 None => None,
-                Some(Value::Array(entries)) if !entries.is_empty()
-                    && entries.len() <= MAX_INSPECTION_COLLECTION =>
+                Some(Value::Array(entries))
+                    if !entries.is_empty() && entries.len() <= MAX_INSPECTION_COLLECTION =>
                 {
                     Some(entries)
                 }
@@ -659,12 +659,7 @@ fn inspect_value(
                     // propertyNames independently validates every key,
                     // including names also listed in properties.
                     if let Some(names) = names {
-                        inspect_value(
-                            names,
-                            &Value::String(name.to_owned()),
-                            depth + 1,
-                            budget,
-                        )?;
+                        inspect_value(names, &Value::String(name.to_owned()), depth + 1, budget)?;
                     }
                     if let Some(child) = props.and_then(|props| props.get(name)) {
                         inspect_value(child, member, depth + 1, budget)?;
@@ -1226,11 +1221,20 @@ mod tests {
     #[test]
     fn property_names_validates_every_key_independently_of_properties() {
         for (schema, value) in [
-            (json!({"propertyNames":{"minLength":2}}), json!({"ab":1,"cd":2})),
-            (json!({"propertyNames":{"enum":["first","second"]}}), json!({"first":true})),
+            (
+                json!({"propertyNames":{"minLength":2}}),
+                json!({"ab":1,"cd":2}),
+            ),
+            (
+                json!({"propertyNames":{"enum":["first","second"]}}),
+                json!({"first":true}),
+            ),
             (json!({"propertyNames":false}), json!({})),
-            (json!({"type":"array","propertyNames":false}), json!([1,2])),
-            (json!({"properties":{"x":{"type":"integer"}},"propertyNames":{"const":"x"}}), json!({"x":1})),
+            (json!({"type":"array","propertyNames":false}), json!([1, 2])),
+            (
+                json!({"properties":{"x":{"type":"integer"}},"propertyNames":{"const":"x"}}),
+                json!({"x":1}),
+            ),
         ] {
             assert_eq!(
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
@@ -1242,8 +1246,14 @@ mod tests {
         for (schema, value) in [
             (json!({"propertyNames":{"minLength":2}}), json!({"a":1})),
             (json!({"propertyNames":false}), json!({"x":1})),
-            (json!({"properties":{"x":true},"propertyNames":{"const":"y"}}), json!({"x":1})),
-            (json!({"propertyNames":{"type":"integer"}}), json!({"123":1})),
+            (
+                json!({"properties":{"x":true},"propertyNames":{"const":"y"}}),
+                json!({"x":1}),
+            ),
+            (
+                json!({"propertyNames":{"type":"integer"}}),
+                json!({"123":1}),
+            ),
         ] {
             assert_eq!(
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
@@ -1264,8 +1274,8 @@ mod tests {
         for value in [
             json!([]),
             json!(["start"]),
-            json!(["start",2]),
-            json!(["start",2,true,false]),
+            json!(["start", 2]),
+            json!(["start", 2, true, false]),
         ] {
             assert_eq!(
                 inspect_structured_tool_output(
@@ -1279,8 +1289,8 @@ mod tests {
         }
         for value in [
             json!([2]),
-            json!(["start","wrong"]),
-            json!(["start",2,"bad tail"]),
+            json!(["start", "wrong"]),
+            json!(["start", 2, "bad tail"]),
         ] {
             assert_eq!(
                 inspect_structured_tool_output(
@@ -1296,12 +1306,12 @@ mod tests {
         for (schema, value, expected) in [
             (
                 json!({"prefixItems":[{"type":"integer"}]}),
-                json!([1,"unconstrained",{}]),
+                json!([1, "unconstrained", {}]),
                 McpOutputVerdict::PassedSupportedChecks,
             ),
             (
                 json!({"prefixItems":[{"type":"integer"}],"items":false}),
-                json!([1,2]),
+                json!([1, 2]),
                 McpOutputVerdict::Mismatch,
             ),
             (
@@ -1321,7 +1331,7 @@ mod tests {
             ),
             (
                 json!({"prefixItems":[true],"items":{"type":"boolean"},"uniqueItems":true}),
-                json!([1,1]),
+                json!([1, 1]),
                 McpOutputVerdict::Mismatch,
             ),
         ] {
