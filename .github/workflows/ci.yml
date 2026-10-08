@@ -98,7 +98,7 @@ jobs:
       - name: Smoke isolated MCP stdio transport
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
-        run: cargo test -p chatarium-desktop live_bubblewrap_stdio_smoke -- --nocapture
+        run: cargo test -p chatarium-desktop live_bubblewrap_ -- --nocapture
       - name: Smoke durable sandboxed MCP dispatch and terminal result
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
