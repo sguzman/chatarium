@@ -209,6 +209,25 @@ impl DispatchTransportTrace {
         self.last_observation_sequence = Some(sequence);
     }
 
+    /// Stable, chronological transport evidence with exact journal sequences.
+    /// These are observed event kinds, not proofs of remote model attention.
+    pub fn timeline(&self) -> Vec<(u64, &'static str)> {
+        let mut evidence = Vec::new();
+        for (sequence, label) in [
+            (self.accepted_sequence, "remote acceptance observed"),
+            (self.first_output_sequence, "assistant output observed"),
+            (self.failure_sequence, "remote failure observed"),
+            (self.completed_sequence, "assistant completion observed"),
+            (self.interrupted_sequence, "transport interrupted"),
+        ] {
+            if let Some(sequence) = sequence {
+                evidence.push((sequence, label));
+            }
+        }
+        evidence.sort_unstable_by_key(|(sequence, _)| *sequence);
+        evidence
+    }
+
     pub fn status(&self) -> &'static str {
         match (
             self.completed_sequence.is_some(),
@@ -230,6 +249,18 @@ impl DispatchTransportTrace {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedToolEvidence {
+    pub call_id: u64,
+    pub route_id: u64,
+    pub provider_id: u64,
+    pub source_session_id: u64,
+    pub outcome_sequence: u64,
+    pub admitted_sequence: u64,
+    pub outcome_kind: String,
+    pub included: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct RecordedDispatchManifest {
     pub sequence: u64,
@@ -242,7 +273,7 @@ pub struct RecordedDispatchManifest {
     pub included_items: usize,
     pub omitted_items: usize,
     pub included_bytes: usize,
-    pub listed: Vec<(u64, u64, String)>,
+    pub listed: Vec<ListedToolEvidence>,
     pub truncated: bool,
     pub transport: DispatchTransportTrace,
 }
@@ -341,7 +372,7 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         let call_id = number("call_id")?;
         let provider_id = number("provider_id")?;
         let route_id = number("route_id")?;
-        let _session = number("source_session_id")?;
+        let session_id = number("source_session_id")?;
         let outcome_seq = number("outcome_sequence")?;
         let admission_seq = number("admitted_sequence")?;
         let kind = item
@@ -362,11 +393,16 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         if disposition == "included" {
             listed_included += 1;
         }
-        result_rows.push((
+        result_rows.push(ListedToolEvidence {
             call_id,
+            route_id,
             provider_id,
-            format!("route {route_id} · {kind} · {disposition} · admission #{admission_seq}"),
-        ));
+            source_session_id: session_id,
+            outcome_sequence: outcome_seq,
+            admitted_sequence: admission_seq,
+            outcome_kind: kind.to_owned(),
+            included: disposition == "included",
+        });
     }
     if listed_included > included_total
         || (eligible_total == listed.len() && listed_included != included_total)
@@ -560,6 +596,51 @@ pub fn dispatch_history(
     Ok(results)
 }
 
+/// Portable forensic record for a single historical request. Only
+/// provenance and size metadata are copied; no prompt, message, or tool body.
+pub fn portable_audit_json(item: &RecordedDispatchManifest) -> Value {
+    json!({
+        "schema": "chatarium-request-context-audit-export",
+        "version": 1,
+        "request": {
+            "conversation_id": item.conversation_id,
+            "turn_id": item.turn_id,
+            "class": item.request_class,
+            "dispatch_attempt_sequence": item.sequence,
+        },
+        "transport": {
+            "status": item.transport.status(),
+            "accepted_sequence": item.transport.accepted_sequence,
+            "first_output_sequence": item.transport.first_output_sequence,
+            "failure_sequence": item.transport.failure_sequence,
+            "completed_sequence": item.transport.completed_sequence,
+            "interrupted_sequence": item.transport.interrupted_sequence,
+            "last_observation_sequence": item.transport.last_observation_sequence,
+        },
+        "context": {
+            "included_items": item.included_items,
+            "omitted_items": item.omitted_items,
+            "included_utf8_bytes": item.included_bytes,
+        },
+        "tool_results": {
+            "eligible": item.eligible_total,
+            "included": item.included_total,
+            "omitted": item.omitted_total,
+            "list_truncated": item.truncated,
+            "listed": item.listed.iter().map(|row| json!({
+                "call_id": row.call_id,
+                "route_id": row.route_id,
+                "provider_id": row.provider_id,
+                "source_session_id": row.source_session_id,
+                "outcome_sequence": row.outcome_sequence,
+                "admitted_sequence": row.admitted_sequence,
+                "outcome_kind": row.outcome_kind,
+                "disposition": if row.included { "included" } else { "omitted" },
+            })).collect::<Vec<_>>(),
+        },
+    })
+}
+
 /// Visible history of what Chatarium assembled before attempting transport.
 /// This cannot assert that a server received, retained or used a request.
 pub fn render_dispatches(
@@ -620,14 +701,24 @@ pub fn render_dispatches(
                         ui.label(
                             egui::RichText::new(item.transport.status()).strong(),
                         );
-                        ui.label(format!(
-                            "Transport audit · accepted {:?} · completed {:?} · failed {:?} · interrupted {:?} · first output {:?}",
-                            item.transport.accepted_sequence,
-                            item.transport.completed_sequence,
-                            item.transport.failure_sequence,
-                            item.transport.interrupted_sequence,
-                            item.transport.first_output_sequence,
-                        ));
+                        let timeline = item.transport.timeline();
+                        if timeline.is_empty() {
+                            ui.label("No turn-correlated transport observation yet.");
+                        } else {
+                            for (sequence, kind) in timeline {
+                                ui.label(
+                                    egui::RichText::new(format!("Event #{sequence} · {kind}"))
+                                        .monospace()
+                                        .small(),
+                                );
+                            }
+                        }
+                        if ui.button("Copy this audit as JSON").clicked() {
+                            let report = portable_audit_json(item);
+                            if let Ok(text) = serde_json::to_string_pretty(&report) {
+                                ui.ctx().copy_text(text);
+                            }
+                        }
                         ui.label(format!(
                             "MCP evidence · {} eligible · {} included in composed payload · {} omitted by this dispatch path",
                             item.eligible_total,
@@ -640,10 +731,19 @@ pub fn render_dispatches(
                             item.omitted_items,
                             item.included_bytes,
                         ));
-                        for (call_id, provider_id, summary) in &item.listed {
+                        for evidence in &item.listed {
+                            let disposition = if evidence.included { "included" } else { "omitted" };
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "call {call_id} · provider {provider_id} · {summary}"
+                                    "call {} · provider {} · session {} · route {} · {} · {} · outcome #{} · admitted #{}",
+                                    evidence.call_id,
+                                    evidence.provider_id,
+                                    evidence.source_session_id,
+                                    evidence.route_id,
+                                    evidence.outcome_kind,
+                                    disposition,
+                                    evidence.outcome_sequence,
+                                    evidence.admitted_sequence,
                                 ))
                                 .monospace()
                                 .small(),
@@ -1031,6 +1131,81 @@ mod tests {
             rows[0].transport.status(),
             "CONFLICTING TERMINAL EVIDENCE · inspect turn audit"
         );
+    }
+
+    #[test]
+    fn transport_timeline_uses_journal_order_not_fixed_status_order() {
+        let trace = DispatchTransportTrace {
+            accepted_sequence: Some(19),
+            first_output_sequence: Some(21),
+            failure_sequence: Some(34),
+            completed_sequence: None,
+            interrupted_sequence: Some(38),
+            last_observation_sequence: Some(38),
+        };
+        assert_eq!(
+            trace.timeline(),
+            vec![
+                (19, "remote acceptance observed"),
+                (21, "assistant output observed"),
+                (34, "remote failure observed"),
+                (38, "transport interrupted"),
+            ]
+        );
+    }
+
+    #[test]
+    fn copied_audit_is_content_free_but_preserves_full_typed_provenance() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let (turn, _) = append_authored_attempt(&mut store, owner);
+        append_transport_observation(
+            &mut store,
+            &turn,
+            &turn,
+            EventKind::RemoteAcceptanceObserved,
+        );
+        let mut rows = dispatch_history(store.events(), owner).unwrap();
+        let row = rows.first_mut().unwrap();
+        row.listed.push(ListedToolEvidence {
+            call_id: 10,
+            route_id: 20,
+            provider_id: 30,
+            source_session_id: 40,
+            outcome_sequence: 50,
+            admitted_sequence: 60,
+            outcome_kind: "result".to_owned(),
+            included: true,
+        });
+        row.eligible_total = 1;
+        row.included_total = 1;
+        let export = portable_audit_json(row);
+        assert_eq!(export["request"]["conversation_id"], owner.to_string());
+        assert_eq!(export["tool_results"]["listed"][0]["source_session_id"], 40);
+        assert_eq!(export["tool_results"]["listed"][0]["outcome_sequence"], 50);
+        assert_eq!(export["tool_results"]["listed"][0]["disposition"], "included");
+        assert!(export["transport"]["accepted_sequence"].is_number());
+        let serialized = export.to_string();
+        assert!(!serialized.contains("secret adapter bytes"));
+        assert!(!serialized.contains("historically typed user message"));
+        assert!(!serialized.contains("Chatarium tool result"));
+    }
+
+    #[test]
+    fn portable_export_explicitly_marks_bounded_detail() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        append_authored_attempt(&mut store, owner);
+        let mut rows = dispatch_history(store.events(), owner).unwrap();
+        let row = rows.first_mut().unwrap();
+        row.eligible_total = 40;
+        row.omitted_total = 40;
+        row.truncated = true;
+        let export = portable_audit_json(row);
+        assert_eq!(export["tool_results"]["eligible"], 40);
+        assert_eq!(export["tool_results"]["list_truncated"], true);
     }
 
     #[test]

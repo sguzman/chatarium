@@ -743,6 +743,13 @@ manifested history in 12-row pages, rather than silently forgetting older
 attempts. This has no effect on admission, transport or existing immutable
 journal events.
 
+Each attempt also shows its later transport observations in journal order,
+with exact event numbers rather than opaque optional values. An explicit
+**Copy this audit as JSON** control exports a versioned evidence report with
+structured per-call identity, source-session, route, observation and admission
+provenance. Raw messages and tool results are never exported through this
+control. The report honestly labels the 32-entry per-call detail cap.
+
 `DispatchAttempted` is not proof of service delivery. Manifests describe
 Chatarium's prepared input, not server-side storage, use, or a byte-for-byte
 cryptographic proof of the bridge's network transmission. They do not

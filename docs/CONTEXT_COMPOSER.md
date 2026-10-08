@@ -198,6 +198,16 @@ has many previous requests. Pagination limits rendering, **not audit replay**
 or historical retention. Pre-feature dispatches without manifests remain
 unmanifested.
 
+Individual recorded attempts expose an ordered, event-numbered transport
+timeline and an explicitly requested **Copy this audit as JSON** action.
+The export is a portable, versioned, content-free evidence report containing
+the owning conversation/turn, transport observation sequences, composed
+source counts and bytes, and the listed per-call provenance (including
+provider, route, source session, terminal observation and admission event).
+It never duplicates user text, model prompts or adapter-result bodies.
+If more than 32 tool identities were eligible, the export marks its
+per-call detail as incomplete while preserving exact aggregate counts.
+
 **Precision:** `DispatchAttempted` means Chatarium durably prepared an
 outgoing request, not that the service received or used it. Even observed
 remote acceptance is distinct from model attention. The manifest describes
