@@ -45,20 +45,14 @@ fn live_stdio_dispatch_worker_contract_keeps_journal_responsive() {
         ToolProviderName::new("external.slow").unwrap(),
     )
     .unwrap();
-    append_tool_provider_endpoint_checked(
-        &mut store,
-        provider,
-        RouteEndpointId::new(50),
-    )
-    .unwrap();
+    append_tool_provider_endpoint_checked(&mut store, provider, RouteEndpointId::new(50)).unwrap();
     let config = StdioToolProviderConfig::new(
         "/usr/bin/sleep",
         vec!["3".to_owned()],
         vec![ToolOperationName::new("fixture.slow").unwrap()],
     )
     .unwrap();
-    let configured = append_tool_transport_config_checked(&mut store, provider, &config)
-        .unwrap();
+    let configured = append_tool_transport_config_checked(&mut store, provider, &config).unwrap();
     local_tool_provider_control::append_activation_with_inspection(
         &mut store,
         provider,
@@ -76,12 +70,8 @@ fn live_stdio_dispatch_worker_contract_keeps_journal_responsive() {
         "{}".to_owned(),
     )
     .unwrap();
-    append_tool_call_route_user_decision_checked(
-        &mut store,
-        route,
-        RouteUserDecision::Allow,
-    )
-    .unwrap();
+    append_tool_call_route_user_decision_checked(&mut store, route, RouteUserDecision::Allow)
+        .unwrap();
 
     let (command_tx, command_rx) = mpsc::channel();
     let (notice_tx, notice_rx) = mpsc::channel();
