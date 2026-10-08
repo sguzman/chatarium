@@ -15995,10 +15995,8 @@ fn persistence_worker(
             } => {
                 match append_tool_provider_endpoint_checked(&mut store, provider_id, endpoint_id) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::ToolProviderUpdated {
-                            provider_id,
-                            event,
-                        });
+                        let _ =
+                            notices.send(PersistNotice::ToolProviderUpdated { provider_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
