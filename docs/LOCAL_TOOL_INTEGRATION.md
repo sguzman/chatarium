@@ -700,6 +700,36 @@ the same context. **Exact next-request context** remains the authoritative
 preview of the composed request. The inventory is a control surface for
 audited evidence selection, not an alternative source of model instructions.
 
+## Per-attempt outgoing MCP context evidence
+
+The next-request eligible inventory is deliberately not conflated with what
+a particular dispatch path actually sends. Each newly prepared normal Send,
+controller coordination, or worker continuation records a **content-free,
+per-turn manifest** inside its existing durable `DispatchAttempted` event.
+The manifest is derived from the concrete outgoing `ContextPlan`, not a
+different UI preview or a later live admission projection.
+
+Every manifest distinguishes the frozen number of admitted MCP results,
+the number included in that path's composed input, and the number omitted.
+It includes all-source context item/byte totals and up to 32 newest
+per-call identities and dispositions; larger result sets retain exact
+counts with explicitly truncated detail. The raw adapter results are not
+duplicated. Authored Send uses its Send-click snapshot; specialized
+controller/worker requests report eligibility from their start-event
+prefixes while keeping unrequested MCP evidence out of their input.
+
+The read-only **Recent outgoing context snapshots** inspector under
+**Context & inference controls** shows these recorded attempts per local
+conversation and whether later acceptance was observed. The data is
+frozen per attempt, unlike the live admitted-evidence inventory. Old
+dispatches without this format remain unmanifested; no speculative
+retrospective reconstruction is attempted.
+
+`DispatchAttempted` is not proof of service delivery. Manifests describe
+Chatarium's prepared input, not server-side storage, use, or a byte-for-byte
+cryptographic proof of the bridge's network transmission. They do not
+grant execution authority or any new context admission.
+
 ## Focused call review (desktop)
 
 Above the bounded historical **Tool call audit**, the desktop surfaces the

@@ -15,6 +15,7 @@ mod local_tool_provider_control;
 mod mcp_async_tests;
 mod mcp_call_review;
 mod mcp_context_inventory;
+mod mcp_dispatch_manifest;
 mod mcp_output_audit;
 mod mcp_provider_workflow;
 mod mcp_result_review;
@@ -2941,6 +2942,14 @@ impl ChatariumApp {
                                     message.conversation_id,
                                 ));
                             transcript.extend(intent.routed_context);
+                            // The Send-click admission snapshot is frozen in this
+                            // pending intent. Do not re-read live admissions after
+                            // the durable user-message commit.
+                            let frozen_tool_sources = intent
+                                .tool_result_context
+                                .iter()
+                                .map(|item| item.source.clone())
+                                .collect::<Vec<_>>();
                             transcript.extend(intent.tool_result_context);
                             transcript.extend(intent.local_memory_context);
                             if one_shot_selection_sequence.is_some() {
@@ -2967,6 +2976,34 @@ impl ChatariumApp {
                                 intent.developer_context.as_str(),
                                 transcript,
                             );
+                            let manifest = match mcp_dispatch_manifest::capture(
+                                message.conversation_id,
+                                "authored",
+                                &frozen_tool_sources,
+                                &context_plan,
+                            ) {
+                                Ok(manifest) => manifest,
+                                Err(error) => {
+                                    self.status = format!("cannot record exact outgoing context: {error}");
+                                    continue;
+                                }
+                            };
+                            let payload = match mcp_dispatch_manifest::attach_to_dispatch_payload(
+                                remote_turn_payload(
+                                    message.turn_id,
+                                    &remote_request_id,
+                                    Some(&intent.model),
+                                    None,
+                                    None,
+                                ),
+                                manifest,
+                            ) {
+                                Ok(payload) => payload,
+                                Err(error) => {
+                                    self.status = format!("cannot journal outgoing context: {error}");
+                                    continue;
+                                }
+                            };
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
@@ -2975,13 +3012,6 @@ impl ChatariumApp {
                                 instructions: context_plan.instructions.clone(),
                                 request_patch: intent.request_patch,
                             });
-                            let payload = remote_turn_payload(
-                                message.turn_id,
-                                &remote_request_id,
-                                Some(&intent.model),
-                                None,
-                                None,
-                            );
                             if self.queue_turn_event(
                                 message.turn_id,
                                 EventKind::DispatchAttempted,
@@ -5484,6 +5514,28 @@ impl ChatariumApp {
             self.conversation_developer_context.as_str(),
             transcript,
         );
+        let frozen_tool_sources = match admitted_tool_result_context_messages(
+            &coordination_prefix,
+            self.local_conversation_id,
+        ) {
+            Ok(results) => results.into_iter().map(|item| item.source).collect::<Vec<_>>(),
+            Err(error) => {
+                self.status = format!("cannot audit coordination tool eligibility: {error}");
+                return;
+            }
+        };
+        let manifest = match mcp_dispatch_manifest::capture(
+            self.local_conversation_id,
+            "controller_coordination",
+            &frozen_tool_sources,
+            &context_plan,
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.status = format!("cannot record coordination context evidence: {error}");
+                return;
+            }
+        };
         let request_id = coordination.coordination_turn_id.to_string();
         self.pending_remote_turn = Some(PendingRemoteTurn {
             turn_id: coordination.coordination_turn_id,
@@ -5494,13 +5546,23 @@ impl ChatariumApp {
             request_patch,
         });
 
-        let payload = remote_turn_payload(
-            coordination.coordination_turn_id,
-            &request_id,
-            Some(&model),
-            None,
-            Some("non-authored controller coordination remote dispatch"),
-        );
+        let payload = match mcp_dispatch_manifest::attach_to_dispatch_payload(
+            remote_turn_payload(
+                coordination.coordination_turn_id,
+                &request_id,
+                Some(&model),
+                None,
+                Some("non-authored controller coordination remote dispatch"),
+            ),
+            manifest,
+        ) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.pending_remote_turn = None;
+                self.status = format!("cannot journal coordination context evidence: {error}");
+                return;
+            }
+        };
         if self.queue_turn_event(
             coordination.coordination_turn_id,
             EventKind::DispatchAttempted,
@@ -5715,6 +5777,28 @@ impl ChatariumApp {
             self.conversation_developer_context.as_str(),
             transcript,
         );
+        let frozen_tool_sources = match admitted_tool_result_context_messages(
+            &execution_prefix,
+            self.local_conversation_id,
+        ) {
+            Ok(results) => results.into_iter().map(|item| item.source).collect::<Vec<_>>(),
+            Err(error) => {
+                self.status = format!("cannot audit continuation tool eligibility: {error}");
+                return;
+            }
+        };
+        let manifest = match mcp_dispatch_manifest::capture(
+            self.local_conversation_id,
+            "worker_continuation",
+            &frozen_tool_sources,
+            &context_plan,
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.status = format!("cannot record continuation context evidence: {error}");
+                return;
+            }
+        };
         let request_id = execution.execution_turn_id.to_string();
         self.pending_remote_turn = Some(PendingRemoteTurn {
             turn_id: execution.execution_turn_id,
@@ -5725,13 +5809,23 @@ impl ChatariumApp {
             request_patch,
         });
 
-        let payload = remote_turn_payload(
-            execution.execution_turn_id,
-            &request_id,
-            Some(&model),
-            None,
-            Some("bounded controller continuation remote dispatch"),
-        );
+        let payload = match mcp_dispatch_manifest::attach_to_dispatch_payload(
+            remote_turn_payload(
+                execution.execution_turn_id,
+                &request_id,
+                Some(&model),
+                None,
+                Some("bounded controller continuation remote dispatch"),
+            ),
+            manifest,
+        ) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.pending_remote_turn = None;
+                self.status = format!("cannot journal continuation context evidence: {error}");
+                return;
+            }
+        };
         if self.queue_turn_event(
             execution.execution_turn_id,
             EventKind::DispatchAttempted,
@@ -12400,6 +12494,14 @@ impl eframe::App for ChatariumApp {
                                     ));
                                 }
                             }
+                        });
+                        ui.add_space(8.0);
+                        ui.collapsing("Recent outgoing context snapshots · journaled", |ui| {
+                            mcp_dispatch_manifest::render_dispatches(
+                                ui,
+                                &self.events,
+                                self.local_conversation_id,
+                            );
                         });
                         ui.add_space(8.0);
                         ui.collapsing("Exact next-request context", |ui| {

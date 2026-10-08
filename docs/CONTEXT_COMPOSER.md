@@ -143,6 +143,44 @@ Results over 64 KiB are never truncated into model context.
 
 See [LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md).
 
+## Durable outgoing-context evidence manifest
+
+Every **new** Chatarium Responses dispatch path now derives a compact manifest
+from the *same typed `ContextPlan`* that supplies its outgoing input. The
+manifest is appended inside the existing scoped, durable
+`DispatchAttempted` event, **before** the bridge command is issued.
+It records request class, owning local conversation, total composed source
+counts/bytes, and separate counts for tool results **admitted at the frozen
+snapshot** versus actually **included in the composed input**. It retains
+bounded call, route, provider, source-session, outcome and admission identity
+for the newest 32 entries; if there are more, the full counts remain exact
+and the omitted detail rows are explicitly labeled as truncated. The raw
+tool output and request body are not copied into this metadata.
+
+The three dispatch kinds are ordinary authored Send, non-authored controller
+coordination, and bounded worker continuation. Authored Send uses the
+admission set frozen when Send was clicked, not the live selection after
+the journal acknowledges the user message. Specialized dispatches use
+their **historical start-event prefix** to report eligible results. They do
+not silently import those results merely because they were admitted for
+ordinary conversation turns. Capturing the manifest validates that every
+included tool result belongs to the eligible set; inconsistency blocks
+dispatch rather than silently reporting a false record.
+
+Under **Context & inference controls → Recent outgoing context snapshots**,
+Chatarium displays the latest manifested attempts for the selected local
+conversation, the included/eligible distinction, bounded evidence identities,
+and whether a later remote-acceptance observation exists. Legacy attempts
+without a manifest are not retrospectively invented.
+
+**Precision:** `DispatchAttempted` means Chatarium durably prepared an
+outgoing request, not that the service received or used it. Even observed
+remote acceptance is distinct from model attention. The manifest describes
+Chatarium's composed input before any bridge/provider transformations; it
+is **not** a cryptographic digest of the full wire request. UTF-8 byte
+counts are not token estimates, and no admission or execution permissions
+are changed by the audit.
+
 ## Explicit local memory source
 
 Context Composer now has a first-class `LocalMemory` source distinct from
