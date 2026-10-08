@@ -292,8 +292,9 @@ fn run_one_shot(
             return Err("sandbox MCP stdout/stderr exceeded byte budget".to_owned());
         }
         if !status.success() {
+            let diagnostic = String::from_utf8_lossy(&stderr);
             return Err(format!(
-                "isolated MCP process exited unsuccessfully: {status}"
+                "isolated MCP process exited unsuccessfully: {status}; bounded stderr: {diagnostic}"
             ));
         }
         let text = std::str::from_utf8(&output)
@@ -390,8 +391,7 @@ mod tests {
             return;
         }
         use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
-        let request = tools_call_request(71, "fixture.echo", &serde_json::json!({}))
-            .unwrap();
+        let request = tools_call_request(71, "fixture.echo", &serde_json::json!({})).unwrap();
         let frame = encode_stdio_frame(&request).unwrap();
         let reply = r#"{"jsonrpc":"2.0","id":71,"result":{"resultType":"complete","content":[{"type":"text","text":"sandbox-ok"}]}}"#;
         let command = format!("s/.*/{reply}/p");
@@ -400,7 +400,8 @@ mod tests {
             &["-n".to_owned(), "-e".to_owned(), command],
             &frame,
             71,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(returned, format!("{reply}\n"));
     }
 
