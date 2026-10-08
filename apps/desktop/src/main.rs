@@ -8,6 +8,7 @@ mod diagnostics;
 mod integration_journey;
 mod local_archive_search;
 mod local_conversations;
+mod native_conversation_search;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
@@ -940,6 +941,7 @@ struct ChatariumApp {
     local_conversation_catalog: local_conversations::LocalConversationCatalog,
     local_conversation_rename: String,
     show_archived_local_conversations: bool,
+    local_conversation_search_query: String,
     events: Vec<EventEnvelope>,
     historical_catalog: Vec<HistoricalConversationCatalogEntry>,
     selected_historical_conversation: Option<LocalConversationId>,
@@ -1225,6 +1227,7 @@ impl ChatariumApp {
                         ),
                         local_conversation_catalog,
                         show_archived_local_conversations: false,
+            local_conversation_search_query: String::new(),
                         events: events.clone(),
                         historical_catalog,
                         selected_historical_conversation: None,
@@ -1419,6 +1422,7 @@ impl ChatariumApp {
             ),
             local_conversation_catalog,
             show_archived_local_conversations: false,
+            local_conversation_search_query: String::new(),
             historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
             events: events.clone(),
             selected_historical_conversation: None,
@@ -5991,6 +5995,7 @@ impl eframe::App for ChatariumApp {
             });
         let mut select_local_requested: Option<LocalConversationId> = None;
         let mut create_local_requested = false;
+        let mut visible_native_search_matches = 0_usize;
         let mut rename_local_requested = false;
         let mut archive_local_requested = false;
         let mut select_historical_requested = None;
@@ -6014,13 +6019,20 @@ impl eframe::App for ChatariumApp {
             self.archive_search_selection = None;
         }
         let archive_search_id = egui::Id::new("local-archive-search");
+        let native_search_id = egui::Id::new("native-conversation-search");
+        let mut native_search_has_focus = false;
+        let mut focus_native_search = false;
         let mut archive_search_has_focus = false;
         let mut archive_result_clicked = None;
         let mut open_reader_from_transcript_search = false;
         let mut focus_archive_search = false;
         let mut clear_archive_search_focus = false;
         if ctx.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::K)) {
-            focus_archive_search = true;
+            if ctx.input(|input| input.modifiers.shift) {
+                focus_native_search = true;
+            } else {
+                focus_archive_search = true;
+            }
         }
 
         egui::SidePanel::left("sidebar")
@@ -6185,6 +6197,35 @@ impl eframe::App for ChatariumApp {
                             );
                         });
                         ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let input_width = (ui.available_width() - 50.0).max(90.0);
+                            let native_search_response = ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.local_conversation_search_query,
+                                )
+                                .id(native_search_id)
+                                .hint_text("Find a local chat by title or text…")
+                                .desired_width(input_width),
+                            );
+                            native_search_has_focus = native_search_response.has_focus();
+                            if ui
+                                .add_enabled(
+                                    !self.local_conversation_search_query.is_empty(),
+                                    egui::Button::new("Clear"),
+                                )
+                                .clicked()
+                            {
+                                self.local_conversation_search_query.clear();
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new(
+                                "Native chats · Ctrl+Shift+K focus · Esc clear · local text only",
+                            )
+                            .size(9.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        ui.add_space(6.0);
 
                         for entry in self.local_conversation_catalog.entries() {
                             if entry.archived && !self.show_archived_local_conversations {
@@ -6197,6 +6238,15 @@ impl eframe::App for ChatariumApp {
                                 entry.id,
                                 &self.events,
                             );
+                            let match_kind = native_conversation_search::find_match(
+                                &self.local_conversation_search_query,
+                                title.as_str(),
+                                messages.iter().map(|message| message.text.as_str()),
+                            );
+                            let Some(match_kind) = match_kind else {
+                                continue;
+                            };
+                            visible_native_search_matches += 1;
                             let selected =
                                 !historical_mode && entry.id == self.local_conversation_id;
                             egui::Frame::default()
@@ -6218,6 +6268,17 @@ impl eframe::App for ChatariumApp {
                                         select_local_requested = Some(entry.id);
                                     }
                                     ui.horizontal(|ui| {
+                                        if !self.local_conversation_search_query.trim().is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(match match_kind {
+                                                    native_conversation_search::NativeSearchMatch::Title => "TITLE MATCH",
+                                                    native_conversation_search::NativeSearchMatch::Message => "MESSAGE MATCH",
+                                                })
+                                                .size(9.0)
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(112, 176, 137)),
+                                            );
+                                        }
                                         ui.label(
                                             egui::RichText::new(format!(
                                                 "{} message{}",
@@ -6238,6 +6299,22 @@ impl eframe::App for ChatariumApp {
                                     });
                                 });
                             ui.add_space(4.0);
+                        }
+                        if !self.local_conversation_search_query.trim().is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} visible native conversation match{}",
+                                    visible_native_search_matches,
+                                    if visible_native_search_matches == 1 { "" } else { "es" },
+                                ))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            if visible_native_search_matches == 0 {
+                                ui.label(
+                                    "No visible native chats match. Enable Show archived to include archived chats.",
+                                );
+                            }
                         }
 
                         if !historical_mode {
@@ -6930,6 +7007,15 @@ impl eframe::App for ChatariumApp {
 
         if focus_archive_search {
             ctx.memory_mut(|memory| memory.request_focus(archive_search_id));
+        }
+        if focus_native_search {
+            ctx.memory_mut(|memory| memory.request_focus(native_search_id));
+        }
+        if native_search_has_focus
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.local_conversation_search_query.clear();
+            ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
         }
         if archive_search_has_focus {
             ctx.input_mut(|input| {

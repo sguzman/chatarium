@@ -123,6 +123,24 @@ If a browser prototype fails two focused live validations at the same architectu
 
 Keep egui rendering cheap. The app should display immutable/cheap snapshots of state and emit commands. Persistence, networking, capture parsing, indexing, and reconciliation run elsewhere.
 
+### Native conversation discovery
+
+The local conversation sidebar has an independent, ephemeral filter for
+native Chatarium chats. It matches explicit or derived titles as well as
+locally projected user and assistant message text, case-insensitively.
+Search results indicate whether the title or transcript matched. Empty
+queries preserve the full list, including empty native conversations;
+archived visibility stays under its existing explicit toggle.
+
+This is distinct from the imported ChatGPT mirrored archive search.
+**Ctrl+Shift+K** focuses the native conversation filter, and **Esc**
+clears it and returns keyboard focus. The mirrored archive retains its
+separate **Ctrl+K** shortcut. Searching local conversations does not
+query a network service, change the active conversation, admit model
+context, or read untrusted MCP tool bodies. The matching policy has focused tests in
+`apps/desktop/src/native_conversation_search.rs` and the desktop is checked
+through the existing GitHub Actions Rust/Linux matrix.
+
 ### Keyboard focus ownership
 
 Ctrl+Enter commits a message **only while the message composer has keyboard
