@@ -134,8 +134,7 @@ mod tests {
         assert_eq!(rejected["provider_executed"], false);
         assert_eq!(rejected["journal_accessed"], false);
         assert_eq!(rejected["host_network_accessed"], false);
-        let roundtrip: serde_json::Value =
-            serde_json::from_str(&rejected.to_string()).unwrap();
+        let roundtrip: serde_json::Value = serde_json::from_str(&rejected.to_string()).unwrap();
         assert_eq!(roundtrip, rejected);
         assert!(roundtrip["detail"].as_str().unwrap().contains("\"bad\""));
     }
@@ -143,12 +142,27 @@ mod tests {
     #[test]
     fn only_owned_failure_stage_prefixes_select_categories() {
         for (error, category) in [
-            ("Linux MCP confinement is unsupported on this platform", "unsupported_platform"),
-            ("executable /usr/bin/bwrap failed metadata inspection: PathUnavailable", "launcher_trust_check_failed"),
-            ("restricted runner refuses non-root-owned executable /usr/bin/bwrap", "launcher_trust_check_failed"),
-            ("isolated host-readiness probe could not start: permission denied", "probe_spawn_failed"),
+            (
+                "Linux MCP confinement is unsupported on this platform",
+                "unsupported_platform",
+            ),
+            (
+                "executable /usr/bin/bwrap failed metadata inspection: PathUnavailable",
+                "launcher_trust_check_failed",
+            ),
+            (
+                "restricted runner refuses non-root-owned executable /usr/bin/bwrap",
+                "launcher_trust_check_failed",
+            ),
+            (
+                "isolated host-readiness probe could not start: permission denied",
+                "probe_spawn_failed",
+            ),
             ("isolated host-readiness probe timed out", "probe_timed_out"),
-            ("isolated host-readiness probe exited exit status: 1", "sandbox_probe_rejected"),
+            (
+                "isolated host-readiness probe exited exit status: 1",
+                "sandbox_probe_rejected",
+            ),
             ("inconclusive launcher evidence", "probe_failed"),
         ] {
             assert_eq!(failure_category(error), category);
