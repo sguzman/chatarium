@@ -344,5 +344,10 @@ The local tool integration substrate has landed as a separate domain; see
 [LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). Immutable tool calls,
 explicit user-approved routes, one-shot dispatch, and terminal tool outcomes
 must remain separate from WorkerLifecycle, supervision, and conversation
-context. Only the deterministic, side-effect-free builtin hello smoke adapter
-is currently executable; arbitrary MCP and external tools remain disabled.
+context. The deterministic, side-effect-free builtin hello adapter is
+executable. A separately approved, immutable, one-shot external stdio MCP
+call is also executable on a compatible Linux host only through the
+restricted bubblewrap/prlimit runner with an independent user Run action.
+General host-command execution, Streamable HTTP, and autonomous model-driven
+tool execution remain disabled; see the detailed host restrictions in
+[LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md).
