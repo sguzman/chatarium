@@ -671,6 +671,25 @@ without reviewing the body. Results larger than the existing 65,536-byte
 context limit cannot be admitted, even as truncated previews. Approval, dispatch, and result-context admission
 remain independent gates. This focus cannot launch, replay, or retry a tool.
 
+### Bounded multi-result queue substrate
+
+The read-only result-review module now also constructs a **priority-ordered
+queue** of all historically owned results in the same bounded 16-observation
+provider window. Each item retains its exact call identity, observed sequence,
+and independently replayed context decision. Undecided items precede admitted
+items, which precede explicitly excluded items; equal-status items remain
+newest-first. Foreign conversation results never enter this queue. Inconsistent
+or duplicate decision identities and ownership replay errors fail the entire
+queue closed instead of presenting a partly trusted selection. Oversized
+results remain excluded and never acquire an admission action.
+
+The existing desktop panel continues to display its single focused result,
+now selected from that shared verified queue. **The multi-row UI and any
+per-item review controls are not yet wired into the desktop.** No bulk
+admission, automatic result ingestion, or additional permissions were added.
+Any later multi-row UI must preserve independent inspection and deliberate
+per-result checked journal decisions.
+
 ## Focused call review (desktop)
 
 Above the bounded historical **Tool call audit**, the desktop surfaces the

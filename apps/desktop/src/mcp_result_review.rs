@@ -19,10 +19,11 @@ pub struct FocusedResult<'a> {
     pub stage: ResultReviewStage,
 }
 
-/// Resolve historical ownership separately for each recent observation.
-/// A replay failure blocks the entire focus rather than masking an invalid
-/// journal as an empty or authorized queue. Older results stay in the audit.
-pub fn focus_recent_result<'a>(
+/// Build a bounded, read-only review queue for one provider and conversation.
+/// Every candidate's historical ownership and existing decision identity must
+/// replay cleanly. An error blocks the entire queue; partial results are never
+/// returned as if they were authorized.
+pub fn recent_result_queue<'a>(
     outcomes: &'a [ToolCallOutcomeRecord],
     decisions: &[ToolResultContextRecord],
     provider_id: ToolProviderId,
@@ -30,13 +31,13 @@ pub fn focus_recent_result<'a>(
     mut owning_conversation: impl FnMut(
         &ToolCallOutcomeRecord,
     ) -> Result<Option<LocalConversationId>, String>,
-) -> Result<Option<FocusedResult<'a>>, String> {
+) -> Result<Vec<FocusedResult<'a>>, String> {
     let mut candidate_outcomes = outcomes
         .iter()
         .filter(|outcome| outcome.provider_id == provider_id)
         .collect::<Vec<_>>();
     candidate_outcomes.sort_unstable_by_key(|outcome| std::cmp::Reverse(outcome.observed_sequence));
-    let mut focus: Option<FocusedResult<'a>> = None;
+    let mut queue = Vec::new();
     for outcome in candidate_outcomes
         .into_iter()
         .take(RECENT_RESULT_CANDIDATES)
@@ -44,9 +45,13 @@ pub fn focus_recent_result<'a>(
         if owning_conversation(outcome)? != Some(conversation_id) {
             continue;
         }
-        let record = decisions
+        let mut matching_decisions = decisions
             .iter()
-            .find(|record| record.call_id == outcome.call_id);
+            .filter(|record| record.call_id == outcome.call_id);
+        let record = matching_decisions.next();
+        if matching_decisions.next().is_some() {
+            return Err("duplicate context decisions for a tool result".to_owned());
+        }
         if let Some(record) = record {
             if record.conversation_id != conversation_id
                 || record.outcome_sequence != outcome.observed_sequence
@@ -60,15 +65,48 @@ pub fn focus_recent_result<'a>(
                 );
             }
         }
-        let stage = classify(record.map(|record| record.decision), outcome.text.len());
-        if focus
-            .as_ref()
-            .is_none_or(|current| stage.focus_priority() > current.stage.focus_priority())
-        {
-            focus = Some(FocusedResult { outcome, stage });
-        }
+        queue.push(FocusedResult {
+            outcome,
+            stage: classify(record.map(|record| record.decision), outcome.text.len()),
+        });
     }
-    Ok(focus)
+    // Prioritize undecided results, but preserve newest-first chronology
+    // within a stage. Ordering is for presentation, never authorization.
+    queue.sort_by(|left, right| {
+        right
+            .stage
+            .focus_priority()
+            .cmp(&left.stage.focus_priority())
+            .then_with(|| {
+                right.outcome
+                    .observed_sequence
+                    .cmp(&left.outcome.observed_sequence)
+            })
+            .then_with(|| right.outcome.call_id.get().cmp(&left.outcome.call_id.get()))
+    });
+    Ok(queue)
+}
+
+/// Backward-compatible single-result focus, now derived from the same
+/// independently verified multi-result queue.
+pub fn focus_recent_result<'a>(
+    outcomes: &'a [ToolCallOutcomeRecord],
+    decisions: &[ToolResultContextRecord],
+    provider_id: ToolProviderId,
+    conversation_id: LocalConversationId,
+    owning_conversation: impl FnMut(
+        &ToolCallOutcomeRecord,
+    ) -> Result<Option<LocalConversationId>, String>,
+) -> Result<Option<FocusedResult<'a>>, String> {
+    Ok(recent_result_queue(
+        outcomes,
+        decisions,
+        provider_id,
+        conversation_id,
+        owning_conversation,
+    )?
+    .into_iter()
+    .next())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +292,171 @@ mod tests {
             Err("historical owner projection rejected".to_owned())
         });
         assert!(matches!(err, Err(ref msg) if msg.contains("projection rejected")));
+    }
+
+    fn sample_decision(
+        outcome: &ToolCallOutcomeRecord,
+        owner: LocalConversationId,
+        decision: ToolResultContextDecision,
+    ) -> ToolResultContextRecord {
+        ToolResultContextRecord {
+            call_id: outcome.call_id,
+            route_id: outcome.route_id,
+            provider_id: outcome.provider_id,
+            source_session_id: outcome.source_session_id,
+            conversation_id: owner,
+            outcome_sequence: outcome.observed_sequence,
+            outcome_kind: outcome.kind,
+            decision,
+            first_decision_sequence: outcome.observed_sequence + 1,
+            last_decision_sequence: outcome.observed_sequence + 1,
+        }
+    }
+
+    #[test]
+    fn queue_shows_multiple_owned_results_in_review_priority_order() {
+        let own = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let outcomes = vec![
+            sample_outcome(1, 7, 10),
+            sample_outcome(2, 7, 11),
+            sample_outcome(3, 7, 12),
+            sample_outcome(4, 7, 13),
+            sample_outcome(5, 8, 14),
+        ];
+        let decisions = vec![
+            sample_decision(&outcomes[1], own, ToolResultContextDecision::Admit),
+            sample_decision(&outcomes[2], own, ToolResultContextDecision::Exclude),
+        ];
+        let queue = recent_result_queue(
+            &outcomes,
+            &decisions,
+            ToolProviderId::new(7),
+            own,
+            |outcome| {
+                Ok(Some(if outcome.call_id.get() == 4 {
+                    other
+                } else {
+                    own
+                }))
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            queue
+                .iter()
+                .map(|item| item.outcome.call_id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(queue[0].stage, ResultReviewStage::ExcludedByDefault);
+        assert_eq!(queue[1].stage, ResultReviewStage::Admitted);
+        assert_eq!(queue[2].stage, ResultReviewStage::ExplicitlyExcluded);
+        assert!(queue[0].stage.may_admit_from_preview(false));
+        assert!(!queue[1].stage.may_admit());
+        assert!(!queue[2].stage.may_exclude());
+    }
+
+    #[test]
+    fn queue_keeps_newest_first_within_each_review_stage() {
+        let own = LocalConversationId::new();
+        let outcomes = vec![
+            sample_outcome(1, 7, 10),
+            sample_outcome(2, 7, 12),
+            sample_outcome(3, 7, 11),
+        ];
+        let queue = recent_result_queue(
+            &outcomes,
+            &[],
+            ToolProviderId::new(7),
+            own,
+            |_| Ok(Some(own)),
+        )
+        .unwrap();
+        assert_eq!(
+            queue
+                .iter()
+                .map(|item| item.outcome.call_id.get())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+    }
+
+    #[test]
+    fn queue_limits_provider_window_before_cross_conversation_filtering() {
+        let own = LocalConversationId::new();
+        let outcomes = (1..=RECENT_RESULT_CANDIDATES + 3)
+            .map(|number| sample_outcome(number as u64, 7, number as u64))
+            .collect::<Vec<_>>();
+        let queue = recent_result_queue(
+            &outcomes,
+            &[],
+            ToolProviderId::new(7),
+            own,
+            |_| Ok(Some(own)),
+        )
+        .unwrap();
+        assert_eq!(queue.len(), RECENT_RESULT_CANDIDATES);
+        assert_eq!(queue[0].outcome.observed_sequence, (RECENT_RESULT_CANDIDATES + 3) as u64);
+        assert!(queue.iter().all(|entry| entry.outcome.observed_sequence >= 4));
+    }
+
+    #[test]
+    fn corrupt_or_duplicate_decision_blocks_entire_queue() {
+        let own = LocalConversationId::new();
+        let outcome = sample_outcome(1, 7, 10);
+        let good = sample_decision(&outcome, own, ToolResultContextDecision::Admit);
+        let mut wrong = good;
+        wrong.route_id = chatarium_core::routing::RouteId::new(999);
+        let outcomes = vec![outcome];
+        assert!(recent_result_queue(
+            &outcomes,
+            &[wrong],
+            ToolProviderId::new(7),
+            own,
+            |_| Ok(Some(own)),
+        )
+        .is_err());
+        assert!(recent_result_queue(
+            &outcomes,
+            &[good, good],
+            ToolProviderId::new(7),
+            own,
+            |_| Ok(Some(own)),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn queue_replay_failure_and_oversized_results_fail_closed() {
+        let own = LocalConversationId::new();
+        let mut oversized = sample_outcome(2, 7, 11);
+        oversized.text = "x".repeat(MAX_CONTEXT_TOOL_RESULT_BYTES + 1);
+        let outcomes = vec![sample_outcome(1, 7, 10), oversized];
+        let queue = recent_result_queue(
+            &outcomes,
+            &[],
+            ToolProviderId::new(7),
+            own,
+            |_| Ok(Some(own)),
+        )
+        .unwrap();
+        assert_eq!(queue[1].stage, ResultReviewStage::TooLargeToAdmit);
+        assert!(!queue[1].stage.may_admit());
+        assert!(recent_result_queue(
+            &outcomes,
+            &[],
+            ToolProviderId::new(7),
+            own,
+            |outcome| {
+                if outcome.call_id.get() == 1 {
+                    Err("owner replay failed".to_owned())
+                } else {
+                    Ok(Some(own))
+                }
+            },
+        )
+        .is_err());
     }
 
     #[test]
