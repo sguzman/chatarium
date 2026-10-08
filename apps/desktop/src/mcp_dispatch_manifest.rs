@@ -106,15 +106,35 @@ pub fn capture(
             }
         }
     }
-    let inventory_included = plan
-        .inventory
+    // Verify source-level correspondence, not just an aggregate included
+    // count. Every tool result named by the composer must match the frozen
+    // admission's exact identity, including excluded-by-policy entries.
+    let mut inventory_decisions = BTreeMap::new();
+    for item in &plan.inventory {
+        if let Some(evidence) = tool_evidence(&item.source) {
+            if eligible.get(&evidence.call_id) != Some(&evidence) {
+                return Err(format!(
+                    "composed tool inventory references non-eligible call {}",
+                    evidence.call_id
+                ));
+            }
+            if inventory_decisions
+                .insert(evidence.call_id, item.decision)
+                .is_some()
+            {
+                return Err(format!(
+                    "composed tool inventory repeats call {}",
+                    evidence.call_id
+                ));
+            }
+        }
+    }
+    let inventory_included = inventory_decisions
         .iter()
-        .filter(|item| {
-            item.decision == InclusionDecision::Included
-                && matches!(item.source, ContextSource::ToolResult { .. })
-        })
-        .count();
-    if inventory_included != included.len() {
+        .filter(|(_, decision)| **decision == InclusionDecision::Included)
+        .map(|(call_id, _)| *call_id)
+        .collect::<BTreeSet<_>>();
+    if inventory_included != included {
         return Err("composed tool-result inventory differs from outgoing messages".to_owned());
     }
 
@@ -140,6 +160,12 @@ pub fn capture(
                 "admitted_sequence": item.admitted_sequence,
                 "outcome_kind": item.outcome_kind,
                 "disposition": if included.contains(&item.call_id) { "included" } else { "omitted" },
+                "composition_reason": match inventory_decisions.get(&item.call_id) {
+                    Some(InclusionDecision::Included) => "included",
+                    Some(InclusionDecision::ExcludedByPolicy) => "excluded_by_policy",
+                    Some(InclusionDecision::OmittedEmpty) => "omitted_empty",
+                    None => "not_selected_for_dispatch",
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -250,6 +276,37 @@ impl DispatchTransportTrace {
     }
 }
 
+/// Optional per-result composition reason. Older v1 manifests carry only
+/// included/omitted and are never assigned a guessed historical reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCompositionReason {
+    Included,
+    ExcludedByPolicy,
+    OmittedEmpty,
+    NotSelectedForDispatch,
+}
+
+impl ToolCompositionReason {
+    pub const fn stable_name(self) -> &'static str {
+        match self {
+            Self::Included => "included",
+            Self::ExcludedByPolicy => "excluded_by_policy",
+            Self::OmittedEmpty => "omitted_empty",
+            Self::NotSelectedForDispatch => "not_selected_for_dispatch",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "included" => Some(Self::Included),
+            "excluded_by_policy" => Some(Self::ExcludedByPolicy),
+            "omitted_empty" => Some(Self::OmittedEmpty),
+            "not_selected_for_dispatch" => Some(Self::NotSelectedForDispatch),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedToolEvidence {
     pub call_id: u64,
@@ -260,6 +317,7 @@ pub struct ListedToolEvidence {
     pub admitted_sequence: u64,
     pub outcome_kind: String,
     pub included: bool,
+    pub composition_reason: Option<ToolCompositionReason>,
 }
 
 #[derive(Debug, Clone)]
@@ -394,6 +452,17 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         if disposition == "included" {
             listed_included += 1;
         }
+        let composition_reason = match item.get("composition_reason") {
+            None => None,
+            Some(Value::String(value)) => {
+                let parsed = ToolCompositionReason::parse(value).ok_or_else(error)?;
+                if (disposition == "included") != (parsed == ToolCompositionReason::Included) {
+                    return Err(error());
+                }
+                Some(parsed)
+            }
+            _ => return Err(error()),
+        };
         result_rows.push(ListedToolEvidence {
             call_id,
             route_id,
@@ -403,6 +472,7 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
             admitted_sequence: admission_seq,
             outcome_kind: kind.to_owned(),
             included: disposition == "included",
+            composition_reason,
         });
     }
     if listed_included > included_total
@@ -637,6 +707,7 @@ pub fn portable_audit_json(item: &RecordedDispatchManifest) -> Value {
                 "admitted_sequence": row.admitted_sequence,
                 "outcome_kind": row.outcome_kind,
                 "disposition": if row.included { "included" } else { "omitted" },
+                "composition_reason": row.composition_reason.map(ToolCompositionReason::stable_name),
             })).collect::<Vec<_>>(),
         },
     })
@@ -785,6 +856,10 @@ pub fn reverse_tool_provenance_json(report: &ToolProvenanceReport<'_>) -> Value 
                     ToolProvenanceDisposition::UnknownBecauseManifestTruncated => "unknown_truncated",
                 },
                 "remote_outcome_observation": entry.dispatch.transport.status(),
+                "composition_reason": entry.dispatch.listed.iter()
+                    .find(|row| row.call_id == report.call_id)
+                    .and_then(|row| row.composition_reason)
+                    .map(ToolCompositionReason::stable_name),
             })
         }).collect::<Vec<_>>(),
         "limits": {
@@ -962,6 +1037,15 @@ fn render_reverse_tool_provenance(
                         "Transport status: {}",
                         entry.dispatch.transport.status()
                     ));
+                    if let Some(reason) = entry.dispatch.listed.iter()
+                        .find(|evidence| evidence.call_id == report.call_id)
+                        .and_then(|evidence| evidence.composition_reason)
+                    {
+                        ui.label(format!(
+                            "Composition reason: {}",
+                            reason.stable_name(),
+                        ));
+                    }
                     if entry.disposition == ToolProvenanceDisposition::UnknownBecauseManifestTruncated {
                         ui.label("No per-call determination is possible from this truncated manifest. Check other evidence before drawing conclusions.");
                     }
@@ -1141,15 +1225,19 @@ pub fn render_dispatches(
                         ));
                         for evidence in &item.listed {
                             let disposition = if evidence.included { "included" } else { "omitted" };
+                            let reason = evidence.composition_reason
+                                .map(ToolCompositionReason::stable_name)
+                                .unwrap_or("not recorded in legacy manifest");
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "call {} · provider {} · session {} · route {} · {} · {} · outcome #{} · admitted #{}",
+                                    "call {} · provider {} · session {} · route {} · {} · {} ({}) · outcome #{} · admitted #{}",
                                     evidence.call_id,
                                     evidence.provider_id,
                                     evidence.source_session_id,
                                     evidence.route_id,
                                     evidence.outcome_kind,
                                     disposition,
+                                    reason,
                                     evidence.outcome_sequence,
                                     evidence.admitted_sequence,
                                 ))
@@ -1268,6 +1356,11 @@ mod tests {
             admitted_sequence,
             outcome_kind: "result".to_owned(),
             included,
+            composition_reason: Some(if included {
+                ToolCompositionReason::Included
+            } else {
+                ToolCompositionReason::NotSelectedForDispatch
+            }),
         }
     }
 
@@ -1430,6 +1523,164 @@ mod tests {
         assert_eq!(manifest["included_tool_results"], 0);
         assert_eq!(manifest["omitted_tool_results"], 1);
         assert_eq!(manifest["listed_tool_results"][0]["disposition"], "omitted");
+    }
+
+    #[test]
+    fn capture_explains_included_and_non_selected_tool_results() {
+        let owner = LocalConversationId::new();
+        let source = admitted_source(17);
+        let included = capture(owner, "authored", &[source.clone()], &plan_with_tool(&source))
+            .unwrap();
+        assert_eq!(included["listed_tool_results"][0]["composition_reason"], "included");
+        let not_selected = capture(
+            owner,
+            "controller_coordination",
+            &[source],
+            &ContextPlan::compose(ContextPolicy::dispatch(), "", "", []),
+        )
+        .unwrap();
+        assert_eq!(
+            not_selected["listed_tool_results"][0]["composition_reason"],
+            "not_selected_for_dispatch"
+        );
+    }
+
+    #[test]
+    fn capture_reports_policy_exclusion_without_inventing_inclusion() {
+        let owner = LocalConversationId::new();
+        let source = admitted_source(7);
+        let ContextSource::ToolResult {
+            call_id,
+            route_id,
+            provider_id,
+            source_session_id,
+            outcome_sequence,
+            admitted_sequence,
+            outcome_kind,
+        } = &source
+        else {
+            panic!("expected tool source");
+        };
+        let mut policy = ContextPolicy::dispatch();
+        policy.include_tool_results = false;
+        let plan = ContextPlan::compose(
+            policy,
+            "",
+            "",
+            [TranscriptMessage::tool_result(
+                "tool output remains excluded",
+                *call_id,
+                *route_id,
+                *provider_id,
+                *source_session_id,
+                *outcome_sequence,
+                *admitted_sequence,
+                outcome_kind,
+            )],
+        );
+        let manifest = capture(owner, "authored", &[source], &plan).unwrap();
+        assert_eq!(manifest["included_tool_results"], 0);
+        assert_eq!(manifest["listed_tool_results"][0]["disposition"], "omitted");
+        assert_eq!(
+            manifest["listed_tool_results"][0]["composition_reason"],
+            "excluded_by_policy"
+        );
+        assert!(!manifest.to_string().contains("tool output remains excluded"));
+    }
+
+    #[test]
+    fn exclusion_from_inventory_without_frozen_admission_fails_closed() {
+        let owner = LocalConversationId::new();
+        let source = admitted_source(7);
+        let ContextSource::ToolResult {
+            call_id,
+            route_id,
+            provider_id,
+            source_session_id,
+            outcome_sequence,
+            admitted_sequence,
+            outcome_kind,
+        } = &source
+        else {
+            panic!("expected tool source");
+        };
+        let mut policy = ContextPolicy::dispatch();
+        policy.include_tool_results = false;
+        let plan = ContextPlan::compose(
+            policy,
+            "",
+            "",
+            [TranscriptMessage::tool_result(
+                "unapproved tool result",
+                *call_id,
+                *route_id,
+                *provider_id,
+                *source_session_id,
+                *outcome_sequence,
+                *admitted_sequence,
+                outcome_kind,
+            )],
+        );
+        assert!(capture(owner, "authored", &[], &plan).is_err());
+    }
+
+    #[test]
+    fn older_manifest_without_composition_reason_remains_readable() {
+        let owner = LocalConversationId::new();
+        let source = admitted_source(7);
+        let mut manifest = capture(owner, "authored", &[source.clone()], &plan_with_tool(&source))
+            .unwrap();
+        manifest["listed_tool_results"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("composition_reason");
+        let payload = attach_to_dispatch_payload(
+            json!({
+                "schema":"chatarium-responses-turn-observation",
+                "version":1,
+                "details":{"local_turn_id":"old-turn","request_id":"old-turn"}
+            }).to_string(),
+            manifest,
+        )
+        .unwrap();
+        let event = EventEnvelope {
+            sequence: 20,
+            at_unix_ms: 0,
+            scope: Some("local-turn:old-turn".to_owned()),
+            kind: EventKind::DispatchAttempted,
+            payload,
+        };
+        let parsed = parse_dispatch(&event).unwrap().unwrap();
+        assert_eq!(parsed.listed[0].composition_reason, None);
+        assert!(parsed.listed[0].included);
+    }
+
+    #[test]
+    fn contradictory_or_unknown_composition_reason_blocks_manifest_replay() {
+        let owner = LocalConversationId::new();
+        let source = admitted_source(7);
+        for reason in ["not_selected_for_dispatch", "nonsense", "excluded_by_policy"] {
+            let mut manifest =
+                capture(owner, "authored", &[source.clone()], &plan_with_tool(&source)).unwrap();
+            manifest["listed_tool_results"][0]["composition_reason"] = json!(reason);
+            let payload = attach_to_dispatch_payload(
+                json!({
+                    "schema":"chatarium-responses-turn-observation",
+                    "version":1,
+                    "details":{"local_turn_id":"turn-1","request_id":"turn-1"}
+                }).to_string(),
+                manifest,
+            )
+            .unwrap();
+            let event = EventEnvelope {
+                sequence: 30,
+                at_unix_ms: 0,
+                scope: Some("local-turn:turn-1".to_owned()),
+                kind: EventKind::DispatchAttempted,
+                payload,
+            };
+            assert!(parse_dispatch(&event).is_err());
+        }
     }
 
     #[test]
@@ -1769,6 +2020,7 @@ mod tests {
             admitted_sequence: 60,
             outcome_kind: "result".to_owned(),
             included: true,
+            composition_reason: Some(ToolCompositionReason::Included),
         });
         row.eligible_total = 1;
         row.included_total = 1;

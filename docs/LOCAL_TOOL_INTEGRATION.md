@@ -753,6 +753,22 @@ message text. This is a reconstruction of **manifested local prepared
 requests only**; pre-feature attempts, remote receipt and actual model
 attention cannot be established by this lookup.
 
+### Omission reasons from the exact composer
+
+New per-request evidence manifests retain a reason beside each listed
+result: `included`, `excluded_by_policy`, `omitted_empty`, or
+`not_selected_for_dispatch`. The latter is particularly important for
+specialized controller/worker requests that intentionally do not import
+ordinary admitted MCP results. These are recorded from the precise
+outgoing Context Composer inventory; source identity and decision must
+match the frozen eligible set before the dispatch is journaled.
+
+Existing v1 manifests lacking a reason remain readable with an explicit
+unrecorded reason. Unknown or contradictory reason codes are rejected.
+The forward and reverse audit inspectors and their JSON exports present
+only the recorded reason, not an invented explanation from today's
+conversation context.
+
 ### Transport correlation and complete history
 
 The outgoing-context inspector now uses a single journal pass rather than

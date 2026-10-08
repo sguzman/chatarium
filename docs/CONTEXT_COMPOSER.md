@@ -207,6 +207,25 @@ manifest feature remain unknown rather than inferred. An INCLUDED
 disposition is evidence about the locally composed request, not proof of
 delivery, model attention or a successful remote answer.
 
+### Why an admitted MCP result was omitted
+
+New manifests distinguish not only **included** versus **omitted** but the
+composition reason for every retained call identity. An omitted result may
+be **excluded by the request's explicit context policy**, **omitted as
+empty** (reserved for compatible composer sources), or **not selected for
+that dispatch composition** (for example, an independently scoped
+controller/worker request). Included results are marked **included**.
+This reason comes from the same typed `ContextPlan` inventory that builds
+the actual outgoing input; the manifest validates exact source identities
+and inclusion decisions rather than trusting matching aggregate counts.
+
+Reasons are optional additions to the existing v1 manifest record: older
+valid manifests remain readable and are labeled as having **no recorded
+reason**, never assigned a retrospective explanation. Contradictory or
+unknown new reason codes fail closed on replay. Per-result reasons appear
+in the outgoing-request audit, reverse-provenance detail and content-free
+JSON exports. No raw evidence or tool execution authority is added.
+
 ### Correlated transport history and navigation
 
 The manifest history inspector replays journal events **once in chronological
