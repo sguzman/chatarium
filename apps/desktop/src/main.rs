@@ -13,6 +13,7 @@ mod local_tool_adapter;
 mod local_tool_provider_control;
 #[cfg(test)]
 mod mcp_async_tests;
+mod mcp_call_review;
 mod mcp_output_audit;
 mod mcp_provider_workflow;
 mod offline_reader;
@@ -9179,6 +9180,131 @@ impl eframe::App for ChatariumApp {
                                                         None
                                                     }
                                                 };
+                                            // Focus is a read-only projection of durable records.
+                                            // Execution is still guarded independently by the
+                                            // original approval, activation and sandbox gates.
+                                            if let (Some(routes), Some(outcomes)) =
+                                                (&routes, &outcomes)
+                                            {
+                                                let next_review = calls.iter().rev().filter(
+                                                    |call| self.tool_selected_provider == Some(call.provider_id),
+                                                ).find_map(|call| {
+                                                    let route_id = call.route_id?;
+                                                    let route = routes.iter().find(|route| {
+                                                        route.request.id == route_id
+                                                    })?;
+                                                    let observed = outcomes.iter().any(|outcome| {
+                                                        outcome.call_id == call.call_id
+                                                    });
+                                                    let stage = mcp_call_review::classify(
+                                                        call.route_bound_sequence.is_some(),
+                                                        route.latest_user_decision,
+                                                        route.dispatch_sequence.is_some(),
+                                                        observed,
+                                                    );
+                                                    stage.actionable().then_some((call, route, stage))
+                                                });
+                                                ui.group(|ui| {
+                                                    ui.label(egui::RichText::new(
+                                                        "NEXT MANUAL MCP CALL REVIEW"
+                                                    ).strong());
+                                                    if let Some((call, route, stage)) = next_review {
+                                                        ui.label(format!(
+                                                            "Call {} · route {} · {} · {}",
+                                                            call.call_id.get(),
+                                                            route.request.id.get(),
+                                                            call.operation.as_str(),
+                                                            stage.label(),
+                                                        ));
+                                                        ui.label(format!(
+                                                            "Provider {} · source session {} · recorded #{}",
+                                                            call.provider_id.get(),
+                                                            call.source_session_id.get(),
+                                                            call.recorded_sequence,
+                                                        ));
+                                                        ui.collapsing(
+                                                            format!("Inspect exact recorded intent · {} bytes", call.arguments_text.len()),
+                                                            |ui| {
+                                                                ui.label(egui::RichText::new(call.arguments_text.as_str()).monospace());
+                                                            },
+                                                        );
+                                                        match stage {
+                                                            mcp_call_review::CallReviewStage::AwaitingDecision => {
+                                                                ui.label("Review the immutable intent. Allow does not run the tool; execution needs a separate deliberate action.");
+                                                                let enabled = !self.tool_command_pending
+                                                                    && self.persist_tx.is_some()
+                                                                    && !route.gate_state.is_dispatched();
+                                                                ui.horizontal(|ui| {
+                                                                    if ui.add_enabled(
+                                                                        enabled, egui::Button::new("Allow this route")
+                                                                    ).clicked() {
+                                                                        self.decide_tool_call_route(
+                                                                            route.request.id, RouteUserDecision::Allow
+                                                                        );
+                                                                    }
+                                                                    if ui.add_enabled(
+                                                                        enabled, egui::Button::new("Deny this route")
+                                                                    ).clicked() {
+                                                                        self.decide_tool_call_route(
+                                                                            route.request.id, RouteUserDecision::Deny
+                                                                        );
+                                                                    }
+                                                                });
+                                                            }
+                                                            mcp_call_review::CallReviewStage::ApprovedForSeparateReview => {
+                                                                ui.label("User Allow is recorded. Inspect the exact wire request before a separate one-shot Run.");
+                                                                ui.collapsing("Review approved wire request and choose Run", |ui| {
+                                                                    match preview_activated_stdio_tool_invocation(
+                                                                        &self.events, call.call_id
+                                                                    ) {
+                                                                        Ok(preview) => {
+                                                                            ui.label(format!(
+                                                                                "Activation #{} · route {}",
+                                                                                preview.activation_sequence,
+                                                                                preview.invocation.route_id.get(),
+                                                                            ));
+                                                                            ui.label(egui::RichText::new(
+                                                                                preview.invocation.request_frame.as_str()
+                                                                            ).monospace());
+                                                                            match local_stdio_runner::plan_confined_stdio_launch(
+                                                                                preview.invocation.executable.as_str(),
+                                                                                &preview.invocation.argv,
+                                                                            ) {
+                                                                                Ok(_) => {
+                                                                                    ui.label("Restricted network-isolated sandbox. Run permanently consumes this approved route; no automatic retries.");
+                                                                                    if ui.add_enabled(
+                                                                                        cfg!(target_os = "linux")
+                                                                                            && !self.tool_command_pending
+                                                                                            && self.persist_tx.is_some(),
+                                                                                        egui::Button::new("Run approved MCP call · one shot"),
+                                                                                    ).clicked() {
+                                                                                        self.execute_approved_stdio_tool(call.call_id);
+                                                                                    }
+                                                                                }
+                                                                                Err(error) => {
+                                                                                    ui.label(format!("Sandbox plan blocked: {error}"));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        Err(error) => {
+                                                                            ui.label(format!("Run not eligible: {error}"));
+                                                                        }
+                                                                    }
+                                                                });
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                    } else {
+                                                        ui.label("No unconsumed calls await review for the selected provider.");
+                                                    }
+                                                    ui.label(egui::RichText::new(
+                                                        "Read-only focus; only explicit, separate Allow and Run actions can change durable state."
+                                                    ).small());
+                                                });
+                                            } else {
+                                                ui.label("Call review focus unavailable: route or outcome audit blocked.");
+                                            }
+
                                             egui::ScrollArea::vertical()
                                                 .id_salt("tool-call-audit")
                                                 .max_height(240.0)
