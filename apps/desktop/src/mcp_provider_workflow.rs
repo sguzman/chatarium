@@ -37,12 +37,24 @@ impl ProviderWorkflowStep {
 
     pub const fn instruction(self) -> &'static str {
         match self {
-            Self::Builtin => "Builtin hello uses its own explicitly approved path; external stdio configuration does not apply.",
-            Self::BindEndpoint => "Expand Provider registry and select Bind routing endpoint for this provider. No tool is executed.",
-            Self::ConfigureTransport => "Expand External MCP stdio, enter a trusted canonical /usr/bin executable and the exact argv and allowed operations, then save the immutable configuration. No process starts.",
-            Self::Activate => "Expand External MCP stdio and select Activate. This checks the executable; individual tool calls still need separate approval and Run.",
-            Self::AddressSource => "Select or initialize a local conversation with an active routing endpoint before recording a tool call.",
-            Self::ReadyForManualCall => "Enter an allowed operation and review its arguments, then Record call, explicitly Allow the route, review the activation-aware wire request, and separately Run once. None of these steps is automatic.",
+            Self::Builtin => {
+                "Builtin hello uses its own explicitly approved path; external stdio configuration does not apply."
+            }
+            Self::BindEndpoint => {
+                "Expand Provider registry and select Bind routing endpoint for this provider. No tool is executed."
+            }
+            Self::ConfigureTransport => {
+                "Expand External MCP stdio, enter a trusted canonical /usr/bin executable and the exact argv and allowed operations, then save the immutable configuration. No process starts."
+            }
+            Self::Activate => {
+                "Expand External MCP stdio and select Activate. This checks the executable; individual tool calls still need separate approval and Run."
+            }
+            Self::AddressSource => {
+                "Select or initialize a local conversation with an active routing endpoint before recording a tool call."
+            }
+            Self::ReadyForManualCall => {
+                "Enter an allowed operation and review its arguments, then Record call, explicitly Allow the route, review the activation-aware wire request, and separately Run once. None of these steps is automatic."
+            }
         }
     }
 }
