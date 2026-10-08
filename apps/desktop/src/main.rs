@@ -13374,7 +13374,12 @@ fn append_builtin_hello_checked(
     let call = replay_tool_call_audit(store.events())?
         .into_iter()
         .find(|call| call.route_id == Some(route_id))
-        .ok_or_else(|| format!("route {} is not bound to a durable tool call", route_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "route {} is not bound to a durable tool call",
+                route_id.get()
+            )
+        })?;
     let provider = replay_tool_provider_audit(store.events())?
         .into_iter()
         .find(|provider| provider.provider_id == call.provider_id)
