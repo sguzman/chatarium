@@ -175,6 +175,28 @@ network, or inference context permissions. In particular, a configured
 operation allowlist is necessary but never sufficient to consume a
 `DispatchPermit`.
 
+### Non-executing stdio call preflight
+
+`crates/store/src/tool_stdio_preflight.rs` now provides a read-only,
+fail-closed `preview_stdio_tool_invocation` projection. It joins the current
+authoritative journal across the immutable tool call, `ToolCall` route, current
+local-conversation session leaf, provider endpoint binding, and immutable stdio
+configuration.
+
+A preview requires the exact route to remain undispatched and explicitly
+**Allowed by the user** under `RequireApproval`. It rejects stale/retired
+source sessions, endpoint mismatches, unconfigured providers, operations outside
+the configured allowlist, invalid JSON-object arguments, and mismatched legacy
+XML-like envelopes. It produces exactly one bounded MCP 2026
+`tools/call` JSON-RPC frame correlated to `ToolCallId` as a numeric request
+ID; optional legacy envelope IDs are not mistaken for local identities.
+
+The preview does **not** record an event, consume a permit, activate an
+executable, launch a process, or interpret a result. A preview may become stale
+immediately; it must never be treated as a cached authorization token. A future
+runner must rerun these checks at execution time and separately enforce
+explicit provider activation and the one-shot dispatch boundary.
+
 ### Next transport implementation
 
 The first real transport should remain Linux-native and cost-free. Two
