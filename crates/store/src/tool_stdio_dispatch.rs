@@ -6,16 +6,18 @@
 
 use crate::routing_audit::{RouteUserDecision, record_route_dispatched, replay_routing_audit};
 use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
+use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_stdio_executable_inspection::inspect_stdio_executable;
 use crate::tool_stdio_preflight::{
     ActivatedStdioToolInvocationPreview, preview_activated_stdio_tool_invocation,
 };
 use crate::tool_transport_config_audit::replay_tool_transport_config_audit;
-use crate::EventStore;
+use crate::{EventEnvelope, EventStore};
 use chatarium_core::routing::{
     DecisionAuthority, RouteGate, RouteGateState, RoutePolicy,
 };
-use chatarium_core::tool::ToolCallId;
+use chatarium_core::tool::{ToolCallId, ToolProviderId};
+use chatarium_core::routing::RouteId;
 
 /// Move-only proof that the one-shot route authority was durably consumed.
 /// This is not proof of a launched process, a completed operation, or a
@@ -105,6 +107,77 @@ pub fn reserve_activated_stdio_tool_dispatch(
         invocation,
         dispatch_sequence: next_sequence,
     })
+}
+
+/// Recovery-view item: an external provider's route was durably dispatched,
+/// but no correlated terminal observation exists. This is epistemically
+/// unresolved, *not* failure or confirmation that any process actually ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnresolvedExternalToolDispatch {
+    pub call_id: ToolCallId,
+    pub route_id: RouteId,
+    pub provider_id: ToolProviderId,
+    pub dispatch_sequence: u64,
+}
+
+/// Project unresolved external dispatches without manufacturing tool outcomes.
+///
+/// Only configured external providers are included; builtin hello dispatches
+/// have a different adapter. A historical dispatch is validated against the
+/// journal prefix *before* its permit was consumed, so a later deactivation,
+/// chat-session rollover, or other change cannot rewrite historical authority.
+pub fn replay_unresolved_external_tool_dispatches(
+    events: &[EventEnvelope],
+) -> Result<Vec<UnresolvedExternalToolDispatch>, String> {
+    let calls = replay_tool_call_audit(events)?;
+    let routes = replay_routing_audit(events)?;
+    let configured = replay_tool_transport_config_audit(events)?;
+    let outcomes = replay_tool_call_outcome_audit(events)?;
+    let mut unresolved = Vec::new();
+
+    for call in calls {
+        let Some(config) = configured.iter().find(|record| {
+            record.provider_id == call.provider_id
+                && record.configured_sequence < call.recorded_sequence
+        }) else {
+            continue;
+        };
+        let Some(route_id) = call.route_id else {
+            continue;
+        };
+        let route = routes.iter()
+            .find(|record| record.request.id == route_id)
+            .ok_or_else(|| format!("external tool route {} disappeared", route_id.get()))?;
+        let Some(dispatch_sequence) = route.dispatch_sequence else {
+            continue;
+        };
+        if outcomes.iter().any(|record| {
+            record.call_id == call.call_id || record.route_id == route_id
+        }) {
+            continue;
+        }
+        let prefix = events.iter()
+            .filter(|event| event.sequence < dispatch_sequence)
+            .cloned()
+            .collect::<Vec<_>>();
+        let at_dispatch = preview_activated_stdio_tool_invocation(&prefix, call.call_id)?;
+        if at_dispatch.invocation.route_id != route_id
+            || at_dispatch.invocation.configured_sequence != config.configured_sequence
+        {
+            return Err(format!(
+                "external tool route {} dispatch lacks matching historical approval",
+                route_id.get()
+            ));
+        }
+        unresolved.push(UnresolvedExternalToolDispatch {
+            call_id: call.call_id,
+            route_id,
+            provider_id: call.provider_id,
+            dispatch_sequence,
+        });
+    }
+    unresolved.sort_by_key(|record| record.dispatch_sequence);
+    Ok(unresolved)
 }
 
 #[cfg(test)]
@@ -213,6 +286,42 @@ mod tests {
         let snapshot = store.events().to_vec();
         assert!(reserve_activated_stdio_tool_dispatch(&mut store, CALL).is_err());
         assert_eq!(store.events(), snapshot.as_slice());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unresolved_dispatch_survives_replay_without_invented_terminal_outcome() {
+        let mut store = fixture("/usr/bin/true", true);
+        let reservation = reserve_activated_stdio_tool_dispatch(&mut store, CALL).unwrap();
+        let projected = replay_unresolved_external_tool_dispatches(store.events()).unwrap();
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].call_id, CALL);
+        assert_eq!(projected[0].route_id, ROUTE);
+        assert_eq!(projected[0].provider_id, PROVIDER);
+        assert_eq!(projected[0].dispatch_sequence, reservation.dispatch_sequence());
+        // Replaying the same journal cannot reinterpret the missing result.
+        assert_eq!(projected, replay_unresolved_external_tool_dispatches(store.events()).unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn terminal_observation_closes_unresolved_projection_once() {
+        use crate::tool_outcome_audit::{append_tool_call_outcome_checked, ToolCallOutcomeKind};
+        let mut store = fixture("/usr/bin/true", true);
+        reserve_activated_stdio_tool_dispatch(&mut store, CALL).unwrap();
+        assert_eq!(replay_unresolved_external_tool_dispatches(store.events()).unwrap().len(), 1);
+        append_tool_call_outcome_checked(
+            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result,
+            "{\"resultType\":\"complete\",\"content\":[]}",
+        ).unwrap();
+        assert!(replay_unresolved_external_tool_dispatches(store.events()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unapproved_external_calls_are_not_misreported_as_dispatched() {
+        let store = fixture("/usr/bin/true", false);
+        assert!(replay_unresolved_external_tool_dispatches(store.events())
+            .unwrap().is_empty());
     }
 
     #[test]
