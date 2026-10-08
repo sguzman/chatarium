@@ -296,8 +296,8 @@ fn run_one_shot(
     if !frame.ends_with('\n') || frame.len() > MAX_MCP_FRAME_BYTES {
         return Err("refused an unbounded or malformed MCP request frame".to_owned());
     }
-    let request: serde_json::Value = serde_json::from_str(frame)
-        .map_err(|_| "refused malformed MCP request JSON".to_owned())?;
+    let request: serde_json::Value =
+        serde_json::from_str(frame).map_err(|_| "refused malformed MCP request JSON".to_owned())?;
     if request["id"].as_u64() != Some(request_id) {
         return Err("MCP request does not match approved call identity".to_owned());
     }
