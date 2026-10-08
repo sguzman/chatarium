@@ -327,6 +327,9 @@ enum PersistCommand {
     ExecuteApprovedStdioTool {
         call_id: ToolCallId,
     },
+    RecordExternalStdioOutcome {
+        observation: local_stdio_runner::ConfinedStdioObservation,
+    },
     DecideToolResultContext {
         call_id: ToolCallId,
         conversation_id: LocalConversationId,
@@ -1168,10 +1171,11 @@ impl ChatariumApp {
                 let active_behavior_profile =
                     behavior_profiles.for_conversation(local_conversation_id);
                 let worker_data_dir = data_dir.clone();
+                let completion_tx = persist_tx.clone();
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
                     .spawn(move || {
-                        persistence_worker(store, worker_data_dir, persist_rx, notice_tx)
+                        persistence_worker(store, worker_data_dir, persist_rx, completion_tx, notice_tx)
                     });
 
                 match worker {
@@ -16526,6 +16530,7 @@ fn persistence_worker(
     mut store: JsonlEventStore,
     data_dir: PathBuf,
     commands: Receiver<PersistCommand>,
+    completion_tx: Sender<PersistCommand>,
     notices: Sender<PersistNotice>,
 ) {
     diagnostics::info(
@@ -16855,7 +16860,7 @@ fn persistence_worker(
                 }
             }
             PersistCommand::ExecuteApprovedStdioTool { call_id } => {
-                // Refuse unavailable confinement BEFORE consuming an irreversible route.
+                // Reserve and journal the irreversible dispatch before process effects.
                 let prepared = preview_activated_stdio_tool_invocation(store.events(), call_id)
                     .and_then(|preview| {
                         local_stdio_runner::preflight_confined_stdio_launch(
@@ -16866,36 +16871,82 @@ fn persistence_worker(
                     .and_then(|()| reserve_activated_stdio_tool_dispatch(&mut store, call_id));
                 match prepared {
                     Ok(reservation) => {
-                        // Durable dispatch precedes all process effects.
                         if let Some(event) = store.events().last().cloned() {
                             let _ = notices
                                 .send(PersistNotice::StdioToolDispatchReserved { call_id, event });
                         }
-                        match local_stdio_runner::execute_reserved_stdio_tool_call(
-                            &mut store,
-                            reservation,
-                        ) {
-                            Ok(event) => {
-                                let _ = notices.send(PersistNotice::StdioToolDispatchFinished {
-                                    call_id,
-                                    event,
-                                });
-                            }
-                            Err(error) => {
-                                // The consumed route remains UNRESOLVED; never retry.
-                                let _ = notices.send(PersistNotice::Failed {
-                                    operation: "tool isolated stdio execution (unresolved)",
-                                    revision: None,
-                                    request_id: None,
-                                    turn_id: None,
-                                    error,
-                                });
-                            }
+                        let completion_tx = completion_tx.clone();
+                        let failure_notices = notices.clone();
+                        let launched = thread::Builder::new()
+                            .name(format!("chatarium-mcp-{}", call_id.get()))
+                            .spawn(move || {
+                                let observed = std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(|| {
+                                        local_stdio_runner::run_reserved_stdio_tool_call(reservation)
+                                    }),
+                                );
+                                match observed {
+                                    Ok(observation) => {
+                                        // Journal completion stays serialized with other writes.
+                                        let _ = completion_tx.send(
+                                            PersistCommand::RecordExternalStdioOutcome {
+                                                observation,
+                                            },
+                                        );
+                                    }
+                                    Err(_) => {
+                                        // A panic can leave process effects uncertain.
+                                        let _ = failure_notices.send(PersistNotice::Failed {
+                                            operation: "tool isolated stdio runner panicked (unresolved)",
+                                            revision: None,
+                                            request_id: None,
+                                            turn_id: None,
+                                            error: "sandbox worker panicked; dispatch remains unresolved; no automatic retry".to_owned(),
+                                        });
+                                    }
+                                }
+                            });
+                        if let Err(error) = launched {
+                            // Spawn failure after reservation is unresolved, not retryable.
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "tool isolated stdio worker launch (unresolved)",
+                                revision: None,
+                                request_id: None,
+                                turn_id: None,
+                                error: format!("sandbox worker launch failed: {error}; no automatic retry"),
+                            });
                         }
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "tool isolated stdio preflight",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::RecordExternalStdioOutcome { observation } => {
+                let call_id = observation.call_id;
+                match append_tool_call_outcome_checked(
+                    &mut store,
+                    observation.call_id,
+                    observation.route_id,
+                    observation.kind,
+                    observation.text,
+                ) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::StdioToolDispatchFinished {
+                            call_id,
+                            event,
+                        });
+                    }
+                    Err(error) => {
+                        // Unpersisted observations leave their routes unresolved.
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "tool isolated stdio outcome append (unresolved)",
                             revision: None,
                             request_id: None,
                             turn_id: None,
@@ -20193,9 +20244,12 @@ fn run_production_mirror_acceptance() {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
+    let completion_tx = persist_tx.clone();
     let persist_worker = thread::Builder::new()
         .name("chatarium-acceptance-persistence".to_owned())
-        .spawn(move || persistence_worker(store, data_dir, persist_rx, persist_notice_tx));
+        .spawn(move || {
+            persistence_worker(store, data_dir, persist_rx, completion_tx, persist_notice_tx)
+        });
     let Ok(persist_worker) = persist_worker else {
         println!(
             "{}",
@@ -20605,9 +20659,27 @@ mod tests {
                 .len(),
             1,
         );
-        let outcome_event =
-            local_stdio_runner::execute_reserved_stdio_tool_call(&mut store, reserved).unwrap();
+        let observed = local_stdio_runner::run_reserved_stdio_tool_call(reserved);
+        assert_eq!(observed.call_id, call);
+        assert_eq!(observed.route_id, route);
+        // Journal writes can interleave with sandbox work.
+        append_local_memory_artifact_checked(
+            &mut store,
+            LocalMemoryId::new(73),
+            source,
+            "independent write during MCP execution".to_owned(),
+        )
+        .unwrap();
+        let outcome_event = append_tool_call_outcome_checked(
+            &mut store,
+            observed.call_id,
+            observed.route_id,
+            observed.kind,
+            observed.text,
+        )
+        .unwrap();
         assert_eq!(outcome_event.kind, EventKind::ToolCallOutcomeObserved);
+        assert!(outcome_event.sequence > dispatch_sequence + 1);
         let outcome = replay_tool_call_outcome_audit(store.events())
             .unwrap()
             .into_iter()
@@ -23758,8 +23830,9 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel();
         let (notice_tx, notice_rx) = mpsc::channel();
         let worker_data_dir = path.parent().expect("journal parent").to_path_buf();
+        let completion_tx = command_tx.clone();
         let worker = thread::spawn(move || {
-            persistence_worker(store, worker_data_dir, command_rx, notice_tx)
+            persistence_worker(store, worker_data_dir, command_rx, completion_tx, notice_tx)
         });
 
         let message = AuthoredUserMessage::new(
