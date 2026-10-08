@@ -1,6 +1,8 @@
 # Local tool integration
 
-Status: **ACTIVE SUBSTRATE**. No live MCP or local tool execution is enabled.
+Status: **ACTIVE SUBSTRATE**. One side-effect-free builtin `hello` smoke adapter
+is enabled. General MCP, arbitrary local process, filesystem, and network tool
+execution remain disabled.
 
 This is Chatarium's local tool-call control plane, not a second invisible
 function-execution pipeline. The authoritative state is the append-only journal.
@@ -24,8 +26,10 @@ The current Rust and desktop implementation has these separate layers:
    decisions are durable and cannot be inferred from call text.
 4. **One-shot route dispatch authority.** The existing typed
    `RouteGate`/`DispatchPermit` is the only permissible dispatch boundary.
-   The new tool UI is intentionally **inert**: it can prepare, inspect, and
-   decide a route but cannot yet send work to a tool adapter.
+   Tool calls default to inert. The **only** currently enabled execution path
+   is a side-effect-free builtin `hello` proof requiring exact provider name,
+   operation, JSON argument validation, explicit Allow, and a separate user
+   click to dispatch. No other call/provider is executable.
 5. **Terminal adapter-result audit.** `ToolCallOutcomeObserved` is an
    independent exact-text result/error fact. Replay requires the call to be
    correlated to the exact `ToolCall` route and requires that route to have
@@ -45,10 +49,10 @@ oversized results, and blank error bodies. A checked pre-append API validates
 the entire prospective result before mutating the authoritative journal.
 Archive integrity validates all tool/provider/call/outcome journals.
 
-The new tool outcome audit is a *storage contract for future adapters*. No
-desktop action currently pretends to manufacture an adapter observation.
-No tool result is silently entered into ordinary transcript, shared memory,
-or Context Composer.
+The new tool outcome audit is also the storage contract for future adapters.
+The builtin hello adapter produces a real deterministic result after its
+one-shot dispatch; all other providers remain inert. No tool result is
+silently entered into ordinary transcript, shared memory, or Context Composer.
 
 ## Recovered legacy tool-envelope compatibility
 
@@ -102,6 +106,39 @@ explicitly rather than conflating the two identity domains.
 The model-facing request shape, if any, must separately respect the ready
 Local Inference Contract for the active SIWC profile/model. Native capability
 availability is not permission authority to run a tool.
+
+## Builtin hello smoke workflow (Linux-native, no new dependencies)
+
+The small adapter in `apps/desktop/src/local_tool_adapter.rs` reuses the
+original shim's exact `hello` semantics: successful output contains
+`{"message":"hello"}`. It performs **no filesystem, network, process,
+browser, or external MCP actions**.
+
+In the desktop tool area:
+
+1. Manually register a provider named exactly `chatarium.builtin` and bind its
+   routing endpoint. The source conversation also needs a current endpoint.
+2. Select that provider, enter the `hello` operation, and supply `{}` as
+   arguments. Alternatively paste the original `<tool_call name="hello">`
+   envelope and click **Read legacy envelope**; this validates/fills the
+   operation but preserves the exact pasted text without recording a call.
+3. Click **Record call + propose approval route**, inspect the immutable call,
+   and explicitly **Allow** the pending ToolCall route.
+4. Separately click **Run local hello**. The persistence worker revalidates
+   current source/provider addressability, exact provider/operation, arguments,
+   route identity, and explicit user permission before it consumes the typed
+   one-shot dispatch authority.
+5. Inspect the exact terminal `<tool_result>` in **Tool call audit**, with
+   route, dispatch sequence, and outcome sequence.
+
+Any failed pre-dispatch validation leaves the journal unchanged. After durable
+dispatch, a crash before outcome is **unresolved**, not automatically retried.
+Repeated clicks cannot dispatch the same route twice.
+
+This is a deliberate local smoke test of the control plane, not a claim that
+the system hosts arbitrary MCP providers or offers an automatic agent tool
+loop. A separate adapter and execution policy is still required for every
+future nontrivial tool.
 
 ## Next implementation boundary
 
