@@ -372,6 +372,60 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn deactivation_during_host_probe_prevents_dispatch_without_consuming_approval() {
+        let mut store = fixture("/usr/bin/true", true);
+        // Simulate the request's read-only approval check before its
+        // asynchronous Linux namespace readiness probe has completed.
+        assert!(preview_activated_stdio_tool_invocation(store.events(), CALL).is_ok());
+        let configured_sequence = replay_tool_transport_config_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.provider_id == PROVIDER)
+            .unwrap()
+            .configured_sequence;
+        append_tool_provider_activation_decision_checked(
+            &mut store,
+            PROVIDER,
+            configured_sequence,
+            ProviderActivationDecision::Deactivate,
+        )
+        .unwrap();
+
+        // Probe success cannot be treated as cached authority. The
+        // persistence worker must revalidate current activation before
+        // recording any irreversible RouteDispatched.
+        let before = store.events().len();
+        assert!(reserve_activated_stdio_tool_dispatch(&mut store, CALL).is_err());
+        assert_eq!(store.events().len(), before);
+        let route = replay_routing_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.request.id == ROUTE)
+            .unwrap();
+        assert!(route.dispatch_sequence.is_none());
+        assert_eq!(
+            route.gate_state,
+            RouteGateState::Allowed {
+                by: DecisionAuthority::User,
+            },
+        );
+
+        // Re-activation is a NEW authority epoch and cannot silently
+        // resurrect calls recorded before that new activation.
+        append_tool_provider_activation_decision_checked(
+            &mut store,
+            PROVIDER,
+            configured_sequence,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
+        let before = store.events().len();
+        assert!(reserve_activated_stdio_tool_dispatch(&mut store, CALL).is_err());
+        assert_eq!(store.events().len(), before);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn missing_executable_does_not_consume_approval() {
         let mut store = fixture("/chatarium-nonexistent-stdio-path-937242/not-found", true);
         let before = store.events().len();
