@@ -8,6 +8,7 @@ mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_runner;
+mod local_stdio_host_diagnostics;
 mod local_tool_adapter;
 mod local_tool_provider_control;
 #[cfg(test)]
@@ -970,6 +971,8 @@ struct ChatariumApp {
     route_dispatch_command_pending: bool,
     route_context_command_pending: bool,
     tool_command_pending: bool,
+    // Read-only, point-in-time host observation; never an execution permit.
+    last_sandbox_host_check: Option<Result<(), String>>,
     tool_provider_name_draft: String,
     tool_selected_provider: Option<ToolProviderId>,
     tool_stdio_executable_draft: String,
@@ -1253,6 +1256,7 @@ impl ChatariumApp {
                         route_dispatch_command_pending: false,
                         route_context_command_pending: false,
                         tool_command_pending: false,
+                        last_sandbox_host_check: None,
                         tool_provider_name_draft: String::new(),
                         tool_selected_provider: None,
                         tool_stdio_executable_draft: String::new(),
@@ -1446,6 +1450,7 @@ impl ChatariumApp {
             route_dispatch_command_pending: false,
             route_context_command_pending: false,
             tool_command_pending: false,
+                        last_sandbox_host_check: None,
             tool_provider_name_draft: String::new(),
             tool_selected_provider: None,
             tool_stdio_executable_draft: String::new(),
@@ -3384,6 +3389,7 @@ impl ChatariumApp {
                 }
                 PersistNotice::SandboxHostChecked { result } => {
                     self.tool_command_pending = false;
+                    self.last_sandbox_host_check = Some(result.clone());
                     self.status = match result {
                         Ok(()) => "Linux confinement host probe passed. No tool provider launched and no route permit consumed.".to_owned(),
                         Err(error) => format!("Linux confinement host probe blocked: {error}"),
@@ -4705,6 +4711,7 @@ impl ChatariumApp {
         match sender.send(PersistCommand::CheckSandboxHostReadiness) {
             Ok(()) => {
                 self.tool_command_pending = true;
+                self.last_sandbox_host_check = None;
                 self.status =
                     "checking real Linux namespace sandbox with a fixed harmless process…"
                         .to_owned();
@@ -8633,6 +8640,36 @@ impl eframe::App for ChatariumApp {
                                 "Runs only the fixed root-owned /usr/bin/true under the actual network-isolated namespace and resource-limit policy. No configured provider launches; no journal dispatch or permission is consumed.",
                             ).clicked() {
                                 self.check_sandbox_host_readiness();
+                            }
+                            if let Some(observation) = &self.last_sandbox_host_check {
+                                match observation {
+                                    Ok(()) => {
+                                        ui.label(
+                                            egui::RichText::new("Last Linux sandbox check: READY · fixed /usr/bin/true only")
+                                                .color(egui::Color32::from_rgb(106, 169, 128)),
+                                        );
+                                    }
+                                    Err(detail) => {
+                                        let category = local_stdio_host_diagnostics::failure_category(detail);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Last Linux sandbox check: NOT READY · {category}"
+                                            ))
+                                            .color(egui::Color32::from_rgb(186, 108, 108)),
+                                        );
+                                        ui.label(local_stdio_host_diagnostics::failure_explanation(category));
+                                        ui.collapsing("Bounded host failure detail · diagnostic only", |ui| {
+                                            ui.label(egui::RichText::new(detail).monospace());
+                                        });
+                                    }
+                                }
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Point-in-time observation only. No provider launched, journal written, or route permission consumed. Readiness cannot authorize an MCP call."
+                                    )
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
                             }
                             match replay_tool_provider_audit(&self.events) {
                                 Err(error) => {
