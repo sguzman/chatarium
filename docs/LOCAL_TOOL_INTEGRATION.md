@@ -197,6 +197,22 @@ immediately; it must never be treated as a cached authorization token. A future
 runner must rerun these checks at execution time and separately enforce
 explicit provider activation and the one-shot dispatch boundary.
 
+### Linux executable metadata inspection
+
+`crates/store/src/tool_stdio_executable_inspection.rs` provides a second
+non-executing check for an external Linux stdio executable. It rejects missing
+paths, symlink components, non-directory ancestors, group/world-writable
+ancestor directories, non-regular targets, files lacking executable mode,
+and executable files writable by group or world. Non-Linux builds explicitly
+report unsupported platform.
+
+This is conservative metadata inspection, **not an authenticity guarantee**.
+A filesystem path can change after inspection (TOCTOU); a positive result must
+not be cached as a launch permit. It makes no assertion that the binary is
+benign, does not restrict what an eventual subprocess can access, and never
+reads process credentials or spawns an executable. External execution still
+requires an independent explicit activation and a race-aware launch design.
+
 ### Next transport implementation
 
 The first real transport should remain Linux-native and cost-free. Two
