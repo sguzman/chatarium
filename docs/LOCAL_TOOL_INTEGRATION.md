@@ -229,13 +229,29 @@ a currently active provider and activation **before the call was recorded**.
 Disabling a provider blocks pending calls. Re-enabling it does not revive
 old pending calls recorded before the newest activation.
 
-This is a Rust storage/preflight substrate, **not yet a desktop control**,
-trust assessment, or external execution implementation. The eventual desktop
-control must originate from a deliberate human action, inspect the configured
-executable, and preserve explicit revocation. Future process execution must
-rerun activation and all route checks immediately before consuming a one-shot
-permit, and independently enforce an audited, race-aware Linux launch policy.
-No shell, process, network, or implicit model call is activated by this slice.
+The desktop now has explicit human configuration and activation controls.
+In **Context & inference controls → Tools / MCP → External MCP stdio**:
+register a uniquely named provider and bind its endpoint, select the provider,
+enter an absolute Linux executable path, exact argv (one item per line), and
+exact allowed operation names (one per line), then separately save its
+**immutable** transport configuration. After inspecting the displayed path,
+argv, and allowlist, explicitly choose **Activate**. The background persistence
+worker performs conservative Linux executable metadata inspection before
+appending the user activation decision. Activation is refused for nonexistent,
+symlinked, writable, or otherwise unqualified executables; Windows does not
+activate Linux providers. **Deactivate** is an independent durable revocation,
+and does not require an executable to remain present.
+
+An approved external ToolCall route exposes an **Activation-aware MCP preview**
+showing its exact bounded request or the reason it is ineligible. Previews are
+side-effect-free and computed only when expanded in the UI. No external adapter
+is permitted to consume a DispatchPermit yet. Linux metadata inspection is
+not an authenticity guarantee; a future runner must recheck executable
+identity and safety against TOCTOU races immediately before one-shot dispatch.
+
+The configuration/activation UI is intentionally not an arbitrary terminal,
+a shell command editor, or an automatic model tool loop. No shell, process,
+network, or implicit model call becomes executable through these controls.
 
 ### Next transport implementation
 
