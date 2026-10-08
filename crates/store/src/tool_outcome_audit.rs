@@ -74,16 +74,56 @@ pub fn record_tool_call_outcome(
     append_typed(
         store,
         tool_outcome_scope(call_id, route_id),
-        json!({
-            "schema": SCHEMA,
-            "version": VERSION,
-            "record": "tool_call_outcome_observed",
-            "call_id": call_id.get(),
-            "route_id": route_id.get(),
-            "kind": kind.stable_name(),
-            "text": text,
-        }),
+        outcome_value(call_id, route_id, kind, &text),
     )
+}
+
+/// Validate a complete prospective terminal observation before mutating the journal.
+///
+/// Future adapters must use this checked boundary, not the low-level append
+/// helper. It runs the exact authoritative replay contract against an in-memory
+/// prospective event before crossing the durable write boundary.
+pub fn append_tool_call_outcome_checked(
+    store: &mut impl EventStore,
+    call_id: ToolCallId,
+    route_id: RouteId,
+    kind: ToolCallOutcomeKind,
+    text: impl Into<String>,
+) -> Result<EventEnvelope, String> {
+    let text = text.into();
+    if text.len() > MAX_OUTCOME_BYTES || (kind == ToolCallOutcomeKind::Error && text.trim().is_empty())
+    {
+        return Err("tool outcome is too large or has empty error text".to_owned());
+    }
+    let sequence = u64::try_from(store.events().len())
+        .map_err(|error| error.to_string())?
+        .checked_add(1)
+        .ok_or_else(|| "tool outcome journal sequence overflow".to_owned())?;
+    let payload = serde_json::to_string(&outcome_value(call_id, route_id, kind, &text))
+        .map_err(|error| error.to_string())?;
+    let mut prospective = store.events().to_vec();
+    prospective.push(EventEnvelope {
+        sequence,
+        at_unix_ms: 0,
+        scope: Some(tool_outcome_scope(call_id, route_id)),
+        kind: EventKind::ToolCallOutcomeObserved,
+        payload,
+    });
+    let validated = replay_tool_call_outcome_audit(&prospective)?;
+    if !validated
+        .iter()
+        .any(|record| record.call_id == call_id && record.observed_sequence == sequence)
+    {
+        return Err("prospective tool outcome was not projected".to_owned());
+    }
+
+    record_tool_call_outcome(store, call_id, route_id, kind, text)
+        .map_err(|error| error.to_string())?;
+    store
+        .events()
+        .last()
+        .cloned()
+        .ok_or_else(|| "durable tool outcome append returned no event".to_owned())
 }
 
 /// Rebuild exact terminal tool results/errors from authoritative journal events.
@@ -228,6 +268,23 @@ pub fn replay_tool_call_outcome_audit(
     let mut records = outcomes.into_values().collect::<Vec<_>>();
     records.sort_by_key(|record| record.observed_sequence);
     Ok(records)
+}
+
+fn outcome_value(
+    call_id: ToolCallId,
+    route_id: RouteId,
+    kind: ToolCallOutcomeKind,
+    text: &str,
+) -> Value {
+    json!({
+        "schema": SCHEMA,
+        "version": VERSION,
+        "record": "tool_call_outcome_observed",
+        "call_id": call_id.get(),
+        "route_id": route_id.get(),
+        "kind": kind.stable_name(),
+        "text": text,
+    })
 }
 
 /// Stable journal correlation for one tool call's terminal result.
@@ -413,6 +470,42 @@ mod tests {
             &mut MemoryEventStore::default(), CALL, ROUTE, ToolCallOutcomeKind::Result,
             "x".repeat(MAX_OUTCOME_BYTES + 1),
         ).is_err());
+    }
+
+    #[test]
+    fn checked_outcome_rejects_early_and_duplicate_without_mutating_journal() {
+        let mut store = MemoryEventStore::default();
+        let route = setup(&mut store);
+        let before_approval = store.events().len();
+        assert!(append_tool_call_outcome_checked(
+            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, "too soon",
+        ).unwrap_err().contains("before explicitly approved dispatch"));
+        assert_eq!(store.events().len(), before_approval);
+
+        dispatch(&mut store, route);
+        let event = append_tool_call_outcome_checked(
+            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, " exact ",
+        ).unwrap();
+        assert_eq!(event.kind, EventKind::ToolCallOutcomeObserved);
+        assert_eq!(replay_tool_call_outcome_audit(store.events()).unwrap()[0].text, " exact ");
+
+        let after_first = store.events().len();
+        assert!(append_tool_call_outcome_checked(
+            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Error, "duplicate",
+        ).unwrap_err().contains("duplicate terminal"));
+        assert_eq!(store.events().len(), after_first);
+    }
+
+    #[test]
+    fn checked_outcome_rejects_wrong_call_route_without_append() {
+        let mut store = MemoryEventStore::default();
+        let route = setup(&mut store);
+        dispatch(&mut store, route);
+        let before = store.events().len();
+        assert!(append_tool_call_outcome_checked(
+            &mut store, CALL, RouteId::new(99), ToolCallOutcomeKind::Result, "wrong",
+        ).unwrap_err().contains("not bound"));
+        assert_eq!(store.events().len(), before);
     }
 
     #[test]
