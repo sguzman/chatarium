@@ -369,6 +369,49 @@ mod tests {
     }
 
     #[test]
+    fn legacy_wire_id_does_not_override_numeric_mcp_call_identity() {
+        let store = configured_call(
+            "hello",
+            "hello",
+            r#"<tool_call name="hello" id="legacy-external-987">{"text":"ok"}</tool_call>"#,
+            true,
+        );
+        let preview = preview_stdio_tool_invocation(store.events(), CALL).unwrap();
+        let value: Value = serde_json::from_str(preview.request_frame.trim()).unwrap();
+        assert_eq!(value["id"], CALL.get());
+        assert_eq!(value["params"]["name"], "hello");
+        assert_eq!(value["params"]["arguments"], json!({"text":"ok"}));
+        assert_eq!(store.events().last().unwrap().kind, chatarium_core::EventKind::RouteUserDecisionRecorded);
+    }
+
+    #[test]
+    fn denied_and_already_dispatched_routes_fail_closed() {
+        use crate::routing_audit::record_route_dispatched;
+        use chatarium_core::routing::{RouteGate, RouteRequest};
+
+        let mut denied = configured_call("hello", "hello", "{}", false);
+        record_route_user_decision(&mut denied, ROUTE, RouteUserDecision::Deny).unwrap();
+        assert!(preview_stdio_tool_invocation(denied.events(), CALL).is_err());
+
+        let mut dispatched = configured_call("hello", "hello", "{}", true);
+        let request = RouteRequest {
+            id: ROUTE,
+            source: SOURCE_ENDPOINT,
+            destination: PROVIDER_ENDPOINT,
+            class: RouteClass::ToolCall,
+        };
+        let mut gate = RouteGate::new(request, RoutePolicy::RequireApproval);
+        gate.user_allow().unwrap();
+        let permit = gate.authorize_dispatch(ROUTE).unwrap();
+        record_route_dispatched(&mut dispatched, permit).unwrap();
+        assert!(
+            preview_stdio_tool_invocation(dispatched.events(), CALL)
+                .unwrap_err()
+                .contains("undispatched")
+        );
+    }
+
+    #[test]
     fn stale_source_session_is_not_invocable_after_rollover() {
         let mut store = configured_call("hello", "hello", "{}", true);
         record_chat_session_lifecycle_transition(
