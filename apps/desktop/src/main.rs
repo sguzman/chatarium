@@ -8,10 +8,10 @@ mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_runner;
-#[cfg(test)]
-mod mcp_async_tests;
 mod local_tool_adapter;
 mod local_tool_provider_control;
+#[cfg(test)]
+mod mcp_async_tests;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -1177,7 +1177,13 @@ impl ChatariumApp {
                 let worker = thread::Builder::new()
                     .name("chatarium-persistence".to_owned())
                     .spawn(move || {
-                        persistence_worker(store, worker_data_dir, persist_rx, completion_tx, notice_tx)
+                        persistence_worker(
+                            store,
+                            worker_data_dir,
+                            persist_rx,
+                            completion_tx,
+                            notice_tx,
+                        )
                     });
 
                 match worker {
@@ -16915,7 +16921,9 @@ fn persistence_worker(
                                 revision: None,
                                 request_id: None,
                                 turn_id: None,
-                                error: format!("sandbox worker launch failed: {error}; no automatic retry"),
+                                error: format!(
+                                    "sandbox worker launch failed: {error}; no automatic retry"
+                                ),
                             });
                         }
                     }
@@ -16940,10 +16948,8 @@ fn persistence_worker(
                     observation.text,
                 ) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::StdioToolDispatchFinished {
-                            call_id,
-                            event,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::StdioToolDispatchFinished { call_id, event });
                     }
                     Err(error) => {
                         // Unpersisted observations leave their routes unresolved.
@@ -20250,7 +20256,13 @@ fn run_production_mirror_acceptance() {
     let persist_worker = thread::Builder::new()
         .name("chatarium-acceptance-persistence".to_owned())
         .spawn(move || {
-            persistence_worker(store, data_dir, persist_rx, completion_tx, persist_notice_tx)
+            persistence_worker(
+                store,
+                data_dir,
+                persist_rx,
+                completion_tx,
+                persist_notice_tx,
+            )
         });
     let Ok(persist_worker) = persist_worker else {
         println!(
