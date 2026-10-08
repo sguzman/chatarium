@@ -47,6 +47,7 @@ use chatarium_core::{
 };
 use chatarium_protocol::conversation_list::ConversationListItem;
 use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
+use chatarium_protocol::mcp_wire::{McpResponse, decode_stdio_response, parse_tools_list_page};
 use chatarium_store::archive_maintenance::{
     check_archive, create_backup, restore_backup, verify_backup,
 };
@@ -212,7 +213,9 @@ use chatarium_store::tool_result_context_audit::{
 use chatarium_store::tool_stdio_dispatch::{
     replay_unresolved_external_tool_dispatches, reserve_activated_stdio_tool_dispatch,
 };
-use chatarium_store::tool_stdio_preflight::preview_activated_stdio_tool_invocation;
+use chatarium_store::tool_stdio_preflight::{
+    MCP_LIST_TOOLS_OPERATION, preview_activated_stdio_tool_invocation,
+};
 use chatarium_store::tool_transport_config_audit::{
     append_tool_transport_config_checked, replay_tool_transport_config_audit,
 };
@@ -8894,6 +8897,38 @@ impl eframe::App for ChatariumApp {
                                                 "Exact JSON arguments or legacy <tool_call> envelope",
                                             ),
                                         );
+                                        let list_allowed = self
+                                            .tool_selected_provider
+                                            .and_then(|id| {
+                                                replay_tool_transport_config_audit(&self.events)
+                                                    .ok()
+                                                    .and_then(|configs| {
+                                                        configs.into_iter().find(|cfg| {
+                                                            cfg.provider_id == id
+                                                        })
+                                                    })
+                                            })
+                                            .is_some_and(|cfg| {
+                                                cfg.config.allowed_operations().iter().any(|op| {
+                                                    op.as_str() == MCP_LIST_TOOLS_OPERATION
+                                                })
+                                            });
+                                        if ui
+                                            .add_enabled(
+                                                list_allowed && !self.tool_command_pending,
+                                                egui::Button::new("Prepare approved tools/list inspection"),
+                                            )
+                                            .on_hover_text(
+                                                "Only prepares an exact MCP 2026 tools/list request. This provider must explicitly allowlist chatarium.internal.tools-list. Record, Allow and Run are still separate user actions. No provider is executed by this button.",
+                                            )
+                                            .clicked()
+                                        {
+                                            self.tool_operation_draft =
+                                                MCP_LIST_TOOLS_OPERATION.to_owned();
+                                            self.tool_arguments_draft = "{}".to_owned();
+                                            self.status =
+                                                "tools/list draft prepared; record, Allow and Run separately".to_owned();
+                                        }
                                         if self.tool_arguments_draft.trim_start().starts_with("<tool_call")
                                             && ui
                                                 .add_enabled(
@@ -9275,6 +9310,49 @@ impl eframe::App for ChatariumApp {
                                                                         );
                                                                     },
                                                                 );
+                                                                if call.operation.as_str() == MCP_LIST_TOOLS_OPERATION
+                                                                    && outcome.kind == ToolCallOutcomeKind::Result
+                                                                {
+                                                                    ui.collapsing("Provider-advertised tools · untrusted inspection", |ui| {
+                                                                        match decode_stdio_response(&outcome.text, call.call_id.get()) {
+                                                                            Ok(McpResponse::Complete(result)) => match parse_tools_list_page(&result) {
+                                                                                Ok(page) => {
+                                                                                    ui.label(format!("{} advertised tools in this page; no permissions or allowlist changes", page.tools.len()));
+                                                                                    for advertised in &page.tools {
+                                                                                        ui.label(egui::RichText::new(format!(
+                                                                                            "{} · {}",
+                                                                                            advertised.name,
+                                                                                            advertised.title.as_deref().unwrap_or("unnamed tool"),
+                                                                                        )).monospace());
+                                                                                        if let Some(description) = &advertised.description {
+                                                                                            ui.label(description.as_str());
+                                                                                        }
+                                                                                    }
+                                                                                    if let Some(cursor) = &page.next_cursor {
+                                                                                        ui.label("Another page is advertised; continuation is NEVER automatic.");
+                                                                                        if ui.add_enabled(
+                                                                                            !self.tool_command_pending,
+                                                                                            egui::Button::new("Prepare next catalog page"),
+                                                                                        ).on_hover_text(
+                                                                                            "Only fills a new immutable call draft for the same provider. It does not dispatch or grant permission.",
+                                                                                        ).clicked() {
+                                                                                            self.tool_selected_provider = Some(call.provider_id);
+                                                                                            self.tool_operation_draft = MCP_LIST_TOOLS_OPERATION.to_owned();
+                                                                                            self.tool_arguments_draft = serde_json::json!({"cursor":cursor}).to_string();
+                                                                                            self.status = "next catalog page drafted; requires a new approval and Run".to_owned();
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                                Err(error) => {
+                                                                                    ui.label(format!("Invalid catalog result: {error:?}"));
+                                                                                }
+                                                                            },
+                                                                            _ => {
+                                                                                ui.label("Catalog result cannot be decoded.");
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                }
                                                                 if let Some(records) = &tool_context_records {
                                                                     match tool_outcome_owning_conversation(&self.events, outcome) {
                                                                         Ok(Some(owner))
