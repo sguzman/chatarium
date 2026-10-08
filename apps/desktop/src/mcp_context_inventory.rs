@@ -36,21 +36,33 @@ pub fn verified_inventory<'a>(
     for item in admitted {
         let record = &item.record;
         if record.conversation_id != conversation_id {
-            return Err(format!("call {} belongs to another conversation", record.call_id.get()));
+            return Err(format!(
+                "call {} belongs to another conversation",
+                record.call_id.get()
+            ));
         }
         if record.decision != ToolResultContextDecision::Admit
             || item.text.len() > MAX_CONTEXT_TOOL_RESULT_BYTES
             || record.first_decision_sequence <= record.outcome_sequence
             || record.last_decision_sequence < record.first_decision_sequence
         {
-            return Err(format!("call {} has invalid admission evidence", record.call_id.get()));
+            return Err(format!(
+                "call {} has invalid admission evidence",
+                record.call_id.get()
+            ));
         }
         if !seen.insert(record.call_id) {
-            return Err(format!("duplicate admitted tool call {}", record.call_id.get()));
+            return Err(format!(
+                "duplicate admitted tool call {}",
+                record.call_id.get()
+            ));
         }
         let mut matching_calls = calls.iter().filter(|call| call.call_id == record.call_id);
         let call = matching_calls.next().ok_or_else(|| {
-            format!("admitted tool call {} lacks immutable call metadata", record.call_id.get())
+            format!(
+                "admitted tool call {} lacks immutable call metadata",
+                record.call_id.get()
+            )
         })?;
         if matching_calls.next().is_some() {
             return Err(format!("duplicate immutable call {}", record.call_id.get()));
@@ -63,9 +75,15 @@ pub fn verified_inventory<'a>(
                 sequence <= call.recorded_sequence || sequence >= record.outcome_sequence
             })
         {
-            return Err(format!("call {} has inconsistent immutable correlation", record.call_id.get()));
+            return Err(format!(
+                "call {} has inconsistent immutable correlation",
+                record.call_id.get()
+            ));
         }
-        rows.push(AdmittedEvidenceRow { admitted: item, call });
+        rows.push(AdmittedEvidenceRow {
+            admitted: item,
+            call,
+        });
     }
     rows.sort_unstable_by(|left, right| {
         right
@@ -100,9 +118,9 @@ pub fn render_inventory(
     rows: &[AdmittedEvidenceRow<'_>],
     can_revoke: bool,
 ) -> Option<ToolCallId> {
-    let bytes = rows
-        .iter()
-        .fold(0_usize, |total, row| total.saturating_add(row.admitted.text.len()));
+    let bytes = rows.iter().fold(0_usize, |total, row| {
+        total.saturating_add(row.admitted.text.len())
+    });
     ui.label(format!(
         "{} currently admitted MCP result{} · {} raw UTF-8 bytes",
         rows.len(),
@@ -198,10 +216,13 @@ mod tests {
             first_decision_sequence: id * 10 + 4,
             last_decision_sequence: id * 10 + 4,
         };
-        (call, AdmittedToolResult {
-            record,
-            text: format!("raw result for {id}"),
-        })
+        (
+            call,
+            AdmittedToolResult {
+                record,
+                text: format!("raw result for {id}"),
+            },
+        )
     }
 
     #[test]
@@ -210,8 +231,14 @@ mod tests {
         let samples = (1..=22)
             .map(|id| sample(owner, id, id % 3 + 1, ToolResultContextDecision::Admit))
             .collect::<Vec<_>>();
-        let calls = samples.iter().map(|(call, _)| call.clone()).collect::<Vec<_>>();
-        let admitted = samples.into_iter().map(|(_, item)| item).collect::<Vec<_>>();
+        let calls = samples
+            .iter()
+            .map(|(call, _)| call.clone())
+            .collect::<Vec<_>>();
+        let admitted = samples
+            .into_iter()
+            .map(|(_, item)| item)
+            .collect::<Vec<_>>();
         let rows = verified_inventory(&admitted, &calls, owner).unwrap();
         assert_eq!(rows.len(), 22);
         assert_eq!(rows[0].admitted.record.call_id.get(), 22);
@@ -235,7 +262,9 @@ mod tests {
         let owner = LocalConversationId::new();
         let (call, result) = sample(owner, 1, 7, ToolResultContextDecision::Admit);
         assert!(verified_inventory(&[result.clone()], &[], owner).is_err());
-        assert!(verified_inventory(&[result.clone()], &[call.clone(), call.clone()], owner).is_err());
+        assert!(
+            verified_inventory(&[result.clone()], &[call.clone(), call.clone()], owner).is_err()
+        );
         assert!(verified_inventory(&[result.clone(), result], &[call], owner).is_err());
     }
 
