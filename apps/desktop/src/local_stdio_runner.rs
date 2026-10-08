@@ -380,6 +380,30 @@ mod tests {
         );
     }
 
+    /// This runs in the Linux CI sandbox job with explicit opt-in. It uses
+    /// stock root-owned sed as a deterministic stdio MCP fixture; the stdin
+    /// writer must finish before sed emits one correlated terminal response.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_bubblewrap_stdio_smoke() {
+        if std::env::var_os("CHATARIUM_TEST_LINUX_MCP_SANDBOX").is_none() {
+            return;
+        }
+        use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
+        let request = tools_call_request(71, "fixture.echo", &serde_json::json!({}))
+            .unwrap();
+        let frame = encode_stdio_frame(&request).unwrap();
+        let reply = r#"{"jsonrpc":"2.0","id":71,"result":{"resultType":"complete","content":[{"type":"text","text":"sandbox-ok"}]}}"#;
+        let command = format!("s/.*/{reply}/p");
+        let returned = run_one_shot(
+            "/usr/bin/sed",
+            &["-n".to_owned(), "-e".to_owned(), command],
+            &frame,
+            71,
+        ).unwrap();
+        assert_eq!(returned, format!("{reply}\n"));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn missing_confinement_binary_never_triggers_unsafe_direct_launch() {
