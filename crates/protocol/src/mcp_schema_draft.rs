@@ -43,12 +43,15 @@ impl DraftBuilder {
         let spec = schema
             .as_object()
             .ok_or_else(|| format!("provider schema for {path} is not an object"))?;
-        if ["$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"]
-            .iter()
-            .any(|keyword| spec.contains_key(*keyword))
+        if [
+            "$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else",
+        ]
+        .iter()
+        .any(|keyword| spec.contains_key(*keyword))
             || spec.get("type").is_some_and(|t| t.is_array())
         {
-            self.notes.push(format!("{path}: complex schema; replace null manually"));
+            self.notes
+                .push(format!("{path}: complex schema; replace null manually"));
             return Ok(Value::Null);
         }
         match spec.get("type").and_then(Value::as_str) {
@@ -58,7 +61,8 @@ impl DraftBuilder {
                 Ok(Value::String(String::new()))
             }
             Some("integer" | "number") => {
-                self.notes.push(format!("{path}: review numeric zero placeholder"));
+                self.notes
+                    .push(format!("{path}: review numeric zero placeholder"));
                 Ok(Value::from(0))
             }
             Some("boolean") => {
@@ -72,7 +76,9 @@ impl DraftBuilder {
             Some("null") => Ok(Value::Null),
             None if spec.contains_key("properties") => self.object(schema, path, depth),
             _ => {
-                self.notes.push(format!("{path}: unsupported or unspecified type; replace null"));
+                self.notes.push(format!(
+                    "{path}: unsupported or unspecified type; replace null"
+                ));
                 Ok(Value::Null)
             }
         }
@@ -93,7 +99,9 @@ impl DraftBuilder {
             _ => return Err(format!("{path}: required must be an array")),
         };
         if required.len() > MAX_REQUIRED_PER_OBJECT {
-            return Err(format!("{path}: required field list exceeds drafting limit"));
+            return Err(format!(
+                "{path}: required field list exceeds drafting limit"
+            ));
         }
         let mut seen = BTreeSet::new();
         let mut output = Map::new();
@@ -137,7 +145,10 @@ pub fn draft_required_arguments(input_schema: &Value) -> Result<McpArgumentDraft
     {
         return Err("root schema composition/reference is not supported for drafting".to_owned());
     }
-    if schema.get("type").is_some_and(|t| t.as_str() != Some("object")) {
+    if schema
+        .get("type")
+        .is_some_and(|t| t.as_str() != Some("object"))
+    {
         return Err("tool arguments must have an object inputSchema".to_owned());
     }
     let mut builder = DraftBuilder {
@@ -178,7 +189,10 @@ mod tests {
         });
         let draft = draft_required_arguments(&schema).unwrap();
         let parsed: Value = serde_json::from_str(&draft.arguments_json).unwrap();
-        assert_eq!(parsed, json!({"city":"","options":{"enabled":false},"count":0}));
+        assert_eq!(
+            parsed,
+            json!({"city":"","options":{"enabled":false},"count":0})
+        );
         assert!(!draft.arguments_json.contains("server-controlled"));
         assert!(!draft.arguments_json.contains("optionalDanger"));
         assert_eq!(draft.review_notes.len(), 3);
@@ -193,7 +207,8 @@ mod tests {
                 "selector":{"$ref":"#/$defs/anything"},
                 "extras":{"oneOf":[{"type":"string"},{"type":"number"}]}
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let parsed: Value = serde_json::from_str(&draft.arguments_json).unwrap();
         assert_eq!(parsed, json!({"selector":null,"extras":null}));
         assert_eq!(draft.review_notes.len(), 2);
@@ -217,7 +232,8 @@ mod tests {
         }
         assert!(draft_required_arguments(&nested).is_err());
         let names: Vec<String> = (0..40).map(|index| format!("f{index}")).collect();
-        let properties: Map<String, Value> = names.iter()
+        let properties: Map<String, Value> = names
+            .iter()
             .map(|name| (name.clone(), json!({"type":"boolean"})))
             .collect();
         let schema = json!({"type":"object","required":names,"properties":properties});
@@ -228,7 +244,8 @@ mod tests {
     fn empty_or_optional_only_schema_produces_empty_editable_object() {
         let draft = draft_required_arguments(&json!({
             "type":"object","properties":{"extra":{"type":"string","default":"injected"}}
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(draft.arguments_json, "{}");
         assert!(draft.review_notes.is_empty());
     }
