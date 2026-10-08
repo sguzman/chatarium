@@ -10,6 +10,7 @@ use chatarium_core::routing::RouteId;
 use chatarium_core::tool::{StdioToolProviderConfig, ToolCallId};
 use chatarium_protocol::mcp_wire::{
     MAX_MCP_FRAME_BYTES, McpResponse, decode_stdio_response, parse_tools_list_page,
+    validate_tools_call_result,
 };
 use chatarium_store::tool_outcome_audit::{MAX_OUTCOME_BYTES, ToolCallOutcomeKind};
 use chatarium_store::tool_stdio_dispatch::ReservedStdioToolDispatch;
@@ -454,6 +455,14 @@ fn run_one_shot(
             .map_err(|e| format!("sandbox MCP response rejected: {e:?}"))?;
         match response {
             McpResponse::Complete(result) => {
+                if method == "tools/call" {
+                    // The 2026 protocol requires a content array even if the
+                    // provider also supplies structuredContent. This is shape
+                    // validation, not an endorsement of untrusted content.
+                    validate_tools_call_result(&result).map_err(|e| {
+                        format!("sandbox MCP tools/call result rejected: {e:?}")
+                    })?;
+                }
                 if method == "tools/list" {
                     // The catalogue is untrusted provider testimony. Reject
                     // malformed, duplicate or oversized pages; never import
@@ -599,6 +608,26 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("tools/list page rejected"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_bubblewrap_rejects_malformed_tool_result_even_with_matching_id() {
+        if std::env::var_os("CHATARIUM_TEST_LINUX_MCP_SANDBOX").is_none() {
+            return;
+        }
+        use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_call_request};
+        let request = tools_call_request(74, "fixture.echo", &serde_json::json!({})).unwrap();
+        let frame = encode_stdio_frame(&request).unwrap();
+        let invalid = r#"{"jsonrpc":"2.0","id":74,"result":{"resultType":"complete","content":[{"type":"text"}]}}"#;
+        let error = run_one_shot(
+            "/usr/bin/sed",
+            &["-n".to_owned(), "-e".to_owned(), format!("s/.*/{invalid}/p")],
+            &frame,
+            74,
+        )
+        .unwrap_err();
+        assert!(error.contains("tools/call result rejected"));
     }
 
     #[cfg(target_os = "linux")]

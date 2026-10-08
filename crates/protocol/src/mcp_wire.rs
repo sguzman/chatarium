@@ -17,6 +17,7 @@ pub const MAX_MCP_FRAME_BYTES: usize = 1_048_576;
 pub const MAX_MCP_ARGUMENT_BYTES: usize = 65_536;
 pub const MAX_MCP_TOOL_NAME_SCALARS: usize = 128;
 pub const MAX_MCP_LIST_TOOLS_PER_PAGE: usize = 128;
+pub const MAX_MCP_CALL_CONTENT_BLOCKS: usize = 128;
 
 /// A tool catalogue is external provider testimony, not an execution allowlist.
 /// Exact input schema remains untrusted JSON until separately reviewed.
@@ -96,6 +97,88 @@ pub fn parse_tools_list_page(result: &Value) -> Result<McpToolCatalogPage, McpWi
         });
     }
     Ok(McpToolCatalogPage { tools, next_cursor })
+}
+
+/// Structural summary only. It is not outputSchema validation, trusted
+/// content, or authority to admit a tool response into model context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpToolCallResultShape {
+    pub content_blocks: usize,
+    pub has_structured_content: bool,
+    pub is_error: bool,
+}
+
+/// Check a completed 2026 tools/call body before treating it as a durable
+/// successful transport observation. The outer JSON-RPC request ID is checked
+/// separately. Unknown content block variants fail closed; extra provider
+/// metadata stays untrusted and is never interpreted as instructions.
+pub fn validate_tools_call_result(
+    result: &Value,
+) -> Result<McpToolCallResultShape, McpWireError> {
+    let object = result.as_object().ok_or(McpWireError::InvalidResponse)?;
+    if object.get("resultType").and_then(Value::as_str) != Some("complete") {
+        return Err(McpWireError::InvalidResponse);
+    }
+    let content = object
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or(McpWireError::InvalidResponse)?;
+    if content.len() > MAX_MCP_CALL_CONTENT_BLOCKS {
+        return Err(McpWireError::TooLarge);
+    }
+    let is_error = match object.get("isError") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(McpWireError::InvalidResponse),
+    };
+    for item in content {
+        let block = item.as_object().ok_or(McpWireError::InvalidResponse)?;
+        if block
+            .get("annotations")
+            .is_some_and(|annotations| !annotations.is_object())
+        {
+            return Err(McpWireError::InvalidResponse);
+        }
+        let valid = match block.get("type").and_then(Value::as_str) {
+            Some("text") => has_string(block, "text"),
+            Some("image" | "audio") => {
+                has_string(block, "data") && has_nonempty_string(block, "mimeType")
+            }
+            Some("resource_link") => {
+                has_nonempty_string(block, "uri") && has_nonempty_string(block, "name")
+            }
+            Some("resource") => block
+                .get("resource")
+                .and_then(Value::as_object)
+                .is_some_and(|resource| {
+                    has_nonempty_string(resource, "uri")
+                        && (has_string(resource, "text") || has_string(resource, "blob"))
+                        && resource
+                            .get("mimeType")
+                            .is_none_or(Value::is_string)
+                }),
+            _ => false,
+        };
+        if !valid {
+            return Err(McpWireError::InvalidResponse);
+        }
+    }
+    Ok(McpToolCallResultShape {
+        content_blocks: content.len(),
+        has_structured_content: object.contains_key("structuredContent"),
+        is_error,
+    })
+}
+
+fn has_string(object: &serde_json::Map<String, Value>, key: &str) -> bool {
+    object.get(key).is_some_and(Value::is_string)
+}
+
+fn has_nonempty_string(object: &serde_json::Map<String, Value>, key: &str) -> bool {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,6 +353,78 @@ fn request(id: u64, method: &str, mut params: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tools_call_accepts_all_specified_content_variants_and_structured_scalars() {
+        let result = json!({
+            "resultType": "complete",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "image", "mimeType": "image/png", "data": "aGVsbG8="},
+                {"type": "audio", "mimeType": "audio/wav", "data": "aGVsbG8="},
+                {"type": "resource_link", "uri": "file:///tmp/example", "name": "example"},
+                {"type": "resource", "resource": {"uri": "file:///tmp/a", "text": "text"}},
+                {"type": "resource", "resource": {"uri": "file:///tmp/b", "blob": "YWJj"}}
+            ],
+            "isError": false,
+            "structuredContent": [1, true, null]
+        });
+        assert_eq!(
+            validate_tools_call_result(&result).unwrap(),
+            McpToolCallResultShape {
+                content_blocks: 6,
+                has_structured_content: true,
+                is_error: false
+            }
+        );
+        let tool_error = json!({
+            "resultType": "complete",
+            "content": [{"type":"text","text":"invalid argument"}],
+            "isError": true
+        });
+        let shape = validate_tools_call_result(&tool_error).unwrap();
+        assert!(shape.is_error);
+        assert!(!shape.has_structured_content);
+        assert_eq!(
+            validate_tools_call_result(&json!({"resultType":"complete","content":[]})).unwrap(),
+            McpToolCallResultShape {
+                content_blocks: 0,
+                has_structured_content: false,
+                is_error: false
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_completed_tool_results_fail_closed() {
+        for result in [
+            json!({"resultType":"complete"}),
+            json!({"resultType":"complete","content":{}}),
+            json!({"resultType":"complete","content":[null]}),
+            json!({"resultType":"complete","content":[{"type":"text"}]}),
+            json!({"resultType":"complete","content":[{"type":"image","data":"AA=="}]}),
+            json!({"resultType":"complete","content":[{"type":"audio","data":"AA==","mimeType":3}]}),
+            json!({"resultType":"complete","content":[{"type":"resource_link","uri":"x"}]}),
+            json!({"resultType":"complete","content":[{"type":"resource","resource":{"uri":"x"}}]}),
+            json!({"resultType":"complete","content":[{"type":"unknown","text":"x"}]}),
+            json!({"resultType":"complete","content":[{"type":"text","text":"x","annotations":false}]}),
+            json!({"resultType":"complete","content":[],"isError":"false"}),
+            json!({"resultType":"input_required","content":[]}),
+        ] {
+            assert_eq!(
+                validate_tools_call_result(&result),
+                Err(McpWireError::InvalidResponse)
+            );
+        }
+        let too_many = json!({
+            "resultType": "complete",
+            "content": vec![json!({"type":"text","text":"x"}); MAX_MCP_CALL_CONTENT_BLOCKS + 1]
+        });
+        assert_eq!(
+            validate_tools_call_result(&too_many),
+            Err(McpWireError::TooLarge)
+        );
+    }
 
     #[test]
     fn tools_list_catalog_requires_explicit_valid_page_and_cursor() {

@@ -491,6 +491,27 @@ guarantee that a later launch will succeed. Actual EndeavourOS/Arch host
 validation remains an operator-side milestone and cannot be inferred from
 GitHub's Ubuntu CI.
 
+## MCP tools/call result-shape validation
+
+The strict stdio adapter now structurally validates every correlated,
+`resultType: complete` `tools/call` response **before** recording it as a
+successful tool result. A result needs a `content` array (including an empty
+array if applicable), with at most 128 content blocks. Recognized blocks are
+text, image, audio, resource links, and embedded text/blob resources; each
+must have the corresponding required fields. Optional `isError` must be a
+boolean. Arbitrary JSON values in `structuredContent` are preserved and
+must not be mistaken for a substitute for the required `content` array.
+
+This is intentionally **bounded structural screening**, not arbitrary JSON
+Schema evaluation or verification of resource URI targets, MIME payloads,
+base64 bytes, a provider-advertised `outputSchema`, or whether the underlying
+tool action succeeded. An MCP tool's own `isError: true` remains visible in
+its exact, audited response; it is not silently recast as a JSON-RPC protocol
+error. A malformed completed response produces a durable adapter-error
+observation after the already-consumed dispatch, not a retry or a context
+admission. Tool-produced text and metadata remain untrusted and
+context-excluded unless the user separately admits that exact outcome.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select
