@@ -725,6 +725,24 @@ frozen per attempt, unlike the live admitted-evidence inventory. Old
 dispatches without this format remain unmanifested; no speculative
 retrospective reconstruction is attempted.
 
+### Transport correlation and complete history
+
+The outgoing-context inspector now uses a single journal pass rather than
+re-scanning all events for each displayed attempt. Only later typed
+observations with matching scope, local turn ID and request ID can establish
+acceptance, completion, failure, partial output, or interruption. An
+inconsistent correlation blocks the read-only projection; it is never
+interpreted as successful remote acceptance. The manifested origin must
+independently match its durable authored commit, coordination start or
+continuation start and the recorded conversation. The status display
+preserves ambiguity after interrupted transport and flags contradictory
+terminal evidence instead of selecting a convenient outcome.
+
+A per-conversation **Newer / Older** pager browses the complete available
+manifested history in 12-row pages, rather than silently forgetting older
+attempts. This has no effect on admission, transport or existing immutable
+journal events.
+
 `DispatchAttempted` is not proof of service delivery. Manifests describe
 Chatarium's prepared input, not server-side storage, use, or a byte-for-byte
 cryptographic proof of the bridge's network transmission. They do not

@@ -173,6 +173,31 @@ conversation, the included/eligible distinction, bounded evidence identities,
 and whether a later remote-acceptance observation exists. Legacy attempts
 without a manifest are not retrospectively invented.
 
+### Correlated transport history and navigation
+
+The manifest history inspector replays journal events **once in chronological
+order** and joins later transport observations by the exact local-turn scope,
+request identity, and typed Responses observation envelope. It never assumes
+that an event elsewhere in the journal belongs to the selected request.
+Before displaying the records, it independently checks manifested conversation
+ownership against the typed authored-message commit or the durable
+controller-coordination/worker-continuation start.
+
+The inspector distinguishes **no observed outcome**, **remote acceptance**,
+**completion**, **observed remote failure**, **transport interruption**, and
+**conflicting terminal observations**. A late interruption never erases
+previously observed acceptance; a completion after an interruption is labeled
+as such. These are journaled observation types, **not** claims about model
+attention, server persistence, or guaranteed delivery. Unexpectedly
+mis-correlated typed transport observations fail the history projection
+closed instead of silently fabricating an outcome.
+
+All manifested attempts remain navigable oldest-to-newest through paginated
+history (12 visible per page, newest page first), even when a conversation
+has many previous requests. Pagination limits rendering, **not audit replay**
+or historical retention. Pre-feature dispatches without manifests remain
+unmanifested.
+
 **Precision:** `DispatchAttempted` means Chatarium durably prepared an
 outgoing request, not that the service received or used it. Even observed
 remote acceptance is distinct from model attention. The manifest describes

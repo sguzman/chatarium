@@ -6,6 +6,9 @@
 
 use crate::context_composer::{ContextPlan, ContextSource, InclusionDecision};
 use chatarium_core::{EventKind, LocalConversationId};
+use chatarium_store::authored::{DecodedUserMessageCommit, decode_user_message_commit};
+use chatarium_store::continuation_execution_audit::replay_worker_continuation_execution_audit;
+use chatarium_store::controller_coordination_audit::replay_controller_coordination_audit;
 use chatarium_store::EventEnvelope;
 use eframe::egui;
 use serde_json::{Value, json};
@@ -171,6 +174,62 @@ pub fn attach_to_dispatch_payload(payload: String, manifest: Value) -> Result<St
     serde_json::to_string(&value).map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DispatchTransportTrace {
+    pub accepted_sequence: Option<u64>,
+    pub failure_sequence: Option<u64>,
+    pub completed_sequence: Option<u64>,
+    pub interrupted_sequence: Option<u64>,
+    pub first_output_sequence: Option<u64>,
+    pub last_observation_sequence: Option<u64>,
+}
+
+impl DispatchTransportTrace {
+    fn observe(&mut self, kind: EventKind, sequence: u64) {
+        match kind {
+            EventKind::RemoteAcceptanceObserved => {
+                self.accepted_sequence.get_or_insert(sequence);
+            }
+            EventKind::RemoteFailureObserved => {
+                self.failure_sequence.get_or_insert(sequence);
+            }
+            EventKind::AssistantCompletionObserved => {
+                self.completed_sequence.get_or_insert(sequence);
+            }
+            EventKind::TransportInterrupted => {
+                self.interrupted_sequence.get_or_insert(sequence);
+            }
+            EventKind::AssistantStreamStarted
+            | EventKind::AssistantDeltaObserved
+            | EventKind::AssistantSnapshotObserved => {
+                self.first_output_sequence.get_or_insert(sequence);
+            }
+            _ => return,
+        }
+        self.last_observation_sequence = Some(sequence);
+    }
+
+    pub fn status(&self) -> &'static str {
+        match (
+            self.completed_sequence.is_some(),
+            self.failure_sequence.is_some(),
+            self.interrupted_sequence.is_some(),
+            self.accepted_sequence.is_some(),
+            self.first_output_sequence.is_some(),
+        ) {
+            (true, true, _, _, _) => "CONFLICTING TERMINAL EVIDENCE · inspect turn audit",
+            (true, false, true, _, _) => "COMPLETION OBSERVED AFTER INTERRUPTION",
+            (true, false, false, _, _) => "COMPLETION OBSERVED",
+            (false, true, _, _, _) => "REMOTE FAILURE OBSERVED",
+            (false, false, true, true, _) => "INTERRUPTED AFTER REMOTE ACCEPTANCE",
+            (false, false, true, false, _) => "TRANSPORT INTERRUPTED · OUTCOME UNKNOWN",
+            (false, false, false, true, _) => "REMOTE ACCEPTED · COMPLETION NOT OBSERVED",
+            (false, false, false, false, true) => "OUTPUT OBSERVED · ACCEPTANCE NOT RECORDED",
+            _ => "DISPATCH ATTEMPT RECORDED · OUTCOME NOT OBSERVED",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RecordedDispatchManifest {
     pub sequence: u64,
@@ -185,7 +244,7 @@ pub struct RecordedDispatchManifest {
     pub included_bytes: usize,
     pub listed: Vec<(u64, u64, String)>,
     pub truncated: bool,
-    pub remote_acceptance_observed: bool,
+    pub transport: DispatchTransportTrace,
 }
 
 /// Reject malformed *manifested* dispatches rather than guessing. Old
@@ -327,40 +386,174 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         included_bytes: count("context_included_utf8_bytes")?,
         listed: result_rows,
         truncated,
-        remote_acceptance_observed: false,
+        transport: DispatchTransportTrace::default(),
     }))
 }
 
-pub fn recent_dispatches(
+
+fn is_transport_evidence(kind: EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::RemoteAcceptanceObserved
+            | EventKind::RemoteFailureObserved
+            | EventKind::AssistantStreamStarted
+            | EventKind::AssistantDeltaObserved
+            | EventKind::AssistantSnapshotObserved
+            | EventKind::AssistantCompletionObserved
+            | EventKind::TransportInterrupted
+    )
+}
+
+/// Only typed, turn-correlated observations can establish remote outcome
+/// evidence. An unrelated event with the same scope cannot spoof acceptance.
+fn validate_transport_observation(
+    event: &EventEnvelope,
+    recorded: &RecordedDispatchManifest,
+) -> Result<(), String> {
+    let invalid = || {
+        format!(
+            "transport observation at event #{} does not match manifested turn {}",
+            event.sequence, recorded.turn_id
+        )
+    };
+    let value: Value = serde_json::from_str(&event.payload).map_err(|_| invalid())?;
+    if value.get("schema").and_then(Value::as_str)
+        != Some("chatarium-responses-turn-observation")
+        || value.get("version").and_then(Value::as_u64) != Some(1)
+        || value.pointer("/details/local_turn_id").and_then(Value::as_str)
+            != Some(recorded.turn_id.as_str())
+        || value.pointer("/details/request_id").and_then(Value::as_str)
+            != Some(recorded.turn_id.as_str())
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Independently link each manifest's asserted conversation to its durable
+/// originating authored commit or typed non-authored orchestration start.
+/// No manifest may borrow another conversation's identity.
+fn verify_origins(
+    events: &[EventEnvelope],
+    rows: &[RecordedDispatchManifest],
+) -> Result<(), String> {
+    let mut authored = BTreeMap::new();
+    for event in events {
+        if let Some(DecodedUserMessageCommit::Typed(message)) =
+            decode_user_message_commit(event)?
+        {
+            let id = message.turn_id.to_string();
+            if event.scope.as_deref() != Some(format!("local-turn:{id}").as_str())
+                || authored
+                    .insert(id.clone(), (message.conversation_id.to_string(), event.sequence))
+                    .is_some()
+            {
+                return Err(format!("conflicting typed authored origin for turn {id}"));
+            }
+        }
+    }
+    let require_coordination = rows
+        .iter()
+        .any(|row| row.request_class == "controller_coordination");
+    let require_continuation = rows
+        .iter()
+        .any(|row| row.request_class == "worker_continuation");
+    let coordination = if require_coordination {
+        replay_controller_coordination_audit(events)?
+            .into_iter()
+            .map(|item| {
+                (
+                    item.coordination_turn_id.to_string(),
+                    (
+                        item.controller_conversation_id.to_string(),
+                        item.started_sequence,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+    let continuation = if require_continuation {
+        replay_worker_continuation_execution_audit(events)?
+            .into_iter()
+            .map(|item| {
+                (
+                    item.execution_turn_id.to_string(),
+                    (
+                        item.worker_conversation_id.to_string(),
+                        item.started_sequence,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+    for row in rows {
+        let origin = match row.request_class.as_str() {
+            "authored" => authored.get(&row.turn_id),
+            "controller_coordination" => coordination.get(&row.turn_id),
+            "worker_continuation" => continuation.get(&row.turn_id),
+            _ => None,
+        };
+        match origin {
+            Some((owner, started)) if owner == &row.conversation_id && *started < row.sequence => {}
+            _ => {
+                return Err(format!(
+                    "dispatch event #{} has no matching historically owned {} origin",
+                    row.sequence, row.request_class
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Linear chronological audit. Earlier implementation rescanned the entire
+/// journal for every visible dispatch; this records each exact-turn transport
+/// observation once, with stable immutable event sequence identifiers.
+pub fn dispatch_history(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
 ) -> Result<Vec<RecordedDispatchManifest>, String> {
-    let mut result = Vec::new();
-    let mut seen = BTreeSet::new();
-    for event in events.iter().rev() {
-        let Some(mut manifest) = parse_dispatch(event)? else {
-            continue;
-        };
-        if manifest.conversation_id != conversation_id.to_string() {
-            continue;
+    let mut results = Vec::new();
+    let mut turn_to_row = BTreeMap::<String, usize>::new();
+    let mut last_sequence = None;
+    for event in events {
+        if last_sequence.is_some_and(|previous| event.sequence <= previous) {
+            return Err(format!("journal sequence is not increasing at #{}", event.sequence));
         }
-        if !seen.insert(manifest.turn_id.clone()) {
-            return Err(format!(
-                "duplicate manifested dispatch for turn {}",
-                manifest.turn_id
-            ));
-        }
-        manifest.remote_acceptance_observed = events.iter().any(|later| {
-            later.sequence > event.sequence
-                && later.scope == event.scope
-                && later.kind == EventKind::RemoteAcceptanceObserved
-        });
-        result.push(manifest);
-        if result.len() >= MAX_VISIBLE_DISPATCHES {
-            break;
+        last_sequence = Some(event.sequence);
+        if event.kind == EventKind::DispatchAttempted {
+            if let Some(manifest) = parse_dispatch(event)? {
+                if turn_to_row
+                    .insert(manifest.turn_id.clone(), results.len())
+                    .is_some()
+                {
+                    return Err(format!(
+                        "duplicate manifested dispatch for turn {}",
+                        manifest.turn_id
+                    ));
+                }
+                results.push(manifest);
+            }
+        } else if is_transport_evidence(event.kind) {
+            if let Some(scope) = event.scope.as_deref() {
+                if let Some(turn_id) = scope.strip_prefix("local-turn:") {
+                    if let Some(index) = turn_to_row.get(turn_id).copied() {
+                        let recorded = &mut results[index];
+                        validate_transport_observation(event, recorded)?;
+                        recorded.transport.observe(event.kind, event.sequence);
+                    }
+                }
+            }
         }
     }
-    Ok(result)
+    verify_origins(events, &results)?;
+    results.retain(|row| row.conversation_id == conversation_id.to_string());
+    results.reverse();
+    Ok(results)
 }
 
 /// Visible history of what Chatarium assembled before attempting transport.
@@ -370,13 +563,46 @@ pub fn render_dispatches(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
 ) {
-    match recent_dispatches(events, conversation_id) {
+    match dispatch_history(events, conversation_id) {
         Ok(rows) if rows.is_empty() => {
             ui.label("No manifested dispatch attempts for this local conversation. Older attempts did not record this metadata.");
         }
         Ok(rows) => {
-            ui.label("Journaled request-preparation evidence, not proof of remote receipt or model attention. Source IDs and counts are retained; raw tool text is not duplicated.");
-            for item in rows {
+            ui.label("Journaled request-preparation evidence, not proof of remote receipt or model attention. Transport outcomes are correlated by exact turn, request ID and durable sequence.");
+            let page_id = ui
+                .id()
+                .with(("mcp-dispatch-history-page", conversation_id.to_string()));
+            let mut page = ui
+                .ctx()
+                .data_mut(|data| data.get_temp::<usize>(page_id).unwrap_or(0));
+            let pages = rows.len().div_ceil(MAX_VISIBLE_DISPATCHES);
+            page = page.min(pages.saturating_sub(1));
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(page > 0, egui::Button::new("Newer"))
+                    .clicked()
+                {
+                    page -= 1;
+                }
+                ui.label(format!(
+                    "Page {} / {} · {} recorded attempts",
+                    page + 1,
+                    pages,
+                    rows.len()
+                ));
+                if ui
+                    .add_enabled(page + 1 < pages, egui::Button::new("Older"))
+                    .clicked()
+                {
+                    page += 1;
+                }
+            });
+            ui.ctx().data_mut(|data| data.insert_temp(page_id, page));
+            for item in rows
+                .iter()
+                .skip(page * MAX_VISIBLE_DISPATCHES)
+                .take(MAX_VISIBLE_DISPATCHES)
+            {
                 ui.collapsing(
                     format!(
                         "{} · turn {} · event #{} · {} included / {} admitted",
@@ -387,11 +613,17 @@ pub fn render_dispatches(
                         item.eligible_total,
                     ),
                     |ui| {
-                        ui.label(if item.remote_acceptance_observed {
-                            "Remote acceptance observed after this attempt."
-                        } else {
-                            "Remote acceptance NOT observed. Dispatch outcome may be unknown."
-                        });
+                        ui.label(
+                            egui::RichText::new(item.transport.status()).strong(),
+                        );
+                        ui.label(format!(
+                            "Transport audit · accepted {:?} · completed {:?} · failed {:?} · interrupted {:?} · first output {:?}",
+                            item.transport.accepted_sequence,
+                            item.transport.completed_sequence,
+                            item.transport.failure_sequence,
+                            item.transport.interrupted_sequence,
+                            item.transport.first_output_sequence,
+                        ));
                         ui.label(format!(
                             "MCP evidence · {} eligible · {} included in composed payload · {} omitted by this dispatch path",
                             item.eligible_total,
@@ -567,6 +799,242 @@ mod tests {
         assert!(parse_dispatch(&event).is_err());
     }
 
+    fn append_authored_attempt(
+        store: &mut chatarium_store::MemoryEventStore,
+        owner: LocalConversationId,
+    ) -> (String, u64) {
+        use chatarium_core::{AuthoredUserMessage, LocalMessageId, LocalTurnId};
+        use chatarium_store::authored::{commit_user_message, local_turn_scope};
+        use chatarium_store::EventStore;
+
+        let turn = LocalTurnId::new();
+        let message = AuthoredUserMessage::new(
+            owner,
+            turn,
+            LocalMessageId::new(),
+            "historically typed user message",
+        );
+        commit_user_message(store, &message).unwrap();
+        let manifest = capture(
+            owner,
+            "authored",
+            &[],
+            &ContextPlan::compose(ContextPolicy::dispatch(), "", "", []),
+        )
+        .unwrap();
+        let turn_id = turn.to_string();
+        let payload = json!({
+            "schema": "chatarium-responses-turn-observation",
+            "version": 1,
+            "details": {
+                "local_turn_id": turn_id,
+                "request_id": turn_id,
+            },
+        })
+        .to_string();
+        let payload = attach_to_dispatch_payload(payload, manifest).unwrap();
+        let sequence = store
+            .append_scoped(
+                Some(local_turn_scope(turn)),
+                EventKind::DispatchAttempted,
+                payload,
+            )
+            .unwrap();
+        (turn_id, sequence)
+    }
+
+    fn append_transport_observation(
+        store: &mut chatarium_store::MemoryEventStore,
+        turn: &str,
+        request: &str,
+        kind: EventKind,
+    ) -> u64 {
+        use chatarium_store::EventStore;
+        store
+            .append_scoped(
+                Some(format!("local-turn:{turn}")),
+                kind,
+                json!({
+                    "schema": "chatarium-responses-turn-observation",
+                    "version": 1,
+                    "details": {
+                        "local_turn_id": turn,
+                        "request_id": request,
+                    },
+                })
+                .to_string(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn exact_turn_outcomes_replay_without_cross_conversation_leakage() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let (first_turn, first_dispatch) = append_authored_attempt(&mut store, first);
+        let (second_turn, second_dispatch) = append_authored_attempt(&mut store, second);
+        let accepted = append_transport_observation(
+            &mut store,
+            &first_turn,
+            &first_turn,
+            EventKind::RemoteAcceptanceObserved,
+        );
+        let completed = append_transport_observation(
+            &mut store,
+            &first_turn,
+            &first_turn,
+            EventKind::AssistantCompletionObserved,
+        );
+        assert!(completed > accepted && accepted > first_dispatch);
+        assert!(second_dispatch > first_dispatch);
+        let first_rows = dispatch_history(store.events(), first).unwrap();
+        assert_eq!(first_rows.len(), 1);
+        assert_eq!(first_rows[0].turn_id, first_turn);
+        assert_eq!(first_rows[0].transport.accepted_sequence, Some(accepted));
+        assert_eq!(first_rows[0].transport.completed_sequence, Some(completed));
+        assert_eq!(first_rows[0].transport.status(), "COMPLETION OBSERVED");
+        let second_rows = dispatch_history(store.events(), second).unwrap();
+        assert_eq!(second_rows.len(), 1);
+        assert_eq!(second_rows[0].turn_id, second_turn);
+        assert_eq!(second_rows[0].transport.accepted_sequence, None);
+        assert_eq!(
+            second_rows[0].transport.status(),
+            "DISPATCH ATTEMPT RECORDED · OUTCOME NOT OBSERVED",
+        );
+    }
+
+    #[test]
+    fn foreign_request_id_in_same_turn_scope_blocks_projection() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let (turn, _) = append_authored_attempt(&mut store, owner);
+        append_transport_observation(
+            &mut store,
+            &turn,
+            "a-different-request",
+            EventKind::RemoteAcceptanceObserved,
+        );
+        assert!(dispatch_history(store.events(), owner).is_err());
+    }
+
+    #[test]
+    fn manifest_owner_must_match_durable_typed_turn_owner() {
+        use chatarium_core::{AuthoredUserMessage, LocalMessageId, LocalTurnId};
+        use chatarium_store::authored::{commit_user_message, local_turn_scope};
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let own = LocalConversationId::new();
+        let forged = LocalConversationId::new();
+        let turn = LocalTurnId::new();
+        let mut store = MemoryEventStore::default();
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(own, turn, LocalMessageId::new(), "owned"),
+        )
+        .unwrap();
+        let manifest = capture(
+            forged,
+            "authored",
+            &[],
+            &ContextPlan::compose(ContextPolicy::dispatch(), "", "", []),
+        )
+        .unwrap();
+        let payload = attach_to_dispatch_payload(
+            json!({
+                "schema": "chatarium-responses-turn-observation",
+                "version": 1,
+                "details": {
+                    "local_turn_id": turn.to_string(),
+                    "request_id": turn.to_string(),
+                },
+            })
+            .to_string(),
+            manifest,
+        )
+        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn)),
+                EventKind::DispatchAttempted,
+                payload,
+            )
+            .unwrap();
+        assert!(dispatch_history(store.events(), own).is_err());
+        assert!(dispatch_history(store.events(), forged).is_err());
+    }
+
+    #[test]
+    fn history_preserves_more_than_twelve_attempts_newest_first() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let mut last = String::new();
+        for _ in 0..27 {
+            let (turn, _) = append_authored_attempt(&mut store, owner);
+            last = turn;
+        }
+        let rows = dispatch_history(store.events(), owner).unwrap();
+        assert_eq!(rows.len(), 27);
+        assert_eq!(rows[0].turn_id, last);
+        assert!(rows.windows(2).all(|pair| pair[0].sequence > pair[1].sequence));
+    }
+
+    #[test]
+    fn transport_interruption_does_not_erase_positive_acceptance_evidence() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let (turn, _) = append_authored_attempt(&mut store, owner);
+        let accepted = append_transport_observation(
+            &mut store,
+            &turn,
+            &turn,
+            EventKind::RemoteAcceptanceObserved,
+        );
+        let interrupted = append_transport_observation(
+            &mut store,
+            &turn,
+            &turn,
+            EventKind::TransportInterrupted,
+        );
+        let rows = dispatch_history(store.events(), owner).unwrap();
+        assert_eq!(rows[0].transport.accepted_sequence, Some(accepted));
+        assert_eq!(rows[0].transport.interrupted_sequence, Some(interrupted));
+        assert_eq!(
+            rows[0].transport.status(),
+            "INTERRUPTED AFTER REMOTE ACCEPTANCE"
+        );
+    }
+
+    #[test]
+    fn conflicting_terminal_observations_are_labeled_not_misreported() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let (turn, _) = append_authored_attempt(&mut store, owner);
+        append_transport_observation(
+            &mut store,
+            &turn,
+            &turn,
+            EventKind::RemoteFailureObserved,
+        );
+        append_transport_observation(
+            &mut store,
+            &turn,
+            &turn,
+            EventKind::AssistantCompletionObserved,
+        );
+        let rows = dispatch_history(store.events(), owner).unwrap();
+        assert_eq!(
+            rows[0].transport.status(),
+            "CONFLICTING TERMINAL EVIDENCE · inspect turn audit"
+        );
+    }
+
     #[test]
     fn legacy_dispatch_does_not_fabricate_manifest() {
         let owner = LocalConversationId::new();
@@ -577,6 +1045,6 @@ mod tests {
             kind: EventKind::DispatchAttempted,
             payload: "{}".to_owned(),
         };
-        assert!(recent_dispatches(&[event], owner).unwrap().is_empty());
+        assert!(dispatch_history(&[event], owner).unwrap().is_empty());
     }
 }
