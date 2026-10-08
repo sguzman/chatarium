@@ -369,9 +369,18 @@ for redundant one-shot selection.
 The explicit manual memory stack is therefore complete enough for dogfooding.
 Automatic semantic retrieval and embedding search remain later.
 
-The active next architectural boundary is the first **MCP/tool integration
-substrate**: typed tool/provider identity, immutable call provenance, routing and
-permission correlation, and durable result/error state before live tool
-execution is enabled. Reuse the existing `RouteClass::ToolCall` gate and recover
-the user's existing XML-oriented MCP envelope before inventing a competing wire
-language. Do not reopen browser/history work as part of this phase.
+The first **MCP/tool integration substrate** is now landed: typed
+provider/tool-call identities, durable provider endpoint correlation, immutable
+call argument/provenance records, explicit RequireApproval ToolCall routing,
+manual Allow/Deny controls, and a separate terminal tool result/error audit.
+The desktop remains intentionally inert: it cannot invoke arbitrary tools just
+because a call is proposed or approved. A tool outcome can only replay after
+an explicitly user-authorized one-shot routing dispatch; no outcome is
+fabricated when dispatch or adapter execution is absent.
+
+The next boundary is a versioned adapter/transport bridge, using the existing
+Braizen/JavaScript-shim XML-oriented MCP envelope only after recovering and
+verifying its actual schema. See
+[LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). No automatic model-driven
+tool execution or hidden tool-result context admission is authorized. Do not
+reopen browser/history work as part of this phase.
