@@ -373,14 +373,16 @@ The first **MCP/tool integration substrate** is now landed: typed
 provider/tool-call identities, durable provider endpoint correlation, immutable
 call argument/provenance records, explicit RequireApproval ToolCall routing,
 manual Allow/Deny controls, and a separate terminal tool result/error audit.
-The desktop remains intentionally inert: it cannot invoke arbitrary tools just
-because a call is proposed or approved. A tool outcome can only replay after
-an explicitly user-authorized one-shot routing dispatch; no outcome is
-fabricated when dispatch or adapter execution is absent.
+The original XML-like tool envelope has now been recovered from the dormant
+ChatGPT Tool Shim and ported to a bounded pure Rust parser/formatter. Only the
+side-effect-free local `chatarium.builtin` / `hello` smoke adapter is executable:
+it requires the immutable call, explicit Allow, and a second user click to
+consume the one-shot dispatch permit. Its exact terminal result is audited
+separately. Arbitrary local commands, browser, filesystem, network, and general
+MCP adapters remain disabled.
 
-The next boundary is a versioned adapter/transport bridge, using the existing
-Braizen/JavaScript-shim XML-oriented MCP envelope only after recovering and
-verifying its actual schema. See
+The next boundary is an explicitly configured, policy-gated provider transport
+and independently admitted tool-result context. See
 [LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). No automatic model-driven
 tool execution or hidden tool-result context admission is authorized. Do not
 reopen browser/history work as part of this phase.
