@@ -1238,7 +1238,11 @@ mod tests {
         }
     }
 
-    fn reverse_evidence(call_id: u64, admitted_sequence: u64, included: bool) -> ListedToolEvidence {
+    fn reverse_evidence(
+        call_id: u64,
+        admitted_sequence: u64,
+        included: bool,
+    ) -> ListedToolEvidence {
         ListedToolEvidence {
             call_id,
             route_id: call_id + 100,
@@ -1267,7 +1271,10 @@ mod tests {
         assert_eq!(report.uncertain_truncated, 0);
         assert_eq!(report.entries.len(), 2);
         assert_eq!(report.entries[0].dispatch.sequence, 40);
-        assert_eq!(report.entries[0].disposition, ToolProvenanceDisposition::Included);
+        assert_eq!(
+            report.entries[0].disposition,
+            ToolProvenanceDisposition::Included
+        );
         assert_eq!(
             report.entries[1].disposition,
             ToolProvenanceDisposition::AdmittedButOmitted
@@ -1294,25 +1301,32 @@ mod tests {
             ToolProvenanceDisposition::UnknownBecauseManifestTruncated
         );
         assert_eq!(report.entries[0].dispatch.sequence, 25);
-        assert_eq!(report.entries[1].disposition, ToolProvenanceDisposition::Included);
+        assert_eq!(
+            report.entries[1].disposition,
+            ToolProvenanceDisposition::Included
+        );
         assert_eq!(report.entries[2].dispatch.sequence, 15);
     }
 
     #[test]
     fn exact_result_identity_must_match_across_dispatches_but_readmission_can_change() {
         let owner = LocalConversationId::new();
-        let first = manifest_for_reverse_test(10, owner, vec![reverse_evidence(7, 19, false)], false);
-        let second = manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 25, true)], false);
+        let first =
+            manifest_for_reverse_test(10, owner, vec![reverse_evidence(7, 19, false)], false);
+        let second =
+            manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 25, true)], false);
         assert!(reverse_tool_provenance(&[second, first], 7).is_ok());
         let mut corrupted = reverse_evidence(7, 30, true);
         corrupted.source_session_id = 999;
         let bad = manifest_for_reverse_test(30, owner, vec![corrupted], false);
-        let consistent = manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false);
+        let consistent =
+            manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false);
         assert!(reverse_tool_provenance(&[consistent, bad], 7).is_err());
         let mut corrupted = reverse_evidence(7, 30, true);
         corrupted.outcome_sequence += 1;
         let bad = manifest_for_reverse_test(30, owner, vec![corrupted], false);
-        let consistent = manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false);
+        let consistent =
+            manifest_for_reverse_test(40, owner, vec![reverse_evidence(7, 35, true)], false);
         assert!(reverse_tool_provenance(&[consistent, bad], 7).is_err());
     }
 
@@ -1342,7 +1356,10 @@ mod tests {
         assert_eq!(json["counts"]["unknown_due_to_truncation"], 1);
         assert_eq!(json["dispatches"][0]["disposition"], "included");
         assert_eq!(json["dispatches"][1]["disposition"], "unknown_truncated");
-        assert_eq!(json["limits"]["legacy_unmanifested_requests_are_unknown"], true);
+        assert_eq!(
+            json["limits"]["legacy_unmanifested_requests_are_unknown"],
+            true
+        );
         let serialized = json.to_string();
         assert!(!serialized.contains("secret adapter bytes"));
         assert!(!serialized.contains("historically typed user message"));
