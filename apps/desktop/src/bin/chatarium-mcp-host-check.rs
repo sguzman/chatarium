@@ -1,11 +1,11 @@
 //! A provider-free, journal-free compatibility check for the production
 //! Linux MCP one-shot sandbox. No permission or tool route is consumed.
 
+#[path = "../local_stdio_host_diagnostics.rs"]
+mod local_stdio_host_diagnostics;
 #[path = "../local_stdio_runner.rs"]
 #[allow(dead_code)]
 mod local_stdio_runner;
-#[path = "../local_stdio_host_diagnostics.rs"]
-mod local_stdio_host_diagnostics;
 
 use local_stdio_host_diagnostics::failure_category;
 

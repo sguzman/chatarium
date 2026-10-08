@@ -7,8 +7,8 @@ mod local_archive_search;
 mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
-mod local_stdio_runner;
 mod local_stdio_host_diagnostics;
+mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
 #[cfg(test)]
@@ -1256,7 +1256,7 @@ impl ChatariumApp {
                         route_dispatch_command_pending: false,
                         route_context_command_pending: false,
                         tool_command_pending: false,
-                        last_sandbox_host_check: None,
+            last_sandbox_host_check: None,
                         tool_provider_name_draft: String::new(),
                         tool_selected_provider: None,
                         tool_stdio_executable_draft: String::new(),
@@ -1450,7 +1450,7 @@ impl ChatariumApp {
             route_dispatch_command_pending: false,
             route_context_command_pending: false,
             tool_command_pending: false,
-                        last_sandbox_host_check: None,
+            last_sandbox_host_check: None,
             tool_provider_name_draft: String::new(),
             tool_selected_provider: None,
             tool_stdio_executable_draft: String::new(),
