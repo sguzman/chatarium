@@ -125,12 +125,18 @@ fn mismatch_explanation(keyword: &str) -> &'static str {
         "false schema" => "A boolean false schema rejects the structured output.",
         "type" => "Constraint type failed: the structured output has an unexpected JSON type.",
         "required" => "Constraint required failed: a required object property is missing.",
-        "properties" => "Constraint properties failed: a declared property is forbidden by a false schema.",
-        "additionalProperties" => "Constraint additionalProperties failed: an extra object property is forbidden.",
+        "properties" => {
+            "Constraint properties failed: a declared property is forbidden by a false schema."
+        }
+        "additionalProperties" => {
+            "Constraint additionalProperties failed: an extra object property is forbidden."
+        }
         "propertyNames" => "Constraint propertyNames failed: an object key is forbidden.",
         "prefixItems" => "Constraint prefixItems failed: a tuple element is forbidden.",
         "items" => "Constraint items failed: an array element is forbidden.",
-        "const" => "Constraint const failed: the structured output differs from the declared constant.",
+        "const" => {
+            "Constraint const failed: the structured output differs from the declared constant."
+        }
         "enum" => "Constraint enum failed: the structured output matches no declared option.",
         "minLength" => "Constraint minLength failed: a string is too short.",
         "maxLength" => "Constraint maxLength failed: a string is too long.",
@@ -140,8 +146,12 @@ fn mismatch_explanation(keyword: &str) -> &'static str {
         "maxProperties" => "Constraint maxProperties failed: an object has too many properties.",
         "minimum" => "Constraint minimum failed: a number is below its inclusive lower bound.",
         "maximum" => "Constraint maximum failed: a number exceeds its inclusive upper bound.",
-        "exclusiveMinimum" => "Constraint exclusiveMinimum failed: a number is not above its exclusive lower bound.",
-        "exclusiveMaximum" => "Constraint exclusiveMaximum failed: a number is not below its exclusive upper bound.",
+        "exclusiveMinimum" => {
+            "Constraint exclusiveMinimum failed: a number is not above its exclusive lower bound."
+        }
+        "exclusiveMaximum" => {
+            "Constraint exclusiveMaximum failed: a number is not below its exclusive upper bound."
+        }
         "multipleOf" => "Constraint multipleOf failed: a number is not an exact multiple.",
         "uniqueItems" => "Constraint uniqueItems failed: an array contains equivalent entries.",
         _ => "The structured output violates a recognized schema constraint.",
@@ -709,7 +719,13 @@ fn inspect_value(
                     // propertyNames independently validates every key,
                     // including names also listed in properties.
                     if let Some(names) = names {
-                        inspect_child(names, &Value::String(name.to_owned()), depth + 1, budget, "propertyNames")?;
+                        inspect_child(
+                            names,
+                            &Value::String(name.to_owned()),
+                            depth + 1,
+                            budget,
+                            "propertyNames",
+                        )?;
                     }
                     if let Some(child) = props.and_then(|props| props.get(name)) {
                         inspect_child(child, member, depth + 1, budget, "properties")?;
@@ -1427,26 +1443,54 @@ mod tests {
         let cases = [
             (json!(false), json!(1), "boolean false schema"),
             (json!({"type":"string"}), json!(1), "type"),
-            (json!({"properties":{"PRIVATE-PROVIDER-KEY":false}}), json!({"PRIVATE-PROVIDER-KEY":1}), "properties"),
-            (json!({"additionalProperties":false}), json!({"PRIVATE-PROVIDER-KEY":1}), "additionalProperties"),
-            (json!({"propertyNames":false}), json!({"PRIVATE-PROVIDER-KEY":1}), "propertyNames"),
+            (
+                json!({"properties":{"PRIVATE-PROVIDER-KEY":false}}),
+                json!({"PRIVATE-PROVIDER-KEY":1}),
+                "properties",
+            ),
+            (
+                json!({"additionalProperties":false}),
+                json!({"PRIVATE-PROVIDER-KEY":1}),
+                "additionalProperties",
+            ),
+            (
+                json!({"propertyNames":false}),
+                json!({"PRIVATE-PROVIDER-KEY":1}),
+                "propertyNames",
+            ),
             (json!({"prefixItems":[false]}), json!([1]), "prefixItems"),
             (json!({"items":false}), json!([1]), "items"),
-            (json!({"required":["PRIVATE-PROVIDER-KEY"]}), json!({}), "required"),
-            (json!({"const":{"PRIVATE-PROVIDER-KEY":1}}), json!({}), "const"),
-            (json!({"enum":["PRIVATE-PROVIDER-KEY"]}), json!("other"), "enum"),
+            (
+                json!({"required":["PRIVATE-PROVIDER-KEY"]}),
+                json!({}),
+                "required",
+            ),
+            (
+                json!({"const":{"PRIVATE-PROVIDER-KEY":1}}),
+                json!({}),
+                "const",
+            ),
+            (
+                json!({"enum":["PRIVATE-PROVIDER-KEY"]}),
+                json!("other"),
+                "enum",
+            ),
             (json!({"minLength":3}), json!("a"), "minLength"),
             (json!({"maxLength":1}), json!("ab"), "maxLength"),
             (json!({"minItems":2}), json!([1]), "minItems"),
             (json!({"maxItems":0}), json!([1]), "maxItems"),
             (json!({"minProperties":2}), json!({}), "minProperties"),
-            (json!({"maxProperties":0}), json!({"PRIVATE-PROVIDER-KEY":true}), "maxProperties"),
+            (
+                json!({"maxProperties":0}),
+                json!({"PRIVATE-PROVIDER-KEY":true}),
+                "maxProperties",
+            ),
             (json!({"minimum":2}), json!(1), "minimum"),
             (json!({"maximum":2}), json!(3), "maximum"),
             (json!({"exclusiveMinimum":2}), json!(2), "exclusiveMinimum"),
             (json!({"exclusiveMaximum":2}), json!(2), "exclusiveMaximum"),
             (json!({"multipleOf":2}), json!(3), "multipleOf"),
-            (json!({"uniqueItems":true}), json!([1,1.0]), "uniqueItems"),
+            (json!({"uniqueItems":true}), json!([1, 1.0]), "uniqueItems"),
             (
                 json!({"properties":{"PRIVATE-PROVIDER-KEY":{"minLength":4}}}),
                 json!({"PRIVATE-PROVIDER-KEY":"a"}),
@@ -1464,10 +1508,9 @@ mod tests {
             ),
         ];
         for (schema, value, keyword) in cases {
-            let result = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)),
-                &complete(value),
-            ).unwrap();
+            let result =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap();
             assert_eq!(result.verdict, McpOutputVerdict::Mismatch, "{keyword}");
             assert!(result.explanation.contains(keyword), "{keyword}");
             assert!(!result.explanation.contains("PRIVATE-PROVIDER-KEY"));
@@ -1481,10 +1524,9 @@ mod tests {
             "required":["PRIVATE-PROVIDER-KEY"],
             "properties":{"unused":{"pattern":"PRIVATE-PROVIDER-KEY"}}
         });
-        let result = inspect_structured_tool_output(
-            &inspected_tool(Some(schema)),
-            &complete(json!({})),
-        ).unwrap();
+        let result =
+            inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
+                .unwrap();
         assert_eq!(result.verdict, McpOutputVerdict::Inconclusive);
         assert!(!result.explanation.contains("Constraint required failed"));
         assert!(!result.explanation.contains("PRIVATE-PROVIDER-KEY"));
