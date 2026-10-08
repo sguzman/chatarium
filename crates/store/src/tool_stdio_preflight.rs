@@ -11,6 +11,7 @@ use crate::routing_audit::{RouteUserDecision, replay_routing_audit};
 use crate::session_audit::replay_session_audit;
 use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_provider_audit::replay_tool_provider_audit;
+use crate::tool_provider_activation_audit::replay_tool_provider_activation_audit;
 use crate::tool_transport_config_audit::replay_tool_transport_config_audit;
 use chatarium_core::routing::{
     DecisionAuthority, RouteClass, RouteGateState, RouteId, RoutePolicy,
@@ -183,6 +184,48 @@ pub fn preview_stdio_tool_invocation(
         configured_sequence: configured.configured_sequence,
         approved_sequence,
         request_frame,
+    })
+}
+
+/// A validated activation gate in addition to an inert request preview.
+/// This is still not a permit to execute a process or dispatch a route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivatedStdioToolInvocationPreview {
+    pub invocation: StdioToolInvocationPreview,
+    pub activation_sequence: u64,
+}
+
+/// A future runner must recheck this immediately before dispatch and must
+/// independently enforce race-aware executable validation and the one-shot
+/// route permit. Re-activation never revives a call recorded before it.
+pub fn preview_activated_stdio_tool_invocation(
+    events: &[EventEnvelope],
+    call_id: ToolCallId,
+) -> Result<ActivatedStdioToolInvocationPreview, String> {
+    let invocation = preview_stdio_tool_invocation(events, call_id)?;
+    let activation = replay_tool_provider_activation_audit(events)?
+        .into_iter()
+        .find(|record| record.provider_id == invocation.provider_id)
+        .ok_or_else(|| "external tool provider has no explicit activation decision".to_owned())?;
+    if !activation.active {
+        return Err("external tool provider is deactivated".to_owned());
+    }
+    if activation.configured_sequence != invocation.configured_sequence {
+        return Err("external tool provider activation is for a different configuration".to_owned());
+    }
+    let call = replay_tool_call_audit(events)?
+        .into_iter()
+        .find(|record| record.call_id == call_id)
+        .ok_or_else(|| "activated tool call disappeared".to_owned())?;
+    let activation_sequence = activation
+        .activated_sequence
+        .ok_or_else(|| "external tool provider has no active activation sequence".to_owned())?;
+    if activation_sequence >= call.recorded_sequence {
+        return Err("external tool provider was not active when this call was recorded".to_owned());
+    }
+    Ok(ActivatedStdioToolInvocationPreview {
+        invocation,
+        activation_sequence,
     })
 }
 

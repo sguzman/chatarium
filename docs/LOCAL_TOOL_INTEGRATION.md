@@ -213,6 +213,30 @@ benign, does not restrict what an eventual subprocess can access, and never
 reads process credentials or spawns an executable. External execution still
 requires an independent explicit activation and a race-aware launch design.
 
+### Explicit provider activation audit (no execution)
+
+`crates/store/src/tool_provider_activation_audit.rs` adds a durable,
+checked Activate/Deactivate state machine bound to the *exact immutable*
+external stdio configuration sequence. An activation event records an
+explicit user-authority decision, not executable trust or permission for any
+particular call. Duplicate transitions, activation of an unconfigured
+provider, wrong configuration identity, and malformed replay are rejected
+before append. Archive integrity replays this audit.
+
+`preview_activated_stdio_tool_invocation` combines the existing exact-call,
+route, endpoint, and session preflight with the activation state. It requires
+a currently active provider and activation **before the call was recorded**.
+Disabling a provider blocks pending calls. Re-enabling it does not revive
+old pending calls recorded before the newest activation.
+
+This is a Rust storage/preflight substrate, **not yet a desktop control**,
+trust assessment, or external execution implementation. The eventual desktop
+control must originate from a deliberate human action, inspect the configured
+executable, and preserve explicit revocation. Future process execution must
+rerun activation and all route checks immediately before consuming a one-shot
+permit, and independently enforce an audited, race-aware Linux launch policy.
+No shell, process, network, or implicit model call is activated by this slice.
+
 ### Next transport implementation
 
 The first real transport should remain Linux-native and cost-free. Two

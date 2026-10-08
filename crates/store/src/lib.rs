@@ -58,6 +58,7 @@ pub mod supervision_audit;
 pub mod tool_call_audit;
 pub mod tool_outcome_audit;
 pub mod tool_provider_audit;
+pub mod tool_provider_activation_audit;
 pub mod tool_result_context_audit;
 pub mod tool_stdio_executable_inspection;
 pub mod tool_stdio_preflight;
