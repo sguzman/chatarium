@@ -639,6 +639,25 @@ every catalog, and call/route/dispatch chronology is rechecked independently.
 A result passing supported checks is labeled **NOT FULL VALIDATION**.
 No review or expansion action changes execution, permissions, or context.
 
+## Selected provider setup guide (desktop)
+
+The **Tools / MCP** panel now shows a read-only next-step guide for the
+currently selected provider. It derives prerequisites from replayed durable
+provider, transport, activation, and local routing state. In order, it
+identifies whether the provider needs a bound routing endpoint, immutable
+Linux stdio configuration, explicit activation, or an addressable source
+conversation. Once these are in place, it explains the existing separately
+approved **Record call → Allow → review → Run once** workflow. The builtin
+hello adapter is explicitly distinguished from an external stdio provider.
+
+Optional `chatarium.internal.tools-list` inspection is shown as optional
+only if the immutable transport allowlist actually includes it. Changing
+catalog advertisements never grants operations. If a required audit cannot
+be replayed, the guide declines to declare readiness and directs the user
+to the detailed audit errors. The guide has no controls that perform a
+transition or call, never launches a provider, never appends to the
+journal, and cannot cache a sandbox or route permission.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select
