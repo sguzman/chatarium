@@ -1,18 +1,17 @@
 //! Strict Linux-only, one-shot MCP stdio runner.
 //!
-//! This module is intentionally NOT wired to the desktop. A call can reach
-//! it only with a move-only, durably consumed RouteDispatched reservation.
+//! The desktop dispatches a move-only, durably consumed RouteDispatched
+//! reservation to a dedicated process thread. Journal writes remain on the
+//! separate persistence worker.
 //! It launches through root-owned prlimit + bubblewrap, never directly or via
 //! a shell. Missing confinement tools fail closed: no unsafe fallback.
 
-use chatarium_core::tool::StdioToolProviderConfig;
+use chatarium_core::routing::RouteId;
+use chatarium_core::tool::{StdioToolProviderConfig, ToolCallId};
 use chatarium_protocol::mcp_wire::{MAX_MCP_FRAME_BYTES, McpResponse, decode_stdio_response};
-use chatarium_store::tool_outcome_audit::{
-    MAX_OUTCOME_BYTES, ToolCallOutcomeKind, append_tool_call_outcome_checked,
-};
+use chatarium_store::tool_outcome_audit::{MAX_OUTCOME_BYTES, ToolCallOutcomeKind};
 use chatarium_store::tool_stdio_dispatch::ReservedStdioToolDispatch;
 use chatarium_store::tool_stdio_executable_inspection::inspect_stdio_executable;
-use chatarium_store::{EventEnvelope, EventStore};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -190,21 +189,22 @@ fn validate_trusted_binary(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Consume an already-reserved dispatch exactly once and record a checked
-/// terminal observation only when the child has actually terminated.
-///
-/// This intentionally operates on the persistence worker: the journal must
-/// not change between reservation and launch. When the process or journal
-/// fails unexpectedly, the route remains dispatched without a synthesized
-/// result and must never be automatically retried.
-pub fn execute_reserved_stdio_tool_call(
-    store: &mut impl EventStore,
+/// Bounded terminal observation from the separate process worker.
+/// Only the persistence worker may append the result to the journal.
+#[derive(Debug)]
+pub struct ConfinedStdioObservation {
+    pub call_id: ToolCallId,
+    pub route_id: RouteId,
+    pub kind: ToolCallOutcomeKind,
+    pub text: String,
+}
+
+/// Consume the move-only reservation off the persistence worker.
+/// RouteDispatched must already be durable. Never automatically retry.
+pub fn run_reserved_stdio_tool_call(
     reservation: ReservedStdioToolDispatch,
-) -> Result<EventEnvelope, String> {
+) -> ConfinedStdioObservation {
     let invocation = &reservation.invocation().invocation;
-    if store.events().last().map(|e| e.sequence) != Some(reservation.dispatch_sequence()) {
-        return Err("external call reservation is not the current journal tip".to_owned());
-    }
     let call_id = invocation.call_id;
     let route_id = invocation.route_id;
     let kind_and_text = run_one_shot(
@@ -213,13 +213,16 @@ pub fn execute_reserved_stdio_tool_call(
         invocation.request_frame.as_str(),
         call_id.get(),
     );
-    // Adapter errors are terminal *observations*, not a reason to rerun the
-    // route. If the journal write fails the dispatch remains unresolved.
     let (kind, text) = match kind_and_text {
         Ok(frame) => (ToolCallOutcomeKind::Result, frame),
         Err(error) => (ToolCallOutcomeKind::Error, error),
     };
-    append_tool_call_outcome_checked(store, call_id, route_id, kind, text)
+    ConfinedStdioObservation {
+        call_id,
+        route_id,
+        kind,
+        text,
+    }
 }
 
 fn run_one_shot(
