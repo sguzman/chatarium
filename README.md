@@ -15,7 +15,7 @@ The protocol corpus is evidence about ChatGPT as observed. The Rust implementati
 
 Chatarium is intentionally broader than a single reliable chat window. Its long-term endpoint is a **user-controlled ChatGPT desktop workstation** with a visible local control plane: native conversation interaction, MCP/tool integration, multiple coordinated ChatGPT sessions, master/controller -> worker routing, explicit worker lifecycle/completion states, and an egui supervisory surface where routed actions can be inspected, allowed, blocked/forbidden, approved, redirected, or interrupted.
 
-The original XML-like tool-call/result envelope has been recovered from the ChatGPT Tool Shim and ported into a strict, bounded Rust compatibility layer. Native MCP 2026 JSON-RPC is represented separately. Neither wire format grants tool execution authority; external providers remain disabled until explicit activation and one-shot approval.
+The original XML-like tool-call/result envelope has been recovered from the ChatGPT Tool Shim and ported into a strict, bounded Rust compatibility layer. Native MCP 2026 JSON-RPC is represented separately. Neither wire format grants tool execution authority. The initial Linux-only stdio path requires immutable configuration, explicit provider activation, per-call user Allow, and a separate one-shot Run action inside a tightly bounded, network-isolated sandbox; general host-process and HTTP transport are not available. See [`docs/LOCAL_TOOL_INTEGRATION.md`](docs/LOCAL_TOOL_INTEGRATION.md).
 
 These capabilities are sequenced after the reliability/protocol foundations; they are not a reason to skip them, and they are not optional evidence that Chatarium should be narrowed back to “just a chat client.”
 
