@@ -242,6 +242,44 @@ Archive integrity checking also replays unresolved external dispatches and
 their historical permission evidence. A malformed history cannot silently
 become a purportedly recoverable tool call.
 
+### Confined Linux MCP runner (not exposed in the desktop yet)
+
+`apps/desktop/src/local_stdio_runner.rs` contains an opt-in, bounded
+one-shot executor that **only accepts a move-only reserved dispatch**.
+It rejects stale journal-tip reservations, uses an exact single JSON-RPC
+request frame, decodes the single matching MCP reply, and appends a
+checked terminal Result or Error observation. A failed durable outcome
+append leaves the route unresolved; it is **never retried automatically**.
+
+The first hardened launch policy is intentionally narrow:
+
+- Linux only; no Windows implementation or unsafe host-command fallback.
+- The provider executable must be a canonical **root-owned /usr/bin**
+  regular executable with conservative metadata checks. User binaries
+  elsewhere are unsupported by this launcher for now.
+- Requires `/usr/bin/prlimit` and `/usr/bin/bwrap`, both verified as
+  root-owned executables. Missing binaries or unavailable kernel user
+  namespaces cause an error, never unsandboxed execution. These tools
+  are free Linux packages, but they are not presumed installed.
+- `prlimit` enforces 512 MiB address space, 8 CPU seconds, 8 MiB max
+  individual output file size, and 64 open descriptors. The runner adds
+  a 10-second wall-clock timeout, a 1 MiB stdout frame ceiling and
+  a 16 KiB stderr ceiling.
+- `bubblewrap --unshare-all` creates isolated namespaces (including
+  network and PID), with read-only `/usr`, synthetic `/dev` and `/proc`,
+  scratch `/tmp`, no home mount, cleared environment, a new session,
+  and parent-death cleanup. It never constructs a shell command.
+
+**Important limits:** Filesystem metadata checks are not cryptographic
+executable attestation; root compromise and race conditions are beyond
+this first policy. The runner cannot make arbitrary native code intrinsically
+benign. Namespace support depends on the Linux host, and the live
+bubblewrap path is not yet covered by a hosted integration test. This
+module is compiled and its argument/permission/error boundaries are unit
+tested, but no visible desktop action can launch it. A separate execution
+control and deliberate sandbox smoke validation are required before
+enabling it for daily use.
+
 This milestone is the journal-to-runner handoff; no desktop execution action
 has been enabled by it. Before external tool execution is exposed, the Linux
 runner must separately enforce race-aware executable identity, process
