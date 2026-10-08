@@ -75,7 +75,8 @@ merely because it was generated.
 
 See [`docs/LOCAL_FIRST_EXPLORATION.md`](docs/LOCAL_FIRST_EXPLORATION.md),
 [`docs/LIFECYCLE_STATE.md`](docs/LIFECYCLE_STATE.md), and
-[`docs/LOCAL_MEMORY.md`](docs/LOCAL_MEMORY.md) for the current executable
+[`docs/LOCAL_MEMORY.md`](docs/LOCAL_MEMORY.md) and
+[`docs/LOCAL_TOOL_INTEGRATION.md`](docs/LOCAL_TOOL_INTEGRATION.md) for the current executable
 boundaries. The native transport viability contract remains in force but is not
 the current work track.
 
