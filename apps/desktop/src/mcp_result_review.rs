@@ -186,12 +186,8 @@ mod tests {
 
     #[test]
     fn truncated_preview_never_offers_full_result_admission() {
-        assert!(
-            ResultReviewStage::ExcludedByDefault.may_admit_from_preview(false)
-        );
-        assert!(
-            !ResultReviewStage::ExcludedByDefault.may_admit_from_preview(true)
-        );
+        assert!(ResultReviewStage::ExcludedByDefault.may_admit_from_preview(false));
+        assert!(!ResultReviewStage::ExcludedByDefault.may_admit_from_preview(true));
         assert!(!ResultReviewStage::Admitted.may_admit_from_preview(false));
         assert!(!ResultReviewStage::TooLargeToAdmit.may_admit_from_preview(false));
         // A previously admitted result can still be excluded without reading it.
