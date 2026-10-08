@@ -16,7 +16,9 @@ use chatarium_core::tool::{
 use chatarium_core::{
     AuthoredUserMessage, EventKind, LocalConversationId, LocalMessageId, LocalTurnId,
 };
-use chatarium_store::authored::{commit_user_message, local_turn_scope};
+use chatarium_store::authored::{
+    DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
+};
 use chatarium_store::chat_container_audit::record_chat_container_created;
 use chatarium_store::local_conversation_chat_container_audit::record_local_conversation_chat_container_bound;
 use chatarium_store::routing_audit::{
@@ -36,7 +38,6 @@ use chatarium_store::tool_result_context_audit::{
     ToolResultContextDecision, append_tool_result_context_decision_checked,
     replay_admitted_tool_results,
 };
-use chatarium_store::turn_projection::derive_authored_turns;
 use chatarium_store::{EventStore, JsonlEventStore, MemoryEventStore};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -279,7 +280,17 @@ fn integration_journey_durable_tool_admission_followup_revocation_and_restart() 
     {
         let reopened = JsonlEventStore::open(&path).expect("replay after process restart");
         assert_eq!(reopened.events().len(), expected_events);
-        assert_eq!(derive_authored_turns(reopened.events()).unwrap().len(), 3);
+        let decoded = reopened
+            .events()
+            .iter()
+            .map(decode_user_message_commit)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("all durable authored envelopes decode");
+        let committed = decoded
+            .iter()
+            .filter(|message| matches!(message, Some(DecodedUserMessageCommit::Typed(_))))
+            .count();
+        assert_eq!(committed, 3);
         assert_eq!(
             replay_tool_call_outcome_audit(reopened.events())
                 .unwrap()
