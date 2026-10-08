@@ -581,7 +581,7 @@ mod tests {
         }
         use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_list_request};
         let frame = encode_stdio_frame(&tools_list_request(93, None).unwrap()).unwrap();
-        let reply = r#"{"jsonrpc":"2.0","id":93,"result":{"resultType":"complete","tools":[{"name":"weather.read","description":"A tool list is not authority","inputSchema":{"type":"object"}}],"nextCursor":"page2"}}"#;
+        let reply = r#"{"jsonrpc":"2.0","id":93,"result":{"resultType":"complete","tools":[{"name":"weather.read","description":"A tool list is not authority","inputSchema":{"type":"object"},"outputSchema":{"type":"array","items":{"type":"string"}}}],"nextCursor":"page2"}}"#;
         let command = format!("s/.*/{reply}/p");
         let returned = run_one_shot(
             "/usr/bin/sed",

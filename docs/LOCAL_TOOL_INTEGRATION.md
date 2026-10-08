@@ -512,6 +512,39 @@ observation after the already-consumed dispatch, not a retry or a context
 admission. Tool-produced text and metadata remain untrusted and
 context-excluded unless the user separately admits that exact outcome.
 
+## Read-only structured output inspection (MCP 2026)
+
+`tools/list` now retains an optional provider-advertised `outputSchema` in
+the typed catalog snapshot. MCP 2026-07-28 permits object, array, scalar,
+null, and boolean JSON Schema roots. A malformed `outputSchema` field that
+is neither a schema object nor a boolean schema is rejected with the page;
+unknown schema *constraints* are preserved as data, never executed.
+
+`mcp_output_inspection::inspect_structured_tool_output` is a **pure,
+non-executing comparison** between one inspected `McpListedTool` and one
+already-correlated complete `tools/call` result. It distinguishes:
+no advertised schema, no `structuredContent`, tool-reported error,
+definite mismatch, inconclusive inspection, and passing the explicitly
+limited checks. It checks basic JSON types, required object properties,
+nested `properties`, `additionalProperties`, and homogeneous array
+`items` with bounded recursion and item counts. JSON Schema features
+such as `$ref`, `$defs`, composition, `enum`, `const`, `format`, range,
+length, and pattern restrictions are **not yet evaluated**: these produce
+`Inconclusive`, never a false claim of conformance. Unsupported dialects
+and oversized/deep specimens are inconclusive. Only fixed, bounded
+diagnostic strings are emitted; arbitrary provider-supplied fields are
+not copied into diagnostics.
+
+**Passing supported checks is not full JSON Schema 2020-12 validation.**
+The comparison does not perform network requests, fetch resource links,
+load reference schemas, execute tools, authorize calls, or admit a result to
+inference context. The caller must correlate the exact recorded call,
+provider, conversation, catalog observation, and output itself. Catalogs
+can change between observations. This protocol substrate is not yet a
+desktop result-inspection control or an automatic pre-admission gate; future
+UI work must preserve the snapshot boundary and make provisional results
+visibly distinct from verified JSON Schema validation.
+
 ## External MCP one-shot workflow (strict Linux sandbox)
 
 In the desktop tool area, register a provider and bind an endpoint. Select

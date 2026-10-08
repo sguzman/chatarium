@@ -20,13 +20,14 @@ pub const MAX_MCP_LIST_TOOLS_PER_PAGE: usize = 128;
 pub const MAX_MCP_CALL_CONTENT_BLOCKS: usize = 128;
 
 /// A tool catalogue is external provider testimony, not an execution allowlist.
-/// Exact input schema remains untrusted JSON until separately reviewed.
+/// Exact input/output schemas remain untrusted JSON until reviewed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpListedTool {
     pub name: String,
     pub title: Option<String>,
     pub description: Option<String>,
     pub input_schema: Value,
+    pub output_schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,11 +90,19 @@ pub fn parse_tools_list_page(result: &Value) -> Result<McpToolCatalogPage, McpWi
             Some(Value::String(value)) if value.len() <= 65_536 => Some(value.clone()),
             _ => return Err(McpWireError::InvalidResponse),
         };
+        // JSON Schema 2020-12 permits boolean as well as object schemas.
+        // Preserve the exact advertised schema; it grants no new authority.
+        let output_schema = match obj.get("outputSchema") {
+            None => None,
+            Some(value) if value.is_object() || value.is_boolean() => Some(value.clone()),
+            _ => return Err(McpWireError::InvalidResponse),
+        };
         tools.push(McpListedTool {
             name: name.to_owned(),
             title,
             description,
             input_schema: input_schema.clone(),
+            output_schema,
         });
     }
     Ok(McpToolCatalogPage { tools, next_cursor })
@@ -431,7 +440,7 @@ mod tests {
             "tools": [
                 {"name":"weather.read","title":"Weather","description":"Read weather",
                  "inputSchema":{"type":"object","properties":{"city":{"type":"string"}}}},
-                {"name":"hello","inputSchema":{"type":"object"}}
+                {"name":"hello","inputSchema":{"type":"object"}, "outputSchema":{"type":"array","items":{"type":"string"}}}
             ],
             "nextCursor":"second-page"
         });
@@ -439,6 +448,11 @@ mod tests {
         assert_eq!(page.tools.len(), 2);
         assert_eq!(page.tools[0].name, "weather.read");
         assert_eq!(page.tools[0].input_schema["type"], "object");
+        assert!(page.tools[0].output_schema.is_none());
+        assert_eq!(
+            page.tools[1].output_schema.as_ref().unwrap()["type"],
+            "array"
+        );
         assert_eq!(page.next_cursor.as_deref(), Some("second-page"));
         assert!(
             parse_tools_list_page(&json!({"resultType":"complete","tools":[
@@ -452,6 +466,19 @@ mod tests {
             ]}))
             .is_err()
         );
+        assert!(
+            parse_tools_list_page(&json!({"resultType":"complete","tools":[
+                {"name":"unsafe","inputSchema":{}, "outputSchema":[]}
+            ]}))
+            .is_err()
+        );
+        let boolean_schema = parse_tools_list_page(&json!({
+            "resultType":"complete","tools":[
+                {"name":"boolean-output","inputSchema":{},"outputSchema":false}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(boolean_schema.tools[0].output_schema, Some(json!(false)));
         assert!(
             parse_tools_list_page(&json!({"resultType":"complete","tools":[],
             "nextCursor":""}))
