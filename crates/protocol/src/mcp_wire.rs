@@ -98,7 +98,6 @@ pub fn parse_tools_list_page(result: &Value) -> Result<McpToolCatalogPage, McpWi
     Ok(McpToolCatalogPage { tools, next_cursor })
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpWireError {
     Empty,
@@ -288,16 +287,24 @@ mod tests {
         assert_eq!(page.tools[0].name, "weather.read");
         assert_eq!(page.tools[0].input_schema["type"], "object");
         assert_eq!(page.next_cursor.as_deref(), Some("second-page"));
-        assert!(parse_tools_list_page(&json!({"resultType":"complete","tools":[
-            {"name":"same","inputSchema":{}},{"name":"same","inputSchema":{}}
-        ]})).is_err());
-        assert!(parse_tools_list_page(&json!({"resultType":"complete","tools":[
-            {"name":"unsafe","inputSchema":null}
-        ]})).is_err());
-        assert!(parse_tools_list_page(&json!({"resultType":"complete","tools":[],
-            "nextCursor":""})).is_err());
-        assert!(parse_tools_list_page(&json!({"resultType":"input_required","tools":[]}))
-            .is_err());
+        assert!(
+            parse_tools_list_page(&json!({"resultType":"complete","tools":[
+                {"name":"same","inputSchema":{}},{"name":"same","inputSchema":{}}
+            ]}))
+            .is_err()
+        );
+        assert!(
+            parse_tools_list_page(&json!({"resultType":"complete","tools":[
+                {"name":"unsafe","inputSchema":null}
+            ]}))
+            .is_err()
+        );
+        assert!(
+            parse_tools_list_page(&json!({"resultType":"complete","tools":[],
+            "nextCursor":""}))
+            .is_err()
+        );
+        assert!(parse_tools_list_page(&json!({"resultType":"input_required","tools":[]})).is_err());
     }
 
     #[test]
