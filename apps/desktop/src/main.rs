@@ -7,9 +7,9 @@ mod local_archive_search;
 mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
+mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
-mod local_stdio_runner;
 mod offline_reader;
 mod siwc_bridge;
 

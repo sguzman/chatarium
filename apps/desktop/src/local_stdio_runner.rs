@@ -6,9 +6,7 @@
 //! a shell. Missing confinement tools fail closed: no unsafe fallback.
 
 use chatarium_core::tool::StdioToolProviderConfig;
-use chatarium_protocol::mcp_wire::{
-    MAX_MCP_FRAME_BYTES, McpResponse, decode_stdio_response,
-};
+use chatarium_protocol::mcp_wire::{MAX_MCP_FRAME_BYTES, McpResponse, decode_stdio_response};
 use chatarium_store::tool_outcome_audit::{
     MAX_OUTCOME_BYTES, ToolCallOutcomeKind, append_tool_call_outcome_checked,
 };
@@ -68,13 +66,16 @@ pub fn plan_confined_stdio_launch(
         || executable.len() <= "/usr/bin/".len()
         || executable.contains('\0')
         || executable.contains("//")
-        || executable.split('/').any(|part| part == "." || part == "..")
+        || executable
+            .split('/')
+            .any(|part| part == "." || part == "..")
     {
         return Err("this restricted sandbox only runs canonical /usr/bin executables".to_owned());
     }
     if argv.len() > StdioToolProviderConfig::MAX_ARGUMENTS
-        || argv.iter().any(|s| s.len() > StdioToolProviderConfig::MAX_ARGUMENT_BYTES
-            || s.chars().any(char::is_control))
+        || argv.iter().any(|s| {
+            s.len() > StdioToolProviderConfig::MAX_ARGUMENT_BYTES || s.chars().any(char::is_control)
+        })
     {
         return Err("external MCP argv exceeds immutable configuration bounds".to_owned());
     }
@@ -133,18 +134,23 @@ pub fn plan_confined_stdio_launch(
 /// it does not replace the separate *durable* activation and route checks.
 #[cfg(target_os = "linux")]
 fn validate_trusted_binary(path: &str) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
     use chatarium_core::tool::ToolOperationName;
+    use std::os::unix::fs::MetadataExt;
 
     let conf = StdioToolProviderConfig::new(
-        path, Vec::new(), vec![ToolOperationName::new("launch").map_err(|e| format!("{e:?}"))?],
-    ).map_err(|e| format!("{e:?}"))?;
+        path,
+        Vec::new(),
+        vec![ToolOperationName::new("launch").map_err(|e| format!("{e:?}"))?],
+    )
+    .map_err(|e| format!("{e:?}"))?;
     inspect_stdio_executable(&conf)
         .map_err(|e| format!("executable {path} failed metadata inspection: {e:?}"))?;
     let md = std::fs::symlink_metadata(path)
         .map_err(|e| format!("cannot stat executable {path}: {e}"))?;
     if md.uid() != 0 {
-        return Err(format!("restricted runner refuses non-root-owned executable {path}"));
+        return Err(format!(
+            "restricted runner refuses non-root-owned executable {path}"
+        ));
     }
     Ok(())
 }
@@ -166,8 +172,12 @@ pub fn execute_reserved_stdio_tool_call(
     }
     let call_id = invocation.call_id;
     let route_id = invocation.route_id;
-    let kind_and_text = run_one_shot(invocation.executable.as_str(), &invocation.argv,
-        invocation.request_frame.as_str(), call_id.get());
+    let kind_and_text = run_one_shot(
+        invocation.executable.as_str(),
+        &invocation.argv,
+        invocation.request_frame.as_str(),
+        call_id.get(),
+    );
     // Adapter errors are terminal *observations*, not a reason to rerun the
     // route. If the journal write fails the dispatch remains unresolved.
     let (kind, text) = match kind_and_text {
@@ -177,9 +187,12 @@ pub fn execute_reserved_stdio_tool_call(
     append_tool_call_outcome_checked(store, call_id, route_id, kind, text)
 }
 
-fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
-    -> Result<String, String>
-{
+fn run_one_shot(
+    executable: &str,
+    argv: &[String],
+    frame: &str,
+    request_id: u64,
+) -> Result<String, String> {
     if !frame.ends_with('\n') || frame.len() > MAX_MCP_FRAME_BYTES {
         return Err("refused an unbounded or malformed MCP request frame".to_owned());
     }
@@ -206,11 +219,17 @@ fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
             .spawn()
             .map_err(|e| format!("sandbox spawn failed: {e}"))?;
 
-        let stdin = child.stdin.take()
+        let stdin = child
+            .stdin
+            .take()
             .ok_or_else(|| "sandbox stdin pipe unavailable".to_owned())?;
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| "sandbox stdout pipe unavailable".to_owned())?;
-        let stderr = child.stderr.take()
+        let stderr = child
+            .stderr
+            .take()
             .ok_or_else(|| "sandbox stderr pipe unavailable".to_owned())?;
 
         let request = frame.as_bytes().to_vec();
@@ -220,13 +239,19 @@ fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
         });
         let out_reader = thread::spawn(move || {
             let mut buf = Vec::new();
-            stdout.take(MAX_MCP_FRAME_BYTES as u64 + 1)
-                .read_to_end(&mut buf).map(|_| buf).map_err(|e| e.to_string())
+            stdout
+                .take(MAX_MCP_FRAME_BYTES as u64 + 1)
+                .read_to_end(&mut buf)
+                .map(|_| buf)
+                .map_err(|e| e.to_string())
         });
         let err_reader = thread::spawn(move || {
             let mut buf = Vec::new();
-            stderr.take(MAX_STDERR_BYTES + 1)
-                .read_to_end(&mut buf).map(|_| buf).map_err(|e| e.to_string())
+            stderr
+                .take(MAX_STDERR_BYTES + 1)
+                .read_to_end(&mut buf)
+                .map(|_| buf)
+                .map_err(|e| e.to_string())
         });
 
         let start = Instant::now();
@@ -234,7 +259,9 @@ fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
-                Ok(None) if start.elapsed() < WALL_TIMEOUT => thread::sleep(Duration::from_millis(10)),
+                Ok(None) if start.elapsed() < WALL_TIMEOUT => {
+                    thread::sleep(Duration::from_millis(10))
+                }
                 Ok(None) => {
                     timeout = true;
                     let _ = child.kill();
@@ -247,9 +274,15 @@ fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
                 }
             }
         };
-        let wrote = writer.join().map_err(|_| "sandbox stdin writer panicked".to_owned())?;
-        let output = out_reader.join().map_err(|_| "sandbox stdout reader panicked".to_owned())??;
-        let stderr = err_reader.join().map_err(|_| "sandbox stderr reader panicked".to_owned())??;
+        let wrote = writer
+            .join()
+            .map_err(|_| "sandbox stdin writer panicked".to_owned())?;
+        let output = out_reader
+            .join()
+            .map_err(|_| "sandbox stdout reader panicked".to_owned())??;
+        let stderr = err_reader
+            .join()
+            .map_err(|_| "sandbox stderr reader panicked".to_owned())??;
         if timeout {
             return Err("sandbox MCP call exceeded its 10-second wall-time limit".to_owned());
         }
@@ -259,7 +292,9 @@ fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
             return Err("sandbox MCP stdout/stderr exceeded byte budget".to_owned());
         }
         if !status.success() {
-            return Err(format!("isolated MCP process exited unsuccessfully: {status}"));
+            return Err(format!(
+                "isolated MCP process exited unsuccessfully: {status}"
+            ));
         }
         let text = std::str::from_utf8(&output)
             .map_err(|_| "sandbox MCP stdout was not UTF-8".to_owned())?;
@@ -272,8 +307,9 @@ fn run_one_shot(executable: &str, argv: &[String], frame: &str, request_id: u64)
                 }
                 Ok(text.to_owned())
             }
-            McpResponse::Error { code, message, .. } =>
-                Err(format!("sandbox MCP protocol error {code}: {message}")),
+            McpResponse::Error { code, message, .. } => {
+                Err(format!("sandbox MCP protocol error {code}: {message}"))
+            }
         }
     }
 }
@@ -289,9 +325,14 @@ mod tests {
             let plan = plan_confined_stdio_launch(
                 "/usr/bin/example-mcp",
                 &["with spaces".to_owned(), "--flag=;\\$HOME".to_owned()],
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(plan.program(), PRLIMIT);
-            let tool_index = plan.args().iter().position(|arg| arg == "/usr/bin/example-mcp").unwrap();
+            let tool_index = plan
+                .args()
+                .iter()
+                .position(|arg| arg == "/usr/bin/example-mcp")
+                .unwrap();
             assert_eq!(&plan.args()[tool_index - 1], "--");
             assert_eq!(
                 &plan.args()[tool_index + 1..],
@@ -315,18 +356,28 @@ mod tests {
 
     #[test]
     fn infinite_argv_and_control_characters_are_rejected() {
-        assert!(plan_confined_stdio_launch(
-            "/usr/bin/tool", &vec!["ok".to_owned(); StdioToolProviderConfig::MAX_ARGUMENTS + 1],
-        ).is_err());
-        assert!(plan_confined_stdio_launch(
-            "/usr/bin/tool", &["bad\nvalue".to_owned()],
-        ).is_err());
+        assert!(
+            plan_confined_stdio_launch(
+                "/usr/bin/tool",
+                &vec!["ok".to_owned(); StdioToolProviderConfig::MAX_ARGUMENTS + 1],
+            )
+            .is_err()
+        );
+        assert!(plan_confined_stdio_launch("/usr/bin/tool", &["bad\nvalue".to_owned()],).is_err());
     }
 
     #[test]
     fn request_frame_must_be_bounded_even_without_sandbox_installed() {
         assert!(run_one_shot("/usr/bin/true", &[], "{}", 1).is_err());
-        assert!(run_one_shot("/usr/bin/true", &[], &"x".repeat(MAX_MCP_FRAME_BYTES + 1), 1).is_err());
+        assert!(
+            run_one_shot(
+                "/usr/bin/true",
+                &[],
+                &"x".repeat(MAX_MCP_FRAME_BYTES + 1),
+                1
+            )
+            .is_err()
+        );
     }
 
     #[cfg(target_os = "linux")]
