@@ -942,6 +942,7 @@ struct ChatariumApp {
     local_conversation_rename: String,
     show_archived_local_conversations: bool,
     local_conversation_search_query: String,
+    local_conversation_search_selection: Option<usize>,
     events: Vec<EventEnvelope>,
     historical_catalog: Vec<HistoricalConversationCatalogEntry>,
     selected_historical_conversation: Option<LocalConversationId>,
@@ -1228,6 +1229,7 @@ impl ChatariumApp {
                         local_conversation_catalog,
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
+                        local_conversation_search_selection: None,
                         events: events.clone(),
                         historical_catalog,
                         selected_historical_conversation: None,
@@ -1423,6 +1425,7 @@ impl ChatariumApp {
             local_conversation_catalog,
             show_archived_local_conversations: false,
             local_conversation_search_query: String::new(),
+            local_conversation_search_selection: None,
             historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
             events: events.clone(),
             selected_historical_conversation: None,
@@ -5955,6 +5958,9 @@ impl eframe::App for ChatariumApp {
         self.process_remote_notices();
         let local_display_messages =
             projected_local_display_messages(&self.events, self.local_conversation_id);
+        // Rebuild the owned native-chat search corpus once per durable journal
+        // revision, never once per conversation on every egui redraw.
+        let native_search_index = native_conversation_search::cached_index(ctx, &self.events);
         let local_conversation_title = local_conversation_display_title(
             &self.local_conversation_catalog,
             self.local_conversation_id,
@@ -5996,6 +6002,7 @@ impl eframe::App for ChatariumApp {
         let mut select_local_requested: Option<LocalConversationId> = None;
         let mut create_local_requested = false;
         let mut visible_native_search_matches = 0_usize;
+        let mut native_search_matches = Vec::<LocalConversationId>::new();
         let mut rename_local_requested = false;
         let mut archive_local_requested = false;
         let mut select_historical_requested = None;
@@ -6208,6 +6215,9 @@ impl eframe::App for ChatariumApp {
                                 .desired_width(input_width),
                             );
                             native_search_has_focus = native_search_response.has_focus();
+                            if native_search_response.changed() {
+                                self.local_conversation_search_selection = None;
+                            }
                             if ui
                                 .add_enabled(
                                     !self.local_conversation_search_query.is_empty(),
@@ -6216,11 +6226,12 @@ impl eframe::App for ChatariumApp {
                                 .clicked()
                             {
                                 self.local_conversation_search_query.clear();
+                                self.local_conversation_search_selection = None;
                             }
                         });
                         ui.label(
                             egui::RichText::new(
-                                "Native chats · Ctrl+Shift+K focus · Esc clear · local text only",
+                                "Native chats · Ctrl+Shift+K focus · ↑/↓ select · Enter open · Esc clear",
                             )
                             .size(9.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6231,13 +6242,13 @@ impl eframe::App for ChatariumApp {
                             if entry.archived && !self.show_archived_local_conversations {
                                 continue;
                             }
-                            let messages =
-                                projected_local_display_messages(&self.events, entry.id);
-                            let title = local_conversation_display_title(
-                                &self.local_conversation_catalog,
-                                entry.id,
-                                &self.events,
-                            );
+                            let messages = native_search_index.messages(entry.id);
+                            let title = entry
+                                .title
+                                .as_deref()
+                                .filter(|value| !value.trim().is_empty())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| derived_conversation_title(messages));
                             let match_kind = native_conversation_search::find_match(
                                 &self.local_conversation_search_query,
                                 title.as_str(),
@@ -6247,10 +6258,14 @@ impl eframe::App for ChatariumApp {
                                 continue;
                             };
                             visible_native_search_matches += 1;
+                            let result_index = native_search_matches.len();
+                            native_search_matches.push(entry.id);
+                            let keyboard_selected =
+                                self.local_conversation_search_selection == Some(result_index);
                             let selected =
                                 !historical_mode && entry.id == self.local_conversation_id;
                             egui::Frame::default()
-                                .fill(if selected {
+                                .fill(if selected || keyboard_selected {
                                     egui::Color32::from_rgb(31, 33, 39)
                                 } else {
                                     egui::Color32::from_rgb(26, 28, 33)
@@ -6260,7 +6275,7 @@ impl eframe::App for ChatariumApp {
                                 .show(ui, |ui| {
                                     if ui
                                         .selectable_label(
-                                            selected,
+                                            selected || keyboard_selected,
                                             egui::RichText::new(title).strong(),
                                         )
                                         .clicked()
@@ -7011,11 +7026,46 @@ impl eframe::App for ChatariumApp {
         if focus_native_search {
             ctx.memory_mut(|memory| memory.request_focus(native_search_id));
         }
-        if native_search_has_focus
-            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        if self
+            .local_conversation_search_selection
+            .is_some_and(|index| index >= native_search_matches.len())
         {
-            self.local_conversation_search_query.clear();
-            ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
+            self.local_conversation_search_selection = None;
+        }
+        if native_search_has_focus {
+            let mut clear_focus = false;
+            ctx.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    self.local_conversation_search_selection =
+                        local_archive_search::move_selection(
+                            self.local_conversation_search_selection,
+                            native_search_matches.len(),
+                            1,
+                        );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    self.local_conversation_search_selection =
+                        local_archive_search::move_selection(
+                            self.local_conversation_search_selection,
+                            native_search_matches.len(),
+                            -1,
+                        );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                    select_local_requested = self
+                        .local_conversation_search_selection
+                        .and_then(|index| native_search_matches.get(index).copied())
+                        .or_else(|| native_search_matches.first().copied());
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    self.local_conversation_search_query.clear();
+                    self.local_conversation_search_selection = None;
+                    clear_focus = true;
+                }
+            });
+            if clear_focus {
+                ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
+            }
         }
         if archive_search_has_focus {
             ctx.input_mut(|input| {

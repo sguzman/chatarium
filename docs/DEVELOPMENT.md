@@ -37,6 +37,28 @@ process, authenticate a browser, or prove rendering fidelity. Those
 boundaries remain covered by separate transport/sandbox CI and targeted
 desktop or browser QA. The owner does not need to run this test manually.
 
+## Native conversation search scaling
+
+The sidebar's native-chat search is local-only and scoped to typed authored
+user turns and their matching assistant snapshot/completion observations.
+Tool output, controller events, provider diagnostics, and imported remote
+mirror bodies cannot become native-chat search documents simply because
+they share a journal or turn scope.
+
+The search corpus groups journal events by the typed owning conversation in
+one chronological projection pass, then applies the existing display-message
+deduplication rules. It is cached in egui's transient session memory and
+invalidated on durable journal high-water change. Conversation titles
+remain owned by the local catalog; the index is rebuildable and contains
+no separate authoritative database, persisted search query, or background
+provider requests. A regression test compares indexed messages with the
+existing single-conversation projector, including streamed snapshot
+replacement and cross-conversation isolation.
+Native search retains Ctrl+Shift+K focus and adds Up/Down selection with
+Enter to open the highlighted local conversation. Changing or clearing the
+query resets that selection; Escape clears query and focus. Selection is
+transient and cannot change journal history or tool permissions.
+
 ## Automated QA ownership
 
 For browser-facing and integration work, Codex owns the complete local QA/debug/Git loop. The principal is not a manual regression runner. Use the Playwright-managed bundled Chromium QA browser with persistent state at `~/.local/share/chatarium-qa-browser/`; do not automate the principal's normal Edge installation. Follow [Codex-owned QA workstation](CODEX_QA_WORKSTATION.md) plus [Human QA protocol](HUMAN_QA.md).
