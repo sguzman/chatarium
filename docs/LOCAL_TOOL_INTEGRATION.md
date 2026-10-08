@@ -213,6 +213,30 @@ benign, does not restrict what an eventual subprocess can access, and never
 reads process credentials or spawns an executable. External execution still
 requires an independent explicit activation and a race-aware launch design.
 
+### Durable one-shot dispatch reservation (no external launch)
+
+`crates/store/src/tool_stdio_dispatch.rs` introduces a move-only
+`ReservedStdioToolDispatch`. Its checked reservation API replays the
+activated preview from the **current authoritative journal**, rechecks the
+conservative Linux executable path inspection and the exact user-approved
+`RequireApproval` route, and durably appends a single `RouteDispatched`
+event before returning any reservation. Duplicate reservations, unapproved
+calls, and absent executables fail without consuming authority.
+
+A reserved call has **not necessarily started**. If Chatarium crashes after
+the durable dispatch but before a subprocess is launched, or while a
+subprocess may have been running, recovery must present an **unresolved**
+call. It may not automatically dispatch that same call again or synthesize
+an error/result. Only an adapter's correlated terminal observation can
+resolve a dispatched call. This is deliberate at-most-once attempt semantics,
+not a guarantee of exactly-once side effects.
+
+This milestone is the journal-to-runner handoff; no desktop execution action
+has been enabled by it. Before external tool execution is exposed, the Linux
+runner must separately enforce race-aware executable identity, process
+confinement, bounded runtime and I/O, and a child-outcome audit, rather than
+treating reservation or metadata inspection as a process-security proof.
+
 ### Explicit provider activation audit (no execution)
 
 `crates/store/src/tool_provider_activation_audit.rs` adds a durable,
