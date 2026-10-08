@@ -12947,7 +12947,7 @@ impl eframe::App for ChatariumApp {
         let mut next_reader_hit = false;
         let mut previous_reader_hit = false;
         let transcript_scroll_id = egui::Id::new("transcript-reader-scroll");
-        if conversation_keybindings::may_consume_reader_navigation(ctx.text_edit_focused()) {
+        if conversation_keybindings::may_consume_reader_navigation(ctx.wants_keyboard_input()) {
             ctx.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
                     next_reader_hit = true;
