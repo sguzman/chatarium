@@ -185,7 +185,10 @@ fn inspect_schema_subset(
                 {
                     return Err(InspectionIssue::Unsupported);
                 }
-                let unique = names.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>();
+                let unique = names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<BTreeSet<_>>();
                 if unique.len() != names.len() {
                     return Err(InspectionIssue::Unsupported);
                 }
@@ -193,8 +196,8 @@ fn inspect_schema_subset(
             "items" | "additionalProperties" => {
                 inspect_schema_subset(value, depth + 1, budget)?;
             }
-            "minLength" | "maxLength" | "minItems" | "maxItems"
-            | "minProperties" | "maxProperties" => {
+            "minLength" | "maxLength" | "minItems" | "maxItems" | "minProperties"
+            | "maxProperties" => {
                 if value.as_u64().is_none() {
                     return Err(InspectionIssue::Unsupported);
                 }
@@ -208,15 +211,19 @@ fn inspect_schema_subset(
 fn declared_types(value: &Value) -> Result<Vec<&str>, InspectionIssue> {
     let names = match value {
         Value::String(name) => vec![name.as_str()],
-        Value::Array(names) if !names.is_empty() && names.len() <= 7 => {
-            names.iter().map(|item| item.as_str().ok_or(InspectionIssue::Unsupported))
-                .collect::<Result<Vec<_>, _>>()?
-        }
+        Value::Array(names) if !names.is_empty() && names.len() <= 7 => names
+            .iter()
+            .map(|item| item.as_str().ok_or(InspectionIssue::Unsupported))
+            .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(InspectionIssue::Unsupported),
     };
-    if names.iter().any(|name| !matches!(
-        *name, "null" | "boolean" | "object" | "array" | "number" | "integer" | "string"
-    )) || names.iter().collect::<BTreeSet<_>>().len() != names.len() {
+    if names.iter().any(|name| {
+        !matches!(
+            *name,
+            "null" | "boolean" | "object" | "array" | "number" | "integer" | "string"
+        )
+    }) || names.iter().collect::<BTreeSet<_>>().len() != names.len()
+    {
         return Err(InspectionIssue::Unsupported);
     }
     Ok(names)
@@ -332,8 +339,12 @@ fn check_count(
     max_key: &str,
     actual: u64,
 ) -> Result<(), InspectionIssue> {
-    if schema.get(min_key).is_some_and(|limit| limit.as_u64().is_some_and(|min| actual < min))
-        || schema.get(max_key).is_some_and(|limit| limit.as_u64().is_some_and(|max| actual > max))
+    if schema
+        .get(min_key)
+        .is_some_and(|limit| limit.as_u64().is_some_and(|min| actual < min))
+        || schema
+            .get(max_key)
+            .is_some_and(|limit| limit.as_u64().is_some_and(|max| actual > max))
     {
         return Err(InspectionIssue::Mismatch);
     }
@@ -481,15 +492,25 @@ mod tests {
     #[test]
     fn supported_length_and_cardinality_keywords_use_json_schema_semantics() {
         let cases = [
-            (json!({"type":"string","minLength":2,"maxLength":3}), json!("é🙂")),
+            (
+                json!({"type":"string","minLength":2,"maxLength":3}),
+                json!("é🙂"),
+            ),
             (json!({"type":["string","null"],"minLength":2}), Value::Null),
-            (json!({"type":"array","minItems":1,"maxItems":2,"items":{"type":"integer"}}), json!([1,2])),
-            (json!({"type":"object","minProperties":1,"maxProperties":2}), json!({"k":true})),
+            (
+                json!({"type":"array","minItems":1,"maxItems":2,"items":{"type":"integer"}}),
+                json!([1, 2]),
+            ),
+            (
+                json!({"type":"object","minProperties":1,"maxProperties":2}),
+                json!({"k":true}),
+            ),
         ];
         for (schema, value) in cases {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::PassedSupportedChecks);
         }
         let failures = [
@@ -502,9 +523,10 @@ mod tests {
             (json!({"type":["object","array"]}), json!("wrong")),
         ];
         for (schema, value) in failures {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(value),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::Mismatch);
         }
     }
@@ -520,9 +542,10 @@ mod tests {
             json!({"type":"object","required":["x","x"]}),
             json!({"type":"object","properties":{"a":{"minimum":1}}}),
         ] {
-            let verdict = inspect_structured_tool_output(
-                &inspected_tool(Some(schema)), &complete(json!({})),
-            ).unwrap().verdict;
+            let verdict =
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
+                    .unwrap()
+                    .verdict;
             assert_eq!(verdict, McpOutputVerdict::Inconclusive);
         }
     }
@@ -532,7 +555,8 @@ mod tests {
         let tool = inspected_tool(Some(json!({"title":42})));
         assert_eq!(
             inspect_structured_tool_output(&tool, &complete(json!({})))
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
             McpOutputVerdict::Inconclusive,
         );
     }
