@@ -95,8 +95,10 @@ jobs:
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
         run: cargo test -p chatarium-desktop live_confined_host_readiness_probe -- --nocapture
-      - name: Verify standalone MCP host-check entry point
-        run: cargo run -p chatarium-desktop --bin chatarium-mcp-host-check
+      - name: Verify standalone MCP host-check entry point and JSON contract
+        run: |
+          cargo run -p chatarium-desktop --bin chatarium-mcp-host-check
+          cargo run -p chatarium-desktop --bin chatarium-mcp-host-check -- --json | node -e "const x=JSON.parse(require('fs').readFileSync(0,'utf8')); if(x.schema_version!==1 || x.check!=='fixed_usr_bin_true_sandbox' || x.status!=='ready' || x.failure_category!=='none' || x.detail!==null || x.tool_route_consumed!==false || x.provider_executed!==false || x.journal_accessed!==false || x.host_network_accessed!==false) process.exit(1)"
       - name: Smoke isolated MCP stdio transport
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
