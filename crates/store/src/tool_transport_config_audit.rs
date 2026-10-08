@@ -9,9 +9,7 @@ use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_provider_audit::replay_tool_provider_audit;
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::EventKind;
-use chatarium_core::tool::{
-    StdioToolProviderConfig, ToolOperationName, ToolProviderId,
-};
+use chatarium_core::tool::{StdioToolProviderConfig, ToolOperationName, ToolProviderId};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -73,7 +71,10 @@ pub fn append_tool_transport_config_checked(
     }
     record_tool_transport_configured(store, provider_id, config)
         .map_err(|error| error.to_string())?;
-    store.events().last().cloned()
+    store
+        .events()
+        .last()
+        .cloned()
         .ok_or_else(|| "transport configuration append produced no event".to_owned())
 }
 
@@ -101,7 +102,8 @@ pub fn replay_tool_transport_config_audit(
         if records.contains_key(&provider_id) {
             return Err(format!(
                 "duplicate transport configuration for provider {} at #{}",
-                provider_id.get(), event.sequence
+                provider_id.get(),
+                event.sequence
             ));
         }
         let executable = required_string(&value, "executable")?;
@@ -117,23 +119,29 @@ pub fn replay_tool_transport_config_audit(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let config = StdioToolProviderConfig::new(executable, args, operations).map_err(|error| {
-            format!(
-                "invalid stdio provider configuration at #{}: {error:?}",
-                event.sequence
-            )
-        })?;
+        let config =
+            StdioToolProviderConfig::new(executable, args, operations).map_err(|error| {
+                format!(
+                    "invalid stdio provider configuration at #{}: {error:?}",
+                    event.sequence
+                )
+            })?;
 
         let prior = &events[..index];
         let provider = replay_tool_provider_audit(prior)?
             .into_iter()
             .find(|record| record.provider_id == provider_id)
-            .ok_or_else(|| format!(
-                "transport configuration at #{} references missing provider {}",
-                event.sequence, provider_id.get()
-            ))?;
+            .ok_or_else(|| {
+                format!(
+                    "transport configuration at #{} references missing provider {}",
+                    event.sequence,
+                    provider_id.get()
+                )
+            })?;
         if provider.registered_sequence >= event.sequence
-            || provider.endpoint_bound_sequence.is_none_or(|bound| bound >= event.sequence)
+            || provider
+                .endpoint_bound_sequence
+                .is_none_or(|bound| bound >= event.sequence)
         {
             return Err(format!(
                 "provider {} must have an earlier durable routing endpoint before transport configuration",
@@ -141,7 +149,9 @@ pub fn replay_tool_transport_config_audit(
             ));
         }
         if provider.name.as_str() == RESERVED_BUILTIN_PROVIDER {
-            return Err("reserved builtin provider cannot receive an external stdio transport".to_owned());
+            return Err(
+                "reserved builtin provider cannot receive an external stdio transport".to_owned(),
+            );
         }
         if replay_tool_call_audit(prior)?
             .iter()
@@ -153,11 +163,14 @@ pub fn replay_tool_transport_config_audit(
             ));
         }
 
-        records.insert(provider_id, ToolTransportConfigRecord {
+        records.insert(
             provider_id,
-            config,
-            configured_sequence: event.sequence,
-        });
+            ToolTransportConfigRecord {
+                provider_id,
+                config,
+                configured_sequence: event.sequence,
+            },
+        );
     }
 
     let mut values = records.into_values().collect::<Vec<_>>();
@@ -199,21 +212,29 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
 }
 
 fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
-    value.get(field).and_then(Value::as_u64)
+    value
+        .get(field)
+        .and_then(Value::as_u64)
         .ok_or_else(|| format!("tool transport config missing integer '{field}'"))
 }
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value.get(field).and_then(Value::as_str)
+    value
+        .get(field)
+        .and_then(Value::as_str)
         .ok_or_else(|| format!("tool transport config missing string '{field}'"))
 }
 fn required_string_array(value: &Value, field: &str) -> Result<Vec<String>, String> {
-    let array = value.get(field).and_then(Value::as_array)
+    let array = value
+        .get(field)
+        .and_then(Value::as_array)
         .ok_or_else(|| format!("tool transport config missing array '{field}'"))?;
     array
         .iter()
-        .map(|item| item.as_str().map(ToOwned::to_owned).ok_or_else(|| {
-            format!("tool transport config array '{field}' contains a non-string")
-        }))
+        .map(|item| {
+            item.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                format!("tool transport config array '{field}' contains a non-string")
+            })
+        })
         .collect()
 }
 #[must_use]
@@ -235,9 +256,7 @@ mod tests {
     };
     use chatarium_core::routing::RouteEndpointId;
     use chatarium_core::session::SessionId;
-    use chatarium_core::tool::{
-        ToolCallId, ToolProviderEndpointBinding, ToolProviderName,
-    };
+    use chatarium_core::tool::{ToolCallId, ToolProviderEndpointBinding, ToolProviderName};
 
     const PROVIDER: ToolProviderId = ToolProviderId::new(9);
     fn setup(store: &mut impl EventStore, name: &str) {
@@ -246,7 +265,8 @@ mod tests {
         record_tool_provider_endpoint_bound(
             store,
             ToolProviderEndpointBinding::new(PROVIDER, RouteEndpointId::new(100)),
-        ).unwrap();
+        )
+        .unwrap();
     }
     fn config() -> StdioToolProviderConfig {
         StdioToolProviderConfig::new(
@@ -256,23 +276,25 @@ mod tests {
                 ToolOperationName::new("hello").unwrap(),
                 ToolOperationName::new("search").unwrap(),
             ],
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     #[test]
     fn configuration_is_persisted_but_does_not_dispatch_or_execute() {
         let mut store = MemoryEventStore::default();
         setup(&mut store, "my.local.server");
-        let event = append_tool_transport_config_checked(
-            &mut store, PROVIDER, &config()
-        ).unwrap();
+        let event = append_tool_transport_config_checked(&mut store, PROVIDER, &config()).unwrap();
         assert_eq!(event.kind, EventKind::ToolProviderTransportConfigured);
         let records = replay_tool_transport_config_audit(store.events()).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].config, config());
         assert_eq!(records[0].configured_sequence, event.sequence);
         assert!(!store.events().iter().any(|event| {
-            matches!(event.kind, EventKind::RouteDispatched | EventKind::ToolCallOutcomeObserved)
+            matches!(
+                event.kind,
+                EventKind::RouteDispatched | EventKind::ToolCallOutcomeObserved
+            )
         }));
     }
 
@@ -281,18 +303,22 @@ mod tests {
         let mut builtin = MemoryEventStore::default();
         setup(&mut builtin, RESERVED_BUILTIN_PROVIDER);
         let before = builtin.events().len();
-        assert!(append_tool_transport_config_checked(
-            &mut builtin, PROVIDER, &config()
-        ).unwrap_err().contains("reserved builtin"));
+        assert!(
+            append_tool_transport_config_checked(&mut builtin, PROVIDER, &config())
+                .unwrap_err()
+                .contains("reserved builtin")
+        );
         assert_eq!(builtin.events().len(), before);
 
         let mut store = MemoryEventStore::default();
         setup(&mut store, "external");
         append_tool_transport_config_checked(&mut store, PROVIDER, &config()).unwrap();
         let before = store.events().len();
-        assert!(append_tool_transport_config_checked(
-            &mut store, PROVIDER, &config()
-        ).unwrap_err().contains("duplicate transport configuration"));
+        assert!(
+            append_tool_transport_config_checked(&mut store, PROVIDER, &config())
+                .unwrap_err()
+                .contains("duplicate transport configuration")
+        );
         assert_eq!(store.events().len(), before);
     }
 
@@ -300,24 +326,32 @@ mod tests {
     fn provider_must_be_registered_addressable_and_have_no_prior_calls() {
         let mut store = MemoryEventStore::default();
         let before = store.events().len();
-        assert!(append_tool_transport_config_checked(
-            &mut store, PROVIDER, &config()
-        ).unwrap_err().contains("missing provider"));
+        assert!(
+            append_tool_transport_config_checked(&mut store, PROVIDER, &config())
+                .unwrap_err()
+                .contains("missing provider")
+        );
         assert_eq!(store.events().len(), before);
 
         record_tool_provider_registered(
-            &mut store, PROVIDER, &ToolProviderName::new("external").unwrap()
-        ).unwrap();
+            &mut store,
+            PROVIDER,
+            &ToolProviderName::new("external").unwrap(),
+        )
+        .unwrap();
         let before = store.events().len();
-        assert!(append_tool_transport_config_checked(
-            &mut store, PROVIDER, &config()
-        ).unwrap_err().contains("earlier durable routing endpoint"));
+        assert!(
+            append_tool_transport_config_checked(&mut store, PROVIDER, &config())
+                .unwrap_err()
+                .contains("earlier durable routing endpoint")
+        );
         assert_eq!(store.events().len(), before);
 
         record_tool_provider_endpoint_bound(
             &mut store,
             ToolProviderEndpointBinding::new(PROVIDER, RouteEndpointId::new(100)),
-        ).unwrap();
+        )
+        .unwrap();
         record_local_session_registered(&mut store, SessionId::new(1)).unwrap();
         record_tool_call(
             &mut store,
@@ -326,11 +360,14 @@ mod tests {
             PROVIDER,
             &ToolOperationName::new("hello").unwrap(),
             "{}",
-        ).unwrap();
+        )
+        .unwrap();
         let before = store.events().len();
-        assert!(append_tool_transport_config_checked(
-            &mut store, PROVIDER, &config()
-        ).unwrap_err().contains("cannot be configured retroactively"));
+        assert!(
+            append_tool_transport_config_checked(&mut store, PROVIDER, &config())
+                .unwrap_err()
+                .contains("cannot be configured retroactively")
+        );
         assert_eq!(store.events().len(), before);
     }
 
@@ -338,20 +375,23 @@ mod tests {
     fn malformed_complete_configuration_fails_replay() {
         let mut store = MemoryEventStore::default();
         setup(&mut store, "external");
-        store.append_scoped(
-            Some(config_scope(PROVIDER)),
-            EventKind::ToolProviderTransportConfigured,
-            json!({
-                "schema": SCHEMA,
-                "version": VERSION,
-                "record": "tool_transport_configured",
-                "provider_id": PROVIDER.get(),
-                "transport": "stdio",
-                "executable": "relative/path",
-                "argv": [],
-                "allowed_operations": ["hello"],
-            }).to_string(),
-        ).unwrap();
+        store
+            .append_scoped(
+                Some(config_scope(PROVIDER)),
+                EventKind::ToolProviderTransportConfigured,
+                json!({
+                    "schema": SCHEMA,
+                    "version": VERSION,
+                    "record": "tool_transport_configured",
+                    "provider_id": PROVIDER.get(),
+                    "transport": "stdio",
+                    "executable": "relative/path",
+                    "argv": [],
+                    "allowed_operations": ["hello"],
+                })
+                .to_string(),
+            )
+            .unwrap();
         assert!(replay_tool_transport_config_audit(store.events()).is_err());
     }
 }
