@@ -26,6 +26,9 @@ const LIMIT_AS_BYTES: &str = "--as=536870912";
 const LIMIT_CPU_SECONDS: &str = "--cpu=8";
 const LIMIT_FSIZE_BYTES: &str = "--fsize=8388608";
 const LIMIT_OPEN_FILES: &str = "--nofile=64";
+const LIMIT_PROCESSES: &str = "--nproc=256";
+const LIMIT_CORE_DUMPS: &str = "--core=0";
+const SCRATCH_TMPFS_BYTES: &str = "33554432";
 
 /// Restricted launcher plan. All arguments are distinct argv entries: no
 /// interpretation of quotes, pipes, expansions, or shell command strings.
@@ -87,9 +90,12 @@ pub fn plan_confined_stdio_launch(
         LIMIT_CPU_SECONDS.to_owned(),
         LIMIT_FSIZE_BYTES.to_owned(),
         LIMIT_OPEN_FILES.to_owned(),
+        LIMIT_PROCESSES.to_owned(),
+        LIMIT_CORE_DUMPS.to_owned(),
         "--".to_owned(),
         BWRAP.to_owned(),
         "--unshare-all".to_owned(),
+        "--disable-userns".to_owned(),
         "--die-with-parent".to_owned(),
         "--new-session".to_owned(),
         "--clearenv".to_owned(),
@@ -109,6 +115,8 @@ pub fn plan_confined_stdio_launch(
         "/proc".to_owned(),
         "--dev".to_owned(),
         "/dev".to_owned(),
+        "--size".to_owned(),
+        SCRATCH_TMPFS_BYTES.to_owned(),
         "--tmpfs".to_owned(),
         "/tmp".to_owned(),
         "--setenv".to_owned(),
@@ -340,6 +348,12 @@ mod tests {
                 &["with spaces", "--flag=;\\$HOME"],
             );
             assert!(plan.args().contains(&"--unshare-all".to_owned()));
+            assert!(plan.args().contains(&"--disable-userns".to_owned()));
+            assert!(plan.args().contains(&LIMIT_PROCESSES.to_owned()));
+            assert!(plan.args().contains(&LIMIT_CORE_DUMPS.to_owned()));
+            let scratch = plan.args().iter().position(|arg| arg == "--tmpfs").unwrap();
+            assert_eq!(plan.args()[scratch - 2], "--size");
+            assert_eq!(plan.args()[scratch - 1], SCRATCH_TMPFS_BYTES);
             assert!(plan.args().contains(&"--clearenv".to_owned()));
             assert!(plan.args().contains(&"--ro-bind".to_owned()));
             assert!(!plan.args().contains(&"/home".to_owned()));
