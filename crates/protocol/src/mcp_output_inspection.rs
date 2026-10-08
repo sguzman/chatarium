@@ -208,6 +208,17 @@ fn inspect_schema_subset(
                     return Err(InspectionIssue::Unsupported);
                 }
             }
+            "multipleOf" => {
+                let divisor = value.as_number().ok_or(InspectionIssue::Unsupported)?;
+                if exact_decimal(divisor)?.0 <= 0 {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
+            "uniqueItems" => {
+                if !value.is_boolean() {
+                    return Err(InspectionIssue::Unsupported);
+                }
+            }
             "const" => {
                 inspect_json_literal(value, depth + 1, budget)?;
             }
@@ -388,6 +399,122 @@ fn check_numeric_bounds(
     Ok(())
 }
 
+// Preserve the exact decimal meaning of bounded, serializable JSON numbers.
+// Never compute a floating-point remainder. Integers remain exact across the
+// full signed/unsigned 64-bit range; decimals use a checked i128 mantissa and
+// at most 18 base-ten fractional places. Unrepresentable cases are inconclusive.
+fn exact_decimal(number: &Number) -> Result<(i128, u32), InspectionIssue> {
+    if let Some(value) = number.as_i64() {
+        return Ok((i128::from(value), 0));
+    }
+    if let Some(value) = number.as_u64() {
+        return Ok((i128::from(value), 0));
+    }
+    const FLOAT_SAFE_LIMIT: f64 = 9_007_199_254_740_992.0;
+    let approximate = number.as_f64().ok_or(InspectionIssue::Unsupported)?;
+    if !approximate.is_finite() || approximate.abs() >= FLOAT_SAFE_LIMIT {
+        return Err(InspectionIssue::Unsupported);
+    }
+
+    let text = number.to_string();
+    let exponent_at = text.find('e').or_else(|| text.find('E'));
+    let (digits, exponent) = if let Some(at) = exponent_at {
+        let power = text[at + 1..]
+            .parse::<i32>()
+            .map_err(|_| InspectionIssue::Unsupported)?;
+        ( &text[..at], power )
+    } else {
+        (text.as_str(), 0)
+    };
+    if !(-18..=18).contains(&exponent) {
+        return Err(InspectionIssue::Unsupported);
+    }
+
+    let mut mantissa = 0_i128;
+    let mut fractional = 0_i32;
+    let mut period = false;
+    let mut saw_digit = false;
+    for (index, symbol) in digits.bytes().enumerate() {
+        if index == 0 && symbol == b'-' {
+            continue;
+        }
+        if symbol == b'.' && !period {
+            period = true;
+            continue;
+        }
+        if !symbol.is_ascii_digit() {
+            return Err(InspectionIssue::Unsupported);
+        }
+        saw_digit = true;
+        mantissa = mantissa
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i128::from(symbol - b'0')))
+            .ok_or(InspectionIssue::Unsupported)?;
+        if period {
+            fractional += 1;
+        }
+    }
+    if !saw_digit {
+        return Err(InspectionIssue::Unsupported);
+    }
+    if digits.starts_with('-') {
+        mantissa = -mantissa;
+    }
+    let mut places = fractional - exponent;
+    if !(-18..=18).contains(&places) {
+        return Err(InspectionIssue::Unsupported);
+    }
+    if places < 0 {
+        for _ in 0..(-places) {
+            mantissa = mantissa.checked_mul(10).ok_or(InspectionIssue::Unsupported)?;
+        }
+        places = 0;
+    }
+    while places > 0 && mantissa % 10 == 0 {
+        mantissa /= 10;
+        places -= 1;
+    }
+    Ok((mantissa, places as u32))
+}
+
+fn decimal_multiple(actual: &Number, divisor: &Number) -> Result<bool, InspectionIssue> {
+    let (mut amount, amount_places) = exact_decimal(actual)?;
+    let (mut step, step_places) = exact_decimal(divisor)?;
+    if step <= 0 {
+        return Err(InspectionIssue::Unsupported);
+    }
+    let common_places = amount_places.max(step_places);
+    for _ in amount_places..common_places {
+        amount = amount.checked_mul(10).ok_or(InspectionIssue::Unsupported)?;
+    }
+    for _ in step_places..common_places {
+        step = step.checked_mul(10).ok_or(InspectionIssue::Unsupported)?;
+    }
+    Ok(amount % step == 0)
+}
+
+const MAX_UNIQUE_COMPARISON_ITEMS: usize = 16;
+
+/// Deep JSON-semantic uniqueness with no hash coercion and a shared bounded
+/// comparison budget. If a pair is numerically uncertain, do not claim pass.
+fn check_unique_items(
+    items: &[Value],
+    depth: usize,
+    budget: &mut InspectionBudget,
+) -> Result<(), InspectionIssue> {
+    if items.len() > MAX_UNIQUE_COMPARISON_ITEMS {
+        return Err(InspectionIssue::Unsupported);
+    }
+    for (index, item) in items.iter().enumerate() {
+        for other in &items[index + 1..] {
+            if json_equal(item, other, depth + 1, budget)? {
+                return Err(InspectionIssue::Mismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn declared_types(value: &Value) -> Result<Vec<&str>, InspectionIssue> {
     let names = match value {
         Value::String(name) => vec![name.as_str()],
@@ -449,6 +576,11 @@ fn inspect_value(
             }
             if let Some(actual) = value.as_number() {
                 check_numeric_bounds(spec, actual)?;
+                if let Some(divisor) = spec.get("multipleOf").and_then(Value::as_number) {
+                    if !decimal_multiple(actual, divisor)? {
+                        return Err(InspectionIssue::Mismatch);
+                    }
+                }
             }
             if let Some(expected) = spec.get("const") {
                 if !json_equal(value, expected, depth + 1, budget)? {
@@ -512,6 +644,9 @@ fn inspect_value(
                     return Err(InspectionIssue::Unsupported);
                 }
                 check_count(spec, "minItems", "maxItems", array.len() as u64)?;
+                if spec.get("uniqueItems").is_some_and(|flag| flag == true) {
+                    check_unique_items(array, depth + 1, budget)?;
+                }
                 if let Some(items) = items {
                     for member in array {
                         inspect_value(items, member, depth + 1, budget)?;
@@ -883,13 +1018,145 @@ mod tests {
             json!({"properties":{"absent":{"enum":[]}}}),
             json!({"properties":{"absent":{"exclusiveMinimum":"bad"}}}),
             json!({"properties":{"absent":{"enum":"not an array"}}}),
-            json!({"properties":{"absent":{"multipleOf":2}}}),
+            json!({"properties":{"absent":{"multipleOf":0}}}),
         ] {
             let verdict =
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
                     .unwrap()
                     .verdict;
             assert_eq!(verdict, McpOutputVerdict::Inconclusive);
+        }
+    }
+
+    #[test]
+    fn multiple_of_accepts_bounded_exact_decimals_and_large_integers() {
+        for (schema, value) in [
+            (json!({"multipleOf":0.01}), json!(4.02)),
+            (json!({"multipleOf":0.1}), json!(0.3)),
+            (json!({"multipleOf":0.1}), json!(-0.3)),
+            (json!({"multipleOf":0.25}), json!(1.25)),
+            (json!({"multipleOf":0.25}), json!(0)),
+            (json!({"multipleOf":5}), json!(u64::MAX)),
+            (json!({"multipleOf":0.5}), json!(7)),
+            (json!({"multipleOf":3}), json!("not a number")),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap().verdict,
+                McpOutputVerdict::PassedSupportedChecks,
+            );
+        }
+        for (schema, value) in [
+            (json!({"multipleOf":0.01}), json!(4.021)),
+            (json!({"multipleOf":0.1}), json!(0.31)),
+            (json!({"multipleOf":0.25}), json!(-0.3)),
+            (json!({"multipleOf":3}), json!(10)),
+            (json!({"multipleOf":5}), json!(-12)),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
+                    .unwrap().verdict,
+                McpOutputVerdict::Mismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_of_nonpositive_unrepresentable_and_absent_constraints_are_inconclusive() {
+        for schema in [
+            json!({"multipleOf":0}),
+            json!({"multipleOf":-1}),
+            json!({"multipleOf":"0.1"}),
+            json!({"multipleOf":1e-25}),
+            json!({"properties":{"absent":{"multipleOf":0}}}),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
+                    .unwrap().verdict,
+                McpOutputVerdict::Inconclusive,
+            );
+        }
+        for value in [json!(1e100), json!(9007199254740992.0)] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(json!({"multipleOf":0.5}))),
+                    &complete(value),
+                )
+                .unwrap().verdict,
+                McpOutputVerdict::Inconclusive,
+            );
+        }
+    }
+
+    #[test]
+    fn unique_items_uses_deep_equality_with_order_independent_objects() {
+        for value in [
+            json!([]),
+            json!([1,2,3]),
+            json!([{"id":1},{"id":2}]),
+            json!([true,false,null]),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(json!({"type":"array","uniqueItems":true}))),
+                    &complete(value),
+                )
+                .unwrap().verdict,
+                McpOutputVerdict::PassedSupportedChecks,
+            );
+        }
+        for value in [
+            json!([1,1.0]),
+            json!([{"a":1,"b":2},{"b":2.0,"a":1.0}]),
+            json!([[1,2],[1.0,2.0]]),
+            json!([null,null]),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(json!({"uniqueItems":true}))),
+                    &complete(value),
+                )
+                .unwrap().verdict,
+                McpOutputVerdict::Mismatch,
+            );
+        }
+        assert_eq!(
+            inspect_structured_tool_output(
+                &inspected_tool(Some(json!({"uniqueItems":false}))),
+                &complete(json!([1,1])),
+            )
+            .unwrap().verdict,
+            McpOutputVerdict::PassedSupportedChecks,
+        );
+    }
+
+    #[test]
+    fn unique_items_limits_and_uncertain_numbers_never_claim_conformance() {
+        for value in [
+            json!((0..17).collect::<Vec<_>>()),
+            json!([9007199254740992.0, 9_007_199_254_740_993_u64]),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(json!({"uniqueItems":true}))),
+                    &complete(value),
+                )
+                .unwrap().verdict,
+                McpOutputVerdict::Inconclusive,
+            );
+        }
+        for schema in [
+            json!({"uniqueItems":1}),
+            json!({"properties":{"unused":{"uniqueItems":"true"}}}),
+        ] {
+            assert_eq!(
+                inspect_structured_tool_output(
+                    &inspected_tool(Some(schema)),
+                    &complete(json!({})),
+                )
+                .unwrap().verdict,
+                McpOutputVerdict::Inconclusive,
+            );
         }
     }
 
