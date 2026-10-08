@@ -8,6 +8,8 @@ mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_runner;
+#[cfg(test)]
+mod mcp_async_tests;
 mod local_tool_adapter;
 mod local_tool_provider_control;
 mod offline_reader;
