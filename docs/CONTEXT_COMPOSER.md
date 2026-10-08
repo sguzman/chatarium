@@ -200,6 +200,14 @@ unmanifested.
 
 Individual recorded attempts expose an ordered, event-numbered transport
 timeline and an explicitly requested **Copy this audit as JSON** action.
+The expanded history inspector holds a transient, per-conversation
+in-memory projection cache keyed by the append-only journal's observed
+sequence high-water. It replays when a new durable event arrives or the
+selected local conversation changes, but does not rebuild an unchanged
+history on every egui frame. Cache entries never persist across application
+restarts, and failed-closed projections are not silently replaced by a
+partially successful list.
+
 The export is a portable, versioned, content-free evidence report containing
 the owning conversation/turn, transport observation sequences, composed
 source counts and bytes, and the listed per-call provenance (including

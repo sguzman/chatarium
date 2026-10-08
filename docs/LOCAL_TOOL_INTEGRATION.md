@@ -743,6 +743,13 @@ manifested history in 12-row pages, rather than silently forgetting older
 attempts. This has no effect on admission, transport or existing immutable
 journal events.
 
+The viewer additionally caches its verified read-only journal projection
+transiently while the append-only high-water and selected conversation are
+unchanged. This avoids expensive repeated historical ownership and
+coordination replay on every UI frame without changing the durable audit.
+Appending a journal event invalidates the cache, as does switching local
+conversations. Nothing is persisted in the UI cache.
+
 Each attempt also shows its later transport observations in journal order,
 with exact event numbers rather than opaque optional values. An explicit
 **Copy this audit as JSON** control exports a versioned evidence report with

@@ -13,6 +13,7 @@ use chatarium_store::controller_coordination_audit::replay_controller_coordinati
 use eframe::egui;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 pub const MAX_MANIFEST_TOOL_ROWS: usize = 32;
 const MAX_VISIBLE_DISPATCHES: usize = 12;
@@ -641,6 +642,76 @@ pub fn portable_audit_json(item: &RecordedDispatchManifest) -> Value {
     })
 }
 
+/// The journal is append-only while Chatarium is running. A transient UI
+/// cache may reuse this validated projection only when its owner and
+/// journal's observed high-water are unchanged; it never survives restart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct JournalHighWater {
+    event_count: usize,
+    first_sequence: Option<u64>,
+    last_sequence: Option<u64>,
+    first_scope: Option<String>,
+    last_scope: Option<String>,
+    last_kind: Option<EventKind>,
+    last_payload_bytes: Option<usize>,
+}
+
+impl JournalHighWater {
+    fn capture(events: &[EventEnvelope]) -> Self {
+        Self {
+            event_count: events.len(),
+            first_sequence: events.first().map(|event| event.sequence),
+            last_sequence: events.last().map(|event| event.sequence),
+            first_scope: events.first().and_then(|event| event.scope.clone()),
+            last_scope: events.last().and_then(|event| event.scope.clone()),
+            last_kind: events.last().map(|event| event.kind),
+            last_payload_bytes: events.last().map(|event| event.payload.len()),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DispatchHistoryCache {
+    conversation_id: String,
+    high_water: JournalHighWater,
+    rows: Result<Vec<RecordedDispatchManifest>, String>,
+}
+
+impl DispatchHistoryCache {
+    fn build(events: &[EventEnvelope], conversation_id: LocalConversationId) -> Self {
+        Self {
+            conversation_id: conversation_id.to_string(),
+            high_water: JournalHighWater::capture(events),
+            rows: dispatch_history(events, conversation_id),
+        }
+    }
+
+    fn matches(&self, events: &[EventEnvelope], conversation_id: LocalConversationId) -> bool {
+        self.conversation_id == conversation_id.to_string()
+            && self.high_water == JournalHighWater::capture(events)
+    }
+}
+
+fn cached_history(
+    ui: &egui::Ui,
+    events: &[EventEnvelope],
+    conversation_id: LocalConversationId,
+) -> Arc<DispatchHistoryCache> {
+    let cache_id = ui.id().with("mcp-dispatch-history-transient-cache");
+    if let Some(existing) = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<Arc<DispatchHistoryCache>>(cache_id))
+    {
+        if existing.matches(events, conversation_id) {
+            return existing;
+        }
+    }
+    let fresh = Arc::new(DispatchHistoryCache::build(events, conversation_id));
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(cache_id, Arc::clone(&fresh)));
+    fresh
+}
+
 /// Visible history of what Chatarium assembled before attempting transport.
 /// This cannot assert that a server received, retained or used a request.
 pub fn render_dispatches(
@@ -648,7 +719,8 @@ pub fn render_dispatches(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
 ) {
-    match dispatch_history(events, conversation_id) {
+    let cache = cached_history(ui, events, conversation_id);
+    match cache.rows.as_ref() {
         Ok(rows) if rows.is_empty() => {
             ui.label("No manifested dispatch attempts for this local conversation. Older attempts did not record this metadata.");
         }
@@ -1209,6 +1281,65 @@ mod tests {
         let export = portable_audit_json(row);
         assert_eq!(export["tool_results"]["eligible"], 40);
         assert_eq!(export["tool_results"]["list_truncated"], true);
+    }
+
+    #[test]
+    fn transient_projection_cache_invalidates_on_journal_append_or_conversation_change() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let foreign = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        append_authored_attempt(&mut store, owner);
+        let cache = DispatchHistoryCache::build(store.events(), owner);
+        assert!(cache.rows.is_ok());
+        assert!(cache.matches(store.events(), owner));
+        assert!(!cache.matches(store.events(), foreign));
+        append_authored_attempt(&mut store, owner);
+        assert!(!cache.matches(store.events(), owner));
+        let rebuilt = DispatchHistoryCache::build(store.events(), owner);
+        assert!(rebuilt.matches(store.events(), owner));
+        assert_eq!(rebuilt.rows.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn transient_cache_does_not_reuse_a_different_terminal_scope_with_same_sequences() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        append_authored_attempt(&mut store, owner);
+        let cached = DispatchHistoryCache::build(store.events(), owner);
+        let mut altered = store.events().to_vec();
+        altered.last_mut().unwrap().scope = Some("local-turn:another-turn".to_owned());
+        assert_eq!(altered.len(), store.events().len());
+        assert_eq!(
+            altered.last().unwrap().sequence,
+            store.events().last().unwrap().sequence
+        );
+        assert!(!cached.matches(&altered, owner));
+    }
+
+    #[test]
+    fn transient_cache_preserves_a_failed_closed_projection_until_revision_changes() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let (turn, _) = append_authored_attempt(&mut store, owner);
+        append_transport_observation(
+            &mut store,
+            &turn,
+            "wrong-request",
+            EventKind::RemoteAcceptanceObserved,
+        );
+        let cache = DispatchHistoryCache::build(store.events(), owner);
+        assert!(cache.rows.is_err());
+        assert!(cache.matches(store.events(), owner));
+        append_transport_observation(
+            &mut store,
+            &turn,
+            &turn,
+            EventKind::TransportInterrupted,
+        );
+        assert!(!cache.matches(store.events(), owner));
     }
 
     #[test]
