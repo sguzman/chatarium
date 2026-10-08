@@ -34,7 +34,9 @@ pub struct McpOutputInspection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InspectionIssue {
-    Mismatch,
+    // Only code-owned constraint labels can be emitted in diagnostics.
+    // Never copy provider-authored schema keys, values, or output paths.
+    Mismatch(&'static str),
     Unsupported,
 }
 
@@ -104,14 +106,40 @@ pub fn inspect_structured_tool_output(
             McpOutputVerdict::PassedSupportedChecks,
             "The value passed every recognized constraint in this bounded schema subset; this is not full JSON Schema validation.",
         )),
-        Err(InspectionIssue::Mismatch) => Ok(report(
+        Err(InspectionIssue::Mismatch(keyword)) => Ok(report(
             McpOutputVerdict::Mismatch,
-            "The structured output violates a recognized schema constraint.",
+            mismatch_explanation(keyword),
         )),
         Err(InspectionIssue::Unsupported) => Ok(report(
             McpOutputVerdict::Inconclusive,
             "The schema contains unsupported, malformed, or over-budget assertions; no conformance claim was made.",
         )),
+    }
+}
+
+// Fixed diagnostic strings are intentional: provider keys, instance paths and
+// values may contain private data or terminal-control characters. Report the
+// first recognized failing keyword, not untrusted provider-authored content.
+const fn mismatch_explanation(keyword: &str) -> &'static str {
+    match keyword {
+        "false schema" => "A boolean false schema rejects the structured output.",
+        "type" => "Constraint type failed: the structured output has an unexpected JSON type.",
+        "required" => "Constraint required failed: a required object property is missing.",
+        "const" => "Constraint const failed: the structured output differs from the declared constant.",
+        "enum" => "Constraint enum failed: the structured output matches no declared option.",
+        "minLength" => "Constraint minLength failed: a string is too short.",
+        "maxLength" => "Constraint maxLength failed: a string is too long.",
+        "minItems" => "Constraint minItems failed: an array has too few entries.",
+        "maxItems" => "Constraint maxItems failed: an array has too many entries.",
+        "minProperties" => "Constraint minProperties failed: an object has too few properties.",
+        "maxProperties" => "Constraint maxProperties failed: an object has too many properties.",
+        "minimum" => "Constraint minimum failed: a number is below its inclusive lower bound.",
+        "maximum" => "Constraint maximum failed: a number exceeds its inclusive upper bound.",
+        "exclusiveMinimum" => "Constraint exclusiveMinimum failed: a number is not above its exclusive lower bound.",
+        "exclusiveMaximum" => "Constraint exclusiveMaximum failed: a number is not below its exclusive upper bound.",
+        "multipleOf" => "Constraint multipleOf failed: a number is not an exact multiple.",
+        "uniqueItems" => "Constraint uniqueItems failed: an array contains equivalent entries.",
+        _ => "The structured output violates a recognized schema constraint.",
     }
 }
 
@@ -374,13 +402,13 @@ fn check_enum(
             Ok(true) => return Ok(()),
             Ok(false) => {}
             Err(InspectionIssue::Unsupported) => uncertain = true,
-            Err(InspectionIssue::Mismatch) => unreachable!("equality never yields mismatch"),
+            Err(InspectionIssue::Mismatch(_)) => unreachable!("equality never yields mismatch"),
         }
     }
     if uncertain {
         Err(InspectionIssue::Unsupported)
     } else {
-        Err(InspectionIssue::Mismatch)
+        Err(InspectionIssue::Mismatch("enum"))
     }
 }
 
@@ -402,7 +430,7 @@ fn check_numeric_bounds(
         if (lower && (order == Ordering::Less || (exclusive && order == Ordering::Equal)))
             || (!lower && (order == Ordering::Greater || (exclusive && order == Ordering::Equal)))
         {
-            return Err(InspectionIssue::Mismatch);
+            return Err(InspectionIssue::Mismatch(keyword));
         }
     }
     Ok(())
@@ -519,7 +547,7 @@ fn check_unique_items(
     for (index, item) in items.iter().enumerate() {
         for other in &items[index + 1..] {
             if json_equal(item, other, depth + 1, budget)? {
-                return Err(InspectionIssue::Mismatch);
+                return Err(InspectionIssue::Mismatch("uniqueItems"));
             }
         }
     }
@@ -573,12 +601,12 @@ fn inspect_value(
     budget.visit(depth)?;
     match schema {
         Value::Bool(true) => return Ok(()),
-        Value::Bool(false) => return Err(InspectionIssue::Mismatch),
+        Value::Bool(false) => return Err(InspectionIssue::Mismatch("false schema"),
         Value::Object(spec) => {
             if let Some(kind) = spec.get("type") {
                 let kinds = declared_types(kind)?;
                 if !kinds.iter().any(|kind| matches_json_type(kind, value)) {
-                    return Err(InspectionIssue::Mismatch);
+                    return Err(InspectionIssue::Mismatch("type"));
                 }
             }
             if let Some(text) = value.as_str() {
@@ -589,13 +617,13 @@ fn inspect_value(
                 check_numeric_bounds(spec, actual)?;
                 if let Some(divisor) = spec.get("multipleOf").and_then(Value::as_number) {
                     if !decimal_multiple(actual, divisor)? {
-                        return Err(InspectionIssue::Mismatch);
+                        return Err(InspectionIssue::Mismatch("multipleOf"));
                     }
                 }
             }
             if let Some(expected) = spec.get("const") {
                 if !json_equal(value, expected, depth + 1, budget)? {
-                    return Err(InspectionIssue::Mismatch);
+                    return Err(InspectionIssue::Mismatch("const"));
                 }
             }
             if let Some(allowed) = spec.get("enum").and_then(Value::as_array) {
@@ -651,7 +679,7 @@ fn inspect_value(
                 if let Some(required) = required {
                     for name in required {
                         if !object.contains_key(name) {
-                            return Err(InspectionIssue::Mismatch);
+                            return Err(InspectionIssue::Mismatch("required"));
                         }
                     }
                 }
@@ -698,18 +726,21 @@ fn inspect_value(
 
 fn check_count(
     schema: &serde_json::Map<String, Value>,
-    min_key: &str,
-    max_key: &str,
+    min_key: &'static str,
+    max_key: &'static str,
     actual: u64,
 ) -> Result<(), InspectionIssue> {
     if schema
         .get(min_key)
         .is_some_and(|limit| limit.as_u64().is_some_and(|min| actual < min))
-        || schema
-            .get(max_key)
-            .is_some_and(|limit| limit.as_u64().is_some_and(|max| actual > max))
     {
-        return Err(InspectionIssue::Mismatch);
+        return Err(InspectionIssue::Mismatch(min_key));
+    }
+    if schema
+        .get(max_key)
+        .is_some_and(|limit| limit.as_u64().is_some_and(|max| actual > max))
+    {
+        return Err(InspectionIssue::Mismatch(max_key));
     }
     Ok(())
 }
@@ -1367,6 +1398,69 @@ mod tests {
                 McpOutputVerdict::Inconclusive,
             );
         }
+    }
+
+    #[test]
+    fn mismatch_diagnostics_name_exact_constraint_without_echoing_provider_data() {
+        let cases = [
+            (json!(false), json!(1), "boolean false schema"),
+            (json!({"type":"string"}), json!(1), "type"),
+            (json!({"required":["PRIVATE-PROVIDER-KEY"]}), json!({}), "required"),
+            (json!({"const":{"PRIVATE-PROVIDER-KEY":1}}), json!({}), "const"),
+            (json!({"enum":["PRIVATE-PROVIDER-KEY"]}), json!("other"), "enum"),
+            (json!({"minLength":3}), json!("a"), "minLength"),
+            (json!({"maxLength":1}), json!("ab"), "maxLength"),
+            (json!({"minItems":2}), json!([1]), "minItems"),
+            (json!({"maxItems":0}), json!([1]), "maxItems"),
+            (json!({"minProperties":2}), json!({}), "minProperties"),
+            (json!({"maxProperties":0}), json!({"PRIVATE-PROVIDER-KEY":true}), "maxProperties"),
+            (json!({"minimum":2}), json!(1), "minimum"),
+            (json!({"maximum":2}), json!(3), "maximum"),
+            (json!({"exclusiveMinimum":2}), json!(2), "exclusiveMinimum"),
+            (json!({"exclusiveMaximum":2}), json!(2), "exclusiveMaximum"),
+            (json!({"multipleOf":2}), json!(3), "multipleOf"),
+            (json!({"uniqueItems":true}), json!([1,1.0]), "uniqueItems"),
+            (
+                json!({"properties":{"PRIVATE-PROVIDER-KEY":{"minLength":4}}}),
+                json!({"PRIVATE-PROVIDER-KEY":"a"}),
+                "minLength",
+            ),
+            (
+                json!({"propertyNames":{"minLength":3}}),
+                json!({"PRIVATE-PROVIDER-KEY":true,"a":false}),
+                "minLength",
+            ),
+            (
+                json!({"prefixItems":[{"type":"string"}]}),
+                json!([false]),
+                "type",
+            ),
+        ];
+        for (schema, value, keyword) in cases {
+            let result = inspect_structured_tool_output(
+                &inspected_tool(Some(schema)),
+                &complete(value),
+            ).unwrap();
+            assert_eq!(result.verdict, McpOutputVerdict::Mismatch, "{keyword}");
+            assert!(result.explanation.contains(keyword), "{keyword}");
+            assert!(!result.explanation.contains("PRIVATE-PROVIDER-KEY"));
+        }
+    }
+
+    #[test]
+    fn unsupported_nested_constraints_remain_inconclusive_without_keyword_diagnostics() {
+        let schema = json!({
+            "type":"object",
+            "required":["PRIVATE-PROVIDER-KEY"],
+            "properties":{"unused":{"pattern":"PRIVATE-PROVIDER-KEY"}}
+        });
+        let result = inspect_structured_tool_output(
+            &inspected_tool(Some(schema)),
+            &complete(json!({})),
+        ).unwrap();
+        assert_eq!(result.verdict, McpOutputVerdict::Inconclusive);
+        assert!(!result.explanation.contains("Constraint required failed"));
+        assert!(!result.explanation.contains("PRIVATE-PROVIDER-KEY"));
     }
 
     #[test]
