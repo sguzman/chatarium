@@ -19547,6 +19547,11 @@ mod tests {
             PersistNotice::LocalRouteContextDecisionUpdated { .. } => {
                 "local_route_context_decision_updated"
             }
+            PersistNotice::ToolProviderUpdated { .. } => "tool_provider_updated",
+            PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
+            PersistNotice::ToolCallRoutePolicyUpdated { .. } => {
+                "tool_call_route_policy_updated"
+            }
             PersistNotice::LocalMemoryArtifactRecorded { .. } => "local_memory_artifact_recorded",
             PersistNotice::LocalMemoryContextDecisionUpdated { .. } => {
                 "local_memory_context_decision_updated"
