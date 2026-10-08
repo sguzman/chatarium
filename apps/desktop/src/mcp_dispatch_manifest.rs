@@ -1333,12 +1333,7 @@ mod tests {
         let cache = DispatchHistoryCache::build(store.events(), owner);
         assert!(cache.rows.is_err());
         assert!(cache.matches(store.events(), owner));
-        append_transport_observation(
-            &mut store,
-            &turn,
-            &turn,
-            EventKind::TransportInterrupted,
-        );
+        append_transport_observation(&mut store, &turn, &turn, EventKind::TransportInterrupted);
         assert!(!cache.matches(store.events(), owner));
     }
 
