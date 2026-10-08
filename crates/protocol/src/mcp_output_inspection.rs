@@ -422,7 +422,7 @@ fn exact_decimal(number: &Number) -> Result<(i128, u32), InspectionIssue> {
         let power = text[at + 1..]
             .parse::<i32>()
             .map_err(|_| InspectionIssue::Unsupported)?;
-        ( &text[..at], power )
+        (&text[..at], power)
     } else {
         (text.as_str(), 0)
     };
@@ -466,7 +466,9 @@ fn exact_decimal(number: &Number) -> Result<(i128, u32), InspectionIssue> {
     }
     if places < 0 {
         for _ in 0..(-places) {
-            mantissa = mantissa.checked_mul(10).ok_or(InspectionIssue::Unsupported)?;
+            mantissa = mantissa
+                .checked_mul(10)
+                .ok_or(InspectionIssue::Unsupported)?;
         }
         places = 0;
     }
@@ -1042,7 +1044,8 @@ mod tests {
         ] {
             assert_eq!(
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
-                    .unwrap().verdict,
+                    .unwrap()
+                    .verdict,
                 McpOutputVerdict::PassedSupportedChecks,
             );
         }
@@ -1055,7 +1058,8 @@ mod tests {
         ] {
             assert_eq!(
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(value))
-                    .unwrap().verdict,
+                    .unwrap()
+                    .verdict,
                 McpOutputVerdict::Mismatch,
             );
         }
@@ -1072,7 +1076,8 @@ mod tests {
         ] {
             assert_eq!(
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
-                    .unwrap().verdict,
+                    .unwrap()
+                    .verdict,
                 McpOutputVerdict::Inconclusive,
             );
         }
@@ -1082,7 +1087,8 @@ mod tests {
                     &inspected_tool(Some(json!({"multipleOf":0.5}))),
                     &complete(value),
                 )
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
                 McpOutputVerdict::Inconclusive,
             );
         }
@@ -1092,40 +1098,43 @@ mod tests {
     fn unique_items_uses_deep_equality_with_order_independent_objects() {
         for value in [
             json!([]),
-            json!([1,2,3]),
+            json!([1, 2, 3]),
             json!([{"id":1},{"id":2}]),
-            json!([true,false,null]),
+            json!([true, false, null]),
         ] {
             assert_eq!(
                 inspect_structured_tool_output(
                     &inspected_tool(Some(json!({"type":"array","uniqueItems":true}))),
                     &complete(value),
                 )
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
                 McpOutputVerdict::PassedSupportedChecks,
             );
         }
         for value in [
-            json!([1,1.0]),
+            json!([1, 1.0]),
             json!([{"a":1,"b":2},{"b":2.0,"a":1.0}]),
-            json!([[1,2],[1.0,2.0]]),
-            json!([null,null]),
+            json!([[1, 2], [1.0, 2.0]]),
+            json!([null, null]),
         ] {
             assert_eq!(
                 inspect_structured_tool_output(
                     &inspected_tool(Some(json!({"uniqueItems":true}))),
                     &complete(value),
                 )
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
                 McpOutputVerdict::Mismatch,
             );
         }
         assert_eq!(
             inspect_structured_tool_output(
                 &inspected_tool(Some(json!({"uniqueItems":false}))),
-                &complete(json!([1,1])),
+                &complete(json!([1, 1])),
             )
-            .unwrap().verdict,
+            .unwrap()
+            .verdict,
             McpOutputVerdict::PassedSupportedChecks,
         );
     }
@@ -1141,7 +1150,8 @@ mod tests {
                     &inspected_tool(Some(json!({"uniqueItems":true}))),
                     &complete(value),
                 )
-                .unwrap().verdict,
+                .unwrap()
+                .verdict,
                 McpOutputVerdict::Inconclusive,
             );
         }
