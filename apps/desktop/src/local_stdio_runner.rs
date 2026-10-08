@@ -8,7 +8,9 @@
 
 use chatarium_core::routing::RouteId;
 use chatarium_core::tool::{StdioToolProviderConfig, ToolCallId};
-use chatarium_protocol::mcp_wire::{MAX_MCP_FRAME_BYTES, McpResponse, decode_stdio_response};
+use chatarium_protocol::mcp_wire::{
+    MAX_MCP_FRAME_BYTES, McpResponse, decode_stdio_response, parse_tools_list_page,
+};
 use chatarium_store::tool_outcome_audit::{MAX_OUTCOME_BYTES, ToolCallOutcomeKind};
 use chatarium_store::tool_stdio_dispatch::ReservedStdioToolDispatch;
 use chatarium_store::tool_stdio_executable_inspection::inspect_stdio_executable;
@@ -294,6 +296,17 @@ fn run_one_shot(
     if !frame.ends_with('\n') || frame.len() > MAX_MCP_FRAME_BYTES {
         return Err("refused an unbounded or malformed MCP request frame".to_owned());
     }
+    let request: serde_json::Value = serde_json::from_str(frame)
+        .map_err(|_| "refused malformed MCP request JSON".to_owned())?;
+    if request["id"].as_u64() != Some(request_id) {
+        return Err("MCP request does not match approved call identity".to_owned());
+    }
+    let method = request["method"]
+        .as_str()
+        .ok_or_else(|| "refused MCP request without method".to_owned())?;
+    if !matches!(method, "tools/call" | "tools/list") {
+        return Err("restricted MCP adapter supports only tools/call and tools/list".to_owned());
+    }
     preflight_confined_stdio_launch(executable, argv)?;
     let plan = plan_confined_stdio_launch(executable, argv)?;
     #[cfg(not(target_os = "linux"))]
@@ -397,7 +410,14 @@ fn run_one_shot(
         let response = decode_stdio_response(text, request_id)
             .map_err(|e| format!("sandbox MCP response rejected: {e:?}"))?;
         match response {
-            McpResponse::Complete(_) => {
+            McpResponse::Complete(result) => {
+                if method == "tools/list" {
+                    // The catalogue is untrusted provider testimony. Reject
+                    // malformed, duplicate or oversized pages; never import
+                    // it into the immutable configured tool allowlist.
+                    parse_tools_list_page(&result)
+                        .map_err(|e| format!("sandbox MCP tools/list page rejected: {e:?}"))?;
+                }
                 if text.len() > MAX_OUTCOME_BYTES {
                     return Err("sandbox MCP response exceeds durable outcome budget".to_owned());
                 }
@@ -486,6 +506,42 @@ mod tests {
     /// This runs in the Linux CI sandbox job with explicit opt-in. It uses
     /// stock root-owned sed as a deterministic stdio MCP fixture; the stdin
     /// writer must finish before sed emits one correlated terminal response.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_bubblewrap_approved_catalog_inspection_smoke() {
+        if std::env::var_os("CHATARIUM_TEST_LINUX_MCP_SANDBOX").is_none() {
+            return;
+        }
+        use chatarium_protocol::mcp_wire::{encode_stdio_frame, tools_list_request};
+        let frame = encode_stdio_frame(&tools_list_request(93, None).unwrap()).unwrap();
+        let reply = r#"{"jsonrpc":"2.0","id":93,"result":{"resultType":"complete","tools":[{"name":"weather.read","description":"A tool list is not authority","inputSchema":{"type":"object"}}],"nextCursor":"page2"}}"#;
+        let command = format!("s/.*/{reply}/p");
+        let returned = run_one_shot(
+            "/usr/bin/sed",
+            &["-n".to_owned(), "-e".to_owned(), command],
+            &frame,
+            93,
+        )
+        .unwrap();
+        assert_eq!(returned, format!("{reply}\n"));
+
+        // A malformed advertised schema cannot be recorded as a successful
+        // catalogue inspection even though the JSON-RPC envelope is complete.
+        let malformed = r#"{"jsonrpc":"2.0","id":93,"result":{"resultType":"complete","tools":[{"name":"x"}]}}"#;
+        let error = run_one_shot(
+            "/usr/bin/sed",
+            &[
+                "-n".to_owned(),
+                "-e".to_owned(),
+                format!("s/.*/{malformed}/p"),
+            ],
+            &frame,
+            93,
+        )
+        .unwrap_err();
+        assert!(error.contains("tools/list page rejected"));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn live_bubblewrap_stdio_smoke() {
