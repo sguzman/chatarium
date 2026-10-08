@@ -868,7 +868,7 @@ mod tests {
             json!({"type":"string","minLength":"two"}),
             json!({"type":"object","properties":{"unused":{"type":["string","string"]}}}),
             json!({"type":"object","required":["x","x"]}),
-            json!({"type":"object","properties":{"a":{"multipleOf":2}}}),
+            json!({"type":"object","properties":{"a":{"multipleOf":0}}}),
         ] {
             let verdict =
                 inspect_structured_tool_output(&inspected_tool(Some(schema)), &complete(json!({})))
@@ -1063,6 +1063,22 @@ mod tests {
                 McpOutputVerdict::Mismatch,
             );
         }
+    }
+
+    #[test]
+    fn valid_multiple_of_under_absent_property_is_not_mistaken_for_unsupported() {
+        let schema = json!({"type":"object","properties":{
+            "optional":{"type":"number","multipleOf":0.25}
+        }});
+        assert_eq!(
+            inspect_structured_tool_output(
+                &inspected_tool(Some(schema)),
+                &complete(json!({})),
+            )
+            .unwrap()
+            .verdict,
+            McpOutputVerdict::PassedSupportedChecks,
+        );
     }
 
     #[test]
