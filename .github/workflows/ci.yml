@@ -95,3 +95,7 @@ jobs:
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
         run: cargo test -p chatarium-desktop live_bubblewrap_stdio_smoke -- --nocapture
+      - name: Smoke durable sandboxed MCP dispatch and terminal result
+        env:
+          CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
+        run: cargo test -p chatarium-desktop live_stdio_dispatch_worker_contract -- --nocapture
