@@ -12,6 +12,8 @@ mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
 #[cfg(test)]
+mod integration_journey;
+#[cfg(test)]
 mod mcp_async_tests;
 mod mcp_call_review;
 mod mcp_context_inventory;

@@ -14,6 +14,29 @@ cargo clippy --workspace --all-targets
 cargo test --workspace
 ```
 
+## Native conversation integration gate
+
+The desktop binary includes a deterministic integration journey exercised by
+CI on Linux and by the Windows workspace test suite. The dedicated command is:
+
+```text
+cargo test -p chatarium-desktop --bin chatarium-desktop integration_journey_ -- --nocapture
+```
+
+The journey uses the production authored-message commit, local display
+projection, Context Composer, route permission gate, checked tool-result
+observation, explicit result admission, outgoing dispatch manifest, and
+reverse provenance lookup. It writes a temporary, real JSONL journal and
+reopens it to verify restart replay. Negative cases cover an unexecuted
+denied tool, attempted cross-conversation admission, and revocation after
+a Send-click admission snapshot was frozen.
+
+Remote assistant responses in this test are **synthetic typed observations**;
+the test does not contact an inference provider, execute an untrusted
+process, authenticate a browser, or prove rendering fidelity. Those
+boundaries remain covered by separate transport/sandbox CI and targeted
+desktop or browser QA. The owner does not need to run this test manually.
+
 ## Automated QA ownership
 
 For browser-facing and integration work, Codex owns the complete local QA/debug/Git loop. The principal is not a manual regression runner. Use the Playwright-managed bundled Chromium QA browser with persistent state at `~/.local/share/chatarium-qa-browser/`; do not automate the principal's normal Edge installation. Follow [Codex-owned QA workstation](CODEX_QA_WORKSTATION.md) plus [Human QA protocol](HUMAN_QA.md).

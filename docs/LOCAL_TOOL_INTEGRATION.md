@@ -700,6 +700,30 @@ the same context. **Exact next-request context** remains the authoritative
 preview of the composed request. The inventory is a control surface for
 audited evidence selection, not an alternative source of model instructions.
 
+## Conversation-to-tool integration contract
+
+Chatarium's automated native journey exercises the entire **local permission
+and evidence path**, rather than proving isolated components only. It begins
+with a durably authored user turn and locally prepared inference request,
+records a synthetic assistant completion, proposes a separately
+approval-gated MCP call, observes the terminal result through the checked
+boundary, and asserts that the result remains absent from inference until
+the user explicitly admits it. A subsequent authored request then contains
+the exact result once, records an included evidence manifest, and can be
+audited by reverse provenance. Revoking the admission affects future
+requests but does not rewrite prior outgoing evidence. The JSONL journal
+is reopened and replayed to confirm identity, chronology and context
+decisions survive restart.
+
+The deny-path test proves that a denied, undispatched route cannot fabricate
+a checked terminal outcome or become inference context; a foreign
+conversation cannot appropriate another conversation's observed result.
+The Send-click snapshot test proves that a later context revocation does
+not mutate an already prepared request. These assertions run under the
+named native integration gate in GitHub Actions without requiring any local
+manual work. Network acceptance is simulated in this fixture, and live
+inference/browser appearance still require their distinct QA surfaces.
+
 ## Per-attempt outgoing MCP context evidence
 
 The next-request eligible inventory is deliberately not conflated with what

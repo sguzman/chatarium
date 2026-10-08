@@ -80,6 +80,8 @@ jobs:
         run: cargo check -p chatarium-desktop
       - name: Test Linux desktop
         run: cargo test -p chatarium-desktop
+      - name: Native conversation-to-tool-to-followup journey
+        run: cargo test -p chatarium-desktop --bin chatarium-desktop integration_journey_ -- --nocapture
       - name: Test Linux stdio tool safety
         run: cargo test -p chatarium-store tool_stdio_
       - name: Install Linux MCP isolation tools
