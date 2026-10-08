@@ -16,6 +16,88 @@ pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
 pub const MAX_MCP_FRAME_BYTES: usize = 1_048_576;
 pub const MAX_MCP_ARGUMENT_BYTES: usize = 65_536;
 pub const MAX_MCP_TOOL_NAME_SCALARS: usize = 128;
+pub const MAX_MCP_LIST_TOOLS_PER_PAGE: usize = 128;
+
+/// A tool catalogue is external provider testimony, not an execution allowlist.
+/// Exact input schema remains untrusted JSON until separately reviewed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpListedTool {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub input_schema: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpToolCatalogPage {
+    pub tools: Vec<McpListedTool>,
+    pub next_cursor: Option<String>,
+}
+
+/// Validate the bounded, correlated MCP 2026 tools/list response body.
+/// This does not launch a provider, trust its schemas or change configuration.
+/// Additional pages require separate user-reviewed, approved requests.
+pub fn parse_tools_list_page(result: &Value) -> Result<McpToolCatalogPage, McpWireError> {
+    let object = result.as_object().ok_or(McpWireError::InvalidResponse)?;
+    if object.get("resultType").and_then(Value::as_str) != Some("complete") {
+        return Err(McpWireError::InvalidResponse);
+    }
+    let listed = object
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or(McpWireError::InvalidResponse)?;
+    if listed.len() > MAX_MCP_LIST_TOOLS_PER_PAGE {
+        return Err(McpWireError::TooLarge);
+    }
+    let next_cursor = match object.get("nextCursor") {
+        None => None,
+        Some(Value::String(cursor))
+            if !cursor.is_empty() && cursor.len() <= MAX_MCP_ARGUMENT_BYTES =>
+        {
+            Some(cursor.clone())
+        }
+        _ => return Err(McpWireError::InvalidResponse),
+    };
+    let mut names = std::collections::BTreeSet::new();
+    let mut tools = Vec::with_capacity(listed.len());
+    for entry in listed {
+        let obj = entry.as_object().ok_or(McpWireError::InvalidResponse)?;
+        let name = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or(McpWireError::InvalidResponse)?;
+        if name.is_empty()
+            || name.trim() != name
+            || name.chars().count() > MAX_MCP_TOOL_NAME_SCALARS
+            || name.chars().any(char::is_control)
+            || !names.insert(name.to_owned())
+        {
+            return Err(McpWireError::InvalidResponse);
+        }
+        let input_schema = obj
+            .get("inputSchema")
+            .filter(|value| value.is_object())
+            .ok_or(McpWireError::InvalidResponse)?;
+        let title = match obj.get("title") {
+            None => None,
+            Some(Value::String(value)) if value.len() <= 4096 => Some(value.clone()),
+            _ => return Err(McpWireError::InvalidResponse),
+        };
+        let description = match obj.get("description") {
+            None => None,
+            Some(Value::String(value)) if value.len() <= 65_536 => Some(value.clone()),
+            _ => return Err(McpWireError::InvalidResponse),
+        };
+        tools.push(McpListedTool {
+            name: name.to_owned(),
+            title,
+            description,
+            input_schema: input_schema.clone(),
+        });
+    }
+    Ok(McpToolCatalogPage { tools, next_cursor })
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpWireError {
@@ -189,6 +271,34 @@ fn request(id: u64, method: &str, mut params: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tools_list_catalog_requires_explicit_valid_page_and_cursor() {
+        let result = json!({
+            "resultType": "complete",
+            "tools": [
+                {"name":"weather.read","title":"Weather","description":"Read weather",
+                 "inputSchema":{"type":"object","properties":{"city":{"type":"string"}}}},
+                {"name":"hello","inputSchema":{"type":"object"}}
+            ],
+            "nextCursor":"second-page"
+        });
+        let page = parse_tools_list_page(&result).unwrap();
+        assert_eq!(page.tools.len(), 2);
+        assert_eq!(page.tools[0].name, "weather.read");
+        assert_eq!(page.tools[0].input_schema["type"], "object");
+        assert_eq!(page.next_cursor.as_deref(), Some("second-page"));
+        assert!(parse_tools_list_page(&json!({"resultType":"complete","tools":[
+            {"name":"same","inputSchema":{}},{"name":"same","inputSchema":{}}
+        ]})).is_err());
+        assert!(parse_tools_list_page(&json!({"resultType":"complete","tools":[
+            {"name":"unsafe","inputSchema":null}
+        ]})).is_err());
+        assert!(parse_tools_list_page(&json!({"resultType":"complete","tools":[],
+            "nextCursor":""})).is_err());
+        assert!(parse_tools_list_page(&json!({"resultType":"input_required","tools":[]}))
+            .is_err());
+    }
 
     #[test]
     fn stateless_2026_metadata_is_present_per_request() {
