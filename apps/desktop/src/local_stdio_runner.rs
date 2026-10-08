@@ -141,10 +141,7 @@ pub fn plan_confined_stdio_launch(
 /// Fail-closed launch readiness check on the persistence worker, before
 /// consuming a durable one-shot route. Never call this from the render loop.
 /// The runner checks executable metadata again immediately before spawning.
-pub fn preflight_confined_stdio_launch(
-    executable: &str,
-    argv: &[String],
-) -> Result<(), String> {
+pub fn preflight_confined_stdio_launch(executable: &str, argv: &[String]) -> Result<(), String> {
     let _plan = plan_confined_stdio_launch(executable, argv)?;
     #[cfg(target_os = "linux")]
     {
@@ -453,12 +450,10 @@ mod tests {
         // The hosted Linux worker uses root-owned /usr and /usr/bin.
         // If its filesystem ownership differs, the policy must refuse.
         let result = validate_trusted_binary("/usr/bin/true");
-        if std::fs::symlink_metadata("/usr/bin")
-            .is_ok_and(|metadata| {
-                use std::os::unix::fs::MetadataExt;
-                metadata.uid() == 0
-            })
-        {
+        if std::fs::symlink_metadata("/usr/bin").is_ok_and(|metadata| {
+            use std::os::unix::fs::MetadataExt;
+            metadata.uid() == 0
+        }) {
             assert!(result.is_ok());
         } else {
             assert!(result.is_err());

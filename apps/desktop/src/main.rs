@@ -16866,13 +16866,12 @@ fn persistence_worker(
                     Ok(reservation) => {
                         // Durable dispatch precedes all process effects.
                         if let Some(event) = store.events().last().cloned() {
-                            let _ = notices.send(PersistNotice::StdioToolDispatchReserved {
-                                call_id,
-                                event,
-                            });
+                            let _ = notices
+                                .send(PersistNotice::StdioToolDispatchReserved { call_id, event });
                         }
                         match local_stdio_runner::execute_reserved_stdio_tool_call(
-                            &mut store, reservation,
+                            &mut store,
+                            reservation,
                         ) {
                             Ok(event) => {
                                 let _ = notices.send(PersistNotice::StdioToolDispatchFinished {
@@ -20527,20 +20526,30 @@ mod tests {
         let source = LocalConversationId::new();
         let mut store = chatarium_store::MemoryEventStore::default();
         append_local_orchestration_topology_checked(
-            &mut store, source, ChatContainerId::new(1), SessionId::new(1),
-        ).unwrap();
+            &mut store,
+            source,
+            ChatContainerId::new(1),
+            SessionId::new(1),
+        )
+        .unwrap();
         append_current_session_route_endpoint_checked(
-            &mut store, source, SessionId::new(1), RouteEndpointId::new(1),
-        ).unwrap();
+            &mut store,
+            source,
+            SessionId::new(1),
+            RouteEndpointId::new(1),
+        )
+        .unwrap();
         let provider = ToolProviderId::new(30);
         let call = ToolCallId::new(71);
         let route = RouteId::new(72);
         append_tool_provider_registration_checked(
-            &mut store, provider, ToolProviderName::new("external.test").unwrap(),
-        ).unwrap();
-        append_tool_provider_endpoint_checked(
-            &mut store, provider, RouteEndpointId::new(50),
-        ).unwrap();
+            &mut store,
+            provider,
+            ToolProviderName::new("external.test").unwrap(),
+        )
+        .unwrap();
+        append_tool_provider_endpoint_checked(&mut store, provider, RouteEndpointId::new(50))
+            .unwrap();
 
         // Real sandbox process emits one valid bounded MCP response to
         // the immutable, explicitly approved tool request.
@@ -20549,50 +20558,73 @@ mod tests {
             "/usr/bin/sed",
             vec!["-n".to_owned(), "-e".to_owned(), format!("s/.*/{reply}/p")],
             vec![ToolOperationName::new("fixture.echo").unwrap()],
-        ).unwrap();
-        let configured = append_tool_transport_config_checked(
-            &mut store, provider, &sed,
-        ).unwrap();
+        )
+        .unwrap();
+        let configured = append_tool_transport_config_checked(&mut store, provider, &sed).unwrap();
         local_tool_provider_control::append_activation_with_inspection(
-            &mut store, provider, configured.sequence, ProviderActivationDecision::Activate,
-        ).unwrap();
+            &mut store,
+            provider,
+            configured.sequence,
+            ProviderActivationDecision::Activate,
+        )
+        .unwrap();
         append_tool_call_proposal_checked(
-            &mut store, call, route, source, provider,
-            ToolOperationName::new("fixture.echo").unwrap(), "{}".to_owned(),
-        ).unwrap();
+            &mut store,
+            call,
+            route,
+            source,
+            provider,
+            ToolOperationName::new("fixture.echo").unwrap(),
+            "{}".to_owned(),
+        )
+        .unwrap();
 
         let unapproved_events = store.events().len();
         assert!(reserve_activated_stdio_tool_dispatch(&mut store, call).is_err());
         assert_eq!(store.events().len(), unapproved_events);
 
-        append_tool_call_route_user_decision_checked(
-            &mut store, route, RouteUserDecision::Allow,
-        ).unwrap();
+        append_tool_call_route_user_decision_checked(&mut store, route, RouteUserDecision::Allow)
+            .unwrap();
         let approved = preview_activated_stdio_tool_invocation(store.events(), call).unwrap();
         local_stdio_runner::preflight_confined_stdio_launch(
-            approved.invocation.executable.as_str(), &approved.invocation.argv,
-        ).unwrap();
+            approved.invocation.executable.as_str(),
+            &approved.invocation.argv,
+        )
+        .unwrap();
         let reserved = reserve_activated_stdio_tool_dispatch(&mut store, call).unwrap();
         let dispatch_sequence = reserved.dispatch_sequence();
-        assert_eq!(store.events().last().unwrap().kind, EventKind::RouteDispatched);
         assert_eq!(
-            replay_unresolved_external_tool_dispatches(store.events()).unwrap().len(), 1,
+            store.events().last().unwrap().kind,
+            EventKind::RouteDispatched
         );
-        let outcome_event = local_stdio_runner::execute_reserved_stdio_tool_call(
-            &mut store, reserved,
-        ).unwrap();
+        assert_eq!(
+            replay_unresolved_external_tool_dispatches(store.events())
+                .unwrap()
+                .len(),
+            1,
+        );
+        let outcome_event =
+            local_stdio_runner::execute_reserved_stdio_tool_call(&mut store, reserved).unwrap();
         assert_eq!(outcome_event.kind, EventKind::ToolCallOutcomeObserved);
-        let outcome = replay_tool_call_outcome_audit(store.events()).unwrap()
-            .into_iter().find(|event| event.call_id == call).unwrap();
+        let outcome = replay_tool_call_outcome_audit(store.events())
+            .unwrap()
+            .into_iter()
+            .find(|event| event.call_id == call)
+            .unwrap();
         assert_eq!(outcome.dispatch_sequence, dispatch_sequence);
         assert_eq!(outcome.kind, ToolCallOutcomeKind::Result);
-        let parsed = chatarium_protocol::mcp_wire::decode_stdio_response(
-            &outcome.text, call.get(),
-        ).unwrap();
-        assert!(matches!(parsed, chatarium_protocol::mcp_wire::McpResponse::Complete(_)));
+        let parsed =
+            chatarium_protocol::mcp_wire::decode_stdio_response(&outcome.text, call.get()).unwrap();
+        assert!(matches!(
+            parsed,
+            chatarium_protocol::mcp_wire::McpResponse::Complete(_)
+        ));
         assert!(outcome.text.contains("durable-ok"));
-        assert!(replay_unresolved_external_tool_dispatches(store.events())
-            .unwrap().is_empty());
+        assert!(
+            replay_unresolved_external_tool_dispatches(store.events())
+                .unwrap()
+                .is_empty()
+        );
         let final_events = store.events().len();
         assert!(reserve_activated_stdio_tool_dispatch(&mut store, call).is_err());
         assert_eq!(store.events().len(), final_events);
