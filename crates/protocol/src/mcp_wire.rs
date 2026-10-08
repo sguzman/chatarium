@@ -309,7 +309,9 @@ pub fn decode_stdio_response(frame: &str, expected_id: u64) -> Result<McpRespons
         (Some(Value::Object(result)), None) => {
             match result.get("resultType").and_then(Value::as_str) {
                 Some("complete") => Ok(McpResponse::Complete(Value::Object(result.clone()))),
-                Some("inputRequired") => Err(McpWireError::InputRequiredUnsupported),
+                Some("input_required" | "inputRequired") => {
+                    Err(McpWireError::InputRequiredUnsupported)
+                }
                 _ => Err(McpWireError::InvalidResponse),
             }
         }
@@ -519,11 +521,15 @@ mod tests {
 
     #[test]
     fn cannot_confuse_completion_with_multiple_round_trips() {
-        let input_required = r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"inputRequired","inputRequests":{}}}"#;
-        assert_eq!(
-            decode_stdio_response(input_required, 1),
-            Err(McpWireError::InputRequiredUnsupported),
-        );
+        for input_required in [
+            r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"input_required","inputRequests":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"resultType":"inputRequired","inputRequests":{}}}"#,
+        ] {
+            assert_eq!(
+                decode_stdio_response(input_required, 1),
+                Err(McpWireError::InputRequiredUnsupported),
+            );
+        }
     }
 
     #[test]

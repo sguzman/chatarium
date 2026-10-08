@@ -135,7 +135,7 @@ The pure codec provides:
   serialization with escaped embedded newlines;
 - exact numeric request-ID correlation for responses and structured errors;
 - strict rejection of unsolicited/batched/multi-frame/oversized responses;
-- explicit refusal of `inputRequired` multi-round-trip requests: no model
+- explicit refusal of `input_required` multi-round-trip requests: no model
   or server output can silently cause follow-up execution;
 - argument and tool-name validation before any later execution adapter could
   consume a route permit.
