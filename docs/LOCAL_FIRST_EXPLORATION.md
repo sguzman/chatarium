@@ -381,8 +381,14 @@ consume the one-shot dispatch permit. Its exact terminal result is audited
 separately. Arbitrary local commands, browser, filesystem, network, and general
 MCP adapters remain disabled.
 
-The next boundary is an explicitly configured, policy-gated provider transport
-and independently admitted tool-result context. See
-[LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). No automatic model-driven
-tool execution or hidden tool-result context admission is authorized. Do not
-reopen browser/history work as part of this phase.
+Explicit reversible tool-result context admission is now implemented. The
+statically bounded MCP 2026 codec and inert external stdio provider configuration
+are also landed, followed by read-only pre-dispatch call validation and Linux
+executable metadata inspection. None of these operations launches a server.
+
+The next boundary is user-reviewed activation, race-aware executable handling,
+and a bounded one-shot provider adapter, after the existing user-approved
+ToolCall route has been revalidated. See
+[LOCAL_TOOL_INTEGRATION.md](LOCAL_TOOL_INTEGRATION.md). No automatic
+model-driven tool execution or hidden tool-result context admission is
+authorized. Do not reopen browser/history work as part of this phase.
