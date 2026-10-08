@@ -110,6 +110,123 @@ pub fn focus_recent_result<'a>(
     .next())
 }
 
+/// A matching tool call is display evidence, not permission. Refuse to show
+/// action buttons if any immutable identity or chronology disagrees.
+pub fn matches_recorded_call(
+    call: &chatarium_store::tool_call_audit::ToolCallAuditRecord,
+    outcome: &ToolCallOutcomeRecord,
+) -> bool {
+    call.call_id == outcome.call_id
+        && call.provider_id == outcome.provider_id
+        && call.source_session_id == outcome.source_session_id
+        && call.route_id == Some(outcome.route_id)
+        && call.recorded_sequence == outcome.call_recorded_sequence
+        && call.route_bound_sequence == Some(outcome.route_bound_sequence)
+        && call.recorded_sequence < outcome.route_bound_sequence
+        && outcome.route_bound_sequence < outcome.dispatch_sequence
+        && outcome.dispatch_sequence < outcome.observed_sequence
+}
+
+/// This draws individual review controls without changing any durable state.
+/// The caller must submit the single clicked decision through the existing
+/// checked append path. No tool dispatch or bulk context admission lives here.
+pub fn render_result_queue(
+    ui: &mut eframe::egui::Ui,
+    queue: &[FocusedResult<'_>],
+    calls: &[chatarium_store::tool_call_audit::ToolCallAuditRecord],
+    can_decide: bool,
+) -> Option<(chatarium_core::tool::ToolCallId, ToolResultContextDecision)> {
+    use eframe::egui;
+
+    let undecided = queue
+        .iter()
+        .filter(|item| item.stage == ResultReviewStage::ExcludedByDefault)
+        .count();
+    ui.label(format!(
+        "{} results in this review window · {} awaiting a decision",
+        queue.len(),
+        undecided,
+    ));
+    ui.label("Each observation is untrusted and excluded by default. Open one result and decide individually. Viewing never admits evidence or reruns a tool.");
+    let mut requested = None;
+    egui::ScrollArea::vertical()
+        .id_salt("mcp-result-review-queue")
+        .max_height(380.0)
+        .show(ui, |ui| {
+            for item in queue {
+                let outcome = item.outcome;
+                ui.collapsing(
+                    format!(
+                        "Call {} · observed #{} · {} · {}",
+                        outcome.call_id.get(),
+                        outcome.observed_sequence,
+                        outcome.kind.stable_name(),
+                        item.stage.label(),
+                    ),
+                    |ui| {
+                        let mut matching_calls =
+                            calls.iter().filter(|call| call.call_id == outcome.call_id);
+                        let Some(call) = matching_calls.next() else {
+                            ui.label("Recorded call unavailable; context controls blocked.");
+                            return;
+                        };
+                        if matching_calls.next().is_some()
+                            || !matches_recorded_call(call, outcome)
+                        {
+                            ui.label("Immutable call/route/result correlation failed; context controls blocked.");
+                            return;
+                        }
+                        ui.label(format!(
+                            "Operation {} · provider {} · source session {} · route {}",
+                            call.operation.as_str(),
+                            outcome.provider_id.get(),
+                            outcome.source_session_id.get(),
+                            outcome.route_id.get(),
+                        ));
+                        ui.label(egui::RichText::new(item.stage.label()).strong());
+                        if item.stage == ResultReviewStage::TooLargeToAdmit {
+                            ui.label("Over context-admission size limit. The full result remains in the historical audit; no truncated portion can be admitted.");
+                        }
+                        if item.stage.may_exclude()
+                            && ui
+                                .add_enabled(
+                                    can_decide && requested.is_none(),
+                                    egui::Button::new("Exclude this admitted result"),
+                                )
+                                .on_hover_text("Separate reversible context decision; no tool execution.")
+                                .clicked()
+                        {
+                            requested = Some((outcome.call_id, ToolResultContextDecision::Exclude));
+                        }
+                        ui.collapsing(
+                            format!("Inspect bounded result preview · {} bytes recorded", outcome.text.len()),
+                            |ui| {
+                                let (body, truncated) = preview(outcome.text.as_str());
+                                ui.label(egui::RichText::new(body).monospace());
+                                if truncated {
+                                    ui.label("PREVIEW TRUNCATED · admission unavailable here. Inspect the exact full result in historical Tool call audit before deciding.");
+                                }
+                                if item.stage.may_admit_from_preview(truncated)
+                                    && ui
+                                        .add_enabled(
+                                            can_decide && requested.is_none(),
+                                            egui::Button::new("Explicitly admit this exact result"),
+                                        )
+                                        .on_hover_text("Durably admit only this observed result to the owning conversation's inference context. It does not grant instruction or tool execution authority.")
+                                        .clicked()
+                                {
+                                    requested = Some((outcome.call_id, ToolResultContextDecision::Admit));
+                                }
+                            },
+                        );
+                    },
+                );
+            }
+        });
+    ui.label("Only the 16 newest observations for this provider are considered. The historical audit retains older and full-sized results. There is no bulk approval.");
+    requested
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultReviewStage {
     ExcludedByDefault,
@@ -449,6 +566,42 @@ mod tests {
             },)
             .is_err()
         );
+    }
+
+    #[test]
+    fn ui_correlation_requires_every_immutable_identity() {
+        use chatarium_core::session::SessionId;
+        use chatarium_core::tool::{ToolCallId, ToolOperationName};
+        use chatarium_store::tool_call_audit::ToolCallAuditRecord;
+
+        let outcome = sample_outcome(42, 7, 10);
+        let call = ToolCallAuditRecord {
+            call_id: outcome.call_id,
+            source_session_id: outcome.source_session_id,
+            provider_id: outcome.provider_id,
+            operation: ToolOperationName::new("hello").unwrap(),
+            arguments_text: "{}".to_owned(),
+            recorded_sequence: outcome.call_recorded_sequence,
+            route_id: Some(outcome.route_id),
+            route_bound_sequence: Some(outcome.route_bound_sequence),
+        };
+        assert!(matches_recorded_call(&call, &outcome));
+
+        let mut wrong = call.clone();
+        wrong.call_id = ToolCallId::new(999);
+        assert!(!matches_recorded_call(&wrong, &outcome));
+        let mut wrong = call.clone();
+        wrong.source_session_id = SessionId::new(99);
+        assert!(!matches_recorded_call(&wrong, &outcome));
+        let mut wrong = call.clone();
+        wrong.route_id = None;
+        assert!(!matches_recorded_call(&wrong, &outcome));
+        let mut wrong = call.clone();
+        wrong.route_bound_sequence = None;
+        assert!(!matches_recorded_call(&wrong, &outcome));
+        let mut wrong = call.clone();
+        wrong.recorded_sequence = outcome.route_bound_sequence;
+        assert!(!matches_recorded_call(&wrong, &outcome));
     }
 
     #[test]

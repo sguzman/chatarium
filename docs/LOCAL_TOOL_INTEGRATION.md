@@ -641,54 +641,37 @@ No review or expansion action changes execution, permissions, or context.
 
 ## Post-execution result review (desktop)
 
-The desktop's **Tools / MCP** panel now exposes a separate, collapsed
-**Recent MCP result · separate context review** area above the historical
-call audit. This is intentionally distinct from the earlier **Next manual
-MCP call review** that controls execution. Results and adapter errors are
-**excluded from inference context by default**, including when a call was
-approved and successfully dispatched. Neither a provider response nor an
-advertised schema grants instruction authority.
+The **Tools / MCP** panel exposes a collapsed **Recent MCP results · separate
+context review** queue above historical call audit. This is separate from the
+earlier **Next manual MCP call review** that controls execution. Adapter
+results and errors are always **excluded from inference context by default**,
+even after a successful explicitly approved tool run.
 
-The result focus considers at most the 16 most recently recorded terminal
-observations for the selected provider. It verifies the local conversation
-that owned each source session **at outcome time**; a failure to replay this
-ownership or the context-decision audit blocks the focus instead of
-guessing. An undecided result is prioritized over an already admitted or
-explicitly excluded result. Older results remain accessible through the
-complete historical tool audit.
+The queue considers at most the 16 newest terminal observations of the
+selected provider, verifying the historically owning local conversation of
+each source session at outcome time. It checks every matching durable
+context-decision identity, and fails the entire queue closed on replay errors,
+duplicate decisions, or mismatched correlation. Foreign conversation results
+never enter the queue. Undecided results appear first, then admitted,
+explicitly excluded and oversized results. Within each status, the latest
+observation appears first. Older evidence stays in the historical audit.
 
-The review shows the immutable call identity, recorded observation sequence,
-adapter result/error kind, and context status. The untrusted body stays behind
-an **Inspect bounded result preview** expansion, limited to a UTF-8-safe
-4 KiB prefix with an explicit truncation label. This is only a preview;
-the complete exact observation remains in the historical audit. Inside this
-expansion, **Admit** and **Exclude** are separate deliberate, reversible,
-durably checked context decisions; no admission occurs on inspection. Focused
-admission is disabled when the preview is truncated: the complete exact
-observation must be inspected through the historical tool audit before a
-separate decision. Exclusion of an already admitted result remains available
-without reviewing the body. Results larger than the existing 65,536-byte
-context limit cannot be admitted, even as truncated previews. Approval, dispatch, and result-context admission
-remain independent gates. This focus cannot launch, replay, or retry a tool.
+Each row is independently expandable and shows the exact call identifier,
+observation sequence, outcome kind, context status and provider/session/route.
+The associated immutable call identity and dispatch chronology must agree
+before any context-decision control is offered. Inspecting an observation
+shows only a bounded, UTF-8-safe 4 KiB prefix, labeled if truncated.
+A truncated preview cannot authorize admission: the exact outcome must
+instead be reviewed through the historical call audit. Observations larger
+than the existing 65,536-byte context limit cannot be admitted at all.
 
-### Bounded multi-result queue substrate
-
-The read-only result-review module now also constructs a **priority-ordered
-queue** of all historically owned results in the same bounded 16-observation
-provider window. Each item retains its exact call identity, observed sequence,
-and independently replayed context decision. Undecided items precede admitted
-items, which precede explicitly excluded items; equal-status items remain
-newest-first. Foreign conversation results never enter this queue. Inconsistent
-or duplicate decision identities and ownership replay errors fail the entire
-queue closed instead of presenting a partly trusted selection. Oversized
-results remain excluded and never acquire an admission action.
-
-The existing desktop panel continues to display its single focused result,
-now selected from that shared verified queue. **The multi-row UI and any
-per-item review controls are not yet wired into the desktop.** No bulk
-admission, automatic result ingestion, or additional permissions were added.
-Any later multi-row UI must preserve independent inspection and deliberate
-per-result checked journal decisions.
+**Admit** is an explicit, per-result decision only within a complete preview.
+An already admitted result may be explicitly **Excluded** without viewing
+its untrusted body. The UI emits at most one individual decision per frame
+and delegates to the existing checked, durable journal append path; it
+does not write records directly. There is no bulk approval, automatic
+admission, tool launch or retry. The full recorded result is never
+rewritten or implicitly granted instruction authority.
 
 ## Focused call review (desktop)
 

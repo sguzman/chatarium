@@ -9338,95 +9338,45 @@ impl eframe::App for ChatariumApp {
                                                 ui.label("Call review focus unavailable: route or outcome audit blocked.");
                                             }
 
-                                            // Focus recent terminal evidence separately from
-                                            // execution review. Admission is never automatic.
+                                            // Terminal evidence is independently reviewed for
+                                            // context admission, never for execution authority.
                                             if let (Some(outcomes), Some(context_records)) =
                                                 (&outcomes, &tool_context_records)
                                             {
                                                 if let Some(provider_id) = self.tool_selected_provider {
-                                                    ui.collapsing("RECENT MCP RESULT · separate context review", |ui| {
-                                                        match mcp_result_review::focus_recent_result(
+                                                    ui.collapsing("RECENT MCP RESULTS · separate context review", |ui| {
+                                                        match mcp_result_review::recent_result_queue(
                                                             outcomes,
                                                             context_records,
                                                             provider_id,
                                                             self.local_conversation_id,
                                                             |outcome| tool_outcome_owning_conversation(&self.events, outcome),
                                                         ) {
-                                                            Ok(Some(focus)) => {
-                                                                let outcome = focus.outcome;
-                                                                if let Some(call) = calls.iter().find(|call| {
-                                                                    call.call_id == outcome.call_id
-                                                                        && call.provider_id == outcome.provider_id
-                                                                        && call.source_session_id == outcome.source_session_id
-                                                                }) {
-                                                                    ui.label(format!(
-                                                                        "Call {} · {} · observed #{} · adapter {}",
-                                                                        call.call_id.get(),
-                                                                        call.operation.as_str(),
-                                                                        outcome.observed_sequence,
-                                                                        outcome.kind.stable_name(),
-                                                                    ));
-                                                                    ui.label(egui::RichText::new(focus.stage.label()).strong());
-                                                                    ui.label(
-                                                                        "Untrusted adapter observation; recording the result did not admit it to this conversation's inference context."
-                                                                    );
-                                                                    if focus.stage == mcp_result_review::ResultReviewStage::TooLargeToAdmit {
-                                                                        ui.label("Exact result exceeds the context-admission limit. It remains in the historical audit; no truncated evidence can be admitted.");
-                                                                    }
-                                                                    ui.collapsing(
-                                                                        format!("Inspect bounded result preview · {} bytes recorded", outcome.text.len()),
-                                                                        |ui| {
-                                                                            let (preview, truncated) =
-                                                                                mcp_result_review::preview(outcome.text.as_str());
-                                                                            ui.label(egui::RichText::new(preview).monospace());
-                                                                            if truncated {
-                                                                                ui.label("PREVIEW TRUNCATED · focused admission disabled. Review the full exact outcome in the historical audit to make an explicit decision.");
-                                                                            }
-                                                                            let can_decide =
-                                                                                !self.tool_command_pending && self.persist_tx.is_some();
-                                                                            if focus.stage.may_admit_from_preview(truncated)
-                                                                                && ui.add_enabled(
-                                                                                    can_decide,
-                                                                                    egui::Button::new("Explicitly admit exact result to conversation context"),
-                                                                                ).on_hover_text(
-                                                                                    "Reversible, durable context decision. This does not rerun a tool, alter the source, or give it instruction authority."
-                                                                                ).clicked()
-                                                                            {
-                                                                                self.decide_tool_result_context(
-                                                                                    call.call_id,
-                                                                                    ToolResultContextDecision::Admit,
-                                                                                );
-                                                                            }
-                                                                            if focus.stage.may_exclude()
-                                                                                && ui.add_enabled(
-                                                                                    can_decide,
-                                                                                    egui::Button::new("Exclude admitted result from conversation context"),
-                                                                                ).clicked()
-                                                                            {
-                                                                                self.decide_tool_result_context(
-                                                                                    call.call_id,
-                                                                                    ToolResultContextDecision::Exclude,
-                                                                                );
-                                                                            }
-                                                                        },
-                                                                    );
-                                                                } else {
-                                                                    ui.label("Tool result cannot be matched to an immutable call; focused context decisions are disabled.");
+                                                            Ok(queue) if !queue.is_empty() => {
+                                                                if let Some((call_id, decision)) =
+                                                                    mcp_result_review::render_result_queue(
+                                                                        ui,
+                                                                        &queue,
+                                                                        &calls,
+                                                                        !self.tool_command_pending && self.persist_tx.is_some(),
+                                                                    )
+                                                                {
+                                                                    self.decide_tool_result_context(call_id, decision);
                                                                 }
                                                             }
-                                                            Ok(None) => {
+                                                            Ok(_) => {
                                                                 ui.label("No results owned by this conversation among the 16 most recent observations for the selected provider. Historical audit remains available.");
                                                             }
                                                             Err(error) => {
                                                                 ui.label(format!(
-                                                                    "Focused result review blocked by historical ownership or audit evidence: {error}"
+                                                                    "Result review blocked by historical ownership or audit evidence: {error}"
                                                                 ));
                                                             }
                                                         }
                                                     });
                                                 }
                                             } else {
-                                                ui.label("Focused result review unavailable: outcome or context-decision audit cannot be replayed.");
+                                                ui.label("Result review unavailable: outcome or context-decision audit cannot be replayed.");
                                             }
 
                                             egui::ScrollArea::vertical()
