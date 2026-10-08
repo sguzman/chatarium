@@ -6,10 +6,10 @@
 
 use crate::context_composer::{ContextPlan, ContextSource, InclusionDecision};
 use chatarium_core::{EventKind, LocalConversationId};
+use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{DecodedUserMessageCommit, decode_user_message_commit};
 use chatarium_store::continuation_execution_audit::replay_worker_continuation_execution_audit;
 use chatarium_store::controller_coordination_audit::replay_controller_coordination_audit;
-use chatarium_store::EventEnvelope;
 use eframe::egui;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -390,7 +390,6 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
     }))
 }
 
-
 fn is_transport_evidence(kind: EventKind) -> bool {
     matches!(
         kind,
@@ -417,10 +416,11 @@ fn validate_transport_observation(
         )
     };
     let value: Value = serde_json::from_str(&event.payload).map_err(|_| invalid())?;
-    if value.get("schema").and_then(Value::as_str)
-        != Some("chatarium-responses-turn-observation")
+    if value.get("schema").and_then(Value::as_str) != Some("chatarium-responses-turn-observation")
         || value.get("version").and_then(Value::as_u64) != Some(1)
-        || value.pointer("/details/local_turn_id").and_then(Value::as_str)
+        || value
+            .pointer("/details/local_turn_id")
+            .and_then(Value::as_str)
             != Some(recorded.turn_id.as_str())
         || value.pointer("/details/request_id").and_then(Value::as_str)
             != Some(recorded.turn_id.as_str())
@@ -439,13 +439,14 @@ fn verify_origins(
 ) -> Result<(), String> {
     let mut authored = BTreeMap::new();
     for event in events {
-        if let Some(DecodedUserMessageCommit::Typed(message)) =
-            decode_user_message_commit(event)?
-        {
+        if let Some(DecodedUserMessageCommit::Typed(message)) = decode_user_message_commit(event)? {
             let id = message.turn_id.to_string();
             if event.scope.as_deref() != Some(format!("local-turn:{id}").as_str())
                 || authored
-                    .insert(id.clone(), (message.conversation_id.to_string(), event.sequence))
+                    .insert(
+                        id.clone(),
+                        (message.conversation_id.to_string(), event.sequence),
+                    )
                     .is_some()
             {
                 return Err(format!("conflicting typed authored origin for turn {id}"));
@@ -522,7 +523,10 @@ pub fn dispatch_history(
     let mut last_sequence = None;
     for event in events {
         if last_sequence.is_some_and(|previous| event.sequence <= previous) {
-            return Err(format!("journal sequence is not increasing at #{}", event.sequence));
+            return Err(format!(
+                "journal sequence is not increasing at #{}",
+                event.sequence
+            ));
         }
         last_sequence = Some(event.sequence);
         if event.kind == EventKind::DispatchAttempted {
@@ -804,8 +808,8 @@ mod tests {
         owner: LocalConversationId,
     ) -> (String, u64) {
         use chatarium_core::{AuthoredUserMessage, LocalMessageId, LocalTurnId};
-        use chatarium_store::authored::{commit_user_message, local_turn_scope};
         use chatarium_store::EventStore;
+        use chatarium_store::authored::{commit_user_message, local_turn_scope};
 
         let turn = LocalTurnId::new();
         let message = AuthoredUserMessage::new(
@@ -980,7 +984,10 @@ mod tests {
         let rows = dispatch_history(store.events(), owner).unwrap();
         assert_eq!(rows.len(), 27);
         assert_eq!(rows[0].turn_id, last);
-        assert!(rows.windows(2).all(|pair| pair[0].sequence > pair[1].sequence));
+        assert!(
+            rows.windows(2)
+                .all(|pair| pair[0].sequence > pair[1].sequence)
+        );
     }
 
     #[test]
@@ -995,12 +1002,8 @@ mod tests {
             &turn,
             EventKind::RemoteAcceptanceObserved,
         );
-        let interrupted = append_transport_observation(
-            &mut store,
-            &turn,
-            &turn,
-            EventKind::TransportInterrupted,
-        );
+        let interrupted =
+            append_transport_observation(&mut store, &turn, &turn, EventKind::TransportInterrupted);
         let rows = dispatch_history(store.events(), owner).unwrap();
         assert_eq!(rows[0].transport.accepted_sequence, Some(accepted));
         assert_eq!(rows[0].transport.interrupted_sequence, Some(interrupted));
@@ -1016,12 +1019,7 @@ mod tests {
         let owner = LocalConversationId::new();
         let mut store = MemoryEventStore::default();
         let (turn, _) = append_authored_attempt(&mut store, owner);
-        append_transport_observation(
-            &mut store,
-            &turn,
-            &turn,
-            EventKind::RemoteFailureObserved,
-        );
+        append_transport_observation(&mut store, &turn, &turn, EventKind::RemoteFailureObserved);
         append_transport_observation(
             &mut store,
             &turn,
