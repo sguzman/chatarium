@@ -9186,9 +9186,9 @@ impl eframe::App for ChatariumApp {
                                             if let (Some(routes), Some(outcomes)) =
                                                 (&routes, &outcomes)
                                             {
-                                                let next_review = calls.iter().rev().filter(
+                                                let next_review = calls.iter().filter(
                                                     |call| self.tool_selected_provider == Some(call.provider_id),
-                                                ).find_map(|call| {
+                                                ).filter_map(|call| {
                                                     let route_id = call.route_id?;
                                                     let route = routes.iter().find(|route| {
                                                         route.request.id == route_id
@@ -9203,7 +9203,7 @@ impl eframe::App for ChatariumApp {
                                                         observed,
                                                     );
                                                     stage.actionable().then_some((call, route, stage))
-                                                });
+                                                }).max_by_key(|(call, _, _)| call.recorded_sequence);
                                                 ui.group(|ui| {
                                                     ui.label(egui::RichText::new(
                                                         "NEXT MANUAL MCP CALL REVIEW"
@@ -9323,7 +9323,7 @@ impl eframe::App for ChatariumApp {
                                                         ui.label("No unconsumed calls await review for the selected provider.");
                                                     }
                                                     ui.label(egui::RichText::new(
-                                                        "Read-only focus; only explicit, separate Allow and Run actions can change durable state."
+                                                        "This focus grants no permission. Allow/Deny and Run remain separate explicit actions."
                                                     ).small());
                                                 });
                                             } else {
