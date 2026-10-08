@@ -639,6 +639,30 @@ every catalog, and call/route/dispatch chronology is rechecked independently.
 A result passing supported checks is labeled **NOT FULL VALIDATION**.
 No review or expansion action changes execution, permissions, or context.
 
+## Focused call review (desktop)
+
+Above the bounded historical **Tool call audit**, the desktop surfaces the
+newest **actionable, non-dispatched** call for the selected provider. A call
+must have a correlated replayed route, and both route and outcome projections
+must succeed. Denied calls, consumed one-shot routes, and completed calls
+are not presented as new execution tasks. The guide exposes the exact
+immutable recorded intent behind a separate expander.
+
+Calls awaiting a user decision expose distinct **Allow** and **Deny**
+buttons; neither launches a process. Once a user Allow is recorded, the
+same call remains focused, but external MCP **Run** appears only behind
+a separate expansion that shows the exact wire request, active-provider
+review and confinement-plan checks. The real launcher still repeats the
+full preflight and requires the independently consumed route permit.
+The side-effect-free builtin hello retains its separate explicit Run
+path. Neither workflow auto-advances or retries, and the historical
+per-call audit controls remain available.
+
+If a route/outcome projection fails, the focus declines to render an
+actionable call; it cannot infer authorization from partially replayed
+journal evidence. This focus is UI-only and never changes journal or
+transport semantics.
+
 ## Selected provider setup guide (desktop)
 
 The **Tools / MCP** panel now shows a read-only next-step guide for the
