@@ -8,7 +8,9 @@ use crate::routing_audit::replay_routing_audit;
 use crate::tool_call_audit::replay_tool_call_audit;
 use crate::{EventEnvelope, EventStore};
 use chatarium_core::EventKind;
-use chatarium_core::routing::{DecisionAuthority, RouteClass, RouteGateState, RouteId, RoutePolicy};
+use chatarium_core::routing::{
+    DecisionAuthority, RouteClass, RouteGateState, RouteId, RoutePolicy,
+};
 use chatarium_core::session::SessionId;
 use chatarium_core::tool::{ToolCallId, ToolProviderId};
 use serde_json::{Value, json};
@@ -64,7 +66,8 @@ pub fn record_tool_call_outcome(
     text: impl Into<String>,
 ) -> std::io::Result<u64> {
     let text = text.into();
-    if text.len() > MAX_OUTCOME_BYTES || (kind == ToolCallOutcomeKind::Error && text.trim().is_empty())
+    if text.len() > MAX_OUTCOME_BYTES
+        || (kind == ToolCallOutcomeKind::Error && text.trim().is_empty())
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -91,7 +94,8 @@ pub fn append_tool_call_outcome_checked(
     text: impl Into<String>,
 ) -> Result<EventEnvelope, String> {
     let text = text.into();
-    if text.len() > MAX_OUTCOME_BYTES || (kind == ToolCallOutcomeKind::Error && text.trim().is_empty())
+    if text.len() > MAX_OUTCOME_BYTES
+        || (kind == ToolCallOutcomeKind::Error && text.trim().is_empty())
     {
         return Err("tool outcome is too large or has empty error text".to_owned());
     }
@@ -293,14 +297,21 @@ pub fn tool_outcome_scope(call_id: ToolCallId, route_id: RouteId) -> String {
     format!("tool-outcome:{}:{}", call_id.get(), route_id.get())
 }
 
-fn append_typed(store: &mut impl EventStore, scope: String, payload: Value) -> std::io::Result<u64> {
+fn append_typed(
+    store: &mut impl EventStore,
+    scope: String,
+    payload: Value,
+) -> std::io::Result<u64> {
     let encoded = serde_json::to_string(&payload).map_err(invalid_data)?;
     store.append_scoped(Some(scope), EventKind::ToolCallOutcomeObserved, encoded)
 }
 
 fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
     let value: Value = serde_json::from_str(&event.payload).map_err(|error| {
-        format!("malformed tool outcome at sequence {}: {error}", event.sequence)
+        format!(
+            "malformed tool outcome at sequence {}: {error}",
+            event.sequence
+        )
     })?;
     if value.get("schema").and_then(Value::as_str) != Some(SCHEMA)
         || value.get("version").and_then(Value::as_u64) != Some(VERSION)
@@ -314,7 +325,11 @@ fn typed_payload(event: &EventEnvelope) -> Result<Value, String> {
     Ok(value)
 }
 
-fn validate_scope(event: &EventEnvelope, call_id: ToolCallId, route_id: RouteId) -> Result<(), String> {
+fn validate_scope(
+    event: &EventEnvelope,
+    call_id: ToolCallId,
+    route_id: RouteId,
+) -> Result<(), String> {
     let expected = tool_outcome_scope(call_id, route_id);
     if event.scope.as_deref() != Some(expected.as_str()) {
         return Err(format!(
@@ -356,9 +371,7 @@ mod tests {
     use crate::tool_provider_audit::{
         record_tool_provider_endpoint_bound, record_tool_provider_registered,
     };
-    use chatarium_core::routing::{
-        RouteEndpointId, RouteGate, RouteRequest,
-    };
+    use chatarium_core::routing::{RouteEndpointId, RouteGate, RouteRequest};
     use chatarium_core::session::SessionEndpointBinding;
     use chatarium_core::tool::{ToolOperationName, ToolProviderEndpointBinding, ToolProviderName};
 
@@ -373,15 +386,25 @@ mod tests {
         record_local_session_registered(store, SESSION).unwrap();
         record_session_endpoint_bound(store, SessionEndpointBinding::new(SESSION, SOURCE)).unwrap();
         record_tool_provider_registered(
-            store, PROVIDER, &ToolProviderName::new("local-tool").unwrap(),
-        ).unwrap();
+            store,
+            PROVIDER,
+            &ToolProviderName::new("local-tool").unwrap(),
+        )
+        .unwrap();
         record_tool_provider_endpoint_bound(
-            store, ToolProviderEndpointBinding::new(PROVIDER, DESTINATION),
-        ).unwrap();
+            store,
+            ToolProviderEndpointBinding::new(PROVIDER, DESTINATION),
+        )
+        .unwrap();
         record_tool_call(
-            store, CALL, SESSION, PROVIDER, &ToolOperationName::new("inspect").unwrap(),
+            store,
+            CALL,
+            SESSION,
+            PROVIDER,
+            &ToolOperationName::new("inspect").unwrap(),
             " exact args ",
-        ).unwrap();
+        )
+        .unwrap();
         let route = RouteRequest {
             id: ROUTE,
             source: SOURCE,
@@ -407,9 +430,13 @@ mod tests {
         let route = setup(&mut store);
         dispatch(&mut store, route);
         let sequence = record_tool_call_outcome(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result,
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Result,
             " exact result\nwith spacing ",
-        ).unwrap();
+        )
+        .unwrap();
 
         let records = replay_tool_call_outcome_audit(store.events()).unwrap();
         assert_eq!(records.len(), 1);
@@ -427,12 +454,26 @@ mod tests {
         let route = setup(&mut store);
         dispatch(&mut store, route);
         record_tool_call_outcome(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Error, "adapter failed",
-        ).unwrap();
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Error,
+            "adapter failed",
+        )
+        .unwrap();
         record_tool_call_outcome(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, "late result",
-        ).unwrap();
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap_err().contains("duplicate terminal"));
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Result,
+            "late result",
+        )
+        .unwrap();
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap_err()
+                .contains("duplicate terminal")
+        );
     }
 
     #[test]
@@ -440,17 +481,35 @@ mod tests {
         let mut store = MemoryEventStore::default();
         setup(&mut store);
         record_tool_call_outcome(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, "fabricated",
-        ).unwrap();
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap_err().contains("before explicitly approved dispatch"));
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Result,
+            "fabricated",
+        )
+        .unwrap();
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap_err()
+                .contains("before explicitly approved dispatch")
+        );
 
         let mut store = MemoryEventStore::default();
         setup(&mut store);
         record_route_user_decision(&mut store, ROUTE, RouteUserDecision::Deny).unwrap();
         record_tool_call_outcome(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Error, "denied",
-        ).unwrap();
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap_err().contains("before explicitly approved dispatch"));
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Error,
+            "denied",
+        )
+        .unwrap();
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap_err()
+                .contains("before explicitly approved dispatch")
+        );
     }
 
     #[test]
@@ -459,17 +518,39 @@ mod tests {
         let route = setup(&mut store);
         dispatch(&mut store, route);
         record_tool_call_outcome(
-            &mut store, CALL, RouteId::new(99), ToolCallOutcomeKind::Result, "wrong route",
-        ).unwrap();
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap_err().contains("not bound"));
+            &mut store,
+            CALL,
+            RouteId::new(99),
+            ToolCallOutcomeKind::Result,
+            "wrong route",
+        )
+        .unwrap();
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap_err()
+                .contains("not bound")
+        );
 
-        assert!(record_tool_call_outcome(
-            &mut MemoryEventStore::default(), CALL, ROUTE, ToolCallOutcomeKind::Error, "   ",
-        ).is_err());
-        assert!(record_tool_call_outcome(
-            &mut MemoryEventStore::default(), CALL, ROUTE, ToolCallOutcomeKind::Result,
-            "x".repeat(MAX_OUTCOME_BYTES + 1),
-        ).is_err());
+        assert!(
+            record_tool_call_outcome(
+                &mut MemoryEventStore::default(),
+                CALL,
+                ROUTE,
+                ToolCallOutcomeKind::Error,
+                "   ",
+            )
+            .is_err()
+        );
+        assert!(
+            record_tool_call_outcome(
+                &mut MemoryEventStore::default(),
+                CALL,
+                ROUTE,
+                ToolCallOutcomeKind::Result,
+                "x".repeat(MAX_OUTCOME_BYTES + 1),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -477,22 +558,46 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let route = setup(&mut store);
         let before_approval = store.events().len();
-        assert!(append_tool_call_outcome_checked(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, "too soon",
-        ).unwrap_err().contains("before explicitly approved dispatch"));
+        assert!(
+            append_tool_call_outcome_checked(
+                &mut store,
+                CALL,
+                ROUTE,
+                ToolCallOutcomeKind::Result,
+                "too soon",
+            )
+            .unwrap_err()
+            .contains("before explicitly approved dispatch")
+        );
         assert_eq!(store.events().len(), before_approval);
 
         dispatch(&mut store, route);
         let event = append_tool_call_outcome_checked(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Result, " exact ",
-        ).unwrap();
+            &mut store,
+            CALL,
+            ROUTE,
+            ToolCallOutcomeKind::Result,
+            " exact ",
+        )
+        .unwrap();
         assert_eq!(event.kind, EventKind::ToolCallOutcomeObserved);
-        assert_eq!(replay_tool_call_outcome_audit(store.events()).unwrap()[0].text, " exact ");
+        assert_eq!(
+            replay_tool_call_outcome_audit(store.events()).unwrap()[0].text,
+            " exact "
+        );
 
         let after_first = store.events().len();
-        assert!(append_tool_call_outcome_checked(
-            &mut store, CALL, ROUTE, ToolCallOutcomeKind::Error, "duplicate",
-        ).unwrap_err().contains("duplicate terminal"));
+        assert!(
+            append_tool_call_outcome_checked(
+                &mut store,
+                CALL,
+                ROUTE,
+                ToolCallOutcomeKind::Error,
+                "duplicate",
+            )
+            .unwrap_err()
+            .contains("duplicate terminal")
+        );
         assert_eq!(store.events().len(), after_first);
     }
 
@@ -502,9 +607,17 @@ mod tests {
         let route = setup(&mut store);
         dispatch(&mut store, route);
         let before = store.events().len();
-        assert!(append_tool_call_outcome_checked(
-            &mut store, CALL, RouteId::new(99), ToolCallOutcomeKind::Result, "wrong",
-        ).unwrap_err().contains("not bound"));
+        assert!(
+            append_tool_call_outcome_checked(
+                &mut store,
+                CALL,
+                RouteId::new(99),
+                ToolCallOutcomeKind::Result,
+                "wrong",
+            )
+            .unwrap_err()
+            .contains("not bound")
+        );
         assert_eq!(store.events().len(), before);
     }
 
@@ -513,6 +626,10 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let route = setup(&mut store);
         dispatch(&mut store, route);
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
     }
 }
