@@ -6402,7 +6402,7 @@ impl eframe::App for ChatariumApp {
                                                 );
                                             }
                                         }
-                                    
+
                                         if ui
                                             .add_enabled(
                                                 self.local_memory_draft.is_empty()
@@ -7252,9 +7252,7 @@ impl eframe::App for ChatariumApp {
                 ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
             }
         }
-        if let Some((source_conversation_id, message_index)) =
-            stage_native_memory_requested
-        {
+        if let Some((source_conversation_id, message_index)) = stage_native_memory_requested {
             if self.local_memory_draft.is_empty() && !self.local_memory_command_pending {
                 if let Some(staged) = native_conversation_search::stageable_hit(
                     &native_search_index,

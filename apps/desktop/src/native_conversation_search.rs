@@ -1168,19 +1168,28 @@ mod tests {
         author(&mut store, first, "first visible source");
         author(&mut store, second, "private foreign message");
         store
-            .append_scoped(None, EventKind::ToolCallOutcomeObserved, "HIDDEN_TOOL".to_owned())
+            .append_scoped(
+                None,
+                EventKind::ToolCallOutcomeObserved,
+                "HIDDEN_TOOL".to_owned(),
+            )
             .unwrap();
 
         let index = NativeConversationSearchIndex::build(store.events());
         let staged = stageable_hit(&index, first, 0).unwrap();
         assert_eq!(staged.source_conversation_id, first);
-        assert_eq!(staged.source_event_sequence, index.messages(first)[0].sequence);
+        assert_eq!(
+            staged.source_event_sequence,
+            index.messages(first)[0].sequence
+        );
         assert_eq!(staged.text, "first visible source");
         assert!(!staged.text.contains("private foreign"));
         assert!(!staged.text.contains("HIDDEN_TOOL"));
         assert!(stageable_hit(&index, first, 1).is_none());
         assert_eq!(
-            stageable_hit(&index, second, 0).unwrap().source_conversation_id,
+            stageable_hit(&index, second, 0)
+                .unwrap()
+                .source_conversation_id,
             second
         );
     }
