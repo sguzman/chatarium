@@ -289,10 +289,7 @@ impl NativeConversationSearchIndex {
                 _ => None,
             };
             if let Some(owner) = owner {
-                by_conversation
-                    .entry(owner)
-                    .or_default()
-                    .push(event);
+                by_conversation.entry(owner).or_default().push(event);
             }
         }
 
@@ -580,7 +577,9 @@ mod tests {
         assert_eq!(changed_query.len(), 1);
         assert_eq!(entries[changed_query[0].catalog_index].id, second);
 
-        catalog.rename(first, Some("Python project".to_owned()), 3).unwrap();
+        catalog
+            .rename(first, Some("Python project".to_owned()), 3)
+            .unwrap();
         let renamed_entries = catalog.entries();
         let renamed = cached_rows(&ctx, &index, &renamed_entries, false, "python");
         assert_eq!(renamed.len(), 2);
