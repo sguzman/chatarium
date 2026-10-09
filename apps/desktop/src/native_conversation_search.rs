@@ -629,6 +629,9 @@ pub fn cached_index(
 }
 
 #[cfg(test)]
+mod stress_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

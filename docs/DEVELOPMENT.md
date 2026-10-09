@@ -50,9 +50,11 @@ one chronological projection pass, then applies the existing display-message
 deduplication rules. It is cached in egui's transient session memory.
 Append-only draft, tool, controller, and other non-transcript journal events
 advance the cache cursor **without** rebuilding the native message corpus.
-An authored user message or assistant snapshot/completion invalidates it and
-rebuilds from the authoritative journal. A replaced/truncated journal prefix
-is not eligible for reuse. Conversation titles
+An authored user message or assistant snapshot/completion incrementally
+reprojects the affected native conversation. Unaffected conversation message
+vectors remain shared; malformed or contradictory authorship falls back to a
+full authoritative rebuild. A replaced/truncated journal prefix is not
+eligible for append-only reuse. Conversation titles
 remain owned by the local catalog; the index is rebuildable and contains
 no separate authoritative database, persisted search query, or background
 provider requests. A regression test compares indexed messages with the
@@ -73,6 +75,20 @@ search query to the existing transcript reader and selects the first hit so
 the matching bubble scrolls into view. A title-only match never fabricates
 a transcript hit. The handoff is local UI state, not an additional
 inference-context admission or durable mutation.
+
+## Native search archive stress gate
+
+The desktop tests `wide_archive_search_keeps_owner_boundaries_and_incremental_reuse`
+and `deep_archive_search_tracks_individual_hits_without_cloning_bodies`
+construct synthetic local journals with over 16,000 authored messages across
+96 conversations and one separate 4,096-message conversation. They exercise
+per-message provenance, archived filters, tool-event exclusion, bounded
+excerpts, individual hit cycling and sharing of untouched projected messages.
+
+These are deterministic structural regression workloads, **not** latency or
+memory benchmarks against a real account archive. They do not access user
+data, launch providers or require manual QA. Real-world responsiveness and
+peak-memory measurements remain a separate validation task.
 
 ## Automated QA ownership
 
