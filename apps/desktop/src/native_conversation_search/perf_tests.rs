@@ -11,12 +11,7 @@ use std::time::Instant;
 fn author(store: &mut impl EventStore, owner: LocalConversationId, text: String) {
     chatarium_store::authored::commit_user_message(
         store,
-        &AuthoredUserMessage::new(
-            owner,
-            LocalTurnId::new(),
-            LocalMessageId::new(),
-            text,
-        ),
+        &AuthoredUserMessage::new(owner, LocalTurnId::new(), LocalMessageId::new(), text),
     )
     .unwrap();
 }
@@ -82,7 +77,10 @@ fn native_search_perf_profile() {
     let rows = cached_rows(&ctx, &index, &entries, false, "needle");
     let first_query_us = first_start.elapsed().as_micros();
     assert_eq!(rows.len(), CONVERSATIONS / 4);
-    assert!(rows.iter().all(|row| row.matching_message_indices.len() == 8));
+    assert!(
+        rows.iter()
+            .all(|row| row.matching_message_indices.len() == 8)
+    );
     black_box(rows.len());
     let rows_rss_kib = rss_kib();
 
@@ -95,7 +93,15 @@ fn native_search_perf_profile() {
     let cached_queries_total_us = warm_start.elapsed().as_micros();
 
     let churn_start = Instant::now();
-    for term in ["needle", "nonmatching", "not-found", "archive", "message", "needle", "x"] {
+    for term in [
+        "needle",
+        "nonmatching",
+        "not-found",
+        "archive",
+        "message",
+        "needle",
+        "x",
+    ] {
         let matches = cached_rows(&ctx, &index, &entries, false, term);
         black_box(matches.len());
     }

@@ -639,9 +639,9 @@ pub fn cached_index(
 }
 
 #[cfg(test)]
-mod stress_tests;
-#[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod stress_tests;
 
 #[cfg(test)]
 mod tests {
