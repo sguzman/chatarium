@@ -67,6 +67,27 @@ The admitted set is snapshotted when the user clicks Send. A later Admit or
 Exclude action cannot mutate a request already crossing the local
 authored-message durability gate.
 
+## Staging a retrieved native message
+
+Native conversation search now provides **Stage as memory** for a matched
+user/assistant message. Staging requires an empty memory-editor draft and
+only loads the exact projected visible message text into that editor. Nothing
+is durably recorded or admitted by staging alone. The UI displays its native
+source conversation identity and message event sequence for review.
+
+Only a separate **Record memory** action creates an immutable artifact. For
+an unedited staged message, it records the *original* source conversation,
+not whichever chat happens to be active. If the user edits the draft, the
+staged exact-source binding is cleared and a manually authored artifact
+uses the current conversation as its source. The origin event sequence is
+shown for review but is not a new durable field in the memory artifact schema.
+
+Later **Admit memory** or **Use once next request** remains an independent
+per-destination user choice, with the existing durable gates. Staging and
+recording never implicitly grant inference-context authority. Neither
+a retrieved assistant statement nor a retrieved user statement becomes
+verified truth merely by being staged.
+
 ## Desktop controls
 
 **Context & inference controls -> Local memory** exposes:

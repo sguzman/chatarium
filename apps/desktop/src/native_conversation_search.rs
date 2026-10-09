@@ -108,6 +108,30 @@ pub fn copyable_hit_markdown(
     Some((text, message.sequence))
 }
 
+/// Only an explicit user action may stage a retrieved message as a
+/// local-memory draft. This is transient UI data, not a recorded artifact or
+/// inference-context admission. Both the exact text and source identity come
+/// from the same authorized native conversation projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedNativeMessage {
+    pub source_conversation_id: LocalConversationId,
+    pub source_event_sequence: u64,
+    pub text: String,
+}
+
+pub fn stageable_hit(
+    index: &NativeConversationSearchIndex,
+    conversation_id: LocalConversationId,
+    message_index: usize,
+) -> Option<StagedNativeMessage> {
+    let message = index.messages(conversation_id).get(message_index)?;
+    Some(StagedNativeMessage {
+        source_conversation_id: conversation_id,
+        source_event_sequence: message.sequence,
+        text: message.text.clone(),
+    })
+}
+
 /// Opening a native message hit can seed the local transcript reader's
 /// existing search/highlight controls. Titles and empty queries never claim
 /// a matching message.
@@ -1132,6 +1156,33 @@ mod tests {
         assert!(!markdown.contains("FOREIGN_PRIVATE_MESSAGE"));
         assert!(!markdown.contains("HIDDEN_TOOL_SECRET"));
         assert!(copyable_hit_markdown(&index, own, "Neutral title", 99).is_none());
+    }
+
+    #[test]
+    fn staging_a_native_message_keeps_exact_source_and_excludes_foreign_data() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, first, "first visible source");
+        author(&mut store, second, "private foreign message");
+        store
+            .append_scoped(None, EventKind::ToolCallOutcomeObserved, "HIDDEN_TOOL".to_owned())
+            .unwrap();
+
+        let index = NativeConversationSearchIndex::build(store.events());
+        let staged = stageable_hit(&index, first, 0).unwrap();
+        assert_eq!(staged.source_conversation_id, first);
+        assert_eq!(staged.source_event_sequence, index.messages(first)[0].sequence);
+        assert_eq!(staged.text, "first visible source");
+        assert!(!staged.text.contains("private foreign"));
+        assert!(!staged.text.contains("HIDDEN_TOOL"));
+        assert!(stageable_hit(&index, first, 1).is_none());
+        assert_eq!(
+            stageable_hit(&index, second, 0).unwrap().source_conversation_id,
+            second
+        );
     }
 
     #[test]

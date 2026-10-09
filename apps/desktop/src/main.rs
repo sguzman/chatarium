@@ -995,6 +995,9 @@ struct ChatariumApp {
     tool_arguments_draft: String,
     local_memory_command_pending: bool,
     local_memory_draft: String,
+    // Transient source of an unedited message staged from native search.
+    // Editing the draft clears this origin; recording remains an explicit act.
+    staged_local_memory_origin: Option<(LocalConversationId, u64)>,
     local_memory_search_query: String,
     local_memory_label_filter: Option<LocalMemoryLabel>,
     local_memory_source_filter: Option<LocalConversationId>,
@@ -1281,6 +1284,7 @@ impl ChatariumApp {
                         tool_arguments_draft: String::new(),
                         local_memory_command_pending: false,
                         local_memory_draft: String::new(),
+                        staged_local_memory_origin: None,
                         local_memory_search_query: String::new(),
                         local_memory_label_filter: None,
                         local_memory_source_filter: None,
@@ -1477,6 +1481,7 @@ impl ChatariumApp {
             tool_arguments_draft: String::new(),
             local_memory_command_pending: false,
             local_memory_draft: String::new(),
+            staged_local_memory_origin: None,
             local_memory_search_query: String::new(),
             local_memory_label_filter: None,
             local_memory_source_filter: None,
@@ -3482,6 +3487,7 @@ impl ChatariumApp {
                     self.events.push(event);
                     self.local_memory_command_pending = false;
                     self.local_memory_draft.clear();
+                    self.staged_local_memory_origin = None;
                     self.status = format!("local memory {} durably recorded", memory_id.get());
                 }
                 PersistNotice::LocalMemoryContextDecisionUpdated { memory_id, event } => {
@@ -4885,7 +4891,10 @@ impl ChatariumApp {
         };
         match sender.send(PersistCommand::RecordLocalMemory {
             memory_id,
-            source_conversation_id: self.local_conversation_id,
+            source_conversation_id: self
+                .staged_local_memory_origin
+                .map(|(source, _)| source)
+                .unwrap_or(self.local_conversation_id),
             text: self.local_memory_draft.clone(),
         }) {
             Ok(()) => {
@@ -6007,6 +6016,7 @@ impl eframe::App for ChatariumApp {
         let mut cycle_from_keyboard = false;
         let mut visible_native_search_matches = 0_usize;
         let mut native_search_matches = Vec::<LocalConversationId>::new();
+        let mut stage_native_memory_requested: Option<(LocalConversationId, usize)> = None;
         let mut native_copy_candidates = Vec::<(LocalConversationId, Option<usize>)>::new();
         let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
         let mut rename_local_requested = false;
@@ -6391,6 +6401,21 @@ impl eframe::App for ChatariumApp {
                                                     "copied visible message event #{sequence} from local conversation"
                                                 );
                                             }
+                                        }
+                                    
+                                        if ui
+                                            .add_enabled(
+                                                self.local_memory_draft.is_empty()
+                                                    && !self.local_memory_command_pending,
+                                                egui::Button::new("Stage as memory"),
+                                            )
+                                            .on_hover_text(
+                                                "Stage the exact matched message in the memory editor. Record and Admit / Use once are separate explicit actions. Requires an empty memory draft.",
+                                            )
+                                            .clicked()
+                                        {
+                                            stage_native_memory_requested =
+                                                Some((entry.id, message_index));
                                         }
                                     }
                                 });
@@ -7225,6 +7250,25 @@ impl eframe::App for ChatariumApp {
             }
             if clear_focus {
                 ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
+            }
+        }
+        if let Some((source_conversation_id, message_index)) =
+            stage_native_memory_requested
+        {
+            if self.local_memory_draft.is_empty() && !self.local_memory_command_pending {
+                if let Some(staged) = native_conversation_search::stageable_hit(
+                    &native_search_index,
+                    source_conversation_id,
+                    message_index,
+                ) {
+                    self.local_memory_draft = staged.text;
+                    self.staged_local_memory_origin =
+                        Some((staged.source_conversation_id, staged.source_event_sequence));
+                    self.status = format!(
+                        "staged message event #{} as a local memory draft; open Context & inference controls → Local memory to review and Record. No context admitted.",
+                        staged.source_event_sequence,
+                    );
+                }
             }
         }
         if archive_search_has_focus {
@@ -8485,12 +8529,20 @@ impl eframe::App for ChatariumApp {
 
                             let mut record_clicked = false;
                             ui.horizontal_wrapped(|ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut self.local_memory_draft)
-                                        .desired_width(360.0)
-                                        .desired_rows(2)
-                                        .hint_text("Exact local memory text"),
-                                );
+                                if ui
+                                    .add_enabled(
+                                        !self.local_memory_command_pending,
+                                        egui::TextEdit::multiline(&mut self.local_memory_draft)
+                                            .desired_width(360.0)
+                                            .desired_rows(2)
+                                            .hint_text("Exact local memory text"),
+                                    )
+                                    .changed()
+                                {
+                                    // An edited draft is no longer an exact
+                                    // copy of the staged source message.
+                                    self.staged_local_memory_origin = None;
+                                }
                                 let can_record = !self.local_memory_command_pending
                                     && !self.local_memory_draft.trim().is_empty()
                                     && self.persist_tx.is_some();
@@ -8507,6 +8559,18 @@ impl eframe::App for ChatariumApp {
                                     ui.spinner();
                                 }
                             });
+                            if let Some((source, sequence)) = self.staged_local_memory_origin {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Staged from native conversation {source}, message event #{sequence}. Record preserves the source conversation; no context admission occurs.",
+                                    ))
+                                    .size(10.0),
+                                );
+                                if ui.button("Discard staged draft").clicked() {
+                                    self.local_memory_draft.clear();
+                                    self.staged_local_memory_origin = None;
+                                }
+                            }
                             if record_clicked {
                                 self.record_local_memory();
                             }
