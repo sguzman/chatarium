@@ -1104,10 +1104,7 @@ mod tests {
             find_match_with_position("", "Whatever", messages),
             Some((NativeSearchMatch::Title, None))
         );
-        assert_eq!(
-            find_match_with_position("absent", "Other", messages),
-            None
-        );
+        assert_eq!(find_match_with_position("absent", "Other", messages), None);
     }
 
     #[test]
