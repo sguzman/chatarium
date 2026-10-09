@@ -6017,6 +6017,7 @@ impl eframe::App for ChatariumApp {
         let mut visible_native_search_matches = 0_usize;
         let mut native_search_matches = Vec::<LocalConversationId>::new();
         let mut stage_native_memory_requested: Option<(LocalConversationId, usize)> = None;
+        let mut native_reader_target_message: Option<(LocalConversationId, usize)> = None;
         let mut native_copy_candidates = Vec::<(LocalConversationId, Option<usize>)>::new();
         let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
         let mut rename_local_requested = false;
@@ -6307,7 +6308,16 @@ impl eframe::App for ChatariumApp {
                             let messages = native_search_index.messages(entry.id);
                             let title = row.title.as_str();
                             let match_kind = row.kind;
-                            let native_excerpt = row.preview.as_deref();
+                            let hit_choice_id =
+                                egui::Id::new(("chatarium-native-hit-choice", entry.id));
+                            let old_choice = ctx
+                                .data_mut(|data| data.get_temp::<(String, usize)>(hit_choice_id));
+                            let mut hit_ordinal = old_choice
+                                .filter(|(query, _)| query == &self.local_conversation_search_query)
+                                .map(|(_, ordinal)| ordinal)
+                                .unwrap_or(0);
+                            hit_ordinal = hit_ordinal
+                                .min(row.matching_message_indices.len().saturating_sub(1));
                             if match_kind
                                 == native_conversation_search::NativeSearchMatch::Message
                             {
@@ -6316,7 +6326,13 @@ impl eframe::App for ChatariumApp {
                             visible_native_search_matches += 1;
                             let result_index = native_search_matches.len();
                             native_search_matches.push(entry.id);
-                            native_copy_candidates.push((entry.id, row.message_index));
+                            native_copy_candidates.push((
+                                entry.id,
+                                native_conversation_search::selected_message_index(
+                                    row,
+                                    hit_ordinal,
+                                ),
+                            ));
                             let keyboard_selected =
                                 self.local_conversation_search_selection == Some(result_index);
                             let selected =
@@ -6338,6 +6354,12 @@ impl eframe::App for ChatariumApp {
                                         .clicked()
                                     {
                                         select_local_requested = Some(entry.id);
+                                        native_reader_target_message =
+                                            native_conversation_search::selected_message_index(
+                                                row,
+                                                hit_ordinal,
+                                            )
+                                            .map(|index| (entry.id, index));
                                     }
                                     ui.horizontal(|ui| {
                                         if !self.local_conversation_search_query.trim().is_empty() {
@@ -6369,7 +6391,49 @@ impl eframe::App for ChatariumApp {
                                             );
                                         }
                                     });
-                                    if let Some(excerpt) = native_excerpt {
+                                    if row.matching_message_indices.len() > 1 {
+                                        ui.horizontal(|ui| {
+                                            if ui.small_button("Prev hit").clicked() {
+                                                hit_ordinal = if hit_ordinal == 0 {
+                                                    row.matching_message_indices.len() - 1
+                                                } else {
+                                                    hit_ordinal - 1
+                                                };
+                                            }
+                                            ui.label(format!(
+                                                "Match {} of {}",
+                                                hit_ordinal + 1,
+                                                row.matching_message_indices.len(),
+                                            ));
+                                            if ui.small_button("Next hit").clicked() {
+                                                hit_ordinal = (hit_ordinal + 1)
+                                                    % row.matching_message_indices.len();
+                                            }
+                                        });
+                                    }
+                                    ctx.data_mut(|data| {
+                                        data.insert_temp(
+                                            hit_choice_id,
+                                            (self.local_conversation_search_query.clone(), hit_ordinal),
+                                        )
+                                    });
+                                    let selected_message_index =
+                                        native_conversation_search::selected_message_index(
+                                            row,
+                                            hit_ordinal,
+                                        );
+                                    native_copy_candidates[result_index].1 = selected_message_index;
+                                    let selected_preview = if hit_ordinal == 0 {
+                                        row.preview.clone()
+                                    } else {
+                                        selected_message_index.and_then(|position| {
+                                            local_archive_search::local_snippet(
+                                                &messages[position].text,
+                                                &self.local_conversation_search_query.trim().to_lowercase(),
+                                            )
+                                        })
+                                    };
+                                    if let Some(excerpt) = selected_preview {
                                         ui.add(
                                             egui::Label::new(
                                                 egui::RichText::new(excerpt)
@@ -6380,7 +6444,7 @@ impl eframe::App for ChatariumApp {
                                             .truncate(),
                                         );
                                     }
-                                    if let Some(message_index) = row.message_index {
+                                    if let Some(message_index) = selected_message_index {
                                         if ui
                                             .small_button("Copy matched message · Alt+Enter")
                                             .on_hover_text(
@@ -7375,7 +7439,16 @@ impl eframe::App for ChatariumApp {
                     kind,
                 )
                 .unwrap_or_default();
-                self.reader_search_hit = (!self.reader_search_query.is_empty()).then_some(0);
+                self.reader_search_hit = native_reader_target_message
+                    .filter(|(owner, _)| *owner == local_conversation_id)
+                    .and_then(|(_, position)| {
+                        native_conversation_search::reader_hit_ordinal(
+                            native_search_index.messages(local_conversation_id),
+                            &self.reader_search_query,
+                            position,
+                        )
+                    })
+                    .or_else(|| (!self.reader_search_query.is_empty()).then_some(0));
                 if self.reader_search_hit.is_some() {
                     self.reader_restore_pending = false;
                 }

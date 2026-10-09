@@ -150,6 +150,34 @@ pub fn stageable_hit(
     })
 }
 
+/// Resolve the currently displayed match within a single sidebar row.
+/// A stale out-of-range ordinal clamps safely to the newest available hit.
+pub fn selected_message_index(row: &NativeSearchRow, ordinal: usize) -> Option<usize> {
+    row.matching_message_indices
+        .get(ordinal.min(row.matching_message_indices.len().checked_sub(1)?))
+        .copied()
+}
+
+/// Compute which *reader search hit* corresponds to the first occurrence in
+/// a particular matching source message, so navigating to a later match does
+/// not jump back to the first message in the conversation.
+pub fn reader_hit_ordinal(
+    messages: &[DisplayMessage],
+    query: &str,
+    message_index: usize,
+) -> Option<usize> {
+    let message = messages.get(message_index)?;
+    if super::offline_reader::search_hits(&message.text, query).is_empty() {
+        return None;
+    }
+    Some(
+        messages[..message_index]
+            .iter()
+            .map(|previous| super::offline_reader::search_hits(&previous.text, query).len())
+            .sum(),
+    )
+}
+
 /// Opening a native message hit can seed the local transcript reader's
 /// existing search/highlight controls. Titles and empty queries never claim
 /// a matching message.
@@ -188,6 +216,9 @@ pub struct NativeSearchRow {
     /// Index into the same conversation's visible user/assistant projection.
     /// None for empty searches and title matches.
     pub message_index: Option<usize>,
+    /// All matching visible-message positions in this conversation. The
+    /// individual texts are not cloned into the sidebar search cache.
+    pub matching_message_indices: Vec<usize>,
 }
 
 /// These are the only mutable catalog facts that affect native sidebar
@@ -256,9 +287,22 @@ pub fn cached_rows(
             &title,
             messages.iter().map(|message| message.text.as_str()),
         ) {
-            let (message_index, preview) = match hit {
-                Some((index, preview)) => (Some(index), Some(preview)),
-                None => (None, None),
+            let (message_index, preview, matching_message_indices) = match hit {
+                Some((first, preview)) => {
+                    let needle = query.trim().to_lowercase();
+                    let mut indices = vec![first];
+                    indices.extend(
+                        messages
+                            .iter()
+                            .enumerate()
+                            .skip(first + 1)
+                            .filter_map(|(position, message)| {
+                                message.text.to_lowercase().contains(&needle).then_some(position)
+                            }),
+                    );
+                    (Some(first), Some(preview), indices)
+                }
+                None => (None, None, Vec::new()),
             };
             rows.push(NativeSearchRow {
                 catalog_index,
@@ -266,6 +310,7 @@ pub fn cached_rows(
                 kind,
                 preview,
                 message_index,
+                matching_message_indices,
             });
         }
     }
@@ -1264,6 +1309,71 @@ mod tests {
         assert_eq!(title_only.len(), 1);
         assert_eq!(title_only[0].kind, NativeSearchMatch::Title);
         assert_eq!(title_only[0].message_index, None);
+    }
+
+    #[test]
+    fn multiple_matching_messages_have_independent_provenance_and_reader_targets() {
+        use super::super::local_conversations::LocalConversationCatalog;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let source = LocalConversationId::new();
+        let foreign = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, source, "target first");
+        author(&mut store, source, "not a match");
+        author(&mut store, source, "target second");
+        author(&mut store, foreign, "PRIVATE target foreign");
+        author(&mut store, source, "target third");
+
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(source, 1);
+        catalog.create(foreign, 2);
+        catalog.rename(source, Some("Independent title".to_owned()), 3).unwrap();
+        catalog.rename(foreign, Some("Unrelated".to_owned()), 4).unwrap();
+        let ctx = egui::Context::default();
+        let index = cached_index(&ctx, store.events());
+        let entries = catalog.entries();
+        let rows = cached_rows(&ctx, &index, &entries, false, "target");
+        let row = rows
+            .iter()
+            .find(|row| entries[row.catalog_index].id == source)
+            .unwrap();
+        assert_eq!(row.matching_message_indices, vec![0, 2, 3]);
+        assert_eq!(row.message_index, Some(0));
+        assert_eq!(selected_message_index(row, 1), Some(2));
+        assert_eq!(selected_message_index(row, 2), Some(3));
+        assert_eq!(selected_message_index(row, 999), Some(3));
+        assert_eq!(reader_hit_ordinal(index.messages(source), "target", 2), Some(1));
+        assert_eq!(reader_hit_ordinal(index.messages(source), "target", 1), None);
+
+        for (ordinal, expected) in [
+            (0, "target first"),
+            (1, "target second"),
+            (2, "target third"),
+        ] {
+            let position = selected_message_index(row, ordinal).unwrap();
+            let staged = stageable_hit(&index, source, position).unwrap();
+            let (copied, seq) =
+                copyable_hit_markdown(&index, source, &row.title, position).unwrap();
+            assert_eq!(staged.text, expected);
+            assert_eq!(staged.source_event_sequence, seq);
+            assert_eq!(staged.source_conversation_id, source);
+            assert!(copied.contains(expected));
+            assert!(!copied.contains("PRIVATE target foreign"));
+        }
+
+        let title_only = cached_rows(&ctx, &index, &entries, false, "independent");
+        let row = title_only
+            .iter()
+            .find(|row| entries[row.catalog_index].id == source)
+            .unwrap();
+        assert_eq!(row.kind, NativeSearchMatch::Title);
+        assert!(row.matching_message_indices.is_empty());
+        assert_eq!(selected_message_index(row, 0), None);
+
+        // The index is rebuilt from durable owned projections and cached on
+        // unchanged journal input, not from the currently selected hit.
+        assert!(Arc::ptr_eq(&rows, &cached_rows(&ctx, &index, &entries, false, "target")));
     }
 
     #[test]
