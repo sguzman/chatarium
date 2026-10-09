@@ -178,6 +178,25 @@ context, or read untrusted MCP tool bodies. The matching policy has focused test
 `apps/desktop/src/native_conversation_search.rs` and the desktop is checked
 through the existing GitHub Actions Rust/Linux matrix.
 
+### Keyboard-first native chat navigation
+
+**Ctrl+Shift+N** creates a new isolated native conversation and focuses its
+message composer. Any previous native-chat search filter is cleared so the
+new chat remains visible. **Ctrl+Tab** switches to the next unarchived
+native conversation; **Ctrl+Shift+Tab** switches in the other direction.
+The cyclic order is newest-created first, independent of last-opened timestamps
+or mutable titles, so repeated shortcut presses walk every chat instead of
+oscillating between recent ones. Archived conversations are never restored
+implicitly by cycling. When viewing a remote mirror, the first switch opens
+the newest available native chat.
+
+These shortcuts call the same existing persistence-backed create/select
+operations as the sidebar. An in-flight local turn still blocks switching
+or creation; no draft, model state or tool permissions are moved between
+conversations. Cycling decisions are pure/tested in
+`apps/desktop/src/conversation_navigation.rs`. Keyboard-focus behavior in
+the actual Wayland window remains an interactive QA concern.
+
 ### Keyboard focus ownership
 
 Ctrl+Enter commits a message **only while the message composer has keyboard

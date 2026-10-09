@@ -91,6 +91,18 @@ Per-conversation state is isolated unless an explicit higher-level Chatarium fea
 
 This rule is especially important for future master/worker behavior: cross-session communication should be visible, attributable, durable, and policy-controlled rather than emerging from accidental shared hidden context.
 
+### Native conversation navigation
+
+The native workspace supports a stable, keyboard-driven chat cycle:
+**Ctrl+Shift+N** creates a local conversation and focuses its composer;
+**Ctrl+Tab** and **Ctrl+Shift+Tab** navigate unarchived native chats in
+newest-created order. The cycle does not drift when selecting a chat updates
+its last-accessed timestamp. Creating a new chat clears the previous native
+search filter so the empty chat is not hidden immediately. Existing in-flight
+turn constraints remain authoritative: a new chat or switch does not interrupt
+or relocate a pending inference request. Archived conversations stay
+excluded until explicitly restored.
+
 ## Current control surface vs. ChatGPT website
 
 The local inference path is **not currently feature-identical to the ChatGPT website**.

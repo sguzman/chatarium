@@ -3,6 +3,7 @@ mod behavior_profile;
 mod capability_probes;
 mod context_composer;
 mod conversation_keybindings;
+mod conversation_navigation;
 mod diagnostics;
 #[cfg(test)]
 mod integration_journey;
@@ -6043,6 +6044,40 @@ impl eframe::App for ChatariumApp {
             }
         }
 
+        // Native chat navigation is an intentional global shortcut, unlike
+        // reader Home/End keys that belong to a focused text editor. Consume
+        // the exact modifier chord before egui advances keyboard focus.
+        let (new_chat_shortcut, cycle_shortcut) = ctx.input_mut(|input| {
+            let modifiers = input.modifiers;
+            let new_chat = modifiers.ctrl
+                && modifiers.shift
+                && !modifiers.alt
+                && input.consume_key(modifiers, egui::Key::N);
+            let cycle = if modifiers.ctrl
+                && !modifiers.alt
+                && input.consume_key(modifiers, egui::Key::Tab)
+            {
+                Some(if modifiers.shift {
+                    conversation_navigation::CycleDirection::Backward
+                } else {
+                    conversation_navigation::CycleDirection::Forward
+                })
+            } else {
+                None
+            };
+            (new_chat, cycle)
+        });
+        if new_chat_shortcut {
+            create_local_requested = true;
+        } else if let Some(direction) = cycle_shortcut {
+            let current = (!historical_mode).then_some(self.local_conversation_id);
+            select_local_requested = conversation_navigation::cycle_target(
+                &self.local_conversation_catalog.entries(),
+                current,
+                direction,
+            );
+        }
+
         egui::SidePanel::left("sidebar")
             .default_width(320.0)
             .min_width(260.0)
@@ -6232,7 +6267,7 @@ impl eframe::App for ChatariumApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "Native chats · Ctrl+Shift+K focus · ↑/↓ select · Enter open · Esc clear",
+                                "Native chats · Ctrl+Shift+K search · Ctrl+Tab / Ctrl+Shift+Tab switch · Ctrl+Shift+N new",
                             )
                             .size(9.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -7151,7 +7186,17 @@ impl eframe::App for ChatariumApp {
             }
         }
         if create_local_requested {
+            let before = self.local_conversation_id;
             self.create_local_conversation();
+            if self.local_conversation_id != before {
+                // Newly created conversations are empty: show them even if a
+                // previous search filter would have hidden their sidebar row.
+                self.local_conversation_search_query.clear();
+                self.local_conversation_search_selection = None;
+                ctx.memory_mut(|memory| {
+                    memory.request_focus(egui::Id::new("chatarium-message-composer"))
+                });
+            }
         } else if let Some(local_conversation_id) = select_local_requested {
             let can_switch = !self.local_conversation_busy();
             self.activate_local_conversation(local_conversation_id);
@@ -12997,6 +13042,7 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         let editor = egui::TextEdit::multiline(&mut self.draft)
+                            .id(egui::Id::new("chatarium-message-composer"))
                             .desired_rows(4)
                             .frame(false)
                             .hint_text("Write a message…");
