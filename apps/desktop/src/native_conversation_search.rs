@@ -27,14 +27,25 @@ pub fn find_match<'a>(
     title: &str,
     visible_messages: impl IntoIterator<Item = &'a str>,
 ) -> Option<NativeSearchMatch> {
+    find_match_with_preview(query, title, visible_messages).map(|(kind, _)| kind)
+}
+
+/// Search a native conversation and produce its excerpt in the same pass.
+/// This avoids searching every preceding message twice on each sidebar redraw.
+/// Only projected user/assistant messages supplied by the caller are inspected.
+pub fn find_match_with_preview<'a>(
+    query: &str,
+    title: &str,
+    visible_messages: impl IntoIterator<Item = &'a str>,
+) -> Option<(NativeSearchMatch, Option<String>)> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() || title.to_lowercase().contains(&needle) {
-        return Some(NativeSearchMatch::Title);
+        return Some((NativeSearchMatch::Title, None));
     }
     visible_messages
         .into_iter()
-        .any(|message| message.to_lowercase().contains(&needle))
-        .then_some(NativeSearchMatch::Message)
+        .find_map(|message| super::local_archive_search::local_snippet(message, &needle))
+        .map(|preview| (NativeSearchMatch::Message, Some(preview)))
 }
 
 /// Select a native conversation by keyboard result position. The same
@@ -553,6 +564,33 @@ mod tests {
             Some("SECOND owner match".to_owned())
         );
         assert!(matching_message_preview(["safe native message"], "tool secret").is_none());
+    }
+
+    #[test]
+    fn combined_match_and_preview_stops_at_first_hit_without_scanning_twice() {
+        use std::cell::Cell;
+
+        let visited = Cell::new(0);
+        let messages = ["unrelated", "México ↵ matters", "later matching text"];
+        let result = find_match_with_preview(
+            " MÉXICO ",
+            "Other title",
+            messages.iter().copied().inspect(|_| visited.set(visited.get() + 1)),
+        );
+        assert_eq!(result, Some((NativeSearchMatch::Message, Some("México ↵ matters".to_owned()))));
+        assert_eq!(visited.get(), 2);
+
+        visited.set(0);
+        let title_result = find_match_with_preview(
+            "mex",
+            "MEX title",
+            messages.iter().copied().inspect(|_| visited.set(visited.get() + 1)),
+        );
+        assert_eq!(title_result, Some((NativeSearchMatch::Title, None)));
+        assert_eq!(visited.get(), 0);
+
+        assert_eq!(find_match_with_preview("absent", "Other", ["not a hit"]), None);
+        assert_eq!(find_match_with_preview("  ", "", ["anything"]), Some((NativeSearchMatch::Title, None)));
     }
 
     #[test]

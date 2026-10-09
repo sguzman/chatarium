@@ -6288,12 +6288,13 @@ impl eframe::App for ChatariumApp {
                                 .filter(|value| !value.trim().is_empty())
                                 .map(str::to_owned)
                                 .unwrap_or_else(|| derived_conversation_title(messages));
-                            let match_kind = native_conversation_search::find_match(
-                                &self.local_conversation_search_query,
-                                title.as_str(),
-                                messages.iter().map(|message| message.text.as_str()),
-                            );
-                            let Some(match_kind) = match_kind else {
+                            let Some((match_kind, native_excerpt)) =
+                                native_conversation_search::find_match_with_preview(
+                                    &self.local_conversation_search_query,
+                                    title.as_str(),
+                                    messages.iter().map(|message| message.text.as_str()),
+                                )
+                            else {
                                 continue;
                             };
                             if match_kind
@@ -6301,16 +6302,6 @@ impl eframe::App for ChatariumApp {
                             {
                                 native_message_hit_conversations.insert(entry.id);
                             }
-                            let native_excerpt = if match_kind
-                                == native_conversation_search::NativeSearchMatch::Message
-                            {
-                                native_conversation_search::matching_message_preview(
-                                    messages.iter().map(|message| message.text.as_str()),
-                                    &self.local_conversation_search_query,
-                                )
-                            } else {
-                                None
-                            };
                             visible_native_search_matches += 1;
                             let result_index = native_search_matches.len();
                             native_search_matches.push(entry.id);
