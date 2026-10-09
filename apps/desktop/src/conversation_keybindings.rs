@@ -3,6 +3,12 @@
 //! The transcript reader is never allowed to consume editing keys intended for
 //! a focused text input. Sending remains an intentional composer-only action.
 
+/// Ctrl+L may focus the composer only in a native conversation. It is a
+/// navigation action, not authorization to send, alter or persist any draft.
+pub const fn may_focus_native_composer(native_conversation_active: bool) -> bool {
+    native_conversation_active
+}
+
 /// Ctrl+Enter is a submit shortcut only while the message editor is focused.
 /// Buttons remain separately actionable even when the editor is not focused.
 pub const fn may_submit_composer_shortcut(can_commit: bool, composer_has_focus: bool) -> bool {
@@ -18,6 +24,12 @@ pub const fn may_consume_reader_navigation(text_input_focused: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_composer_is_native_only_and_does_not_depend_on_editor_focus() {
+        assert!(may_focus_native_composer(true));
+        assert!(!may_focus_native_composer(false));
+    }
 
     #[test]
     fn ctrl_enter_is_scoped_to_an_enabled_focused_composer() {

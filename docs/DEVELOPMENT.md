@@ -237,6 +237,11 @@ tests live in `apps/desktop/src/native_transcript_export.rs`.
 
 ### Keyboard focus ownership
 
+**Ctrl+L** focuses the native message composer from elsewhere in the local
+workspace without submitting or modifying its draft. It is not claimed in
+read-only historical/mirrored views. This is separate from **Ctrl+Shift+N**
+which creates a new conversation.
+
 Ctrl+Enter commits a message **only while the message composer has keyboard
 focus**. The Send / Commit locally button remains separately accessible.
 Other focused inputs (archive search, settings, conversation rename) must
