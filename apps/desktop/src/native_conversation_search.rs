@@ -572,25 +572,32 @@ mod tests {
 
         let visited = Cell::new(0);
         let messages = ["unrelated", "México ↵ matters", "later matching text"];
-        let result = find_match_with_preview(
-            " MÉXICO ",
-            "Other title",
-            messages.iter().copied().inspect(|_| visited.set(visited.get() + 1)),
-        );
-        assert_eq!(result, Some((NativeSearchMatch::Message, Some("México ↵ matters".to_owned()))));
+        let counted = messages
+            .iter()
+            .copied()
+            .inspect(|_| visited.set(visited.get() + 1));
+        let result = find_match_with_preview(" MÉXICO ", "Other title", counted);
+        let expected = (NativeSearchMatch::Message, Some("México ↵ matters".to_owned()));
+        assert_eq!(result, Some(expected));
         assert_eq!(visited.get(), 2);
 
         visited.set(0);
-        let title_result = find_match_with_preview(
-            "mex",
-            "MEX title",
-            messages.iter().copied().inspect(|_| visited.set(visited.get() + 1)),
-        );
+        let counted = messages
+            .iter()
+            .copied()
+            .inspect(|_| visited.set(visited.get() + 1));
+        let title_result = find_match_with_preview("mex", "MEX title", counted);
         assert_eq!(title_result, Some((NativeSearchMatch::Title, None)));
         assert_eq!(visited.get(), 0);
 
-        assert_eq!(find_match_with_preview("absent", "Other", ["not a hit"]), None);
-        assert_eq!(find_match_with_preview("  ", "", ["anything"]), Some((NativeSearchMatch::Title, None)));
+        assert_eq!(
+            find_match_with_preview("absent", "Other", ["not a hit"]),
+            None
+        );
+        assert_eq!(
+            find_match_with_preview("  ", "", ["anything"]),
+            Some((NativeSearchMatch::Title, None))
+        );
     }
 
     #[test]

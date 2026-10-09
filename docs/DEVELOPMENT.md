@@ -176,7 +176,10 @@ separate **Ctrl+K** shortcut. Searching local conversations does not
 query a network service, change the active conversation, admit model
 context, or read untrusted MCP tool bodies. The matching policy has focused tests in
 `apps/desktop/src/native_conversation_search.rs` and the desktop is checked
-through the existing GitHub Actions Rust/Linux matrix.
+through the existing GitHub Actions Rust/Linux matrix. The native sidebar
+computes its match and Unicode-safe excerpt in one scan of each candidate
+conversation, avoiding a second full message pass merely to display previews.
+Title hits do not fabricate message previews.
 
 ### Keyboard-first native chat navigation
 
