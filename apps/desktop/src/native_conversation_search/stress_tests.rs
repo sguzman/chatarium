@@ -55,11 +55,7 @@ fn cold_projection_preserves_out_of_order_assistant_ownership_and_chronology() {
             completed.to_string(),
         )
         .unwrap();
-    author(
-        &mut store,
-        unrelated,
-        "PRIVATE FOREIGN TRANSCRIPT".to_owned(),
-    );
+    author(&mut store, unrelated, "PRIVATE FOREIGN TRANSCRIPT");
     store
         .append_scoped(
             None,
