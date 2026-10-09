@@ -367,7 +367,11 @@ mod tests {
         let turn = author(&mut store, owner, "initial typed message");
         let base = cached_index(&ctx, store.events());
         store
-            .append_scoped(None, EventKind::DraftChanged, "draft input updated".to_owned())
+            .append_scoped(
+                None,
+                EventKind::DraftChanged,
+                "draft input updated".to_owned(),
+            )
             .unwrap();
         let after_draft = cached_index(&ctx, store.events());
         assert!(Arc::ptr_eq(&base, &after_draft));
@@ -399,9 +403,12 @@ mod tests {
             .unwrap();
         let changed = cached_index(&ctx, store.events());
         assert!(!Arc::ptr_eq(&base, &changed));
-        assert!(changed.messages(owner).iter().any(|message| {
-            message.text == "newly observed assistant message"
-        }));
+        assert!(
+            changed
+                .messages(owner)
+                .iter()
+                .any(|message| { message.text == "newly observed assistant message" })
+        );
     }
 
     #[test]
