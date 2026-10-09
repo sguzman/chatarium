@@ -179,8 +179,14 @@ context, or read untrusted MCP tool bodies. The matching policy has focused test
 through the existing GitHub Actions Rust/Linux matrix. The native sidebar
 computes its match and Unicode-safe excerpt in one scan of each candidate
 conversation, avoiding a second full message pass merely to display previews.
-Title hits do not fabricate message previews. Search results and bounded
-excerpts are cached across egui redraws; they are recomputed only when the
+Title hits do not fabricate message previews. A message hit exposes a
+**Copy matched message** button that copies only the exact visible native
+user/assistant message found in that conversation, using the same provenance-
+bearing Markdown export format as a full transcript. The copied reference
+contains the source conversation identity and event sequence; it does not
+change the active draft, journal, permissions, memory admissions or another
+conversation's context. Title-only matches do not expose this action.
+Search results and bounded excerpts are cached across egui redraws; they are recomputed only when the
 projected native messages, query, catalog titles/order/archive state, or
 visibility of archived conversations changes. Unrelated draft or tool
 journal appends leave both caches reusable.

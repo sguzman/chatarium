@@ -39,14 +39,30 @@ pub fn find_match_with_preview<'a>(
     title: &str,
     visible_messages: impl IntoIterator<Item = &'a str>,
 ) -> Option<(NativeSearchMatch, Option<String>)> {
+    find_match_with_position(query, title, visible_messages)
+        .map(|(kind, hit)| (kind, hit.map(|(_, preview)| preview)))
+}
+
+/// Return the matching position in the exact supplied visible-message slice.
+/// A title match has no message position. The index is used only for an
+/// explicit user-triggered copy, never as an automatic context admission.
+fn find_match_with_position<'a>(
+    query: &str,
+    title: &str,
+    visible_messages: impl IntoIterator<Item = &'a str>,
+) -> Option<(NativeSearchMatch, Option<(usize, String)>)> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() || title.to_lowercase().contains(&needle) {
         return Some((NativeSearchMatch::Title, None));
     }
     visible_messages
         .into_iter()
-        .find_map(|message| super::local_archive_search::local_snippet(message, &needle))
-        .map(|preview| (NativeSearchMatch::Message, Some(preview)))
+        .enumerate()
+        .find_map(|(index, message)| {
+            super::local_archive_search::local_snippet(message, &needle)
+                .map(|preview| (index, preview))
+        })
+        .map(|hit| (NativeSearchMatch::Message, Some(hit)))
 }
 
 /// Select a native conversation by keyboard result position. The same
@@ -97,6 +113,9 @@ pub struct NativeSearchRow {
     pub title: String,
     pub kind: NativeSearchMatch,
     pub preview: Option<String>,
+    /// Index into the same conversation's visible user/assistant projection.
+    /// None for empty searches and title matches.
+    pub message_index: Option<usize>,
 }
 
 /// These are the only mutable catalog facts that affect native sidebar
@@ -160,16 +179,21 @@ pub fn cached_rows(
             .filter(|title| !title.trim().is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| derived_conversation_title(messages));
-        if let Some((kind, preview)) = find_match_with_preview(
+        if let Some((kind, hit)) = find_match_with_position(
             query,
             &title,
             messages.iter().map(|message| message.text.as_str()),
         ) {
+            let (message_index, preview) = match hit {
+                Some((index, preview)) => (Some(index), Some(preview)),
+                None => (None, None),
+            };
             rows.push(NativeSearchRow {
                 catalog_index,
                 title,
                 kind,
                 preview,
+                message_index,
             });
         }
     }
@@ -668,6 +692,11 @@ mod tests {
         assert_eq!(initial.len(), 1);
         assert_eq!(entries[initial[0].catalog_index].id, first);
         assert_eq!(initial[0].kind, NativeSearchMatch::Message);
+        assert_eq!(initial[0].message_index, Some(0));
+        assert_eq!(
+            index.messages(first)[initial[0].message_index.unwrap()].text,
+            "Rust renderer"
+        );
         let repeated = cached_rows(&ctx, &index, &entries, false, "rust");
         assert!(Arc::ptr_eq(&initial, &repeated));
 
@@ -691,6 +720,7 @@ mod tests {
         let renamed = cached_rows(&ctx, &index, &renamed_entries, false, "python");
         assert_eq!(renamed.len(), 2);
         assert_eq!(renamed[0].kind, NativeSearchMatch::Title);
+        assert_eq!(renamed[0].message_index, None);
         assert!(!Arc::ptr_eq(&changed_query, &renamed));
 
         catalog.set_archived(first, true, 4).unwrap();
@@ -1053,6 +1083,31 @@ mod tests {
             Some("SECOND owner match".to_owned())
         );
         assert!(matching_message_preview(["safe native message"], "tool secret").is_none());
+    }
+
+    #[test]
+    fn matching_positions_identify_only_visible_first_message_hits() {
+        let messages = ["not this", "مرحبا México", "MÉXICO later"];
+        let found = find_match_with_position("méxico", "Other", messages);
+        assert_eq!(
+            found,
+            Some((
+                NativeSearchMatch::Message,
+                Some((1, "مرحبا México".to_owned())),
+            ))
+        );
+        assert_eq!(
+            find_match_with_position("mex", "Mex title", messages),
+            Some((NativeSearchMatch::Title, None))
+        );
+        assert_eq!(
+            find_match_with_position("", "Whatever", messages),
+            Some((NativeSearchMatch::Title, None))
+        );
+        assert_eq!(
+            find_match_with_position("absent", "Other", messages),
+            None
+        );
     }
 
     #[test]

@@ -6368,6 +6368,28 @@ impl eframe::App for ChatariumApp {
                                             .truncate(),
                                         );
                                     }
+                                    if let Some(matched) = row
+                                        .message_index
+                                        .and_then(|index| messages.get(index))
+                                    {
+                                        if ui
+                                            .small_button("Copy matched message")
+                                            .on_hover_text(
+                                                "Copy the exact visible source message with its local conversation ID and event sequence. Does not send or admit context.",
+                                            )
+                                            .clicked()
+                                        {
+                                            ctx.copy_text(native_transcript_export::markdown(
+                                                entry.id,
+                                                title,
+                                                std::slice::from_ref(matched),
+                                            ));
+                                            self.status = format!(
+                                                "copied visible message event #{} from local conversation",
+                                                matched.sequence,
+                                            );
+                                        }
+                                    }
                                 });
                             ui.add_space(4.0);
                         }
