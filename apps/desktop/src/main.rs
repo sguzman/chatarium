@@ -6007,6 +6007,7 @@ impl eframe::App for ChatariumApp {
         let mut cycle_from_keyboard = false;
         let mut visible_native_search_matches = 0_usize;
         let mut native_search_matches = Vec::<LocalConversationId>::new();
+        let mut native_copy_candidates = Vec::<(LocalConversationId, Option<usize>)>::new();
         let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
         let mut rename_local_requested = false;
         let mut archive_local_requested = false;
@@ -6305,6 +6306,7 @@ impl eframe::App for ChatariumApp {
                             visible_native_search_matches += 1;
                             let result_index = native_search_matches.len();
                             native_search_matches.push(entry.id);
+                            native_copy_candidates.push((entry.id, row.message_index));
                             let keyboard_selected =
                                 self.local_conversation_search_selection == Some(result_index);
                             let selected =
@@ -6368,26 +6370,27 @@ impl eframe::App for ChatariumApp {
                                             .truncate(),
                                         );
                                     }
-                                    if let Some(matched) = row
-                                        .message_index
-                                        .and_then(|index| messages.get(index))
-                                    {
+                                    if let Some(message_index) = row.message_index {
                                         if ui
-                                            .small_button("Copy matched message")
+                                            .small_button("Copy matched message · Alt+Enter")
                                             .on_hover_text(
                                                 "Copy the exact visible source message with its local conversation ID and event sequence. Does not send or admit context.",
                                             )
                                             .clicked()
                                         {
-                                            ctx.copy_text(native_transcript_export::markdown(
-                                                entry.id,
-                                                title,
-                                                std::slice::from_ref(matched),
-                                            ));
-                                            self.status = format!(
-                                                "copied visible message event #{} from local conversation",
-                                                matched.sequence,
-                                            );
+                                            if let Some((text, sequence)) =
+                                                native_conversation_search::copyable_hit_markdown(
+                                                    &native_search_index,
+                                                    entry.id,
+                                                    title,
+                                                    message_index,
+                                                )
+                                            {
+                                                ctx.copy_text(text);
+                                                self.status = format!(
+                                                    "copied visible message event #{sequence} from local conversation"
+                                                );
+                                            }
                                         }
                                     }
                                 });
@@ -7160,6 +7163,7 @@ impl eframe::App for ChatariumApp {
         }
         if native_search_has_focus {
             let mut clear_focus = false;
+            let mut copy_hit_requested = false;
             ctx.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
                     self.local_conversation_search_selection = local_archive_search::move_selection(
@@ -7181,12 +7185,43 @@ impl eframe::App for ChatariumApp {
                         self.local_conversation_search_selection,
                     );
                 }
+                if input.consume_key(egui::Modifiers::ALT, egui::Key::Enter) {
+                    copy_hit_requested = true;
+                }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                     self.local_conversation_search_query.clear();
                     self.local_conversation_search_selection = None;
                     clear_focus = true;
                 }
             });
+            if copy_hit_requested {
+                if let Some((conversation_id, message_index)) =
+                    native_conversation_search::activate_copy_selection(
+                        &native_copy_candidates,
+                        self.local_conversation_search_selection,
+                    )
+                {
+                    let messages = native_search_index.messages(conversation_id);
+                    let title = self
+                        .local_conversation_catalog
+                        .entry(conversation_id)
+                        .and_then(|entry| entry.title.clone())
+                        .filter(|title| !title.trim().is_empty())
+                        .unwrap_or_else(|| derived_conversation_title(messages));
+                    if let Some((text, sequence)) =
+                        native_conversation_search::copyable_hit_markdown(
+                            &native_search_index,
+                            conversation_id,
+                            &title,
+                            message_index,
+                        )
+                    {
+                        ctx.copy_text(text);
+                        self.status =
+                            format!("copied visible message event #{sequence} from local conversation");
+                    }
+                }
+            }
             if clear_focus {
                 ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
             }

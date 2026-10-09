@@ -78,6 +78,36 @@ pub fn activate_selection(
         .copied()
 }
 
+/// Resolve a keyboard-highlighted native search match to a visible message.
+/// A selected title-only hit deliberately cannot copy another row's text.
+pub fn activate_copy_selection(
+    matches: &[(LocalConversationId, Option<usize>)],
+    selection: Option<usize>,
+) -> Option<(LocalConversationId, usize)> {
+    let &(conversation_id, message_index) = selection
+        .and_then(|index| matches.get(index))
+        .or_else(|| matches.first())?;
+    message_index.map(|index| (conversation_id, index))
+}
+
+/// Produce an explicitly requested, provenance-bearing reference to exactly
+/// one projected native user/assistant message. Missing positions fail closed.
+/// Neither this projection nor its caller admits the text to model context.
+pub fn copyable_hit_markdown(
+    index: &NativeConversationSearchIndex,
+    conversation_id: LocalConversationId,
+    title: &str,
+    message_index: usize,
+) -> Option<(String, u64)> {
+    let message = index.messages(conversation_id).get(message_index)?;
+    let text = super::native_transcript_export::markdown(
+        conversation_id,
+        title,
+        std::slice::from_ref(message),
+    );
+    Some((text, message.sequence))
+}
+
 /// Opening a native message hit can seed the local transcript reader's
 /// existing search/highlight controls. Titles and empty queries never claim
 /// a matching message.
@@ -1042,6 +1072,62 @@ mod tests {
             reader_query_for_result("  ", NativeSearchMatch::Message),
             None
         );
+    }
+
+    #[test]
+    fn keyboard_copy_targets_only_the_highlighted_visible_message() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        assert_eq!(activate_copy_selection(&[], None), None);
+        let candidates = [(first, None), (second, Some(4))];
+        assert_eq!(activate_copy_selection(&candidates, None), None);
+        assert_eq!(activate_copy_selection(&candidates, Some(0)), None);
+        assert_eq!(
+            activate_copy_selection(&candidates, Some(1)),
+            Some((second, 4))
+        );
+        assert_eq!(activate_copy_selection(&candidates, Some(99)), None);
+        assert_eq!(
+            activate_copy_selection(&[(first, Some(2))], None),
+            Some((first, 2))
+        );
+    }
+
+    #[test]
+    fn explicit_hit_export_contains_only_one_owned_visible_message() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let own = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, own, "first unrelated message");
+        author(&mut store, own, "wanted visible message");
+        author(&mut store, other, "FOREIGN_PRIVATE_MESSAGE");
+        store
+            .append_scoped(None, EventKind::ToolCallOutcomeObserved, "HIDDEN_TOOL_SECRET".to_owned())
+            .unwrap();
+
+        let ctx = egui::Context::default();
+        let index = cached_index(&ctx, store.events());
+        let messages = index.messages(own);
+        let hit = find_match_with_position(
+            "wanted",
+            "Neutral title",
+            messages.iter().map(|message| message.text.as_str()),
+        )
+        .unwrap();
+        let position = hit.1.unwrap().0;
+        let (markdown, event_sequence) =
+            copyable_hit_markdown(&index, own, "Neutral title", position).unwrap();
+
+        assert_eq!(event_sequence, messages[position].sequence);
+        assert!(markdown.contains("wanted visible message"));
+        assert!(markdown.contains(&own.to_string()));
+        assert!(markdown.contains(&format!("event #{event_sequence}")));
+        assert!(!markdown.contains("first unrelated message"));
+        assert!(!markdown.contains("FOREIGN_PRIVATE_MESSAGE"));
+        assert!(!markdown.contains("HIDDEN_TOOL_SECRET"));
+        assert!(copyable_hit_markdown(&index, own, "Neutral title", 99).is_none());
     }
 
     #[test]

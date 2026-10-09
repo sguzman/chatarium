@@ -185,7 +185,12 @@ user/assistant message found in that conversation, using the same provenance-
 bearing Markdown export format as a full transcript. The copied reference
 contains the source conversation identity and event sequence; it does not
 change the active draft, journal, permissions, memory admissions or another
-conversation's context. Title-only matches do not expose this action.
+conversation's context. Title-only matches do not expose this action. With native search focused,
+**Alt+Enter** copies the highlighted result's matching message (or the first
+result if no row is highlighted). It does not open/switch conversations;
+**Enter** continues to open the selected result. Copying a title-only result
+does nothing. Both copy paths share the same checked, single-message export
+helper and regression tests for source isolation.
 Search results and bounded excerpts are cached across egui redraws; they are recomputed only when the
 projected native messages, query, catalog titles/order/archive state, or
 visibility of archived conversations changes. Unrelated draft or tool
