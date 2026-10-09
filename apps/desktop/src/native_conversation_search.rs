@@ -10,6 +10,7 @@ use chatarium_store::authored::{
 };
 use eframe::egui;
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +86,20 @@ struct JournalRevision {
     last_sequence: Option<u64>,
     last_scope: Option<String>,
     last_kind: Option<EventKind>,
+    last_at_unix_ms: Option<u64>,
     last_payload_bytes: Option<usize>,
+    last_payload_fingerprint: Option<u64>,
+}
+
+// The journal is append-only during ordinary operation. Still, an archive
+// replacement can retain the same event count, sequence, kind, scope and
+// payload byte length while changing visible conversation text. Fingerprint
+// the boundary event rather than trusting its size alone. The fingerprint is
+// a cache invalidation hint, not a cryptographic journal integrity check.
+fn payload_fingerprint(event: &EventEnvelope) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    event.payload.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl JournalRevision {
@@ -96,7 +110,9 @@ impl JournalRevision {
             last_sequence: events.last().map(|event| event.sequence),
             last_scope: events.last().and_then(|event| event.scope.clone()),
             last_kind: events.last().map(|event| event.kind),
+            last_at_unix_ms: events.last().map(|event| event.at_unix_ms),
             last_payload_bytes: events.last().map(|event| event.payload.len()),
+            last_payload_fingerprint: events.last().map(payload_fingerprint),
         }
     }
 
@@ -114,7 +130,9 @@ impl JournalRevision {
             && self.last_sequence == Some(last.sequence)
             && self.last_scope.as_deref() == last.scope.as_deref()
             && self.last_kind == Some(last.kind)
+            && self.last_at_unix_ms == Some(last.at_unix_ms)
             && self.last_payload_bytes == Some(last.payload.len())
+            && self.last_payload_fingerprint == Some(payload_fingerprint(last))
     }
 }
 
@@ -423,6 +441,31 @@ mod tests {
         replaced.last_mut().unwrap().scope = Some("different-scope".to_owned());
         let next = cached_index(&ctx, &replaced);
         assert!(!Arc::ptr_eq(&cached, &next));
+    }
+
+    #[test]
+    fn native_index_cache_rebuilds_when_same_sized_tail_payload_changes() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let ctx = egui::Context::default();
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, owner, "first");
+        let original = cached_index(&ctx, store.events());
+        assert_eq!(original.messages(owner)[0].text, "first");
+
+        // Preserve every old revision discriminator, including the byte
+        // length, while changing the source text of a durable user message.
+        let mut replaced = store.events().to_vec();
+        let tail = replaced.last_mut().unwrap();
+        let new_payload = tail.payload.replacen("first", "other", 1);
+        assert_ne!(new_payload, tail.payload);
+        assert_eq!(new_payload.len(), tail.payload.len());
+        tail.payload = new_payload;
+
+        let refreshed = cached_index(&ctx, &replaced);
+        assert!(!Arc::ptr_eq(&original, &refreshed));
+        assert_eq!(refreshed.messages(owner)[0].text, "other");
+        assert!(Arc::ptr_eq(&refreshed, &cached_index(&ctx, &replaced)));
     }
 
     #[test]
