@@ -7217,8 +7217,9 @@ impl eframe::App for ChatariumApp {
                         )
                     {
                         ctx.copy_text(text);
-                        self.status =
-                            format!("copied visible message event #{sequence} from local conversation");
+                        self.status = format!(
+                            "copied visible message event #{sequence} from local conversation"
+                        );
                     }
                 }
             }

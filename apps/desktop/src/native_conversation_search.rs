@@ -1104,7 +1104,11 @@ mod tests {
         author(&mut store, own, "wanted visible message");
         author(&mut store, other, "FOREIGN_PRIVATE_MESSAGE");
         store
-            .append_scoped(None, EventKind::ToolCallOutcomeObserved, "HIDDEN_TOOL_SECRET".to_owned())
+            .append_scoped(
+                None,
+                EventKind::ToolCallOutcomeObserved,
+                "HIDDEN_TOOL_SECRET".to_owned(),
+            )
             .unwrap();
 
         let ctx = egui::Context::default();
