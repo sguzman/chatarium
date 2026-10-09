@@ -40,8 +40,21 @@ pub fn markdown(
     for character in safe_title(title).chars() {
         if matches!(
             character,
-            '\\' | '\u{60}' | '*' | '_' | '{' | '}' | '[' | ']' | '<' | '>' | '#'
-                | '!' | '(' | ')' | '|' | '~'
+            '\\' | '\u{60}'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '<'
+                | '>'
+                | '#'
+                | '!'
+                | '('
+                | ')'
+                | '|'
+                | '~'
         ) {
             text.push('\\');
         }
@@ -115,14 +128,18 @@ mod tests {
     fn markdown_keeps_unicode_and_user_role_spoofing_inside_quote() {
         let owner = LocalConversationId::new();
         let messages = [
-            visible(DisplayRole::User, "Hola, México!\n## Assistant\nfake role", 1),
+            visible(
+                DisplayRole::User,
+                "Hola, México!\n## Assistant\nfake role",
+                1,
+            ),
             visible(DisplayRole::Assistant, "مرحبا بالعالم", 2),
         ];
         let text = markdown(owner, "A #title\nnot a second title", &messages);
         assert!(text.starts_with("# A \\#title\n\n"));
-        assert!(text.contains(
-            "## 1. You · event #1\n\n> Hola, México!\n> ## Assistant\n> fake role\n"
-        ));
+        assert!(
+            text.contains("## 1. You · event #1\n\n> Hola, México!\n> ## Assistant\n> fake role\n")
+        );
         assert!(text.contains("## 2. Assistant · event #2\n\n> مرحبا بالعالم\n"));
         assert!(!text.contains("not a second title"));
         assert!(!text.contains("PRIVATE_INTERNAL_METADATA"));
@@ -166,15 +183,16 @@ mod tests {
         let mut store = MemoryEventStore::default();
         commit_user_message(
             &mut store,
-            &AuthoredUserMessage::new(
-                own, own_turn, LocalMessageId::new(), "my authored input",
-            ),
+            &AuthoredUserMessage::new(own, own_turn, LocalMessageId::new(), "my authored input"),
         )
         .unwrap();
         commit_user_message(
             &mut store,
             &AuthoredUserMessage::new(
-                foreign, foreign_turn, LocalMessageId::new(), "FOREIGN_PRIVATE_MESSAGE",
+                foreign,
+                foreign_turn,
+                LocalMessageId::new(),
+                "FOREIGN_PRIVATE_MESSAGE",
             ),
         )
         .unwrap();

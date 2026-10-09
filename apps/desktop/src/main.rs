@@ -7245,7 +7245,10 @@ impl eframe::App for ChatariumApp {
         } else if let Some(local_conversation_id) = select_local_requested {
             let can_switch = !self.local_conversation_busy();
             self.activate_local_conversation(local_conversation_id);
-            if cycle_from_keyboard && can_switch && self.local_conversation_id == local_conversation_id {
+            if cycle_from_keyboard
+                && can_switch
+                && self.local_conversation_id == local_conversation_id
+            {
                 // Keyboard cycling can target a chat outside the previous
                 // search filter; keep the activated row visible.
                 self.local_conversation_search_query.clear();
