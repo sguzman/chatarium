@@ -1224,8 +1224,7 @@ mod tests {
 
         let projected = NativeConversationSearchIndex::build(store.events());
         let staged = stageable_hit(&projected, source, 0).unwrap();
-        let staged_origin =
-            Some((staged.source_conversation_id, staged.source_event_sequence));
+        let staged_origin = Some((staged.source_conversation_id, staged.source_event_sequence));
         assert_eq!(
             recording_source_conversation(destination, staged_origin),
             source
@@ -1261,8 +1260,7 @@ mod tests {
             LocalMemoryContextDecision::Admit,
         )
         .unwrap();
-        let admitted =
-            replay_admitted_local_memory_context(store.events(), destination).unwrap();
+        let admitted = replay_admitted_local_memory_context(store.events(), destination).unwrap();
         assert_eq!(admitted.len(), 1);
         assert_eq!(admitted[0].source_conversation_id, source);
         assert!(

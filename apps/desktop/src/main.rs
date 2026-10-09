@@ -7253,11 +7253,10 @@ impl eframe::App for ChatariumApp {
                 }
             }
             if stage_hit_requested {
-                stage_native_memory_requested =
-                    native_conversation_search::activate_copy_selection(
-                        &native_copy_candidates,
-                        self.local_conversation_search_selection,
-                    );
+                stage_native_memory_requested = native_conversation_search::activate_copy_selection(
+                    &native_copy_candidates,
+                    self.local_conversation_search_selection,
+                );
             }
             if clear_focus {
                 ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
