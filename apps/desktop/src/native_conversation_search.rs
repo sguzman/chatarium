@@ -679,6 +679,17 @@ mod tests {
     fn streaming_assistant_updates_only_reproject_the_owned_conversation() {
         use chatarium_store::{EventStore, MemoryEventStore};
 
+        fn assert_same_messages(actual: &[DisplayMessage], expected: &[DisplayMessage]) {
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert_eq!(actual.role, expected.role);
+                assert_eq!(actual.text, expected.text);
+                assert_eq!(actual.sequence, expected.sequence);
+                assert_eq!(actual.timestamp, expected.timestamp);
+                assert_eq!(actual.provenance_label, expected.provenance_label);
+            }
+        }
+
         let ctx = egui::Context::default();
         let first = LocalConversationId::new();
         let second = LocalConversationId::new();
@@ -712,7 +723,7 @@ mod tests {
             let current = cached_index(&ctx, store.events());
             let full = NativeConversationSearchIndex::build(store.events());
             for owner in [first, second] {
-                assert_eq!(current.messages(owner), full.messages(owner));
+                assert_same_messages(current.messages(owner), full.messages(owner));
             }
             assert!(Arc::ptr_eq(
                 other_messages,
@@ -726,9 +737,9 @@ mod tests {
         // incremental assistant-only replay must then fall back to a rebuild.
         author(&mut store, first, "A new turn");
         let after_user = cached_index(&ctx, store.events());
-        assert_eq!(
+        assert_same_messages(
             after_user.messages(first),
-            NativeConversationSearchIndex::build(store.events()).messages(first)
+            NativeConversationSearchIndex::build(store.events()).messages(first),
         );
         assert!(!Arc::ptr_eq(
             other_messages,
