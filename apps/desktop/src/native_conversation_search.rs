@@ -577,7 +577,10 @@ mod tests {
             .copied()
             .inspect(|_| visited.set(visited.get() + 1));
         let result = find_match_with_preview(" MÉXICO ", "Other title", counted);
-        let expected = (NativeSearchMatch::Message, Some("México ↵ matters".to_owned()));
+        let expected = (
+            NativeSearchMatch::Message,
+            Some("México ↵ matters".to_owned()),
+        );
         assert_eq!(result, Some(expected));
         assert_eq!(visited.get(), 2);
 
