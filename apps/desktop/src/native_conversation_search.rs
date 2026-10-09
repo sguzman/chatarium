@@ -52,10 +52,7 @@ pub fn activate_selection(
 /// Opening a native message hit can seed the local transcript reader's
 /// existing search/highlight controls. Titles and empty queries never claim
 /// a matching message.
-pub fn reader_query_for_result(
-    query: &str,
-    kind: NativeSearchMatch,
-) -> Option<String> {
+pub fn reader_query_for_result(query: &str, kind: NativeSearchMatch) -> Option<String> {
     if kind != NativeSearchMatch::Message {
         return None;
     }

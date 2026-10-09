@@ -7164,12 +7164,11 @@ impl eframe::App for ChatariumApp {
                 } else {
                     native_conversation_search::NativeSearchMatch::Title
                 };
-                self.reader_search_query =
-                    native_conversation_search::reader_query_for_result(
-                        &self.local_conversation_search_query,
-                        kind,
-                    )
-                    .unwrap_or_default();
+                self.reader_search_query = native_conversation_search::reader_query_for_result(
+                    &self.local_conversation_search_query,
+                    kind,
+                )
+                .unwrap_or_default();
                 self.reader_search_hit = (!self.reader_search_query.is_empty()).then_some(0);
                 if self.reader_search_hit.is_some() {
                     self.reader_restore_pending = false;
