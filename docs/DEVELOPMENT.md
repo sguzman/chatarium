@@ -219,9 +219,12 @@ event list; the projection still owns its visible text and remains independent
 of the journal's subsequent growth. When the journal appends only assistant
 snapshots/completions for previously known native turns, a bounded incremental
 projection rebuilds the affected conversation(s) and reuses every other
-conversation's projected message Arc. New authored turns and unknown scopes
-fall back to complete projection. Tests compare incremental output with a
-fresh full rebuild and check cross-conversation isolation.
+conversation's projected message Arc. Typed authored user turns also extend
+their own conversation incrementally. Ownership for a batch is resolved before
+assistant messages, preserving the full builder's ordering. Unknown scopes,
+legacy/malformed commits, changed owners, and replaced journal prefixes fall
+back to a full projection. Regression fixtures cover 128 conversations,
+batched new conversation creation, pointer reuse, and cross-chat isolation.
 
 This is a derived, transient performance optimization, not a new source of
 truth. The append-only journal remains authoritative. Regression coverage in

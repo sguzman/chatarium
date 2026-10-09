@@ -313,35 +313,64 @@ impl NativeConversationSearchIndex {
         }
     }
 
-    /// Extend the derived projection when only known native assistant scopes
-    /// receive new snapshots or completions. New authored turns, unrecognized
-    /// scopes and any replaced journal prefix must use the full rebuild.
-    /// All unaffected conversation vectors are shared, not recopied.
-    fn extend_known_assistant_appends(
+    /// Incrementally replay typed local user commits and known assistant
+    /// observations from an immutable journal suffix. Project only affected
+    /// conversations; all unrelated conversation vectors stay shared.
+    /// Malformed/legacy authorship, unknown assistant scopes or remapped
+    /// existing turn owners fall back to a full rebuild.
+    fn extend_native_appends(
         &self,
         events: &[EventEnvelope],
         first_new_position: usize,
     ) -> Option<Self> {
+        let mut owners = Arc::clone(&self.owners);
+
+        // Resolve every new typed turn before attributing assistant events,
+        // matching the full builder's two-pass ownership semantics.
+        for event in &events[first_new_position..] {
+            if event.kind != EventKind::UserMessageCommitted {
+                continue;
+            }
+            let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+                decode_user_message_commit(event)
+            else {
+                return None;
+            };
+            let scope = local_turn_scope(message.turn_id);
+            if owners
+                .get(&scope)
+                .is_some_and(|previous| *previous != message.conversation_id)
+            {
+                // A reassigned historical scope could change old projections.
+                return None;
+            }
+            Arc::make_mut(&mut owners).insert(scope, message.conversation_id);
+        }
+
         let mut positions = self.event_positions.clone();
         let mut touched = BTreeSet::new();
         for (position, event) in events.iter().enumerate().skip(first_new_position) {
-            match event.kind {
-                EventKind::UserMessageCommitted => return None,
-                EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => {
-                    let owner = *event
-                        .scope
-                        .as_deref()
-                        .and_then(|scope| self.owners.get(scope))?;
-                    Arc::make_mut(
-                        positions
-                            .entry(owner)
-                            .or_insert_with(|| Arc::new(Vec::new())),
-                    )
-                    .push(position);
-                    touched.insert(owner);
+            let owner = match event.kind {
+                EventKind::UserMessageCommitted => {
+                    let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+                        decode_user_message_commit(event)
+                    else {
+                        return None;
+                    };
+                    message.conversation_id
                 }
-                _ => {}
-            }
+                EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => {
+                    *event.scope.as_deref().and_then(|scope| owners.get(scope))?
+                }
+                _ => continue,
+            };
+            Arc::make_mut(
+                positions
+                    .entry(owner)
+                    .or_insert_with(|| Arc::new(Vec::new())),
+            )
+            .push(position);
+            touched.insert(owner);
         }
 
         let mut messages = self.messages.clone();
@@ -355,7 +384,7 @@ impl NativeConversationSearchIndex {
         Some(Self {
             revision: JournalRevision::capture(events),
             messages,
-            owners: Arc::clone(&self.owners),
+            owners,
             event_positions: positions,
         })
     }
@@ -416,7 +445,7 @@ pub fn cached_index(
             }
             if let Some(extended) = cache
                 .index
-                .extend_known_assistant_appends(events, first_new_position)
+                .extend_native_appends(events, first_new_position)
             {
                 let index = Arc::new(extended);
                 ctx.data_mut(|data| {
@@ -742,17 +771,151 @@ mod tests {
             assert!(current.messages(first).iter().any(|m| m.text == text));
         }
 
-        // A newly authored native turn changes the ownership directory;
-        // incremental assistant-only replay must then fall back to a rebuild.
+        // A new native authored turn is replayed without touching the
+        // unrelated conversation's projection.
         author(&mut store, first, "A new turn");
         let after_user = cached_index(&ctx, store.events());
         assert_same_messages(
             after_user.messages(first),
             NativeConversationSearchIndex::build(store.events()).messages(first),
         );
-        assert!(!Arc::ptr_eq(
+        assert!(Arc::ptr_eq(
             other_messages,
             after_user.messages.get(&second).unwrap()
+        ));
+    }
+
+    #[test]
+    fn many_conversations_preserve_unaffected_projection_on_new_turns() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let mut store = MemoryEventStore::default();
+        let conversations = (0..128)
+            .map(|index| {
+                let owner = LocalConversationId::new();
+                for message in 0..4 {
+                    author(&mut store, owner, &format!("archive {index} entry {message}"));
+                }
+                owner
+            })
+            .collect::<Vec<_>>();
+        let target = conversations[32];
+        let index = cached_index(&ctx, store.events());
+        let untouched = conversations
+            .iter()
+            .filter(|owner| **owner != target)
+            .map(|owner| (*owner, Arc::clone(index.messages.get(owner).unwrap())))
+            .collect::<Vec<_>>();
+
+        // The full index would scan hundreds of historical events here.
+        // The incremental projection must preserve all other message Arcs.
+        let new_turn = author(&mut store, target, "new isolated user turn");
+        let after_user = cached_index(&ctx, store.events());
+        assert_eq!(after_user.messages(target).len(), 5);
+        for (owner, previous) in &untouched {
+            assert!(Arc::ptr_eq(
+                previous,
+                after_user.messages.get(owner).unwrap()
+            ));
+        }
+        store
+            .append_scoped(
+                Some(local_turn_scope(new_turn)),
+                EventKind::AssistantCompletionObserved,
+                serde_json::json!({
+                    "schema": "chatarium-responses-turn-observation",
+                    "version": 1,
+                    "text": "new isolated assistant reply",
+                    "details": {
+                        "local_turn_id": new_turn.to_string(),
+                        "request_id": new_turn.to_string(),
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let after_answer = cached_index(&ctx, store.events());
+        let rebuilt = NativeConversationSearchIndex::build(store.events());
+        for owner in &conversations {
+            let actual = after_answer.messages(*owner);
+            let expected = rebuilt.messages(*owner);
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert_eq!(actual.text, expected.text);
+                assert_eq!(actual.sequence, expected.sequence);
+                assert_eq!(actual.role, expected.role);
+            }
+        }
+        for (owner, previous) in &untouched {
+            assert!(Arc::ptr_eq(
+                previous,
+                after_answer.messages.get(owner).unwrap()
+            ));
+        }
+
+        // Unknown assistant ownership forces the conservative full rebuild.
+        store
+            .append_scoped(
+                Some("unknown-local-turn".to_owned()),
+                EventKind::AssistantCompletionObserved,
+                "UNOWNED_PRIVATE_OUTPUT".to_owned(),
+            )
+            .unwrap();
+        let fallback = cached_index(&ctx, store.events());
+        assert!(!Arc::ptr_eq(
+            &untouched[0].1,
+            fallback.messages.get(&untouched[0].0).unwrap()
+        ));
+        assert!(conversations.iter().all(|owner| {
+            fallback
+                .messages(*owner)
+                .iter()
+                .all(|message| !message.text.contains("UNOWNED_PRIVATE_OUTPUT"))
+        }));
+    }
+
+    #[test]
+    fn batched_new_authorship_and_assistant_use_full_builder_ordering() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let mut store = MemoryEventStore::default();
+        let other = LocalConversationId::new();
+        author(&mut store, other, "untouched conversation");
+        let original = cached_index(&ctx, store.events());
+
+        let owner = LocalConversationId::new();
+        let turn = author(&mut store, owner, "new conversation");
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn)),
+                EventKind::AssistantCompletionObserved,
+                serde_json::json!({
+                    "schema": "chatarium-responses-turn-observation",
+                    "version": 1,
+                    "text": "new answer",
+                    "details": {
+                        "local_turn_id": turn.to_string(),
+                        "request_id": turn.to_string()
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        let extended = cached_index(&ctx, store.events());
+        let rebuilt = NativeConversationSearchIndex::build(store.events());
+        let expected = rebuilt.messages(owner);
+        let actual = extended.messages(owner);
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(
+            actual.iter().map(|message| message.text.as_str()).collect::<Vec<_>>(),
+            expected.iter().map(|message| message.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(Arc::ptr_eq(
+            original.messages.get(&other).unwrap(),
+            extended.messages.get(&other).unwrap()
         ));
     }
 
