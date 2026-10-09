@@ -158,6 +158,19 @@ pub fn selected_message_index(row: &NativeSearchRow, ordinal: usize) -> Option<u
         .copied()
 }
 
+/// Cycle a selected hit in one conversation without touching other rows,
+/// authoring a message, recording a memory or changing context permissions.
+pub fn cycle_matching_message(
+    row: &NativeSearchRow,
+    ordinal: usize,
+    delta: isize,
+) -> Option<(usize, usize)> {
+    let count = row.matching_message_indices.len();
+    let current = ordinal.min(count.checked_sub(1)?);
+    let next = (current as isize + delta).rem_euclid(count as isize) as usize;
+    Some((next, row.matching_message_indices[next]))
+}
+
 /// Compute which *reader search hit* corresponds to the first occurrence in
 /// a particular matching source message, so navigating to a later match does
 /// not jump back to the first message in the conversation.
@@ -1347,6 +1360,10 @@ mod tests {
         assert_eq!(selected_message_index(row, 1), Some(2));
         assert_eq!(selected_message_index(row, 2), Some(3));
         assert_eq!(selected_message_index(row, 999), Some(3));
+        assert_eq!(cycle_matching_message(row, 0, 1), Some((1, 2)));
+        assert_eq!(cycle_matching_message(row, 2, 1), Some((0, 0)));
+        assert_eq!(cycle_matching_message(row, 0, -1), Some((2, 3)));
+        assert_eq!(cycle_matching_message(row, 999, 1), Some((0, 0)));
         assert_eq!(
             reader_hit_ordinal(index.messages(source), "target", 2),
             Some(1)
@@ -1385,6 +1402,7 @@ mod tests {
         assert_eq!(row.kind, NativeSearchMatch::Title);
         assert!(row.matching_message_indices.is_empty());
         assert_eq!(selected_message_index(row, 0), None);
+        assert_eq!(cycle_matching_message(row, 0, 1), None);
     }
 
     #[test]

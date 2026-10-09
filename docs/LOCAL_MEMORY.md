@@ -75,8 +75,11 @@ message text resolves to the message, so derived titles cannot hide Copy matched
 message or Stage as memory. Title-only hits still have no message actions.
 A conversation with multiple matching messages keeps one sidebar row; its
 Prev hit / Next hit controls select a specific visible message and source event
-for Copy matched message, Stage as memory, and reader navigation. The cached
-search rows retain message indices rather than cloning every matching body.
+for Copy matched message, Stage as memory, and reader navigation.
+With native search focused, **Alt+Up / Alt+Down** cycle the selected row's
+message hits while ordinary Up/Down still select conversations; **Enter**
+opens the selected hit, **Alt+Enter** copies it, and **Alt+M** stages it.
+The cached search rows retain message indices rather than cloning every matching body.
 Selecting a hit does not change memory or inference-context authority.
 
 With the native search field focused, **Alt+M** stages the highlighted matching message (or the first result when none is
