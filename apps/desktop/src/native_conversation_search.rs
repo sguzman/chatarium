@@ -99,6 +99,23 @@ impl JournalRevision {
             last_payload_bytes: events.last().map(|event| event.payload.len()),
         }
     }
+
+    fn is_append_only_prefix_of(&self, events: &[EventEnvelope]) -> bool {
+        if events.len() < self.event_count {
+            return false;
+        }
+        if self.event_count == 0 {
+            return true;
+        }
+        let Some(last) = events.get(self.event_count - 1) else {
+            return false;
+        };
+        self.first_sequence == events.first().map(|event| event.sequence)
+            && self.last_sequence == Some(last.sequence)
+            && self.last_scope.as_deref() == last.scope.as_deref()
+            && self.last_kind == Some(last.kind)
+            && self.last_payload_bytes == Some(last.payload.len())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -170,22 +187,59 @@ impl NativeConversationSearchIndex {
     }
 }
 
-/// Ephemeral egui-frame projection; journal events and owning conversation
-/// metadata remain authoritative. No search query or body is persisted here.
+/// The indexed search corpus only depends on native authored messages and
+/// their matching assistant snapshot/completion observations. Draft writes,
+/// tool events and controller state may advance the append-only journal
+/// without changing any searchable native conversation.
+fn changes_native_messages(kind: EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::UserMessageCommitted
+            | EventKind::AssistantSnapshotObserved
+            | EventKind::AssistantCompletionObserved
+    )
+}
+
+#[derive(Clone)]
+struct NativeSearchCache {
+    observed: JournalRevision,
+    index: Arc<NativeConversationSearchIndex>,
+}
+
+/// Ephemeral egui-frame projection; metadata and journal remain authoritative.
+/// When only unrelated journal events append, advance the cache cursor without
+/// cloning or rebuilding the potentially large message corpus.
 pub fn cached_index(
     ctx: &egui::Context,
     events: &[EventEnvelope],
 ) -> Arc<NativeConversationSearchIndex> {
     let id = egui::Id::new("chatarium-native-conversation-search-index");
-    if let Some(existing) =
-        ctx.data_mut(|data| data.get_temp::<Arc<NativeConversationSearchIndex>>(id))
-    {
-        if existing.matches_journal(events) {
-            return existing;
+    let now = JournalRevision::capture(events);
+    if let Some(mut cache) = ctx.data_mut(|data| data.get_temp::<NativeSearchCache>(id)) {
+        if cache.observed == now {
+            return cache.index;
+        }
+        if cache.observed.is_append_only_prefix_of(events)
+            && events[cache.observed.event_count..]
+                .iter()
+                .all(|event| !changes_native_messages(event.kind))
+        {
+            cache.observed = now;
+            let reused = Arc::clone(&cache.index);
+            ctx.data_mut(|data| data.insert_temp(id, cache));
+            return reused;
         }
     }
     let index = Arc::new(NativeConversationSearchIndex::build(events));
-    ctx.data_mut(|data| data.insert_temp(id, Arc::clone(&index)));
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            id,
+            NativeSearchCache {
+                observed: now,
+                index: Arc::clone(&index),
+            },
+        )
+    });
     index
 }
 
@@ -302,6 +356,66 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn native_index_cache_ignores_unrelated_draft_and_tool_journal_appends() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let ctx = egui::Context::default();
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let turn = author(&mut store, owner, "initial typed message");
+        let base = cached_index(&ctx, store.events());
+        store
+            .append_scoped(None, EventKind::DraftChanged, "draft input updated".to_owned())
+            .unwrap();
+        let after_draft = cached_index(&ctx, store.events());
+        assert!(Arc::ptr_eq(&base, &after_draft));
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn)),
+                EventKind::ToolCallOutcomeObserved,
+                "tool outcome must not be indexed".to_owned(),
+            )
+            .unwrap();
+        let after_tool = cached_index(&ctx, store.events());
+        assert!(Arc::ptr_eq(&base, &after_tool));
+
+        store
+            .append_scoped(
+                Some(local_turn_scope(turn)),
+                EventKind::AssistantCompletionObserved,
+                serde_json::json!({
+                    "schema": "chatarium-responses-turn-observation",
+                    "version": 1,
+                    "text": "newly observed assistant message",
+                    "details": {
+                        "local_turn_id": turn.to_string(),
+                        "request_id": turn.to_string()
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let changed = cached_index(&ctx, store.events());
+        assert!(!Arc::ptr_eq(&base, &changed));
+        assert!(changed.messages(owner).iter().any(|message| {
+            message.text == "newly observed assistant message"
+        }));
+    }
+
+    #[test]
+    fn native_index_cache_rebuilds_if_journal_replaces_prior_tail() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let ctx = egui::Context::default();
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, owner, "first");
+        let cached = cached_index(&ctx, store.events());
+        let mut replaced = store.events().to_vec();
+        replaced.last_mut().unwrap().scope = Some("different-scope".to_owned());
+        let next = cached_index(&ctx, &replaced);
+        assert!(!Arc::ptr_eq(&cached, &next));
     }
 
     #[test]

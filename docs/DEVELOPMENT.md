@@ -47,8 +47,12 @@ they share a journal or turn scope.
 
 The search corpus groups journal events by the typed owning conversation in
 one chronological projection pass, then applies the existing display-message
-deduplication rules. It is cached in egui's transient session memory and
-invalidated on durable journal high-water change. Conversation titles
+deduplication rules. It is cached in egui's transient session memory.
+Append-only draft, tool, controller, and other non-transcript journal events
+advance the cache cursor **without** rebuilding the native message corpus.
+An authored user message or assistant snapshot/completion invalidates it and
+rebuilds from the authoritative journal. A replaced/truncated journal prefix
+is not eligible for reuse. Conversation titles
 remain owned by the local catalog; the index is rebuildable and contains
 no separate authoritative database, persisted search query, or background
 provider requests. A regression test compares indexed messages with the
