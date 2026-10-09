@@ -209,7 +209,10 @@ user/assistant messages. Previously the reader separately scanned the entire
 journal and cloned all current conversation message text on every egui frame
 even when nothing changed. The shared index is rebuilt only when relevant
 durable user/assistant observations advance, reusing it across unrelated
-draft, MCP tool and lifecycle journal appends.
+draft, MCP tool and lifecycle journal appends. Rebuilds borrow relevant journal
+events rather than cloning each raw event payload into a temporary per-chat
+event list; the projection still owns its visible text and remains independent
+of the journal's subsequent growth.
 
 This is a derived, transient performance optimization, not a new source of
 truth. The append-only journal remains authoritative. Regression coverage in

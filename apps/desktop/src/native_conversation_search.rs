@@ -2,7 +2,7 @@
 //! Search only locally projected user/assistant text and the local workspace title.
 //! The journal and metadata catalog remain authoritative; the query is ephemeral.
 
-use super::{DisplayMessage, projected_display_messages};
+use super::{DisplayMessage, projected_display_messages_iter};
 use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{
@@ -167,7 +167,7 @@ impl NativeConversationSearchIndex {
             }
         }
 
-        let mut by_conversation: BTreeMap<LocalConversationId, Vec<EventEnvelope>> =
+        let mut by_conversation: BTreeMap<LocalConversationId, Vec<&EventEnvelope>> =
             BTreeMap::new();
         for event in events {
             let owner = match event.kind {
@@ -190,13 +190,13 @@ impl NativeConversationSearchIndex {
                 by_conversation
                     .entry(owner)
                     .or_default()
-                    .push(event.clone());
+                    .push(event);
             }
         }
 
         let messages = by_conversation
             .into_iter()
-            .map(|(owner, own_events)| (owner, projected_display_messages(&own_events)))
+            .map(|(owner, own_events)| (owner, projected_display_messages_iter(own_events)))
             .collect();
         Self {
             revision: JournalRevision::capture(events),

@@ -21083,6 +21083,12 @@ fn projected_local_display_messages(
 }
 
 fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
+    projected_display_messages_iter(events.iter())
+}
+
+fn projected_display_messages_iter<'a>(
+    events: impl IntoIterator<Item = &'a EventEnvelope>,
+) -> Vec<DisplayMessage> {
     let mut messages = Vec::<DisplayMessage>::new();
     let mut keyed = BTreeMap::<String, usize>::new();
 
