@@ -1362,6 +1362,11 @@ mod tests {
             assert!(!copied.contains("PRIVATE target foreign"));
         }
 
+        // A repeated query reuses its cached snapshot until it changes.
+        assert!(Arc::ptr_eq(
+            &rows,
+            &cached_rows(&ctx, &index, &entries, false, "target"),
+        ));
         let title_only = cached_rows(&ctx, &index, &entries, false, "independent");
         let row = title_only
             .iter()
@@ -1371,9 +1376,6 @@ mod tests {
         assert!(row.matching_message_indices.is_empty());
         assert_eq!(selected_message_index(row, 0), None);
 
-        // The index is rebuilt from durable owned projections and cached on
-        // unchanged journal input, not from the currently selected hit.
-        assert!(Arc::ptr_eq(&rows, &cached_rows(&ctx, &index, &entries, false, "target")));
     }
 
     #[test]
