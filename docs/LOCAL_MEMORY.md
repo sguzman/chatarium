@@ -70,7 +70,10 @@ authored-message durability gate.
 ## Staging a retrieved native message
 
 Native conversation search now provides **Stage as memory** for a matched
-user/assistant message. Staging requires an empty memory-editor draft and
+user/assistant message. With the native search field focused, **Alt+M**
+stages the highlighted matching message (or the first result when none is
+highlighted); a title-only match cannot stage a message. Staging requires
+an empty memory-editor draft and
 only loads the exact projected visible message text into that editor. Nothing
 is durably recorded or admitted by staging alone. The UI displays its native
 source conversation identity and message event sequence for review.

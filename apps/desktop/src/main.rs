@@ -4891,10 +4891,10 @@ impl ChatariumApp {
         };
         match sender.send(PersistCommand::RecordLocalMemory {
             memory_id,
-            source_conversation_id: self
-                .staged_local_memory_origin
-                .map(|(source, _)| source)
-                .unwrap_or(self.local_conversation_id),
+            source_conversation_id: native_conversation_search::recording_source_conversation(
+                self.local_conversation_id,
+                self.staged_local_memory_origin,
+            ),
             text: self.local_memory_draft.clone(),
         }) {
             Ok(()) => {
@@ -6407,7 +6407,7 @@ impl eframe::App for ChatariumApp {
                                             .add_enabled(
                                                 self.local_memory_draft.is_empty()
                                                     && !self.local_memory_command_pending,
-                                                egui::Button::new("Stage as memory"),
+                                                egui::Button::new("Stage as memory · Alt+M"),
                                             )
                                             .on_hover_text(
                                                 "Stage the exact matched message in the memory editor. Record and Admit / Use once are separate explicit actions. Requires an empty memory draft.",
@@ -7189,6 +7189,7 @@ impl eframe::App for ChatariumApp {
         if native_search_has_focus {
             let mut clear_focus = false;
             let mut copy_hit_requested = false;
+            let mut stage_hit_requested = false;
             ctx.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
                     self.local_conversation_search_selection = local_archive_search::move_selection(
@@ -7212,6 +7213,9 @@ impl eframe::App for ChatariumApp {
                 }
                 if input.consume_key(egui::Modifiers::ALT, egui::Key::Enter) {
                     copy_hit_requested = true;
+                }
+                if input.consume_key(egui::Modifiers::ALT, egui::Key::M) {
+                    stage_hit_requested = true;
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                     self.local_conversation_search_query.clear();
@@ -7247,6 +7251,13 @@ impl eframe::App for ChatariumApp {
                         );
                     }
                 }
+            }
+            if stage_hit_requested {
+                stage_native_memory_requested =
+                    native_conversation_search::activate_copy_selection(
+                        &native_copy_candidates,
+                        self.local_conversation_search_selection,
+                    );
             }
             if clear_focus {
                 ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));

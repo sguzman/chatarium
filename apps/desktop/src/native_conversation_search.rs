@@ -119,6 +119,16 @@ pub struct StagedNativeMessage {
     pub text: String,
 }
 
+/// An unedited staged draft is recorded against its native source, even if
+/// another conversation is active. After an edit, the staged origin is cleared
+/// and normal manual recording uses the active conversation instead.
+pub fn recording_source_conversation(
+    active: LocalConversationId,
+    staged_origin: Option<(LocalConversationId, u64)>,
+) -> LocalConversationId {
+    staged_origin.map(|(source, _)| source).unwrap_or(active)
+}
+
 pub fn stageable_hit(
     index: &NativeConversationSearchIndex,
     conversation_id: LocalConversationId,
@@ -1191,6 +1201,74 @@ mod tests {
                 .unwrap()
                 .source_conversation_id,
             second
+        );
+    }
+
+    #[test]
+    fn recording_staged_message_remains_excluded_until_destination_admits_it() {
+        use chatarium_core::local_memory::LocalMemoryId;
+        use chatarium_store::local_memory_audit::{
+            record_local_memory_artifact, replay_local_memory_audit,
+        };
+        use chatarium_store::local_memory_context_audit::{
+            LocalMemoryContextDecision, record_local_memory_context_decision,
+            replay_admitted_local_memory_context,
+        };
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let unrelated = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, source, "preserved source statement");
+
+        let projected = NativeConversationSearchIndex::build(store.events());
+        let staged = stageable_hit(&projected, source, 0).unwrap();
+        let staged_origin =
+            Some((staged.source_conversation_id, staged.source_event_sequence));
+        assert_eq!(
+            recording_source_conversation(destination, staged_origin),
+            source
+        );
+        assert_eq!(
+            recording_source_conversation(destination, None),
+            destination
+        );
+        let memory_id = LocalMemoryId::new(1);
+        record_local_memory_artifact(
+            &mut store,
+            memory_id,
+            recording_source_conversation(destination, staged_origin),
+            staged.text,
+        )
+        .unwrap();
+
+        let artifacts = replay_local_memory_audit(store.events()).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].source_conversation_id, source);
+        assert_eq!(artifacts[0].text, "preserved source statement");
+
+        // Recording a memory is never itself an inference-context admission.
+        assert!(
+            replay_admitted_local_memory_context(store.events(), destination)
+                .unwrap()
+                .is_empty()
+        );
+        record_local_memory_context_decision(
+            &mut store,
+            memory_id,
+            destination,
+            LocalMemoryContextDecision::Admit,
+        )
+        .unwrap();
+        let admitted =
+            replay_admitted_local_memory_context(store.events(), destination).unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].source_conversation_id, source);
+        assert!(
+            replay_admitted_local_memory_context(store.events(), unrelated)
+                .unwrap()
+                .is_empty()
         );
     }
 
