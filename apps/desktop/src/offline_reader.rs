@@ -172,19 +172,67 @@ pub fn inline_segments(text: &str) -> Vec<(String, bool)> {
     segments
 }
 
+/// Return UTF-8 byte ranges into the *original* text, not its lowercase
+/// projection. Unicode lowercase expansion (e.g. İ -> i + combining dot)
+/// changes byte offsets: slicing the original with folded offsets can panic.
+/// Matches touching only part of an expanded character highlight that entire
+/// original character. Searching is read-only and uses no other conversation.
 pub fn search_hits(text: &str, query: &str) -> Vec<(usize, usize)> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return Vec::new();
     }
     let folded = text.to_lowercase();
+    if !folded.contains(&query) {
+        return Vec::new();
+    }
+
+    // ASCII folds preserve byte positions, so keep the common reader path
+    // allocation-free beyond the lowercased search string and hit vector.
+    if text.is_ascii() {
+        let mut hits = Vec::new();
+        let mut from = 0;
+        while let Some(relative) = folded[from..].find(&query) {
+            let start = from + relative;
+            let end = start + query.len();
+            hits.push((start, end));
+            from = end;
+        }
+        return hits;
+    }
+
+    // Each original scalar maps to its extent in the full lowercase string.
+    // Rust's context-sensitive Greek sigma lowering changes a character's
+    // value but not its byte width. Fail closed if widths ever disagree.
+    let mut spans = Vec::new();
+    let mut folded_cursor = 0;
+    for (start, character) in text.char_indices() {
+        let folded_width = character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        let folded_end = folded_cursor + folded_width;
+        spans.push((folded_cursor, folded_end, start, start + character.len_utf8()));
+        folded_cursor = folded_end;
+    }
+    if folded_cursor != folded.len() {
+        return Vec::new();
+    }
+
     let mut hits = Vec::new();
     let mut from = 0;
     while let Some(relative) = folded[from..].find(&query) {
-        let start = from + relative;
-        let end = start + query.len();
-        hits.push((start, end));
-        from = end;
+        let folded_start = from + relative;
+        let folded_end = folded_start + query.len();
+        let first = spans.partition_point(|span| span.1 <= folded_start);
+        let last_exclusive = spans.partition_point(|span| span.0 < folded_end);
+        if let (Some(start), Some(end)) = (
+            spans.get(first).map(|span| span.2),
+            last_exclusive
+                .checked_sub(1)
+                .and_then(|last| spans.get(last))
+                .map(|span| span.3),
+        ) {
+            hits.push((start, end));
+        }
+        from = folded_end;
     }
     hits
 }
@@ -288,6 +336,38 @@ mod tests {
         assert_eq!(search_hits("Alpha alpha", "alpha"), vec![(0, 5), (6, 11)]);
         assert_eq!(next_hit(Some(1), 2, false), Some(0));
         assert_eq!(next_hit(Some(0), 2, true), Some(1));
+    }
+
+    #[test]
+    fn unicode_casefold_search_ranges_are_safe_in_the_original_utf8_text() {
+        // Lowercasing U+0130 expands from one scalar to two; folded byte
+        // offsets no longer correspond to the original reader text.
+        assert_eq!(search_hits("İa", "a"), vec![(2, 3)]);
+        assert_eq!(search_hits("İstanbul", "i"), vec![(0, 2)]);
+        assert_eq!(search_hits("İ İ", "i"), vec![(0, 2), (3, 5)]);
+        assert_eq!(search_hits("xİa🪐Z", "z"), vec![(8, 9)]);
+        assert_eq!(search_hits("ΟΣ", "ος"), vec![(0, 4)]);
+        assert_eq!(search_hits("İ", "\u{307}"), vec![(0, 2)]);
+        assert!(search_hits("İstanbul", "missing").is_empty());
+
+        for (text, query) in [
+            ("İa", "a"),
+            ("İstanbul", "i"),
+            ("İ İ", "i"),
+            ("xİa🪐Z", "z"),
+            ("ΟΣ", "ος"),
+            ("İ", "\u{307}"),
+            ("México niño", "NIÑO"),
+            ("مرحبا بالعالم", "بالعالم"),
+            ("こんにちは", "にち"),
+        ] {
+            for (start, end) in search_hits(text, query) {
+                assert!(
+                    text.get(start..end).is_some(),
+                    "search must return valid original UTF-8 slice: {text:?} / {query:?} / {start}..{end}"
+                );
+            }
+        }
     }
 
     #[test]
