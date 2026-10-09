@@ -58,8 +58,8 @@ pub fn cycle_target(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::local_conversations::LocalConversationCatalog;
+    use super::*;
 
     #[test]
     fn cycle_wraps_both_directions_and_skips_archived_without_restoring() {
@@ -73,10 +73,22 @@ mod tests {
         catalog.set_archived(b, true, 4).unwrap();
         let entries = catalog.entries();
         assert_eq!(cycle_order(&entries), vec![c, a]);
-        assert_eq!(cycle_target(&entries, Some(c), CycleDirection::Forward), Some(a));
-        assert_eq!(cycle_target(&entries, Some(a), CycleDirection::Forward), Some(c));
-        assert_eq!(cycle_target(&entries, Some(a), CycleDirection::Backward), Some(c));
-        assert_eq!(cycle_target(&entries, Some(c), CycleDirection::Backward), Some(a));
+        assert_eq!(
+            cycle_target(&entries, Some(c), CycleDirection::Forward),
+            Some(a)
+        );
+        assert_eq!(
+            cycle_target(&entries, Some(a), CycleDirection::Forward),
+            Some(c)
+        );
+        assert_eq!(
+            cycle_target(&entries, Some(a), CycleDirection::Backward),
+            Some(c)
+        );
+        assert_eq!(
+            cycle_target(&entries, Some(c), CycleDirection::Backward),
+            Some(a)
+        );
         assert!(catalog.entry(b).unwrap().archived);
     }
 
@@ -109,7 +121,10 @@ mod tests {
         catalog.create(older, 1);
         catalog.create(newer, 2);
         for direction in [CycleDirection::Forward, CycleDirection::Backward] {
-            assert_eq!(cycle_target(&catalog.entries(), None, direction), Some(newer));
+            assert_eq!(
+                cycle_target(&catalog.entries(), None, direction),
+                Some(newer)
+            );
             assert_eq!(
                 cycle_target(&catalog.entries(), Some(foreign), direction),
                 Some(newer)
@@ -121,12 +136,24 @@ mod tests {
     fn zero_or_one_unarchived_chat_never_switches_to_self() {
         let first = LocalConversationId::new();
         let mut catalog = LocalConversationCatalog::default();
-        assert_eq!(cycle_target(&catalog.entries(), None, CycleDirection::Forward), None);
+        assert_eq!(
+            cycle_target(&catalog.entries(), None, CycleDirection::Forward),
+            None
+        );
         catalog.create(first, 1);
-        assert_eq!(cycle_target(&catalog.entries(), Some(first), CycleDirection::Forward), None);
-        assert_eq!(cycle_target(&catalog.entries(), None, CycleDirection::Forward), Some(first));
+        assert_eq!(
+            cycle_target(&catalog.entries(), Some(first), CycleDirection::Forward),
+            None
+        );
+        assert_eq!(
+            cycle_target(&catalog.entries(), None, CycleDirection::Forward),
+            Some(first)
+        );
         catalog.set_archived(first, true, 2).unwrap();
-        assert_eq!(cycle_target(&catalog.entries(), Some(first), CycleDirection::Backward), None);
+        assert_eq!(
+            cycle_target(&catalog.entries(), Some(first), CycleDirection::Backward),
+            None
+        );
     }
 
     #[test]
@@ -138,7 +165,9 @@ mod tests {
         catalog.create(b, 1);
         let before = cycle_order(&catalog.entries());
         assert_eq!(before.len(), 2);
-        catalog.rename(a, Some("Different title".to_owned()), 5).unwrap();
+        catalog
+            .rename(a, Some("Different title".to_owned()), 5)
+            .unwrap();
         catalog.set_active(b, 8).unwrap();
         assert_eq!(cycle_order(&catalog.entries()), before);
     }

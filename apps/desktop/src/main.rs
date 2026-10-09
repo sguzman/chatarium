@@ -6053,18 +6053,17 @@ impl eframe::App for ChatariumApp {
                 && modifiers.shift
                 && !modifiers.alt
                 && input.consume_key(modifiers, egui::Key::N);
-            let cycle = if modifiers.ctrl
-                && !modifiers.alt
-                && input.consume_key(modifiers, egui::Key::Tab)
-            {
-                Some(if modifiers.shift {
-                    conversation_navigation::CycleDirection::Backward
+            let cycle =
+                if modifiers.ctrl && !modifiers.alt && input.consume_key(modifiers, egui::Key::Tab)
+                {
+                    Some(if modifiers.shift {
+                        conversation_navigation::CycleDirection::Backward
+                    } else {
+                        conversation_navigation::CycleDirection::Forward
+                    })
                 } else {
-                    conversation_navigation::CycleDirection::Forward
-                })
-            } else {
-                None
-            };
+                    None
+                };
             (new_chat, cycle)
         });
         if new_chat_shortcut {
