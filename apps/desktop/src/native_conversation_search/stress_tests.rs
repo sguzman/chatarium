@@ -73,16 +73,27 @@ fn cold_projection_preserves_out_of_order_assistant_ownership_and_chronology() {
     let visible = indexed.messages(owner);
     assert_eq!(visible.len(), 2);
     assert_eq!(
-        visible.iter().map(|message| message.text.as_str()).collect::<Vec<_>>(),
+        visible
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
         vec!["final assistant reply", "authored later"]
     );
     assert_eq!(
-        visible.iter().map(|message| message.sequence).collect::<Vec<_>>(),
-        expected.iter().map(|message| message.sequence).collect::<Vec<_>>()
+        visible
+            .iter()
+            .map(|message| message.sequence)
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|message| message.sequence)
+            .collect::<Vec<_>>()
     );
-    assert!(visible.iter().all(|message| {
-        !message.text.contains("PRIVATE")
-    }));
+    assert!(
+        visible
+            .iter()
+            .all(|message| { !message.text.contains("PRIVATE") })
+    );
     assert_eq!(indexed.messages(unrelated).len(), 1);
 }
 
