@@ -1385,7 +1385,6 @@ mod tests {
         assert_eq!(row.kind, NativeSearchMatch::Title);
         assert!(row.matching_message_indices.is_empty());
         assert_eq!(selected_message_index(row, 0), None);
-
     }
 
     #[test]
