@@ -349,6 +349,9 @@ pub fn cached_rows(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct JournalRevision {
     event_count: usize,
+    // A separately loaded equal-length archive must not inherit cached
+    // projections solely because its first/last event metadata is identical.
+    source_buffer_addr: usize,
     first_sequence: Option<u64>,
     last_sequence: Option<u64>,
     last_scope: Option<String>,
@@ -363,6 +366,9 @@ struct JournalRevision {
 // payload byte length while changing visible conversation text. Fingerprint
 // the boundary event rather than trusting its size alone. The fingerprint is
 // a cache invalidation hint, not a cryptographic journal integrity check.
+// Record the backing-slice address as a second cheap identity hint: a newly
+// loaded equal-length journal with a changed interior may have the same tail.
+// Authoritative event contents remain immutable under ordinary append-only use.
 fn payload_fingerprint(event: &EventEnvelope) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     event.payload.hash(&mut hasher);
@@ -373,6 +379,7 @@ impl JournalRevision {
     fn capture(events: &[EventEnvelope]) -> Self {
         Self {
             event_count: events.len(),
+            source_buffer_addr: events.as_ptr() as usize,
             first_sequence: events.first().map(|event| event.sequence),
             last_sequence: events.last().map(|event| event.sequence),
             last_scope: events.last().and_then(|event| event.scope.clone()),
@@ -384,7 +391,10 @@ impl JournalRevision {
     }
 
     fn is_append_only_prefix_of(&self, events: &[EventEnvelope]) -> bool {
-        if events.len() < self.event_count {
+        // Equal-length snapshots are handled by exact revision equality.
+        // If that equality failed (e.g. a new archive backing allocation),
+        // there is no journal suffix to incrementally replay.
+        if events.len() <= self.event_count {
             return false;
         }
         if self.event_count == 0 {
@@ -1129,6 +1139,47 @@ mod tests {
         assert!(!Arc::ptr_eq(&original, &refreshed));
         assert_eq!(refreshed.messages(owner)[0].text, "other");
         assert!(Arc::ptr_eq(&refreshed, &cached_index(&ctx, &replaced)));
+    }
+
+    #[test]
+    fn equal_length_replaced_archive_with_same_tail_rebuilds_native_search() {
+        use super::super::local_conversations::LocalConversationCatalog;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let owner = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, owner, "unchanged first");
+        author(&mut store, owner, "interior old");
+        author(&mut store, owner, "unchanged tail");
+
+        let cached = cached_index(&ctx, store.events());
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(owner, 1);
+        catalog
+            .rename(owner, Some("Neutral title".to_owned()), 2)
+            .unwrap();
+        let entries = catalog.entries();
+        assert_eq!(cached_rows(&ctx, &cached, &entries, false, "old").len(), 1);
+
+        // Preserve event count, first/last envelopes and replacement size.
+        // Only the interior of a separately allocated journal is different.
+        let mut swapped = store.events().to_vec();
+        let original = swapped[1].payload.clone();
+        swapped[1].payload = original.replacen("interior old", "interior new", 1);
+        assert_ne!(swapped[1].payload, original);
+        assert_eq!(swapped[1].payload.len(), original.len());
+        assert_eq!(swapped.first(), store.events().first());
+        assert_eq!(swapped.last(), store.events().last());
+
+        let rebuilt = cached_index(&ctx, &swapped);
+        assert!(!Arc::ptr_eq(&cached, &rebuilt));
+        assert_eq!(rebuilt.messages(owner)[1].text, "interior new");
+        assert!(cached_rows(&ctx, &rebuilt, &entries, false, "old").is_empty());
+        let updated = cached_rows(&ctx, &rebuilt, &entries, false, "new");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].message_index, Some(1));
+        assert!(Arc::ptr_eq(&rebuilt, &cached_index(&ctx, &swapped)));
     }
 
     #[test]

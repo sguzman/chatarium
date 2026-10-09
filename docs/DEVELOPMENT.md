@@ -54,7 +54,10 @@ An authored user message or assistant snapshot/completion incrementally
 reprojects the affected native conversation. Unaffected conversation message
 vectors remain shared; malformed or contradictory authorship falls back to a
 full authoritative rebuild. A replaced/truncated journal prefix is not
-eligible for append-only reuse. Conversation titles
+eligible for append-only reuse. An equal-length newly loaded journal
+also invalidates transient search caches when its backing storage differs,
+even if its last recorded event is unchanged. This is a cheap cache identity
+check, not a substitute for journal integrity validation. Conversation titles
 remain owned by the local catalog; the index is rebuildable and contains
 no separate authoritative database, persisted search query, or background
 provider requests. A regression test compares indexed messages with the
@@ -71,8 +74,8 @@ length; the excerpt uses original-character boundaries so accented and
 multilingual searches never slice invalid UTF-8. No raw tool result or
 remote-mirror content is searched or surfaced through this control.
 Opening a native message hit, by mouse or Enter, passes the exact trimmed
-search query to the existing transcript reader and selects the first hit so
-the matching bubble scrolls into view. A title-only match never fabricates
+search query to the transcript reader and targets the explicitly selected
+matching message. A title-only match never fabricates
 a transcript hit. The handoff is local UI state, not an additional
 inference-context admission or durable mutation.
 
