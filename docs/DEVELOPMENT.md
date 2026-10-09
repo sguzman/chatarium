@@ -216,7 +216,12 @@ durable user/assistant observations advance, reusing it across unrelated
 draft, MCP tool and lifecycle journal appends. Rebuilds borrow relevant journal
 events rather than cloning each raw event payload into a temporary per-chat
 event list; the projection still owns its visible text and remains independent
-of the journal's subsequent growth.
+of the journal's subsequent growth. When the journal appends only assistant
+snapshots/completions for previously known native turns, a bounded incremental
+projection rebuilds the affected conversation(s) and reuses every other
+conversation's projected message Arc. New authored turns and unknown scopes
+fall back to complete projection. Tests compare incremental output with a
+fresh full rebuild and check cross-conversation isolation.
 
 This is a derived, transient performance optimization, not a new source of
 truth. The append-only journal remains authoritative. Regression coverage in

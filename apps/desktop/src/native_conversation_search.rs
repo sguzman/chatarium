@@ -10,7 +10,7 @@ use chatarium_store::authored::{
     DecodedUserMessageCommit, decode_user_message_commit, local_turn_scope,
 };
 use eframe::egui;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -252,7 +252,11 @@ impl JournalRevision {
 #[derive(Debug, Clone)]
 pub struct NativeConversationSearchIndex {
     revision: JournalRevision,
-    messages: BTreeMap<LocalConversationId, Vec<DisplayMessage>>,
+    // Arc values allow a newly streamed assistant snapshot to reuse every
+    // other conversation's projected message bodies without cloning them.
+    messages: BTreeMap<LocalConversationId, Arc<Vec<DisplayMessage>>>,
+    owners: Arc<BTreeMap<String, LocalConversationId>>,
+    event_positions: BTreeMap<LocalConversationId, Arc<Vec<usize>>>,
 }
 
 impl NativeConversationSearchIndex {
@@ -269,9 +273,8 @@ impl NativeConversationSearchIndex {
             }
         }
 
-        let mut by_conversation: BTreeMap<LocalConversationId, Vec<&EventEnvelope>> =
-            BTreeMap::new();
-        for event in events {
+        let mut by_conversation: BTreeMap<LocalConversationId, Vec<usize>> = BTreeMap::new();
+        for (position, event) in events.iter().enumerate() {
             let owner = match event.kind {
                 EventKind::UserMessageCommitted => match decode_user_message_commit(event) {
                     Ok(Some(DecodedUserMessageCommit::Typed(message))) => {
@@ -289,24 +292,78 @@ impl NativeConversationSearchIndex {
                 _ => None,
             };
             if let Some(owner) = owner {
-                by_conversation.entry(owner).or_default().push(event);
+                by_conversation.entry(owner).or_default().push(position);
             }
         }
 
-        let messages = by_conversation
-            .into_iter()
-            .map(|(owner, own_events)| (owner, projected_display_messages_iter(own_events)))
-            .collect();
+        let mut messages = BTreeMap::new();
+        let mut event_positions = BTreeMap::new();
+        for (owner, positions) in by_conversation {
+            let visible = projected_display_messages_iter(
+                positions.iter().map(|position| &events[*position]),
+            );
+            messages.insert(owner, Arc::new(visible));
+            event_positions.insert(owner, Arc::new(positions));
+        }
         Self {
             revision: JournalRevision::capture(events),
             messages,
+            owners: Arc::new(owners),
+            event_positions,
         }
+    }
+
+    /// Extend the derived projection when only known native assistant scopes
+    /// receive new snapshots or completions. New authored turns, unrecognized
+    /// scopes and any replaced journal prefix must use the full rebuild.
+    /// All unaffected conversation vectors are shared, not recopied.
+    fn extend_known_assistant_appends(
+        &self,
+        events: &[EventEnvelope],
+        first_new_position: usize,
+    ) -> Option<Self> {
+        let mut positions = self.event_positions.clone();
+        let mut touched = BTreeSet::new();
+        for (position, event) in events.iter().enumerate().skip(first_new_position) {
+            match event.kind {
+                EventKind::UserMessageCommitted => return None,
+                EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => {
+                    let owner = *event
+                        .scope
+                        .as_deref()
+                        .and_then(|scope| self.owners.get(scope))?;
+                    Arc::make_mut(
+                        positions
+                            .entry(owner)
+                            .or_insert_with(|| Arc::new(Vec::new())),
+                    )
+                    .push(position);
+                    touched.insert(owner);
+                }
+                _ => {}
+            }
+        }
+
+        let mut messages = self.messages.clone();
+        for owner in touched {
+            let owned_positions = positions.get(&owner)?;
+            let visible = projected_display_messages_iter(
+                owned_positions.iter().map(|position| &events[*position]),
+            );
+            messages.insert(owner, Arc::new(visible));
+        }
+        Some(Self {
+            revision: JournalRevision::capture(events),
+            messages,
+            owners: Arc::clone(&self.owners),
+            event_positions: positions,
+        })
     }
 
     pub fn messages(&self, conversation_id: LocalConversationId) -> &[DisplayMessage] {
         self.messages
             .get(&conversation_id)
-            .map(Vec::as_slice)
+            .map(|messages| messages.as_slice())
             .unwrap_or(&[])
     }
 
@@ -314,7 +371,6 @@ impl NativeConversationSearchIndex {
         self.revision == JournalRevision::capture(events)
     }
 }
-
 /// The indexed search corpus only depends on native authored messages and
 /// their matching assistant snapshot/completion observations. Draft writes,
 /// tool events and controller state may advance the append-only journal
@@ -347,15 +403,33 @@ pub fn cached_index(
         if cache.observed == now {
             return cache.index;
         }
-        if cache.observed.is_append_only_prefix_of(events)
-            && events[cache.observed.event_count..]
+        if cache.observed.is_append_only_prefix_of(events) {
+            let first_new_position = cache.observed.event_count;
+            if events[first_new_position..]
                 .iter()
                 .all(|event| !changes_native_messages(event.kind))
-        {
-            cache.observed = now;
-            let reused = Arc::clone(&cache.index);
-            ctx.data_mut(|data| data.insert_temp(id, cache));
-            return reused;
+            {
+                cache.observed = now;
+                let reused = Arc::clone(&cache.index);
+                ctx.data_mut(|data| data.insert_temp(id, cache));
+                return reused;
+            }
+            if let Some(extended) = cache
+                .index
+                .extend_known_assistant_appends(events, first_new_position)
+            {
+                let index = Arc::new(extended);
+                ctx.data_mut(|data| {
+                    data.insert_temp(
+                        id,
+                        NativeSearchCache {
+                            observed: now,
+                            index: Arc::clone(&index),
+                        },
+                    )
+                });
+                return index;
+            }
         }
     }
     let index = Arc::new(NativeConversationSearchIndex::build(events));
@@ -599,6 +673,67 @@ mod tests {
         let fresh = cached_rows(&ctx, &advanced_index, &archived_entries, false, "rust");
         assert_eq!(fresh.len(), 1);
         assert_eq!(archived_entries[fresh[0].catalog_index].id, second);
+    }
+
+    #[test]
+    fn streaming_assistant_updates_only_reproject_the_owned_conversation() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let first_turn = author(&mut store, first, "First conversation");
+        author(&mut store, second, "Second private conversation");
+
+        let initial = cached_index(&ctx, store.events());
+        let other_messages = initial.messages.get(&second).unwrap();
+
+        for (kind, text) in [
+            (EventKind::AssistantSnapshotObserved, "partial reply"),
+            (EventKind::AssistantCompletionObserved, "completed reply"),
+        ] {
+            store
+                .append_scoped(
+                    Some(local_turn_scope(first_turn)),
+                    kind,
+                    serde_json::json!({
+                        "schema": "chatarium-responses-turn-observation",
+                        "version": 1,
+                        "text": text,
+                        "details": {
+                            "local_turn_id": first_turn.to_string(),
+                            "request_id": first_turn.to_string(),
+                        }
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+            let current = cached_index(&ctx, store.events());
+            let full = NativeConversationSearchIndex::build(store.events());
+            for owner in [first, second] {
+                assert_eq!(current.messages(owner), full.messages(owner));
+            }
+            assert!(Arc::ptr_eq(
+                other_messages,
+                current.messages.get(&second).unwrap()
+            ));
+            assert!(!current.messages(first).iter().any(|m| m.text.contains("private")));
+            assert!(current.messages(first).iter().any(|m| m.text == text));
+        }
+
+        // A newly authored native turn changes the ownership directory;
+        // incremental assistant-only replay must then fall back to a rebuild.
+        author(&mut store, first, "A new turn");
+        let after_user = cached_index(&ctx, store.events());
+        assert_eq!(
+            after_user.messages(first),
+            NativeConversationSearchIndex::build(store.events()).messages(first)
+        );
+        assert!(!Arc::ptr_eq(
+            other_messages,
+            after_user.messages.get(&second).unwrap()
+        ));
     }
 
     #[test]
