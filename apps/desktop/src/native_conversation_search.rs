@@ -795,7 +795,11 @@ mod tests {
             .map(|index| {
                 let owner = LocalConversationId::new();
                 for message in 0..4 {
-                    author(&mut store, owner, &format!("archive {index} entry {message}"));
+                    author(
+                        &mut store,
+                        owner,
+                        &format!("archive {index} entry {message}"),
+                    );
                 }
                 owner
             })
@@ -910,8 +914,14 @@ mod tests {
         let actual = extended.messages(owner);
         assert_eq!(actual.len(), expected.len());
         assert_eq!(
-            actual.iter().map(|message| message.text.as_str()).collect::<Vec<_>>(),
-            expected.iter().map(|message| message.text.as_str()).collect::<Vec<_>>()
+            actual
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()
         );
         assert!(Arc::ptr_eq(
             original.messages.get(&other).unwrap(),
