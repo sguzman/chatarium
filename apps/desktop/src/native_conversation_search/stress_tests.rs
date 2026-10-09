@@ -1,18 +1,13 @@
 //! Synthetic stress workloads for native-only, provenance-preserving search.
 //! This module exercises correctness at archive scale, not wall-clock budgets.
 
-use super::*;
 use super::super::local_conversations::LocalConversationCatalog;
+use super::*;
 use chatarium_core::{AuthoredUserMessage, LocalMessageId, LocalTurnId};
 use chatarium_store::{EventStore, MemoryEventStore};
 
 fn author(store: &mut impl EventStore, owner: LocalConversationId, text: &str) {
-    let authored = AuthoredUserMessage::new(
-        owner,
-        LocalTurnId::new(),
-        LocalMessageId::new(),
-        text,
-    );
+    let authored = AuthoredUserMessage::new(owner, LocalTurnId::new(), LocalMessageId::new(), text);
     chatarium_store::authored::commit_user_message(store, &authored).unwrap();
 }
 
@@ -81,9 +76,8 @@ fn wide_archive_search_keeps_owner_boundaries_and_incremental_reuse() {
         cached_rows(&ctx, &original, &entries, true, "search-pin").len(),
         48,
     );
-    assert!(
-        cached_rows(&ctx, &original, &entries, false, "NEVER_INDEX_TOOL_BODY").is_empty(),
-    );
+    let excluded = cached_rows(&ctx, &original, &entries, false, "NEVER_INDEX_TOOL_BODY");
+    assert!(excluded.is_empty());
 
     // Draft events advance the journal cursor without projecting messages.
     store
@@ -170,7 +164,11 @@ fn deep_archive_search_tracks_individual_hits_without_cloning_bodies() {
         Some(expected.len() - 1),
     );
     let staged = stageable_hit(&index, owner, last).unwrap();
-    assert!(staged.text.starts_with(&format!("dense-needle message {last}")));
+    assert!(
+        staged
+            .text
+            .starts_with(&format!("dense-needle message {last}"))
+    );
     assert!(Arc::ptr_eq(
         &rows,
         &cached_rows(&ctx, &index, &entries, false, "dense-needle"),
