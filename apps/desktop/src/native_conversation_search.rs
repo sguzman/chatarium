@@ -1220,7 +1220,11 @@ mod tests {
         let source = LocalConversationId::new();
         let foreign = LocalConversationId::new();
         let mut store = MemoryEventStore::default();
-        author(&mut store, source, "Reusable statement from the first message");
+        author(
+            &mut store,
+            source,
+            "Reusable statement from the first message",
+        );
         author(&mut store, foreign, "PRIVATE FOREIGN MESSAGE");
 
         let mut catalog = LocalConversationCatalog::default();
@@ -1252,7 +1256,9 @@ mod tests {
         );
 
         // A custom title alone must never fabricate a message to copy or stage.
-        catalog.rename(source, Some("Title-only keyword".to_owned()), 3).unwrap();
+        catalog
+            .rename(source, Some("Title-only keyword".to_owned()), 3)
+            .unwrap();
         let renamed = catalog.entries();
         let title_only = cached_rows(&ctx, &index, &renamed, false, "keyword");
         assert_eq!(title_only.len(), 1);
