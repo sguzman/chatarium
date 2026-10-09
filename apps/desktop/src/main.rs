@@ -6051,9 +6051,7 @@ impl eframe::App for ChatariumApp {
         // submitting its draft. Mirrored/remote history has no local editor.
         let focus_native_composer =
             conversation_keybindings::may_focus_native_composer(!historical_mode)
-                && ctx.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::CTRL, egui::Key::L)
-                });
+                && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::L));
 
         // Native chat navigation is an intentional global shortcut, unlike
         // reader Home/End keys that belong to a focused text editor. Consume
