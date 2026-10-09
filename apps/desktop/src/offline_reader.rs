@@ -209,7 +209,12 @@ pub fn search_hits(text: &str, query: &str) -> Vec<(usize, usize)> {
     for (start, character) in text.char_indices() {
         let folded_width = character.to_lowercase().map(char::len_utf8).sum::<usize>();
         let folded_end = folded_cursor + folded_width;
-        spans.push((folded_cursor, folded_end, start, start + character.len_utf8()));
+        spans.push((
+            folded_cursor,
+            folded_end,
+            start,
+            start + character.len_utf8(),
+        ));
         folded_cursor = folded_end;
     }
     if folded_cursor != folded.len() {
