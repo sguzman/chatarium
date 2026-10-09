@@ -624,6 +624,10 @@ mod tests {
         let mut catalog = LocalConversationCatalog::default();
         catalog.create(first, 1);
         catalog.create(second, 2);
+        // Neutral catalog titles ensure the initial hits come from message
+        // bodies; derived titles would correctly take precedence otherwise.
+        catalog.rename(first, Some("One".to_owned()), 1).unwrap();
+        catalog.rename(second, Some("Two".to_owned()), 2).unwrap();
 
         let mut store = MemoryEventStore::default();
         author(&mut store, first, "Rust renderer");
