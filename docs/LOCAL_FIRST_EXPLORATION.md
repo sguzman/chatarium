@@ -97,11 +97,28 @@ The native workspace supports a stable, keyboard-driven chat cycle:
 **Ctrl+Shift+N** creates a local conversation and focuses its composer;
 **Ctrl+Tab** and **Ctrl+Shift+Tab** navigate unarchived native chats in
 newest-created order. The cycle does not drift when selecting a chat updates
-its last-accessed timestamp. Creating a new chat clears the previous native
-search filter so the empty chat is not hidden immediately. Existing in-flight
+its last-accessed timestamp. Creating a new chat or cycling to a different
+chat clears the previous native search filter so the active chat remains
+visible in the sidebar. Existing in-flight
 turn constraints remain authoritative: a new chat or switch does not interrupt
 or relocate a pending inference request. Archived conversations stay
 excluded until explicitly restored.
+
+### Explicit native transcript copies
+
+The native sidebar offers **Copy Markdown** and **Copy JSON** for the selected
+local conversation. Both are deliberate clipboard actions only; they never
+automatically export anything, save an external file or update other chats.
+They use the exact native visible-message projection: user and assistant
+content only, not tool responses, memory bodies, raw account history,
+draft WAL, or unselected conversations.
+
+Markdown is a readable role-separated representation with each message
+blockquoted to preserve the distinction between real speaker headings and
+headings authored inside a message. JSON retains exact text, role, local
+conversation ID, and durable event sequence in a versioned structural
+envelope. Both label their limited scope: an in-flight streamed response
+may be partial, and neither format is a replacement for a journal backup.
 
 ## Current control surface vs. ChatGPT website
 

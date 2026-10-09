@@ -186,8 +186,9 @@ new chat remains visible. **Ctrl+Tab** switches to the next unarchived
 native conversation; **Ctrl+Shift+Tab** switches in the other direction.
 The cyclic order is newest-created first, independent of last-opened timestamps
 or mutable titles, so repeated shortcut presses walk every chat instead of
-oscillating between recent ones. Archived conversations are never restored
-implicitly by cycling. When viewing a remote mirror, the first switch opens
+oscillating between recent ones. Cycling clears any stale native search
+filter after a successful switch so the active row is visible. Archived
+conversations are never restored implicitly by cycling. When viewing a remote mirror, the first switch opens
 the newest available native chat.
 
 These shortcuts call the same existing persistence-backed create/select
@@ -196,6 +197,23 @@ or creation; no draft, model state or tool permissions are moved between
 conversations. Cycling decisions are pure/tested in
 `apps/desktop/src/conversation_navigation.rs`. Keyboard-focus behavior in
 the actual Wayland window remains an interactive QA concern.
+
+### Native visible transcript export
+
+The selected **native** conversation can be explicitly copied as readable
+Markdown or versioned structured JSON from the local sidebar. JSON preserves
+exact message whitespace and immutable event sequence; Markdown blockquotes
+message bodies so user-supplied headings cannot impersonate Chatarium's role
+headers. The caller passes only its current
+`projected_local_display_messages` result. Tool results, memory artifacts,
+draft WAL, foreign conversations and imported read-only mirrors are not
+automatically included.
+
+The clipboard action is user-triggered, produces no new journal events, and
+does not silently create a file. An observed, in-progress assistant stream
+may be partial. This is a convenient portable copy, **not** a data backup or
+verified remote transcript. Pure serializer and conversation-isolation
+tests live in `apps/desktop/src/native_transcript_export.rs`.
 
 ### Keyboard focus ownership
 

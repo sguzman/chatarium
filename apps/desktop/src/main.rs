@@ -24,6 +24,7 @@ mod mcp_output_audit;
 mod mcp_provider_workflow;
 mod mcp_result_review;
 mod native_conversation_search;
+mod native_transcript_export;
 mod offline_reader;
 mod siwc_bridge;
 
@@ -6002,6 +6003,7 @@ impl eframe::App for ChatariumApp {
             });
         let mut select_local_requested: Option<LocalConversationId> = None;
         let mut create_local_requested = false;
+        let mut cycle_from_keyboard = false;
         let mut visible_native_search_matches = 0_usize;
         let mut native_search_matches = Vec::<LocalConversationId>::new();
         let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
@@ -6075,6 +6077,7 @@ impl eframe::App for ChatariumApp {
                 current,
                 direction,
             );
+            cycle_from_keyboard = select_local_requested.is_some();
         }
 
         egui::SidePanel::left("sidebar")
@@ -6415,6 +6418,49 @@ impl eframe::App for ChatariumApp {
                             if ui.button("Archive local conversation").clicked() {
                                 archive_local_requested = true;
                             }
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Copy Markdown").clicked() {
+                                    ctx.copy_text(native_transcript_export::markdown(
+                                        self.local_conversation_id,
+                                        &local_conversation_title,
+                                        &local_display_messages,
+                                    ));
+                                    self.status = format!(
+                                        "copied {} visible native messages as Markdown",
+                                        local_display_messages.len(),
+                                    );
+                                }
+                                if ui.button("Copy JSON").clicked() {
+                                    match serde_json::to_string_pretty(
+                                        &native_transcript_export::json_value(
+                                            self.local_conversation_id,
+                                            &local_conversation_title,
+                                            &local_display_messages,
+                                        ),
+                                    ) {
+                                        Ok(export) => {
+                                            ctx.copy_text(export);
+                                            self.status = format!(
+                                                "copied {} visible native messages as JSON",
+                                                local_display_messages.len(),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            self.status = format!(
+                                                "cannot format visible transcript export: {error}",
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                            ui.label(
+                                egui::RichText::new(
+                                    "Explicit clipboard export · visible chat only, not an archive backup.",
+                                )
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
                         }
 
                         if !self.remote_conversation_catalog.is_empty() {
@@ -7199,6 +7245,12 @@ impl eframe::App for ChatariumApp {
         } else if let Some(local_conversation_id) = select_local_requested {
             let can_switch = !self.local_conversation_busy();
             self.activate_local_conversation(local_conversation_id);
+            if cycle_from_keyboard && can_switch && self.local_conversation_id == local_conversation_id {
+                // Keyboard cycling can target a chat outside the previous
+                // search filter; keep the activated row visible.
+                self.local_conversation_search_query.clear();
+                self.local_conversation_search_selection = None;
+            }
             if can_switch
                 && self.local_conversation_id == local_conversation_id
                 && !self.local_conversation_search_query.trim().is_empty()
