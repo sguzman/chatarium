@@ -7311,10 +7311,8 @@ impl eframe::App for ChatariumApp {
                 let row_index = self.local_conversation_search_selection.unwrap_or(0);
                 if let Some(row) = rows.get(row_index) {
                     let conversation_id = native_entries[row.catalog_index].id;
-                    let choice_id =
-                        egui::Id::new(("chatarium-native-hit-choice", conversation_id));
-                    let prior = ctx
-                        .data_mut(|data| data.get_temp::<(String, usize)>(choice_id));
+                    let choice_id = egui::Id::new(("chatarium-native-hit-choice", conversation_id));
+                    let prior = ctx.data_mut(|data| data.get_temp::<(String, usize)>(choice_id));
                     let ordinal = prior
                         .filter(|(query, _)| query == &self.local_conversation_search_query)
                         .map(|(_, ordinal)| ordinal)
