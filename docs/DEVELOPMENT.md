@@ -93,6 +93,23 @@ memory benchmarks against a real account archive. They do not access user
 data, launch providers or require manual QA. Real-world responsiveness and
 peak-memory measurements remain a separate validation task.
 
+## Opt-in synthetic native search profile
+
+Linux CI runs one isolated, ignored Rust test named
+`native_search_perf_profile` after the desktop correctness tests. It
+generates **16,384 synthetic typed user messages**, runs a cold native
+journal projection, first-query search, repeated identical cached queries,
+query edits, draft-only journal append and one native message append. The
+test prints a `CHATARIUM_SEARCH_PROFILE` JSON line containing timings,
+result counts, and Linux process RSS samples where available.
+
+The measurements use a shared hosted runner in a **debug** build. They
+are observations, **not** stable latency thresholds, release-build
+guarantees, real user archive measurements or isolated heap accounting.
+No pass/fail threshold is imposed on timing or resident memory; core
+correctness remains covered by the ordinary tests. The fixture never
+reads imported or personal conversations and does not execute providers.
+
 ## Automated QA ownership
 
 For browser-facing and integration work, Codex owns the complete local QA/debug/Git loop. The principal is not a manual regression runner. Use the Playwright-managed bundled Chromium QA browser with persistent state at `~/.local/share/chatarium-qa-browser/`; do not automate the principal's normal Edge installation. Follow [Codex-owned QA workstation](CODEX_QA_WORKSTATION.md) plus [Human QA protocol](HUMAN_QA.md).

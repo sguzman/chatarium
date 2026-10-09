@@ -80,6 +80,8 @@ jobs:
         run: cargo check -p chatarium-desktop
       - name: Test Linux desktop
         run: cargo test -p chatarium-desktop
+      - name: Profile native archive search (synthetic, non-gating)
+        run: cargo test -p chatarium-desktop --bin chatarium-desktop native_search_perf_profile -- --ignored --nocapture
       - name: Native conversation-to-tool-to-followup journey
         run: cargo test -p chatarium-desktop --bin chatarium-desktop integration_journey_ -- --nocapture
       - name: Test Linux stdio tool safety
