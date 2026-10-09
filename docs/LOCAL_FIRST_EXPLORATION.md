@@ -91,6 +91,15 @@ Per-conversation state is isolated unless an explicit higher-level Chatarium fea
 
 This rule is especially important for future master/worker behavior: cross-session communication should be visible, attributable, durable, and policy-controlled rather than emerging from accidental shared hidden context.
 
+### Shared native message rendering
+
+The active native reader reuses the same cached local-message projection as
+native conversation search. It no longer rescans the entire durable journal
+or clones the selected transcript every redraw. Relevant new
+user/assistant journal observations invalidate that projection, while
+unrelated draft, tool and controller events can reuse it. The underlying
+append-only journal and conversation ownership boundaries remain unchanged.
+
 ### Native conversation navigation
 
 The native workspace supports a stable, keyboard-driven chat cycle:

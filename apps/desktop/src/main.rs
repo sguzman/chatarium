@@ -5958,16 +5958,17 @@ impl eframe::App for ChatariumApp {
         self.process_mirror_controller_notices();
         self.process_live_mirror_fetch_notices();
         self.process_remote_notices();
-        let local_display_messages =
-            projected_local_display_messages(&self.events, self.local_conversation_id);
-        // Rebuild the owned native-chat search corpus once per durable journal
-        // revision, never once per conversation on every egui redraw.
+        // Search and the active chat reader share the same cached native
+        // message corpus. Avoid an extra full-journal scan and a clone of
+        // every visible transcript message on each egui redraw.
         let native_search_index = native_conversation_search::cached_index(ctx, &self.events);
-        let local_conversation_title = local_conversation_display_title(
-            &self.local_conversation_catalog,
-            self.local_conversation_id,
-            &self.events,
-        );
+        let local_display_messages = native_search_index.messages(self.local_conversation_id);
+        let local_conversation_title = self
+            .local_conversation_catalog
+            .entry(self.local_conversation_id)
+            .and_then(|entry| entry.title.clone())
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| derived_conversation_title(local_display_messages));
         let remote_catalog_selected = self.selected_remote_catalog_id.is_some();
         let historical_mode =
             self.selected_historical_conversation.is_some() || remote_catalog_selected;

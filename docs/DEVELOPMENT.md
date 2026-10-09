@@ -198,6 +198,23 @@ conversations. Cycling decisions are pure/tested in
 `apps/desktop/src/conversation_navigation.rs`. Keyboard-focus behavior in
 the actual Wayland window remains an interactive QA concern.
 
+### Shared native transcript projection
+
+The local conversation reader and the sidebar now borrow the same
+`native_conversation_search::cached_index` projection for visible native
+user/assistant messages. Previously the reader separately scanned the entire
+journal and cloned all current conversation message text on every egui frame
+even when nothing changed. The shared index is rebuilt only when relevant
+durable user/assistant observations advance, reusing it across unrelated
+draft, MCP tool and lifecycle journal appends.
+
+This is a derived, transient performance optimization, not a new source of
+truth. The append-only journal remains authoritative. Regression coverage in
+`native_conversation_search.rs` compares cached messages with the original
+per-conversation display projection, including assistant snapshots, completion,
+and foreign-conversation isolation. Indexing never admits tool output as
+chat text.
+
 ### Native visible transcript export
 
 The selected **native** conversation can be explicitly copied as readable
