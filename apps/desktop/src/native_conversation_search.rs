@@ -426,43 +426,51 @@ pub struct NativeConversationSearchIndex {
 impl NativeConversationSearchIndex {
     pub fn build(events: &[EventEnvelope]) -> Self {
         let mut owners = BTreeMap::new();
-        for event in events {
+        let mut by_conversation: BTreeMap<LocalConversationId, Vec<usize>> = BTreeMap::new();
+
+        // Typed user messages establish turn ownership and their own search
+        // positions in the same decoding pass. Parsing these envelopes again
+        // in the second pass made large authored archives needlessly expensive.
+        for (position, event) in events.iter().enumerate() {
             if let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
                 decode_user_message_commit(event)
             {
                 // Only typed authored user turns establish a conversation's
-                // native assistant scope. The tool and controller journals
-                // never become native searchable message bodies.
+                // native assistant scope. Tool, controller, and legacy
+                // payloads must never become native searchable messages.
                 owners.insert(local_turn_scope(message.turn_id), message.conversation_id);
+                by_conversation
+                    .entry(message.conversation_id)
+                    .or_default()
+                    .push(position);
             }
         }
 
-        let mut by_conversation: BTreeMap<LocalConversationId, Vec<usize>> = BTreeMap::new();
+        // Resolve assistant observations after all typed owners are known:
+        // historical journals may contain observations ahead of authorship.
+        // Their positions are merged and sorted before applying the existing
+        // chronological display-message deduplication rules.
         for (position, event) in events.iter().enumerate() {
-            let owner = match event.kind {
-                EventKind::UserMessageCommitted => match decode_user_message_commit(event) {
-                    Ok(Some(DecodedUserMessageCommit::Typed(message))) => {
-                        Some(message.conversation_id)
-                    }
-                    _ => None,
-                },
-                EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved => {
-                    event
-                        .scope
-                        .as_deref()
-                        .and_then(|scope| owners.get(scope))
-                        .copied()
-                }
-                _ => None,
-            };
-            if let Some(owner) = owner {
+            if !matches!(
+                event.kind,
+                EventKind::AssistantSnapshotObserved | EventKind::AssistantCompletionObserved
+            ) {
+                continue;
+            }
+            if let Some(owner) = event
+                .scope
+                .as_deref()
+                .and_then(|scope| owners.get(scope))
+                .copied()
+            {
                 by_conversation.entry(owner).or_default().push(position);
             }
         }
 
         let mut messages = BTreeMap::new();
         let mut event_positions = BTreeMap::new();
-        for (owner, positions) in by_conversation {
+        for (owner, mut positions) in by_conversation {
+            positions.sort_unstable();
             let visible = projected_display_messages_iter(
                 positions.iter().map(|position| &events[*position]),
             );

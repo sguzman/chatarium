@@ -103,6 +103,13 @@ query edits, draft-only journal append and one native message append. The
 test prints a `CHATARIUM_SEARCH_PROFILE` JSON line containing timings,
 result counts, and Linux process RSS samples where available.
 
+Baseline GitHub Actions run
+[37993692410](https://github.com/sguzman/chatarium/actions/runs/37993692410)
+sampled 626,012 µs for cold indexing, 5,076 µs for the first search,
+2,528 µs for 100 cached queries, and process RSS of 20,204 KiB after
+journal setup versus 29,504 KiB after indexing. These values are retained
+as historical evidence for comparing subsequent code changes.
+
 The measurements use a shared hosted runner in a **debug** build. They
 are observations, **not** stable latency thresholds, release-build
 guarantees, real user archive measurements or isolated heap accounting.

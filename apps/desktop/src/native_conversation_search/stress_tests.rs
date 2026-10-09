@@ -12,6 +12,81 @@ fn author(store: &mut impl EventStore, owner: LocalConversationId, text: &str) {
 }
 
 #[test]
+fn cold_projection_preserves_out_of_order_assistant_ownership_and_chronology() {
+    let owner = LocalConversationId::new();
+    let unrelated = LocalConversationId::new();
+    let turn = LocalTurnId::new();
+    let mut store = MemoryEventStore::default();
+    let scope = chatarium_store::authored::local_turn_scope(turn);
+    let observed = serde_json::json!({
+        "schema": "chatarium-responses-turn-observation",
+        "version": 1,
+        "text": "early assistant observation",
+        "details": {
+            "local_turn_id": turn.to_string(),
+            "request_id": turn.to_string(),
+        }
+    });
+    store
+        .append_scoped(
+            Some(scope.clone()),
+            EventKind::AssistantSnapshotObserved,
+            observed.to_string(),
+        )
+        .unwrap();
+    chatarium_store::authored::commit_user_message(
+        &mut store,
+        &AuthoredUserMessage::new(owner, turn, LocalMessageId::new(), "authored later"),
+    )
+    .unwrap();
+    let completed = serde_json::json!({
+        "schema": "chatarium-responses-turn-observation",
+        "version": 1,
+        "text": "final assistant reply",
+        "details": {
+            "local_turn_id": turn.to_string(),
+            "request_id": turn.to_string(),
+        }
+    });
+    store
+        .append_scoped(
+            Some(scope),
+            EventKind::AssistantCompletionObserved,
+            completed.to_string(),
+        )
+        .unwrap();
+    author(
+        &mut store,
+        unrelated,
+        "PRIVATE FOREIGN TRANSCRIPT".to_owned(),
+    );
+    store
+        .append_scoped(
+            None,
+            EventKind::ToolCallOutcomeObserved,
+            "PRIVATE TOOL OUTPUT".to_owned(),
+        )
+        .unwrap();
+
+    let indexed = NativeConversationSearchIndex::build(store.events());
+    let expected = super::super::projected_local_display_messages(store.events(), owner);
+    let visible = indexed.messages(owner);
+    assert_eq!(visible.len(), 2);
+    assert_eq!(
+        visible.iter().map(|message| message.text.as_str()).collect::<Vec<_>>(),
+        vec!["final assistant reply", "authored later"]
+    );
+    assert_eq!(
+        visible.iter().map(|message| message.sequence).collect::<Vec<_>>(),
+        expected.iter().map(|message| message.sequence).collect::<Vec<_>>()
+    );
+    assert!(visible.iter().all(|message| {
+        !message.text.contains("PRIVATE")
+    }));
+    assert_eq!(indexed.messages(unrelated).len(), 1);
+}
+
+#[test]
 fn wide_archive_search_keeps_owner_boundaries_and_incremental_reuse() {
     const SHARDS: usize = 96;
     const MESSAGES: usize = 128;
