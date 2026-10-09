@@ -226,6 +226,10 @@ legacy/malformed commits, changed owners, and replaced journal prefixes fall
 back to a full projection. Regression fixtures cover 128 conversations,
 batched new conversation creation, pointer reuse, and cross-chat isolation.
 
+Derived native conversation titles also stop normalizing after their bounded
+42-character visible prefix. A very large first user message therefore does
+not get fully joined, allocated, and counted just to redraw its sidebar title.
+
 This is a derived, transient performance optimization, not a new source of
 truth. The append-only journal remains authoritative. Regression coverage in
 `native_conversation_search.rs` compares cached messages with the original

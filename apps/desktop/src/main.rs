@@ -21189,17 +21189,37 @@ fn derived_conversation_title(messages: &[DisplayMessage]) -> String {
         return "New local conversation".to_owned();
     };
 
-    let normalized = first.text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        return "Local conversation".to_owned();
-    }
-
+    // Build at most the first 42 Unicode scalar values of the normalized
+    // title. A large pasted first message must not allocate or scan the
+    // entire body just to derive the sidebar label on each redraw.
     const LIMIT: usize = 42;
-    let mut title = normalized.chars().take(LIMIT).collect::<String>();
-    if normalized.chars().count() > LIMIT {
-        title.push('…');
+    let mut title = String::new();
+    let mut count = 0;
+    let mut has_word = false;
+    for word in first.text.split_whitespace() {
+        if has_word {
+            if count == LIMIT {
+                title.push('…');
+                return title;
+            }
+            title.push(' ');
+            count += 1;
+        }
+        for character in word.chars() {
+            if count == LIMIT {
+                title.push('…');
+                return title;
+            }
+            title.push(character);
+            count += 1;
+        }
+        has_word = true;
     }
-    title
+    if title.is_empty() {
+        "Local conversation".to_owned()
+    } else {
+        title
+    }
 }
 
 fn event_text(payload: &str) -> String {
@@ -24715,6 +24735,34 @@ mod tests {
         assert_eq!(
             derived_conversation_title(&messages),
             "a useful local title with whitespace"
+        );
+    }
+
+    #[test]
+    fn native_derived_titles_preserve_normalization_with_bounded_unicode_prefix() {
+        let title = |text: String| {
+            derived_conversation_title(&[DisplayMessage {
+                role: DisplayRole::User,
+                text,
+                sequence: 1,
+                timestamp: None,
+                provenance_label: None,
+            }])
+        };
+        assert_eq!(title("  \n\t  ".to_owned()), "Local conversation");
+        assert_eq!(title("é".repeat(42)), "é".repeat(42));
+        assert_eq!(title("é".repeat(43)), format!("{}…", "é".repeat(42)));
+        assert_eq!(
+            title(format!("{}  \nmore", "a".repeat(42))),
+            format!("{}…", "a".repeat(42))
+        );
+        assert_eq!(
+            title(format!("{}   next", "b".repeat(41))),
+            format!("{} …", "b".repeat(41))
+        );
+        assert_eq!(
+            title(format!("   {} later", "Z".repeat(250_000))),
+            format!("{}…", "Z".repeat(42))
         );
     }
 
