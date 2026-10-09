@@ -20,9 +20,11 @@ pub enum NativeSearchMatch {
     Message,
 }
 
-/// Return the first reason a local conversation matches a case-insensitive
-/// trimmed query. Empty search preserves the normal conversation list.
-/// A query never crosses into a different conversation's projected messages.
+/// Match visible message text before falling back to a matching title.
+/// Derived titles often repeat the first message; a title hit must not mask
+/// the message actions (copy, stage and reader highlighting).
+/// Empty search preserves the normal conversation list. Queries never cross
+/// into another conversation's projected messages.
 pub fn find_match<'a>(
     query: &str,
     title: &str,
@@ -52,17 +54,23 @@ fn find_match_with_position<'a>(
     visible_messages: impl IntoIterator<Item = &'a str>,
 ) -> Option<(NativeSearchMatch, Option<(usize, String)>)> {
     let needle = query.trim().to_lowercase();
-    if needle.is_empty() || title.to_lowercase().contains(&needle) {
+    if needle.is_empty() {
         return Some((NativeSearchMatch::Title, None));
     }
-    visible_messages
+    if let Some(hit) = visible_messages
         .into_iter()
         .enumerate()
         .find_map(|(index, message)| {
             super::local_archive_search::local_snippet(message, &needle)
                 .map(|preview| (index, preview))
         })
-        .map(|hit| (NativeSearchMatch::Message, Some(hit)))
+    {
+        return Some((NativeSearchMatch::Message, Some(hit)));
+    }
+    title
+        .to_lowercase()
+        .contains(&needle)
+        .then_some((NativeSearchMatch::Title, None))
 }
 
 /// Select a native conversation by keyboard result position. The same
@@ -742,7 +750,7 @@ mod tests {
         catalog.create(first, 1);
         catalog.create(second, 2);
         // Neutral catalog titles ensure the initial hits come from message
-        // bodies; derived titles would correctly take precedence otherwise.
+        // bodies; derived titles may repeat the first message.
         catalog.rename(first, Some("One".to_owned()), 1).unwrap();
         catalog.rename(second, Some("Two".to_owned()), 2).unwrap();
 
@@ -1205,6 +1213,54 @@ mod tests {
     }
 
     #[test]
+    fn derived_title_hit_preserves_explicit_copy_and_memory_staging() {
+        use super::super::local_conversations::LocalConversationCatalog;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let source = LocalConversationId::new();
+        let foreign = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, source, "Reusable statement from the first message");
+        author(&mut store, foreign, "PRIVATE FOREIGN MESSAGE");
+
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(source, 1);
+        catalog.create(foreign, 2);
+        let ctx = egui::Context::default();
+        let index = cached_index(&ctx, store.events());
+        let entries = catalog.entries();
+        let rows = cached_rows(&ctx, &index, &entries, false, "reusable");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, NativeSearchMatch::Message);
+        assert_eq!(rows[0].message_index, Some(0));
+        assert!(rows[0].preview.as_deref().unwrap().contains("Reusable"));
+        assert_eq!(entries[rows[0].catalog_index].id, source);
+
+        let (owner, message_index) =
+            activate_copy_selection(&[(source, rows[0].message_index)], None).unwrap();
+        let (exported, sequence) =
+            copyable_hit_markdown(&index, owner, &rows[0].title, message_index).unwrap();
+        let staged = stageable_hit(&index, owner, message_index).unwrap();
+        assert_eq!(staged.source_event_sequence, sequence);
+        assert_eq!(staged.source_conversation_id, source);
+        assert_eq!(staged.text, "Reusable statement from the first message");
+        assert!(exported.contains(&staged.text));
+        assert!(!exported.contains("PRIVATE FOREIGN MESSAGE"));
+        assert_eq!(
+            reader_query_for_result(" reusable ", rows[0].kind),
+            Some("reusable".to_owned())
+        );
+
+        // A custom title alone must never fabricate a message to copy or stage.
+        catalog.rename(source, Some("Title-only keyword".to_owned()), 3).unwrap();
+        let renamed = catalog.entries();
+        let title_only = cached_rows(&ctx, &index, &renamed, false, "keyword");
+        assert_eq!(title_only.len(), 1);
+        assert_eq!(title_only[0].kind, NativeSearchMatch::Title);
+        assert_eq!(title_only[0].message_index, None);
+    }
+
+    #[test]
     fn recording_staged_message_remains_excluded_until_destination_admits_it() {
         use chatarium_core::local_memory::LocalMemoryId;
         use chatarium_store::local_memory_audit::{
@@ -1358,7 +1414,11 @@ mod tests {
             .inspect(|_| visited.set(visited.get() + 1));
         let title_result = find_match_with_preview("mex", "MEX title", counted);
         assert_eq!(title_result, Some((NativeSearchMatch::Title, None)));
-        assert_eq!(visited.get(), 0);
+        assert_eq!(
+            visited.get(),
+            messages.len(),
+            "a title-only fallback must verify there is no visible message match"
+        );
 
         assert_eq!(
             find_match_with_preview("absent", "Other", ["not a hit"]),
@@ -1402,7 +1462,7 @@ mod tests {
     }
 
     #[test]
-    fn unicode_query_and_title_take_priority_over_message_hits() {
+    fn unicode_query_uses_title_when_no_visible_message_matches() {
         assert_eq!(
             find_match("MÉX", "México", ["mex does not need matching"]),
             Some(NativeSearchMatch::Title)
