@@ -729,7 +729,12 @@ mod tests {
                 other_messages,
                 current.messages.get(&second).unwrap()
             ));
-            assert!(!current.messages(first).iter().any(|m| m.text.contains("private")));
+            assert!(
+                !current
+                    .messages(first)
+                    .iter()
+                    .any(|m| m.text.contains("private"))
+            );
             assert!(current.messages(first).iter().any(|m| m.text == text));
         }
 
