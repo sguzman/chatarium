@@ -291,15 +291,15 @@ pub fn cached_rows(
                 Some((first, preview)) => {
                     let needle = query.trim().to_lowercase();
                     let mut indices = vec![first];
-                    indices.extend(
-                        messages
-                            .iter()
-                            .enumerate()
-                            .skip(first + 1)
-                            .filter_map(|(position, message)| {
-                                message.text.to_lowercase().contains(&needle).then_some(position)
-                            }),
-                    );
+                    indices.extend(messages.iter().enumerate().skip(first + 1).filter_map(
+                        |(position, message)| {
+                            message
+                                .text
+                                .to_lowercase()
+                                .contains(&needle)
+                                .then_some(position)
+                        },
+                    ));
                     (Some(first), Some(preview), indices)
                 }
                 None => (None, None, Vec::new()),
@@ -1328,8 +1328,12 @@ mod tests {
         let mut catalog = LocalConversationCatalog::default();
         catalog.create(source, 1);
         catalog.create(foreign, 2);
-        catalog.rename(source, Some("Independent title".to_owned()), 3).unwrap();
-        catalog.rename(foreign, Some("Unrelated".to_owned()), 4).unwrap();
+        catalog
+            .rename(source, Some("Independent title".to_owned()), 3)
+            .unwrap();
+        catalog
+            .rename(foreign, Some("Unrelated".to_owned()), 4)
+            .unwrap();
         let ctx = egui::Context::default();
         let index = cached_index(&ctx, store.events());
         let entries = catalog.entries();
@@ -1343,8 +1347,14 @@ mod tests {
         assert_eq!(selected_message_index(row, 1), Some(2));
         assert_eq!(selected_message_index(row, 2), Some(3));
         assert_eq!(selected_message_index(row, 999), Some(3));
-        assert_eq!(reader_hit_ordinal(index.messages(source), "target", 2), Some(1));
-        assert_eq!(reader_hit_ordinal(index.messages(source), "target", 1), None);
+        assert_eq!(
+            reader_hit_ordinal(index.messages(source), "target", 2),
+            Some(1)
+        );
+        assert_eq!(
+            reader_hit_ordinal(index.messages(source), "target", 1),
+            None
+        );
 
         for (ordinal, expected) in [
             (0, "target first"),
