@@ -2,7 +2,8 @@
 //! Search only locally projected user/assistant text and the local workspace title.
 //! The journal and metadata catalog remain authoritative; the query is ephemeral.
 
-use super::{DisplayMessage, projected_display_messages_iter};
+use super::local_conversations::LocalConversationEntry;
+use super::{DisplayMessage, derived_conversation_title, projected_display_messages_iter};
 use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{
@@ -85,6 +86,107 @@ pub fn matching_message_preview<'a>(
     messages
         .into_iter()
         .find_map(|message| super::local_archive_search::local_snippet(message, &folded))
+}
+
+/// One visible sidebar row, derived solely from the local catalog and
+/// projected native user/assistant messages. The position refers to the
+/// catalog snapshot supplied to `cached_rows`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeSearchRow {
+    pub catalog_index: usize,
+    pub title: String,
+    pub kind: NativeSearchMatch,
+    pub preview: Option<String>,
+}
+
+/// These are the only mutable catalog facts that affect native sidebar
+/// search and order. Last-opened timestamps are not part of the key, but
+/// the ordered IDs are: switching chats can reorder the sidebar.
+#[derive(Clone, PartialEq, Eq)]
+struct CatalogSearchKey {
+    id: LocalConversationId,
+    title: Option<String>,
+    archived: bool,
+}
+
+#[derive(Clone)]
+struct NativeRowsCache {
+    index: Arc<NativeConversationSearchIndex>,
+    query: String,
+    show_archived: bool,
+    catalog: Vec<CatalogSearchKey>,
+    rows: Arc<Vec<NativeSearchRow>>,
+}
+
+/// Cache the *results* of local native search across UI redraws. The journal
+/// projection already has its own independent invalidation; preserving its
+/// Arc identity lets unrelated journal events reuse search matches too.
+/// Catalog ordering/title/archive changes and filter edits invalidate here.
+pub fn cached_rows(
+    ctx: &egui::Context,
+    index: &Arc<NativeConversationSearchIndex>,
+    entries: &[LocalConversationEntry],
+    show_archived: bool,
+    query: &str,
+) -> Arc<Vec<NativeSearchRow>> {
+    let catalog = entries
+        .iter()
+        .map(|entry| CatalogSearchKey {
+            id: entry.id,
+            title: entry.title.clone(),
+            archived: entry.archived,
+        })
+        .collect::<Vec<_>>();
+    let id = egui::Id::new("chatarium-native-conversation-search-rows");
+    if let Some(cache) = ctx.data_mut(|data| data.get_temp::<NativeRowsCache>(id)) {
+        if Arc::ptr_eq(&cache.index, index)
+            && cache.query == query
+            && cache.show_archived == show_archived
+            && cache.catalog == catalog
+        {
+            return cache.rows;
+        }
+    }
+
+    let mut rows = Vec::new();
+    for (catalog_index, entry) in entries.iter().enumerate() {
+        if entry.archived && !show_archived {
+            continue;
+        }
+        let messages = index.messages(entry.id);
+        let title = entry
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| derived_conversation_title(messages));
+        if let Some((kind, preview)) = find_match_with_preview(
+            query,
+            &title,
+            messages.iter().map(|message| message.text.as_str()),
+        ) {
+            rows.push(NativeSearchRow {
+                catalog_index,
+                title,
+                kind,
+                preview,
+            });
+        }
+    }
+    let rows = Arc::new(rows);
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            id,
+            NativeRowsCache {
+                index: Arc::clone(index),
+                query: query.to_owned(),
+                show_archived,
+                catalog,
+                rows: Arc::clone(&rows),
+            },
+        )
+    });
+    rows
 }
 
 // The index reuses the same typed authored ownership and display-message
@@ -438,6 +540,66 @@ mod tests {
                 .iter()
                 .any(|message| { message.text == "newly observed assistant message" })
         );
+    }
+
+    #[test]
+    fn sidebar_results_cache_tracks_query_catalog_and_visible_messages() {
+        use super::super::local_conversations::LocalConversationCatalog;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(first, 1);
+        catalog.create(second, 2);
+
+        let mut store = MemoryEventStore::default();
+        author(&mut store, first, "Rust renderer");
+        author(&mut store, second, "Python tools");
+        let index = cached_index(&ctx, store.events());
+        let entries = catalog.entries();
+
+        let initial = cached_rows(&ctx, &index, &entries, false, "rust");
+        assert_eq!(initial.len(), 1);
+        assert_eq!(entries[initial[0].catalog_index].id, first);
+        assert_eq!(initial[0].kind, NativeSearchMatch::Message);
+        let repeated = cached_rows(&ctx, &index, &entries, false, "rust");
+        assert!(Arc::ptr_eq(&initial, &repeated));
+
+        store
+            .append_scoped(None, EventKind::DraftChanged, "unrelated".to_owned())
+            .unwrap();
+        let unchanged_index = cached_index(&ctx, store.events());
+        assert!(Arc::ptr_eq(&index, &unchanged_index));
+        let unchanged = cached_rows(&ctx, &unchanged_index, &entries, false, "rust");
+        assert!(Arc::ptr_eq(&initial, &unchanged));
+
+        let changed_query = cached_rows(&ctx, &index, &entries, false, "python");
+        assert!(!Arc::ptr_eq(&initial, &changed_query));
+        assert_eq!(changed_query.len(), 1);
+        assert_eq!(entries[changed_query[0].catalog_index].id, second);
+
+        catalog.rename(first, Some("Python project".to_owned()), 3).unwrap();
+        let renamed_entries = catalog.entries();
+        let renamed = cached_rows(&ctx, &index, &renamed_entries, false, "python");
+        assert_eq!(renamed.len(), 2);
+        assert_eq!(renamed[0].kind, NativeSearchMatch::Title);
+        assert!(!Arc::ptr_eq(&changed_query, &renamed));
+
+        catalog.set_archived(first, true, 4).unwrap();
+        let archived_entries = catalog.entries();
+        let hidden = cached_rows(&ctx, &index, &archived_entries, false, "python");
+        assert_eq!(hidden.len(), 1);
+        let shown = cached_rows(&ctx, &index, &archived_entries, true, "python");
+        assert_eq!(shown.len(), 2);
+
+        author(&mut store, second, "A new rust discussion");
+        let advanced_index = cached_index(&ctx, store.events());
+        assert!(!Arc::ptr_eq(&index, &advanced_index));
+        let fresh = cached_rows(&ctx, &advanced_index, &archived_entries, false, "rust");
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(archived_entries[fresh[0].catalog_index].id, second);
     }
 
     #[test]

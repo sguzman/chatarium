@@ -6283,26 +6283,20 @@ impl eframe::App for ChatariumApp {
                         );
                         ui.add_space(6.0);
 
-                        for entry in self.local_conversation_catalog.entries() {
-                            if entry.archived && !self.show_archived_local_conversations {
-                                continue;
-                            }
+                        let native_entries = self.local_conversation_catalog.entries();
+                        let native_rows = native_conversation_search::cached_rows(
+                            ctx,
+                            &native_search_index,
+                            &native_entries,
+                            self.show_archived_local_conversations,
+                            &self.local_conversation_search_query,
+                        );
+                        for row in native_rows.iter() {
+                            let entry = &native_entries[row.catalog_index];
                             let messages = native_search_index.messages(entry.id);
-                            let title = entry
-                                .title
-                                .as_deref()
-                                .filter(|value| !value.trim().is_empty())
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| derived_conversation_title(messages));
-                            let Some((match_kind, native_excerpt)) =
-                                native_conversation_search::find_match_with_preview(
-                                    &self.local_conversation_search_query,
-                                    title.as_str(),
-                                    messages.iter().map(|message| message.text.as_str()),
-                                )
-                            else {
-                                continue;
-                            };
+                            let title = row.title.as_str();
+                            let match_kind = row.kind;
+                            let native_excerpt = row.preview.as_deref();
                             if match_kind
                                 == native_conversation_search::NativeSearchMatch::Message
                             {
@@ -6363,7 +6357,7 @@ impl eframe::App for ChatariumApp {
                                             );
                                         }
                                     });
-                                    if let Some(excerpt) = native_excerpt.as_deref() {
+                                    if let Some(excerpt) = native_excerpt {
                                         ui.add(
                                             egui::Label::new(
                                                 egui::RichText::new(excerpt)

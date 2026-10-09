@@ -179,7 +179,11 @@ context, or read untrusted MCP tool bodies. The matching policy has focused test
 through the existing GitHub Actions Rust/Linux matrix. The native sidebar
 computes its match and Unicode-safe excerpt in one scan of each candidate
 conversation, avoiding a second full message pass merely to display previews.
-Title hits do not fabricate message previews.
+Title hits do not fabricate message previews. Search results and bounded
+excerpts are cached across egui redraws; they are recomputed only when the
+projected native messages, query, catalog titles/order/archive state, or
+visibility of archived conversations changes. Unrelated draft or tool
+journal appends leave both caches reusable.
 
 ### Keyboard-first native chat navigation
 
