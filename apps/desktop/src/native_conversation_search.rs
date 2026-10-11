@@ -253,6 +253,53 @@ struct NativeRowsCache {
     rows: Arc<Vec<NativeSearchRow>>,
 }
 
+/// Build one native search row in a single pass. Keep exact positions in
+/// the owner projection, never copies of all matching message bodies.
+/// Message hits outrank title hits, including titles derived from messages.
+fn collect_native_search_row(
+    needle: &str,
+    catalog_index: usize,
+    title: String,
+    messages: &[DisplayMessage],
+) -> Option<NativeSearchRow> {
+    if needle.is_empty() {
+        return Some(NativeSearchRow {
+            catalog_index,
+            title,
+            kind: NativeSearchMatch::Title,
+            preview: None,
+            message_index: None,
+            matching_message_indices: Vec::new(),
+        });
+    }
+    let mut matching_message_indices = Vec::new();
+    let mut preview = None;
+    for (position, message) in messages.iter().enumerate() {
+        if message.text.to_lowercase().contains(needle) {
+            if matching_message_indices.is_empty() {
+                preview = super::local_archive_search::local_snippet(&message.text, needle);
+            }
+            matching_message_indices.push(position);
+        }
+    }
+    let message_index = matching_message_indices.first().copied();
+    let kind = if message_index.is_some() {
+        NativeSearchMatch::Message
+    } else if title.to_lowercase().contains(needle) {
+        NativeSearchMatch::Title
+    } else {
+        return None;
+    };
+    Some(NativeSearchRow {
+        catalog_index,
+        title,
+        kind,
+        preview,
+        message_index,
+        matching_message_indices,
+    })
+}
+
 /// Cache the *results* of local native search across UI redraws. The journal
 /// projection already has its own independent invalidation; preserving its
 /// Arc identity lets unrelated journal events reuse search matches too.
@@ -283,6 +330,7 @@ pub fn cached_rows(
         }
     }
 
+    let needle = query.trim().to_lowercase();
     let mut rows = Vec::new();
     for (catalog_index, entry) in entries.iter().enumerate() {
         if entry.archived && !show_archived {
@@ -295,36 +343,8 @@ pub fn cached_rows(
             .filter(|title| !title.trim().is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| derived_conversation_title(messages));
-        if let Some((kind, hit)) = find_match_with_position(
-            query,
-            &title,
-            messages.iter().map(|message| message.text.as_str()),
-        ) {
-            let (message_index, preview, matching_message_indices) = match hit {
-                Some((first, preview)) => {
-                    let needle = query.trim().to_lowercase();
-                    let mut indices = vec![first];
-                    indices.extend(messages.iter().enumerate().skip(first + 1).filter_map(
-                        |(position, message)| {
-                            message
-                                .text
-                                .to_lowercase()
-                                .contains(&needle)
-                                .then_some(position)
-                        },
-                    ));
-                    (Some(first), Some(preview), indices)
-                }
-                None => (None, None, Vec::new()),
-            };
-            rows.push(NativeSearchRow {
-                catalog_index,
-                title,
-                kind,
-                preview,
-                message_index,
-                matching_message_indices,
-            });
+        if let Some(row) = collect_native_search_row(&needle, catalog_index, title, messages) {
+            rows.push(row);
         }
     }
     let rows = Arc::new(rows);
@@ -1467,6 +1487,70 @@ mod tests {
         assert!(row.matching_message_indices.is_empty());
         assert_eq!(selected_message_index(row, 0), None);
         assert_eq!(cycle_matching_message(row, 0, 1), None);
+    }
+
+    #[test]
+    fn single_pass_native_rows_match_reference_search_semantics() {
+        use super::super::local_conversations::LocalConversationCatalog;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let owner = LocalConversationId::new();
+        let isolated = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        for body in [
+            "İstanbul first", "not related", "MÉXICO second", "the rust user guide",
+            "rust again", "مرحبا بالعالم", "emoji 🦀 second",
+        ] {
+            author(&mut store, owner, body);
+        }
+        author(&mut store, isolated, "PRIVATE title-exclusive phrase");
+        let index = cached_index(&ctx, store.events());
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(owner, 1);
+        catalog.create(isolated, 2);
+        catalog.rename(owner, Some("Rust México Title".to_owned()), 3).unwrap();
+        catalog.rename(isolated, Some("Other".to_owned()), 4).unwrap();
+        let entries = catalog.entries();
+
+        for query in [
+            "", "  ", "rust", "RUST", " méxico ", "i", "İ", "🦀",
+            "مرحبا", "title", "missing", "private",
+        ] {
+            let rows = cached_rows(&ctx, &index, &entries, false, query);
+            for entry in &entries {
+                let title = entry.title.clone().unwrap();
+                let messages = index.messages(entry.id);
+                let reference = find_match_with_position(
+                    query,
+                    &title,
+                    messages.iter().map(|message| message.text.as_str()),
+                );
+                let actual = rows.iter().find(|row| entries[row.catalog_index].id == entry.id);
+                match (reference, actual) {
+                    (None, None) => {}
+                    (Some((kind, hit)), Some(row)) => {
+                        assert_eq!(row.kind, kind, "{query}");
+                        assert_eq!(row.message_index, hit.as_ref().map(|(position, _)| *position), "{query}");
+                        assert_eq!(row.preview, hit.map(|(_, excerpt)| excerpt), "{query}");
+                        let needle = query.trim().to_lowercase();
+                        let expected = if needle.is_empty() {
+                            Vec::new()
+                        } else {
+                            messages
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(position, message)| {
+                                    message.text.to_lowercase().contains(&needle).then_some(position)
+                                })
+                                .collect::<Vec<_>>()
+                        };
+                        assert_eq!(row.matching_message_indices, expected, "{query}");
+                    }
+                    _ => panic!("native result diverged for query {query:?}"),
+                }
+            }
+        }
     }
 
     #[test]

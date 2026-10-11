@@ -93,6 +93,11 @@ memory benchmarks against a real account archive. They do not access user
 data, launch providers or require manual QA. Real-world responsiveness and
 peak-memory measurements remain a separate validation task.
 
+Native query result construction now collects the first match preview and
+all matching message positions in a single pass per conversation, lowercasing
+the query only once per cache miss. It preserves message-first title fallback,
+bounded excerpts, source isolation, and separate memory admission.
+
 ## Opt-in synthetic native search profile
 
 Linux CI runs one isolated, ignored Rust test named
