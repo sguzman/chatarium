@@ -16,6 +16,13 @@ fn author(store: &mut impl EventStore, owner: LocalConversationId, text: String)
     .unwrap();
 }
 
+fn median_us(samples: &[u128]) -> u128 {
+    assert!(!samples.is_empty());
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
 fn rss_kib() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status
@@ -139,6 +146,19 @@ fn native_search_perf_profile() {
     black_box(index.messages(owners[0]).len());
     let index_rss_kib = rss_kib();
 
+    // Repeat the same cold construction on immutable synthetic journal data.
+    // The uncached builder is intentionally measured instead of a warmed
+    // egui cache hit. Report the distribution, never gate on wall-clock time.
+    const COLD_REPEATS: usize = 9;
+    let mut cold_build_samples_us = Vec::with_capacity(COLD_REPEATS);
+    for _ in 0..COLD_REPEATS {
+        let start = Instant::now();
+        let rebuilt = NativeConversationSearchIndex::build(store.events());
+        assert_eq!(rebuilt.messages(owners[0]).len(), MESSAGES_PER_CONVERSATION);
+        black_box(rebuilt);
+        cold_build_samples_us.push(start.elapsed().as_micros());
+    }
+
     let first_start = Instant::now();
     let rows = cached_rows(&ctx, &index, &entries, false, "needle");
     let first_query_us = first_start.elapsed().as_micros();
@@ -220,6 +240,8 @@ fn native_search_perf_profile() {
     }
     let mut legacy_scan_total_us = 0;
     let mut single_pass_scan_total_us = 0;
+    let mut legacy_scan_samples_us = Vec::with_capacity(COMPARISON_ROUNDS);
+    let mut single_pass_scan_samples_us = Vec::with_capacity(COMPARISON_ROUNDS);
     for round in 0..COMPARISON_ROUNDS {
         for legacy in if round % 2 == 0 {
             [true, false]
@@ -229,10 +251,13 @@ fn native_search_perf_profile() {
             let start = Instant::now();
             let hits = scan_query_profile(&index, &entries, &COMPARISON_QUERIES, legacy);
             assert!(hits > 0);
+            let elapsed = start.elapsed().as_micros();
             if legacy {
-                legacy_scan_total_us += start.elapsed().as_micros();
+                legacy_scan_total_us += elapsed;
+                legacy_scan_samples_us.push(elapsed);
             } else {
-                single_pass_scan_total_us += start.elapsed().as_micros();
+                single_pass_scan_total_us += elapsed;
+                single_pass_scan_samples_us.push(elapsed);
             }
         }
     }
@@ -242,7 +267,12 @@ fn native_search_perf_profile() {
         serde_json::json!({
             "schema": "chatarium-native-search-profile",
             "version": 1,
-            "mode": "debug-ci-synthetic",
+            "mode": if cfg!(debug_assertions) { "debug-ci-synthetic" } else { "release-ci-synthetic" },
+            "profile_optimized": !cfg!(debug_assertions),
+            "cold_build_repeats": COLD_REPEATS,
+            "cold_build_min_us": *cold_build_samples_us.iter().min().unwrap(),
+            "cold_build_median_us": median_us(&cold_build_samples_us),
+            "cold_build_max_us": *cold_build_samples_us.iter().max().unwrap(),
             "conversations": CONVERSATIONS,
             "messages": CONVERSATIONS * MESSAGES_PER_CONVERSATION,
             "query_matches": rows.len(),
@@ -255,6 +285,8 @@ fn native_search_perf_profile() {
             "ab_comparison_rounds": COMPARISON_ROUNDS,
             "ab_legacy_scan_total_us": legacy_scan_total_us,
             "ab_single_pass_scan_total_us": single_pass_scan_total_us,
+            "ab_legacy_scan_median_us": median_us(&legacy_scan_samples_us),
+            "ab_single_pass_scan_median_us": median_us(&single_pass_scan_samples_us),
             "unrelated_append_us": unrelated_append_us,
             "native_append_us": native_append_us,
             "process_rss_kib_after_journal": setup_rss_kib,
