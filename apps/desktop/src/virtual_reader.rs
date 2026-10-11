@@ -642,3 +642,6 @@ mod tests {
 
 #[cfg(test)]
 mod perf_tests;
+
+#[cfg(test)]
+mod scroll_tests;

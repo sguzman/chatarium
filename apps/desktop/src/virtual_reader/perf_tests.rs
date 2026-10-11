@@ -77,7 +77,11 @@ fn legacy_row_at(layout: &VirtualReaderLayout, top: f32) -> Option<usize> {
     Some(low.min(count - 1))
 }
 
-fn legacy_visible_range(layout: &VirtualReaderLayout, top: f32, bottom: f32) -> std::ops::Range<usize> {
+fn legacy_visible_range(
+    layout: &VirtualReaderLayout,
+    top: f32,
+    bottom: f32,
+) -> std::ops::Range<usize> {
     let count = layout.heights.len();
     if count == 0 {
         return 0..0;
@@ -122,7 +126,9 @@ fn viewport_scan(layout: &VirtualReaderLayout, positions: &[f32], legacy: bool) 
         } else {
             layout.row_at(top)
         };
-        checksum = checksum.wrapping_add(range.len()).wrapping_add(anchor.unwrap_or(0));
+        checksum = checksum
+            .wrapping_add(range.len())
+            .wrapping_add(anchor.unwrap_or(0));
     }
     black_box(checksum)
 }
@@ -177,12 +183,13 @@ fn virtual_reader_perf_profile() {
     // claim. Equality is verified before either timed loop.
     const AB_ROUNDS: usize = 9;
     let positions = (0..VIEWPORT_QUERIES)
-        .map(|iteration| {
-            (iteration * 104_729 % MESSAGES) as f32 / MESSAGES as f32 * height
-        })
+        .map(|iteration| (iteration * 104_729 % MESSAGES) as f32 / MESSAGES as f32 * height)
         .collect::<Vec<_>>();
     for &top in &positions {
-        assert_eq!(legacy_visible_range(&planner, top, top + 900.0), planner.visible_range(top, top + 900.0));
+        assert_eq!(
+            legacy_visible_range(&planner, top, top + 900.0),
+            planner.visible_range(top, top + 900.0)
+        );
         assert_eq!(legacy_row_at(&planner, top), planner.row_at(top));
     }
     let mut legacy_samples_us = Vec::with_capacity(AB_ROUNDS);
