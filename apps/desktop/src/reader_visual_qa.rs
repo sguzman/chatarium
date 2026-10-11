@@ -62,7 +62,7 @@ impl ReaderQa {
     fn new(output_dir: PathBuf) -> Self {
         let primary = fixture();
         let alternate = Arc::new(
-            (0..256)
+            (0_usize..256)
                 .map(|index| DisplayMessage {
                     role: if index.is_multiple_of(2) {
                         DisplayRole::User
@@ -133,18 +133,17 @@ impl ReaderQa {
 impl eframe::App for ReaderQa {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
-        let (top, middle, bottom, search, append, away, back) =
-            ctx.input_mut(|input| {
-                (
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F3),
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F4),
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F5),
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
-                    input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
-                )
-            });
+        let (top, middle, bottom, search, append, away, back) = ctx.input_mut(|input| {
+            (
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F3),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F4),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F5),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
+            )
+        });
         let mut panel_width = 0.0;
         let mut rendered = Vec::new();
         let mut scroll_offset = 0.0;
