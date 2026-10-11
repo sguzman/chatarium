@@ -54,6 +54,50 @@ fi
 xdotool windowactivate --sync "$window"
 sleep 1
 import -window "$window" "$OUT/production-initial.png"
+
+# An actual user-authored local turn through the production composer and
+# persistence worker. Wait for the durable UserMessageCommitted event rather
+# than accepting a merely autosaved draft or counting a button click.
+MARKER="CHATARIUM_QA_COMMITTED_TURN_314159"
+JOURNAL="$OUT/data/journal.jsonl"
+xdotool mousemove --window "$window" 750 620 click 1
+xdotool type --clearmodifiers --delay 15 "$MARKER"
+
+is_committed() {
+    python3 - "$JOURNAL" "$MARKER" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+journal, marker = Path(sys.argv[1]), sys.argv[2]
+if not journal.is_file():
+    raise SystemExit(1)
+matches = 0
+for raw in journal.read_text().splitlines():
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        continue
+    kind = "".join(ch.lower() for ch in str(event.get("kind", "")) if ch.isalnum())
+    if kind == "usermessagecommitted" and marker in raw:
+        matches += 1
+raise SystemExit(0 if matches == 1 else 1)
+PY
+}
+for _ in $(seq 1 35); do
+    if is_committed; then break; fi
+    # Shortcut submits only when the editor holds focus and draft is durable.
+    xdotool key --clearmodifiers ctrl+Return
+    sleep 0.4
+done
+if ! is_committed; then
+    echo "Production UI did not durably commit its synthetic message" >&2
+    tail -n 100 "$LOG" >&2 || true
+    exit 1
+fi
+sleep 0.7
+import -window "$window" "$OUT/production-committed.png"
+
 xdotool windowsize "$window" 930 650
 sleep 1
 import -window "$window" "$OUT/production-resized.png"
@@ -66,7 +110,7 @@ import sys
 
 out = Path(sys.argv[1])
 images = []
-for stem in ("production-initial", "production-resized"):
+for stem in ("production-initial", "production-committed", "production-resized"):
     file = out / (stem + ".png")
     with Image.open(file) as src:
         img = src.convert("RGB")
@@ -75,11 +119,16 @@ for stem in ("production-initial", "production-resized"):
     if len(img.resize((180, 120)).getcolors(180 * 120) or []) < 20:
         raise AssertionError(f"production window did not paint plausible UI: {stem}")
     images.append(img)
-if images[0].width - images[1].width < 120:
+if images[0].width - images[2].width < 120:
     raise AssertionError("production window failed native resize")
-w = min(images[0].width, images[1].width)
-h = min(images[0].height, images[1].height)
-if ImageChops.difference(images[0].crop((0, 0, w, h)), images[1].crop((0, 0, w, h))).getbbox() is None:
+# The message itself must materially change the central transcript area.
+# Comparing only the title would miss a failure to display the committed turn.
+chat_rect = (460, 75, min(images[0].width, images[1].width), 520)
+if ImageChops.difference(images[0].crop(chat_rect), images[1].crop(chat_rect)).getbbox() is None:
+    raise AssertionError("committed turn did not change the production transcript")
+w = min(images[1].width, images[2].width)
+h = min(images[1].height, images[2].height)
+if ImageChops.difference(images[1].crop((0, 0, w, h)), images[2].crop((0, 0, w, h))).getbbox() is None:
     raise AssertionError("production UI did not respond visually to resize")
 (out / "production-summary.json").write_text(json.dumps({
     "schema": "chatarium-isolated-production-window",
@@ -87,8 +136,10 @@ if ImageChops.difference(images[0].crop((0, 0, w, h)), images[1].crop((0, 0, w, 
     "status": "pass",
     "scenario": "fresh-offline-workspace",
     "initial_px": list(images[0].size),
-    "resized_px": list(images[1].size),
-    "screenshots": 2,
+    "committed_px": list(images[1].size),
+    "resized_px": list(images[2].size),
+    "screenshots": 3,
+    "durable_user_message": True,
     "isolated_home": True,
     "isolated_data_dir": True,
 }, indent=2) + "\n")
@@ -97,4 +148,5 @@ PY
 test -d "$OUT/home"
 test -d "$OUT/data"
 test -s "$OUT/production-initial.png"
+test -s "$OUT/production-committed.png"
 test -s "$OUT/production-resized.png"

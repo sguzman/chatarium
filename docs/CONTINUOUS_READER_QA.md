@@ -102,13 +102,16 @@ launches the **actual ChatariumApp** with a fresh, empty `HOME`,
 existing credentials, ordinary journals, and the user's browser profile are
 not visible to this launch. There is no automated sign-in.
 
-Xvfb/Openbox captures a real production-window screenshot, resizes the app,
-and captures a second screenshot. The test checks the native window exists,
-the images are nonblank, the window actually shrank, and pixels changed after
-the resize. Screenshots and a small machine-readable summary share the
-seven-day CI artifact. This specifically validates production startup and
-basic layout reflow; it does **not** yet validate in-app conversation creation,
-message commit, or production continuous-reader navigation.
+Xvfb/Openbox captures a real production-window screenshot, enters a
+synthetic message through the actual composer, waits for a durable
+`UserMessageCommitted` journal event (not merely a draft save), and captures
+a second screenshot of the changed conversation. The test then resizes the
+window and captures a third image. It checks the native window exists, the
+images are nonblank, the transcript changed after committing, and the window
+visibly reflowed. Screenshots and machine-readable evidence share the seven-day
+CI artifact. This validates production startup, local message persistence,
+and basic layout reflow; it does **not** yet validate production conversation
+switching or continuous-reader navigation.
 
 ## ScrollArea ID correctness
 
