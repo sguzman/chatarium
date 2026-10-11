@@ -244,6 +244,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -13531,9 +13532,17 @@ impl eframe::App for ChatariumApp {
         let mut reader_output_offset = None;
 
         let virtual_id = egui::Id::new(("chatarium-native-virtual-layout", &reader_key));
-        let mut virtual_layout = ctx
-            .data_mut(|data| data.get_temp::<virtual_reader::VirtualReaderLayout>(virtual_id))
-            .unwrap_or_default();
+        // Egui clones temporary values on lookup. Keep the large height and
+        // signature arrays behind a shared handle rather than copying them
+        // every redraw, including when paging makes virtualization inactive.
+        let virtual_layout_state = ctx
+            .data_mut(|data| {
+                data.get_temp::<Arc<Mutex<virtual_reader::VirtualReaderLayout>>>(virtual_id)
+            })
+            .unwrap_or_else(|| Arc::new(Mutex::new(Default::default())));
+        let mut virtual_layout = virtual_layout_state
+            .lock()
+            .expect("virtual reader cache lock poisoned");
 
         // Paging is a local UI projection, not a change to journal contents,
         // inference context or authorization. Keep restored full-reader
@@ -13853,9 +13862,10 @@ impl eframe::App for ChatariumApp {
                 virtual_layout.remember_view_offset(offset);
             }
         }
+        drop(virtual_layout);
         ctx.data_mut(|data| {
             data.insert_temp(paging_id, reader_window.clone());
-            data.insert_temp(virtual_id, virtual_layout);
+            data.insert_temp(virtual_id, virtual_layout_state);
         });
         let selection_changed = self.reader_search_hit != reader_hit_from_button;
         self.reader_search_hit = reader_hit_from_button;
