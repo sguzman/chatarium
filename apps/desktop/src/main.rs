@@ -26,9 +26,9 @@ mod mcp_result_review;
 mod native_conversation_search;
 mod native_transcript_export;
 mod offline_reader;
+mod reader_visual_qa;
 mod siwc_bridge;
 mod virtual_reader;
-mod reader_visual_qa;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::control::{

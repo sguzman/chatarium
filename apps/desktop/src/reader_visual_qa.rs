@@ -116,7 +116,8 @@ impl eframe::App for ReaderQa {
             )
             .show(ctx, |ui| {
                 panel_width = ui.available_width();
-                self.layout.sync(Some(Arc::clone(&self.source)), panel_width);
+                self.layout
+                    .sync(Some(Arc::clone(&self.source)), panel_width);
                 if top {
                     self.phase = "top";
                     self.jump_to = Some(0.0);
@@ -140,7 +141,10 @@ impl eframe::App for ReaderQa {
                         .color(egui::Color32::from_rgb(185, 215, 243)),
                 );
                 ui.label("F1 Top   ·   F2 Middle   ·   F3 End   ·   F4 Find ARCHIVE NEEDLE");
-                ui.label(format!("Mode: continuous  |  Phase: {}  |  Messages: {COUNT}", self.phase));
+                ui.label(format!(
+                    "Mode: continuous  |  Phase: {}  |  Messages: {COUNT}",
+                    self.phase
+                ));
                 ui.separator();
 
                 let mut scroller = egui::ScrollArea::vertical()
@@ -151,7 +155,8 @@ impl eframe::App for ReaderQa {
                     scroller = scroller.vertical_scroll_offset(jump);
                 }
                 let out = scroller.show_viewport(ui, |ui, viewport| {
-                    self.layout.sync(Some(Arc::clone(&self.source)), ui.available_width());
+                    self.layout
+                        .sync(Some(Arc::clone(&self.source)), ui.available_width());
                     let list_top = ui.cursor().top();
                     let header_height = list_top - ui.max_rect().top();
                     let range = self.layout.visible_range(
@@ -164,10 +169,7 @@ impl eframe::App for ReaderQa {
                     }
                     let top = list_top + self.layout.offset(range.start);
                     let bottom = list_top + self.layout.offset(range.end);
-                    let rect = egui::Rect::from_x_y_ranges(
-                        ui.max_rect().x_range(),
-                        top..=bottom,
-                    );
+                    let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |inner| {
                         for index in range {
                             inner.push_id(("qa-native-message", index), |row| {
@@ -175,7 +177,11 @@ impl eframe::App for ReaderQa {
                                 draw_reader_bubble(
                                     row,
                                     &self.source[index],
-                                    if self.phase == "search" { "ARCHIVE NEEDLE" } else { "" },
+                                    if self.phase == "search" {
+                                        "ARCHIVE NEEDLE"
+                                    } else {
+                                        ""
+                                    },
                                     index == SEARCH_TARGET && self.phase == "search",
                                     ctx,
                                 );
