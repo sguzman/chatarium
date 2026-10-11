@@ -59,12 +59,30 @@ xdotool windowactivate --sync "$window"
 sleep 1
 import -window "$window" "$OUT/long-initial.png"
 xdotool mousemove --window "$window" 740 250 click 1
+# Startup screenshot can precede the initial sticky-bottom settle. Establish
+# the tail reference through a real End key before testing navigation.
+xdotool key --clearmodifiers End
+sleep 0.8
+import -window "$window" "$OUT/long-tail-reference.png"
 xdotool key --clearmodifiers Home
 sleep 0.8
 import -window "$window" "$OUT/long-home.png"
 xdotool key --clearmodifiers End
 sleep 0.8
 import -window "$window" "$OUT/long-end.png"
+
+# The production control is available only for long archives. Switch it on
+# through real X11 clicks rather than mutating egui state or faking a session.
+xdotool mousemove --window "$window" 489 99 click 1
+sleep 0.8
+import -window "$window" "$OUT/long-continuous-enabled.png"
+xdotool mousemove --window "$window" 740 250 click 1
+xdotool key --clearmodifiers Home
+sleep 0.8
+import -window "$window" "$OUT/long-continuous-home.png"
+xdotool key --clearmodifiers End
+sleep 0.8
+import -window "$window" "$OUT/long-continuous-end.png"
 
 python3 - "$OUT" <<'PY'
 from pathlib import Path
@@ -97,7 +115,7 @@ if not texts[0].startswith(fixture["first_marker"]) or not texts[-1].startswith(
     raise AssertionError("long fixture lost first or last marker")
 
 images = {}
-for label in ("initial", "home", "end"):
+for label in ("initial", "tail-reference", "home", "end", "continuous-enabled", "continuous-home", "continuous-end"):
     with Image.open(out / f"long-{label}.png") as src:
         img = src.convert("RGB")
     if img.width < 1100 or img.height < 700:
@@ -116,8 +134,8 @@ def aligned_difference(a, b):
         candidates.append(sum(ImageStat.Stat(delta).mean) / 3)
     return min(candidates)
 
-home_distance = aligned_difference("initial", "home")
-end_distance = aligned_difference("initial", "end")
+home_distance = aligned_difference("tail-reference", "home")
+end_distance = aligned_difference("tail-reference", "end")
 if home_distance < 8.0:
     raise AssertionError(
         f"Home did not leave the initial tail view: distance={home_distance:.3f}"
@@ -126,6 +144,19 @@ if end_distance > 7.0:
     raise AssertionError(
         f"End did not restore the initial tail view: distance={end_distance:.3f}"
     )
+# The checkbox itself must visibly change in the real window; merely
+# injecting the click without entering continuous mode is not a pass.
+control_rect = (465, 90, 620, 110)
+control_delta = ImageChops.difference(
+    images["end"].crop(control_rect), images["continuous-enabled"].crop(control_rect)
+)
+if control_delta.getbbox() is None:
+    raise AssertionError("continuous reader checkbox did not respond to X11 click")
+continuous_delta = ImageChops.difference(
+    images["continuous-home"].crop(region), images["continuous-end"].crop(region)
+)
+if continuous_delta.getbbox() is None:
+    raise AssertionError("continuous reader ignored Home/End navigation")
 summary = {
     "schema": "chatarium-long-native-reader-qa",
     "version": 1,
@@ -138,7 +169,9 @@ summary = {
     "end_restores_tail": True,
     "home_image_distance": round(home_distance, 3),
     "end_image_distance": round(end_distance, 3),
-    "screenshots": 3,
+    "screenshots": 7,
+    "continuous_reader_toggled_in_production": True,
+    "continuous_home_and_end_distinct": True,
     "isolated_credentials_and_journal": True
 }
 (out / "long-summary.json").write_text(json.dumps(summary, indent=2) + "\n")

@@ -149,13 +149,18 @@ conversation owns every message, including distinct first/last markers,
 multilingual text, and code/long-wrapping fixtures. No normal journal or
 account data is opened.
 
-A separate Xvfb test launches the **actual ChatariumApp** with that archive,
-captures startup, Home, and End screenshots, and verifies the durable event
-count, single conversation ownership, and visible transcript change between
-navigation positions. This initial scenario deliberately leaves the default
-paged/continuous reader choice unchanged. It establishes a production-backed
-long-archive baseline before enabling the opt-in continuous mode under
-automated GUI control.
+A separate Xvfb test launches the **actual ChatariumApp** with that archive.
+It captures startup, then establishes a settled tail reference using an explicit
+End key. Home must leave that reference and a second End must restore it.
+Screenshot comparison independently aligns the transcript to accommodate small
+sidebar width shifts; this rejects the earlier regression where Home stayed at
+the tail while End unexpectedly jumped to the first message.
+
+The same disposable production run then clicks the actual Continuous reader
+checkbox through X11 (without changing the default), checks that the control
+paint changed, and captures separate Home/End screenshots from the virtualized
+reader. The journal remains read-only throughout navigation; no private data or
+credentials are available to the test.
 
 ## ScrollArea ID correctness
 
