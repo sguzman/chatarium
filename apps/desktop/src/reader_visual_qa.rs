@@ -216,7 +216,17 @@ impl eframe::App for ReaderQa {
                 }
                 if search {
                     self.phase = "search";
-                    self.jump_to = Some((self.layout.offset(SEARCH_TARGET) - 100.0).max(0.0));
+                }
+                // Use the same virtual-layout search state as the production
+                // reader. A width change invalidates measured rows and must
+                // reveal the selected hit again without another F4 press.
+                if self.phase == "search" {
+                    if let Some(offset) = self
+                        .layout
+                        .new_search_offset("ARCHIVE NEEDLE", Some(SEARCH_TARGET))
+                    {
+                        self.jump_to = Some((offset - 100.0).max(0.0));
+                    }
                 }
                 ui.label(
                     egui::RichText::new("CHATARIUM / NATIVE READER QA / SYNTHETIC")

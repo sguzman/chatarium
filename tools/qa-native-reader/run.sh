@@ -98,9 +98,9 @@ xdotool key --clearmodifiers F4
 wait_state '.phase == "search" and .rendered_search_hit == true'
 save_frame search
 
+# A true reflow regression: do not reissue F4. The selected hit should
+# remain visible automatically when its estimated and measured heights change.
 xdotool windowsize "$window" 970 740
-wait_state '.viewport_width < 1000'
-xdotool key --clearmodifiers F4
 wait_state '.phase == "search" and .viewport_width < 1000 and .rendered_search_hit == true'
 save_frame resized
 
