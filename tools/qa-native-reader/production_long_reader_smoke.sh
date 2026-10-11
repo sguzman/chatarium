@@ -13,6 +13,20 @@ chmod 700 "$OUT/runtime"
 "$ROOT/target/debug/chatarium-reader-seed" \
     .qa-native-long-reader/data/journal.jsonl >"$OUT/seed.json"
 jq -e '.schema == "chatarium-long-native-reader-fixture" and .events == 257 and .disposable == true' "$OUT/seed.json" >/dev/null
+
+# xvfb-run can expose DISPLAY slightly before the X server accepts clients.
+# Do not launch openbox or winit until a real X11 query succeeds.
+for _ in $(seq 1 100); do
+    if xdotool getdisplaygeometry >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
+done
+if ! xdotool getdisplaygeometry >/dev/null 2>&1; then
+    echo "disposable Xvfb display failed to become ready" >&2
+    exit 1
+fi
+
 openbox >"$OUT/openbox.log" 2>&1 &
 wm_pid=$!
 app_pid=""
