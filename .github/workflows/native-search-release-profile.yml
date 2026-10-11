@@ -1,0 +1,23 @@
+name: native-search-release-profile
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/desktop/src/native_conversation_search.rs"
+      - "apps/desktop/src/native_conversation_search/**"
+      - ".github/workflows/native-search-release-profile.yml"
+
+concurrency:
+  group: native-search-release-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Optimized, repeated native search profile (synthetic, non-gating timing)
+        run: cargo test --release -p chatarium-desktop --bin chatarium-desktop native_search_perf_profile -- --ignored --nocapture
