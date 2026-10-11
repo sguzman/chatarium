@@ -398,6 +398,134 @@ mod tests {
         assert!(!layout.finish_measurements());
     }
 
+
+    /// A simple linear reference independent of the Fenwick implementation.
+    /// It deliberately uses f64 sums to catch cumulative rounding errors.
+    fn reference_offset(heights: &[f32], index: usize) -> f64 {
+        heights
+            .iter()
+            .take(index.min(heights.len()))
+            .map(|height| f64::from(*height))
+            .sum()
+    }
+
+    fn reference_visible_range(heights: &[f32], top: f32, bottom: f32) -> Range<usize> {
+        if heights.is_empty() {
+            return 0..0;
+        }
+        let top = f64::from((top - OVERSCAN_PX).max(0.0));
+        let bottom = f64::from((bottom + OVERSCAN_PX).max(top as f32));
+        let mut start = heights.len();
+        let mut end = 0;
+        let mut running = 0.0;
+        for (index, height) in heights.iter().enumerate() {
+            let next = running + f64::from(*height);
+            if start == heights.len() && next > top {
+                start = index;
+            }
+            if running < bottom {
+                end = index + 1;
+            }
+            running = next;
+        }
+        start..end.max(start.saturating_add(1)).min(heights.len())
+    }
+
+    #[test]
+    fn irregular_aggregate_height_replay_agrees_with_linear_geometry_oracle() {
+        // Reproduce a diverse archive without network, user history, a GPU,
+        // external dependencies or nondeterministic seeds. Long messages,
+        // Unicode, tiny messages, soft wrapping and hard line breaks coexist.
+        let mut source = Arc::new(
+            (0..4_096)
+                .map(|index| {
+                    let text = match index % 7 {
+                        0 => String::new(),
+                        1 => "short".to_owned(),
+                        2 => "Español 日本語 العربية 🪐".repeat(13),
+                        3 => "first\nsecond\nthird".repeat(7),
+                        4 => "wide code: ".to_owned() + &"x".repeat(700),
+                        5 => "x".repeat(2_048),
+                        _ => "ordinary user / assistant message".to_owned(),
+                    };
+                    message(index, &text)
+                })
+                .collect(),
+        );
+        let mut width = 800.0;
+        let mut layout = VirtualReaderLayout::default();
+        layout.sync(Some(Arc::clone(&source)), width);
+        let mut expected = source
+            .iter()
+            .map(|entry| estimated_height(entry, width))
+            .collect::<Vec<_>>();
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next_random = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        for step in 0..768 {
+            if step > 0 && step % 113 == 0 {
+                width = if width == 800.0 { 460.0 } else { 800.0 };
+                layout.sync(Some(Arc::clone(&source)), width);
+                expected = source
+                    .iter()
+                    .map(|entry| estimated_height(entry, width))
+                    .collect();
+            } else if step > 0 && step % 181 == 0 {
+                let mut appended = source.as_ref().clone();
+                appended.push(message(
+                    appended.len() as u64,
+                    "new multiline message\nwith 🪐 Unicode",
+                ));
+                source = Arc::new(appended);
+                layout.sync(Some(Arc::clone(&source)), width);
+                expected.push(estimated_height(source.last().unwrap(), width));
+            } else {
+                let index = (next_random() as usize) % expected.len();
+                let height = 48.0 + (next_random() % 20_000) as f32;
+                layout.measure(index, height);
+                expected[index] = height;
+                assert!(layout.finish_measurements());
+            }
+
+            let measured = expected.len();
+            let random_index = (next_random() as usize) % (measured + 1);
+            let reference = reference_offset(&expected, random_index);
+            let actual = f64::from(layout.offset(random_index));
+            assert!(
+                (actual - reference).abs() <= (reference.abs() * 0.000_000_2).max(1.0),
+                "offset mismatch at iteration {step}, row {random_index}: {actual} != {reference}"
+            );
+
+            let total = reference_offset(&expected, measured);
+            let top = ((next_random() as f64 / u64::MAX as f64) * total) as f32;
+            let bottom = top + 900.0;
+            assert_eq!(
+                layout.visible_range(top, bottom),
+                reference_visible_range(&expected, top, bottom),
+                "incorrect virtual window at iteration {step}"
+            );
+            let expected_row = expected
+                .iter()
+                .scan(0.0_f64, |sum, height| {
+                    *sum += f64::from(*height);
+                    Some(*sum)
+                })
+                .position(|end| end > f64::from(top))
+                .unwrap_or(measured - 1);
+            assert_eq!(
+                layout.row_at(top),
+                Some(expected_row),
+                "incorrect viewport anchor at iteration {step}"
+            );
+        }
+        assert_eq!(expected.len(), 4_100);
+    }
+
     #[test]
     fn huge_archives_use_a_bounded_row_subset_and_ignore_bad_heights() {
         let source = Arc::new((0..16_384).map(|i| message(i, "one row")).collect());
