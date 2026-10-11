@@ -671,6 +671,13 @@ impl NativeConversationSearchIndex {
         })
     }
 
+    pub fn message_projection(
+        &self,
+        conversation_id: LocalConversationId,
+    ) -> Option<Arc<Vec<DisplayMessage>>> {
+        self.messages.get(&conversation_id).cloned()
+    }
+
     pub fn messages(&self, conversation_id: LocalConversationId) -> &[DisplayMessage] {
         self.messages
             .get(&conversation_id)
