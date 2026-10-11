@@ -145,6 +145,13 @@ snapshot. Fast keypress-and-release sequences otherwise lose their modifiers
 before egui evaluates the event. Headless tests reproduce this released-chord
 case and confirm ordinary Tab and Alt-modified keys remain untouched.
 
+The next visual run showed a stricter frame-order defect: after a shortcut
+changed the active conversation, the header and transcript still used values
+projected before the shortcut was applied. Keyboard new-chat and cycling now
+execute immediately after background notices and before all
+conversation-dependent projections. Sidebar actions retain their own repaint
+path. This avoids relying on a second event to reconcile a stale frame.
+
 The actual desktop GUI regression established that the consumed shortcut and
 catalog activation both succeeded, while the painted transcript stayed stale
 until a later resize. Creating and switching local conversations now explicitly
