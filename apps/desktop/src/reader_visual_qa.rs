@@ -97,6 +97,7 @@ impl ReaderQa {
         rendered: &[usize],
         visible: &[usize],
         appended_bubble_visible_height: f32,
+        search_bubble_visible_height: f32,
     ) {
         let status = json!({
             "schema": "chatarium-native-visual-qa",
@@ -124,7 +125,8 @@ impl ReaderQa {
             "render_end": rendered.last(),
             "search_target": SEARCH_TARGET,
             "font_fallbacks": super::system_fonts::loaded_names(ctx),
-            "rendered_search_hit": rendered.contains(&SEARCH_TARGET),
+            "rendered_search_hit": search_bubble_visible_height >= 48.0,
+            "search_bubble_visible_height": search_bubble_visible_height,
             "persistent_user_journal_access": false,
             "remote_network_access": false
         });
@@ -154,6 +156,7 @@ impl eframe::App for ReaderQa {
         let mut rendered = Vec::new();
         let mut visible = Vec::new();
         let mut appended_bubble_visible_height = 0.0;
+        let mut search_bubble_visible_height = 0.0;
         let mut scroll_offset = 0.0;
 
         egui::CentralPanel::default()
@@ -277,6 +280,9 @@ impl eframe::App for ReaderQa {
                                         {
                                             appended_bubble_visible_height = clipped.height();
                                         }
+                                        if index == SEARCH_TARGET {
+                                            search_bubble_visible_height = clipped.height();
+                                        }
                                     }
                                 }
                                 row.add_space(12.0);
@@ -298,6 +304,7 @@ impl eframe::App for ReaderQa {
             &rendered,
             &visible,
             appended_bubble_visible_height,
+            search_bubble_visible_height,
         );
         ctx.request_repaint_after(Duration::from_millis(160));
     }

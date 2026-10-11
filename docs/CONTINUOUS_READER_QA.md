@@ -61,8 +61,10 @@ synthetic append, switching away, and switching back. The append marker
 survives the synthetic conversation switch. Overscan layout membership
 alone does not prove a message is on screen: the visual harness requires the
 appended bubble's production-renderer rectangle to intersect the scroll clip
-by at least 48 logical pixels. This prevents a laid-out, offscreen row from
-being misreported as visible. It checks for nonblank
+by at least 48 logical pixels. The same rule now applies to the distant search
+target, both before and after resizing; screenshot checking rejects states where
+only an overscanned offscreen row was laid out. This prevents a laid-out,
+offscreen row from being misreported as visible. It checks for nonblank
 screenshots, changed pixel contents between scroll positions, bounded visible
 row counts, expected source indices, and search-target visibility.
 

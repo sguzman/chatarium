@@ -20,6 +20,12 @@ for label in labels:
         raise AssertionError(f"blank or implausibly uniform screenshot: {label}")
     if state["rendered_count"] <= 0 or state["rendered_count"] >= 48:
         raise AssertionError(f"unbounded/missing virtual rows: {label}")
+    if state["visible_count"] <= 0 or state["visible_count"] > state["rendered_count"]:
+        raise AssertionError(f"invalid in-clip bubble count: {label}")
+    if label in ("search", "resized") and state["search_bubble_visible_height"] < 48:
+        raise AssertionError(f"search target not visibly painted: {label}")
+    if label in ("appended", "returned") and state["appended_bubble_visible_height"] < 48:
+        raise AssertionError(f"appended message not visibly painted: {label}")
     images[label] = image
 
 for before, after in (("top", "middle"), ("middle", "wheel"), ("middle", "bottom"), ("bottom", "search"), ("resized", "appended"), ("appended", "alternate"), ("alternate", "returned")):
