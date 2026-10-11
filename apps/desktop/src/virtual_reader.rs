@@ -137,6 +137,29 @@ impl VirtualReaderLayout {
         self.height_sum(index) as f32
     }
 
+    /// Locate the row intersecting the un-overscanned viewport top. Keeping
+    /// its start position stable prevents upper overscan measurements from
+    /// visibly shifting the user's reading position.
+    #[must_use]
+    pub fn row_at(&self, top: f32) -> Option<usize> {
+        let count = self.heights.len();
+        if count == 0 {
+            return None;
+        }
+        let top = f64::from(top.max(0.0));
+        let mut low = 0;
+        let mut high = count;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if self.height_sum(mid + 1) <= top {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        Some(low.min(count - 1))
+    }
+
     #[must_use]
     pub fn visible_range(&self, top: f32, bottom: f32) -> Range<usize> {
         let count = self.heights.len();
@@ -273,6 +296,16 @@ mod tests {
         assert_eq!(layout.offset(1), 105.0);
         assert_eq!(layout.offset(2), 575.0);
         assert_eq!(layout.total_height(), 665.0);
+        assert_eq!(layout.row_at(0.0), Some(0));
+        assert_eq!(layout.row_at(105.0), Some(1));
+        assert_eq!(layout.row_at(600.0), Some(2));
+        assert_eq!(layout.row_at(10_000.0), Some(2));
+        let anchor_before = layout.offset(2);
+        layout.measure(0, 205.0);
+        assert!(layout.finish_measurements());
+        assert_eq!(layout.offset(2) - anchor_before, 100.0);
+        layout.measure(0, 105.0);
+        assert!(layout.finish_measurements());
         // Overscan extends only 320px above 450px, so the 105px
         // first message is rightly excluded while rows 1-2 remain visible.
         assert_eq!(layout.visible_range(450.0, 455.0), 1..3);
@@ -333,6 +366,7 @@ mod tests {
         assert_ne!(layout.offset(1), 399.0);
         layout.sync(None, 450.0);
         assert_eq!(layout.visible_range(0.0, 300.0), 0..0);
+        assert_eq!(layout.row_at(0.0), None);
         assert_eq!(layout.saved_view_offset(), None);
         layout.remember_view_offset(245.0);
         layout.remember_view_offset(f32::NAN);
