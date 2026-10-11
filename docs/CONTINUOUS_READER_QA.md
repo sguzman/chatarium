@@ -164,6 +164,14 @@ the durable journal, independent of which conversation the application
 initially selects. This test uses screenshot similarity, not OCR, and never
 accesses the user's normal HOME, credentials, or journal.
 
+Production shortcut failure reports now include a strictly opt-in,
+isolated-fixture trace of egui key-event names and modifier flags (no text,
+message bodies, cookies or account state). This distinguishes a missing key
+event from a rejected modifier chord without touching personal data.
+The long-archive production test now runs independently after a successful
+build, even if the earlier two-conversation GUI smoke fails; its result
+is collected in the same CI run instead of being skipped.
+
 ## Isolated long-archive production GUI QA
 
 The dedicated `chatarium-reader-seed` test executable writes exactly 257

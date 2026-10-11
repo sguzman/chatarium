@@ -68,6 +68,7 @@ env -i \
     XAUTHORITY="${XAUTHORITY:-}" \
     LIBGL_ALWAYS_SOFTWARE=1 \
     CHATARIUM_DATA_DIR="$OUT/data" \
+    CHATARIUM_QA_SHORTCUT_TRACE=1 \
     "$ROOT/target/debug/chatarium-desktop" >"$LOG" 2>&1 &
 app_pid=$!
 window=""
@@ -231,6 +232,8 @@ PY
         fi
     done
     echo "keyboard conversation navigation failed to repaint transcript: $chord" >&2
+    # Log only key identity/modifiers from the isolated test process.
+    grep 'CHATARIUM_QA_SHORTCUT_' "$OUT/production.log" "$OUT/production-restarted.log" 2>/dev/null | tail -n 50 >&2 || true
     return 1
 }
 
@@ -266,6 +269,7 @@ env -i \
     XAUTHORITY="${XAUTHORITY:-}" \
     LIBGL_ALWAYS_SOFTWARE=1 \
     CHATARIUM_DATA_DIR="$OUT/data" \
+    CHATARIUM_QA_SHORTCUT_TRACE=1 \
     "$ROOT/target/debug/chatarium-desktop" >"$OUT/production-restarted.log" 2>&1 &
 app_pid=$!
 window=""

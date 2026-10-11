@@ -45,6 +45,7 @@ jobs:
           bash -n tools/qa-native-reader/production_long_reader_smoke.sh
           python3 -m py_compile tools/qa-native-reader/check_screenshots.py tools/qa-native-reader/check_empty_conversation.py tools/qa-native-reader/check_replay.py
       - name: Build native Chatarium binary
+        id: build
         run: cargo build -p chatarium-desktop --bin chatarium-desktop --bin chatarium-reader-seed
       - name: Launch synthetic native reader and capture visual evidence
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/run.sh
@@ -56,6 +57,7 @@ jobs:
       - name: Smoke actual production workspace with isolated home and data
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_smoke.sh
       - name: Smoke actual desktop on a seeded long native archive
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_long_reader_smoke.sh
       - name: Upload disposable screenshots and structural results
         if: always()

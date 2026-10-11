@@ -56,6 +56,26 @@ pub fn consume_native_conversation_shortcuts(
 ) -> (bool, Option<super::conversation_navigation::CycleDirection>) {
     use super::conversation_navigation::CycleDirection;
 
+    // Structural QA evidence only: key names/modifiers, never editor content.
+    // This opt-in is used solely inside the isolated Xvfb production fixture.
+    let trace = std::env::var("CHATARIUM_QA_SHORTCUT_TRACE").as_deref() == Ok("1");
+    if trace {
+        for event in &input.events {
+            if let egui::Event::Key { key, pressed, repeat, modifiers, .. } = event {
+                if modifiers.ctrl || *key == egui::Key::Tab {
+                    eprintln!(
+                        "CHATARIUM_QA_SHORTCUT_EVENT key={key:?} pressed={pressed} repeat={repeat} ctrl={} shift={} alt={} snapshot_ctrl={} snapshot_shift={}",
+                        modifiers.ctrl,
+                        modifiers.shift,
+                        modifiers.alt,
+                        input.modifiers.ctrl,
+                        input.modifiers.shift
+                    );
+                }
+            }
+        }
+    }
+
     let new_chat = pressed_chord_modifiers(&input.events, egui::Key::N, Some(true))
         .is_some_and(|modifiers| input.consume_key(modifiers, egui::Key::N));
     let cycle =
@@ -68,6 +88,9 @@ pub fn consume_native_conversation_shortcuts(
                     CycleDirection::Forward
                 })
         });
+    if trace && (new_chat || cycle.is_some()) {
+        eprintln!("CHATARIUM_QA_SHORTCUT_CONSUMED new_chat={new_chat} cycle={cycle:?}");
+    }
     (new_chat, cycle)
 }
 
