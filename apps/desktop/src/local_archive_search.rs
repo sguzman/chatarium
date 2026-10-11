@@ -267,7 +267,12 @@ pub fn local_snippet(text: &str, folded_query: &str) -> Option<String> {
         .unwrap_or(text.len());
     let prefix = if start > 0 { "…" } else { "" };
     let suffix = if end < text.len() { "…" } else { "" };
-    let excerpt = text[start..end].replace('\r', "").replace('\n', " ↵ ");
+    // Preserve CR-only and CRLF boundaries in previews. Dropping CR joins
+    // separate original lines into misleading continuous source text.
+    let excerpt = text[start..end]
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', " ↵ ");
     Some(format!("{prefix}{excerpt}{suffix}"))
 }
 
@@ -415,6 +420,16 @@ mod tests {
             Some("EL NIÑO ↵ sueña".to_owned())
         );
         assert!(local_snippet("México", "other").is_none());
+    }
+
+    #[test]
+    fn snippets_preserve_carriage_return_line_boundaries() {
+        let text = "first\rTARGET\r\nlast";
+        assert_eq!(
+            local_snippet(text, "target"),
+            Some("first ↵ TARGET ↵ last".to_owned())
+        );
+        assert!(!local_snippet(text, "target").unwrap().contains('\r'));
     }
 
     #[test]
