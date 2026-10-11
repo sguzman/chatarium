@@ -117,6 +117,12 @@ continuous-reader navigation through a long persisted transcript.
 
 ## Actual-app restart and durable replay
 
+Before composing the second message, QA compares the production screenshot
+with the freshly launched empty-chat view. If the Ctrl+Shift+N shortcut is lost
+to focus, it retries using the actual sidebar New local button and verifies
+the empty view again. No second message is typed into the first conversation
+under a missed-shortcut condition.
+
 The isolated production GUI smoke now stops the native process after
 committing messages in two independently owned conversations, then launches
 a **new Chatarium process** using the same disposable HOME and journal.

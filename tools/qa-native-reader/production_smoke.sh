@@ -104,6 +104,17 @@ SECOND_MARKER="CHATARIUM_QA_SECOND_CONVERSATION_271828"
 xdotool key --clearmodifiers ctrl+shift+n
 sleep 0.9
 import -window "$window" "$OUT/production-second-empty.png"
+# A real X11 shortcut can occasionally be lost to the focused composer.
+# Never type the second message unless an empty conversation is visibly
+# selected. Compare with the previously painted initial empty view, rather
+# than guessing from elapsed time or accepting a successful key injection.
+if ! python3 tools/qa-native-reader/check_empty_conversation.py "$OUT/production-initial.png" "$OUT/production-second-empty.png"; then
+    echo "Ctrl+Shift+N did not open an empty conversation; retrying via UI button" >&2
+    xdotool mousemove --window "$window" 55 276 click 1
+    sleep 0.9
+    import -window "$window" "$OUT/production-second-empty.png"
+fi
+python3 tools/qa-native-reader/check_empty_conversation.py "$OUT/production-initial.png" "$OUT/production-second-empty.png"
 xdotool mousemove --window "$window" 750 620 click 1
 xdotool type --clearmodifiers --delay 15 "$SECOND_MARKER"
 for _ in $(seq 1 35); do
