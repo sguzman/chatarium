@@ -163,7 +163,6 @@ impl eframe::App for ReaderQa {
         // Mirror the production Chatarium reader keyboard handler:
         // PageDown/PageUp scroll through scroll_area::State, rather than
         // creating a second key-navigation path for the synthetic shell.
-        let scroll_id = egui::Id::new(("qa-native-virtual-transcript", self.conversation));
         let mut panel_width = 0.0;
         let mut rendered = Vec::new();
         let mut visible = Vec::new();
@@ -178,13 +177,6 @@ impl eframe::App for ReaderQa {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
-                let actual_scroll_id = ui.make_persistent_id(egui::Id::new(scroll_id));
-                if page_down {
-                    super::adjust_reader_scroll(ctx, actual_scroll_id, 480.0);
-                }
-                if page_up {
-                    super::adjust_reader_scroll(ctx, actual_scroll_id, -480.0);
-                }
                 panel_width = ui.available_width();
                 if append {
                     let messages = Arc::make_mut(&mut self.primary);
@@ -268,6 +260,18 @@ impl eframe::App for ReaderQa {
                 ));
                 ui.separator();
 
+                // The active conversation may change in this frame. Resolve
+                // the scroll-state key *after* transitions so the first
+                // return frame cannot overwrite the other conversation's
+                // persisted ScrollArea state.
+                let scroll_id = egui::Id::new(("qa-native-virtual-transcript", self.conversation));
+                let actual_scroll_id = ui.make_persistent_id(egui::Id::new(scroll_id));
+                if page_down {
+                    super::adjust_reader_scroll(ctx, actual_scroll_id, 480.0);
+                }
+                if page_up {
+                    super::adjust_reader_scroll(ctx, actual_scroll_id, -480.0);
+                }
                 let mut scroller = egui::ScrollArea::vertical()
                     .id_salt(scroll_id)
                     .auto_shrink([false, false])
