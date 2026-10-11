@@ -171,7 +171,10 @@ impl VirtualReaderLayout {
     #[must_use]
     pub fn row_at(&self, top: f32) -> Option<usize> {
         let count = self.heights.len();
-        (count > 0).then(|| self.prefix_rank(f64::from(top.max(0.0)), true).min(count - 1))
+        (count > 0).then(|| {
+            self.prefix_rank(f64::from(top.max(0.0)), true)
+                .min(count - 1)
+        })
     }
 
     #[must_use]
@@ -599,11 +602,7 @@ mod tests {
 
     #[test]
     fn fenwick_prefix_ranks_include_exact_boundaries() {
-        let source = Arc::new(vec![
-            message(0, "a"),
-            message(1, "b"),
-            message(2, "c"),
-        ]);
+        let source = Arc::new(vec![message(0, "a"), message(1, "b"), message(2, "c")]);
         let mut layout = VirtualReaderLayout::default();
         layout.sync(Some(source), 700.0);
         for (index, height) in [100.0, 200.0, 300.0].into_iter().enumerate() {

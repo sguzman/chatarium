@@ -55,6 +55,78 @@ fn rss_kib() -> Option<u64> {
         .and_then(|number| number.parse().ok())
 }
 
+/// Reproduce the pre-optimization nested binary-search reference inside
+/// the profiler only. Its f64 Fenwick sums and float bounds must match the
+/// shipping rank-based viewport planner exactly.
+fn legacy_row_at(layout: &VirtualReaderLayout, top: f32) -> Option<usize> {
+    let count = layout.heights.len();
+    if count == 0 {
+        return None;
+    }
+    let top = f64::from(top.max(0.0));
+    let mut low = 0;
+    let mut high = count;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if layout.height_sum(mid + 1) <= top {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    Some(low.min(count - 1))
+}
+
+fn legacy_visible_range(layout: &VirtualReaderLayout, top: f32, bottom: f32) -> std::ops::Range<usize> {
+    let count = layout.heights.len();
+    if count == 0 {
+        return 0..0;
+    }
+    let top = f64::from((top - OVERSCAN_PX).max(0.0));
+    let bottom = f64::from((bottom + OVERSCAN_PX).max(top as f32));
+    let mut low = 0;
+    let mut high = count;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if layout.height_sum(mid + 1) <= top {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    let start = low;
+    low = 0;
+    high = count;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if layout.height_sum(mid) < bottom {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    start..low.max(start.saturating_add(1)).min(count)
+}
+
+fn viewport_scan(layout: &VirtualReaderLayout, positions: &[f32], legacy: bool) -> usize {
+    let mut checksum = 0_usize;
+    for &top in positions {
+        let bottom = top + 900.0;
+        let range = if legacy {
+            legacy_visible_range(layout, top, bottom)
+        } else {
+            layout.visible_range(top, bottom)
+        };
+        let anchor = if legacy {
+            legacy_row_at(layout, top)
+        } else {
+            layout.row_at(top)
+        };
+        checksum = checksum.wrapping_add(range.len()).wrapping_add(anchor.unwrap_or(0));
+    }
+    black_box(checksum)
+}
+
 #[test]
 #[ignore = "opt-in synthetic profiling; no wall-clock gates"]
 fn virtual_reader_perf_profile() {
@@ -99,6 +171,44 @@ fn virtual_reader_perf_profile() {
     }
     let viewport_queries_us = viewport_start.elapsed().as_micros();
     black_box(viewport_rows);
+
+    // Same-run A/B: alternate order to reduce CPU cache and clock bias.
+    // Absolute timing between different GitHub runners is not a speedup
+    // claim. Equality is verified before either timed loop.
+    const AB_ROUNDS: usize = 9;
+    let positions = (0..VIEWPORT_QUERIES)
+        .map(|iteration| {
+            (iteration * 104_729 % MESSAGES) as f32 / MESSAGES as f32 * height
+        })
+        .collect::<Vec<_>>();
+    for &top in &positions {
+        assert_eq!(legacy_visible_range(&planner, top, top + 900.0), planner.visible_range(top, top + 900.0));
+        assert_eq!(legacy_row_at(&planner, top), planner.row_at(top));
+    }
+    let mut legacy_samples_us = Vec::with_capacity(AB_ROUNDS);
+    let mut prefix_samples_us = Vec::with_capacity(AB_ROUNDS);
+    let mut ab_checksum = None;
+    for round in 0..AB_ROUNDS {
+        for legacy in if round.is_multiple_of(2) {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let start = Instant::now();
+            let checksum = viewport_scan(&planner, &positions, legacy);
+            let elapsed = start.elapsed().as_micros();
+            if let Some(expected) = ab_checksum {
+                assert_eq!(checksum, expected);
+            } else {
+                ab_checksum = Some(checksum);
+            }
+            if legacy {
+                legacy_samples_us.push(elapsed);
+            } else {
+                prefix_samples_us.push(elapsed);
+            }
+        }
+    }
 
     let measure_start = Instant::now();
     for iteration in 0..HEIGHT_EDITS {
@@ -181,6 +291,10 @@ fn virtual_reader_perf_profile() {
             "viewport_queries": VIEWPORT_QUERIES,
             "viewport_queries_total_us": viewport_queries_us,
             "viewport_rows_checksum": viewport_rows,
+            "ab_rounds": AB_ROUNDS,
+            "ab_legacy_nested_search_median_us": median_us(&legacy_samples_us),
+            "ab_prefix_descent_median_us": median_us(&prefix_samples_us),
+            "ab_matching_checksum": ab_checksum,
             "measured_height_edits": HEIGHT_EDITS,
             "measured_edits_total_us": measured_updates_us,
             "append_samples": append_samples_us.len(),
