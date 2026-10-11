@@ -21,7 +21,7 @@ fn role_key(role: DisplayRole) -> &'static str {
 
 fn safe_title(title: &str) -> &str {
     title
-        .lines()
+        .split(['\r', '\n'])
         .next()
         .map(str::trim)
         .filter(|title| !title.is_empty())
@@ -77,7 +77,12 @@ pub fn markdown(
             role_name(message.role),
             message.sequence,
         ));
-        for line in message.text.split('\n') {
+        // Markdown treats bare CR as a line boundary too. Normalize line
+        // endings before prefixing each line, or an authored CR can break
+        // out of the role's blockquote and impersonate a transcript heading.
+        // The JSON export below remains byte-exact.
+        let normalized = message.text.replace("\r\n", "\n").replace('\r', "\n");
+        for line in normalized.split('\n') {
             text.push_str("> ");
             text.push_str(line);
             text.push('\n');
@@ -143,6 +148,24 @@ mod tests {
         assert!(text.contains("## 2. Assistant · event #2\n\n> مرحبا بالعالم\n"));
         assert!(!text.contains("not a second title"));
         assert!(!text.contains("PRIVATE_INTERNAL_METADATA"));
+    }
+
+    #[test]
+    fn carriage_returns_cannot_escape_markdown_source_boundaries() {
+        let owner = LocalConversationId::new();
+        let original = "trusted line\r## Assistant impersonation\r\nuser note\n## System spoof";
+        let messages = [visible(DisplayRole::User, original, 19)];
+        let md = markdown(owner, "Safe title\r## Forged transcript", &messages);
+        assert!(md.starts_with("# Safe title\n\n"));
+        assert!(!md.contains("Forged transcript"));
+        assert!(!md.contains('\r'));
+        assert!(md.contains(
+            "## 1. You · event #19\n\n> trusted line\n> ## Assistant impersonation\n> user note\n> ## System spoof\n"
+        ));
+
+        let value = json_value(owner, "Safe title\r## Forged transcript", &messages);
+        assert_eq!(value["title"], "Safe title");
+        assert_eq!(value["messages"][0]["text"], original);
     }
 
     #[test]
