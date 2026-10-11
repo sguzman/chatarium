@@ -253,6 +253,71 @@ struct NativeRowsCache {
     rows: Arc<Vec<NativeSearchRow>>,
 }
 
+/// Cache exact native reader highlight positions across redraws. The
+/// source Arc is the authority: appends to unrelated conversations can reuse
+/// positions, while edits to this conversation's projection invalidate them.
+/// Imported/mirrored transcript readers are deliberately outside this cache.
+#[derive(Clone)]
+struct NativeReaderHitCache {
+    conversation_id: LocalConversationId,
+    message_projection: Option<Arc<Vec<DisplayMessage>>>,
+    query: String,
+    hits: Arc<Vec<(usize, usize, usize)>>,
+}
+
+/// Read-only hit positions in the current native user/assistant projection.
+/// No hidden tool data, memory, or other conversation enters this projection.
+pub fn cached_reader_hits(
+    ctx: &egui::Context,
+    index: &Arc<NativeConversationSearchIndex>,
+    conversation_id: LocalConversationId,
+    query: &str,
+) -> Arc<Vec<(usize, usize, usize)>> {
+    let projection = index.messages.get(&conversation_id).cloned();
+    let cache_id = egui::Id::new("chatarium-native-transcript-reader-hits");
+    if let Some(cache) = ctx.data_mut(|data| data.get_temp::<NativeReaderHitCache>(cache_id)) {
+        let unchanged = match (&cache.message_projection, &projection) {
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            (None, None) => true,
+            _ => false,
+        };
+        if cache.conversation_id == conversation_id && cache.query == query && unchanged {
+            return cache.hits;
+        }
+    }
+    let hits = if query.trim().is_empty() {
+        Vec::new()
+    } else {
+        projection
+            .as_deref()
+            .map(|messages| {
+                messages
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(message_index, message)| {
+                        super::offline_reader::search_hits(&message.text, query)
+                            .into_iter()
+                            .map(move |(start, end)| (message_index, start, end))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let hits = Arc::new(hits);
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            cache_id,
+            NativeReaderHitCache {
+                conversation_id,
+                message_projection: projection,
+                query: query.to_owned(),
+                hits: Arc::clone(&hits),
+            },
+        )
+    });
+    hits
+}
+
 /// Build one native search row with a single message scan. Same-run
 /// release-mode profiling favors this over the former two-pass row builder.
 /// The older path remains a test-only comparison reference.
@@ -1045,6 +1110,54 @@ mod tests {
                 .iter()
                 .any(|message| { message.text == "newly observed assistant message" })
         );
+    }
+
+    #[test]
+    fn reader_hit_cache_reuses_unchanged_native_messages_and_invalidates_on_append() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let owner = LocalConversationId::new();
+        let unrelated = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, owner, "HELLO hello");
+        author(&mut store, unrelated, "private unrelated content");
+
+        let original = cached_index(&ctx, store.events());
+        let hits = cached_reader_hits(&ctx, &original, owner, "hello");
+        assert_eq!(hits.as_slice(), &[(0, 0, 5), (0, 6, 11)]);
+        assert!(Arc::ptr_eq(
+            &hits,
+            &cached_reader_hits(&ctx, &original, owner, "hello"),
+        ));
+        assert!(cached_reader_hits(&ctx, &original, owner, "absent").is_empty());
+        assert_eq!(
+            cached_reader_hits(&ctx, &original, owner, "hello").as_slice(),
+            &[(0, 0, 5), (0, 6, 11)],
+        );
+
+        author(&mut store, unrelated, "different private append");
+        let unrelated_append = cached_index(&ctx, store.events());
+        assert!(!Arc::ptr_eq(&original, &unrelated_append));
+        assert!(Arc::ptr_eq(
+            original.messages.get(&owner).unwrap(),
+            unrelated_append.messages.get(&owner).unwrap(),
+        ));
+        let original_again = cached_reader_hits(&ctx, &unrelated_append, owner, "hello");
+        // The cache contains the latest query, so the explicit intervening
+        // "absent" query above changed its identity. Compare a warm repeat.
+        assert!(Arc::ptr_eq(
+            &original_again,
+            &cached_reader_hits(&ctx, &unrelated_append, owner, "hello"),
+        ));
+
+        author(&mut store, owner, "hello from this conversation");
+        let own_append = cached_index(&ctx, store.events());
+        let expanded = cached_reader_hits(&ctx, &own_append, owner, "hello");
+        assert_eq!(expanded.as_slice(), &[(0, 0, 5), (0, 6, 11), (1, 0, 5)]);
+        assert!(!Arc::ptr_eq(&original_again, &expanded));
+        assert!(cached_reader_hits(&ctx, &own_append, unrelated, "hello").is_empty());
+        assert!(cached_reader_hits(&ctx, &own_append, owner, "  ").is_empty());
     }
 
     #[test]

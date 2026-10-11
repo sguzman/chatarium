@@ -13459,15 +13459,26 @@ impl eframe::App for ChatariumApp {
         } else {
             None
         };
-        let reader_hit_targets = display_messages
-            .iter()
-            .enumerate()
-            .flat_map(|(message_index, message)| {
-                offline_reader::search_hits(&message.text, &self.reader_search_query)
-                    .into_iter()
-                    .map(move |(start, end)| (message_index, start, end))
-            })
-            .collect::<Vec<_>>();
+        let reader_hit_targets = if historical_mode {
+            std::sync::Arc::new(
+                display_messages
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(message_index, message)| {
+                        offline_reader::search_hits(&message.text, &self.reader_search_query)
+                            .into_iter()
+                            .map(move |(start, end)| (message_index, start, end))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            native_conversation_search::cached_reader_hits(
+                ctx,
+                &native_search_index,
+                self.local_conversation_id,
+                &self.reader_search_query,
+            )
+        };
         if self
             .reader_search_hit
             .is_some_and(|hit| hit >= reader_hit_targets.len())
