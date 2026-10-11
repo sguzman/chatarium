@@ -13862,8 +13862,8 @@ impl eframe::App for ChatariumApp {
         if selection_changed {
             ctx.request_repaint();
         }
-        if let Some(offset) = reader_output_offset
-            .filter(|_| !reader_window.enabled && !reader_window.virtualized)
+        if let Some(offset) =
+            reader_output_offset.filter(|_| !reader_window.enabled && !reader_window.virtualized)
         {
             if (offset - self.reader_last_saved_offset).abs() > 1.0
                 && self.reader_last_position_write.elapsed() > Duration::from_millis(250)

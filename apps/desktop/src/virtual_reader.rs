@@ -143,11 +143,7 @@ impl VirtualReaderLayout {
 
     /// Navigate to a new result using virtual offsets without requiring
     /// the target bubble to have been instantiated in the prior frame.
-    pub fn new_search_offset(
-        &mut self,
-        query: &str,
-        hit_message: Option<usize>,
-    ) -> Option<f32> {
+    pub fn new_search_offset(&mut self, query: &str, hit_message: Option<usize>) -> Option<f32> {
         let selection = (query.to_owned(), hit_message);
         if self.last_search.as_ref() == Some(&selection) {
             return None;
@@ -215,7 +211,9 @@ mod tests {
         assert_eq!(layout.offset(1), 105.0);
         assert_eq!(layout.offset(2), 575.0);
         assert_eq!(layout.total_height(), 665.0);
-        assert_eq!(layout.visible_range(450.0, 455.0), 0..3);
+        // Overscan extends only 320px above 450px, so the 105px
+        // first message is rightly excluded while rows 1-2 remain visible.
+        assert_eq!(layout.visible_range(450.0, 455.0), 1..3);
         assert_eq!(layout.new_search_offset("last", Some(2)), Some(575.0));
         assert_eq!(layout.new_search_offset("last", Some(2)), None);
         assert_eq!(layout.new_search_offset("last", Some(99)), None);
@@ -268,7 +266,10 @@ mod tests {
         let source = Arc::new((0..16_384).map(|i| message(i, "one row")).collect());
         let mut layout = VirtualReaderLayout::default();
         layout.sync(Some(source), 850.0);
-        let range = layout.visible_range(layout.total_height() / 2.0, layout.total_height() / 2.0 + 700.0);
+        let range = layout.visible_range(
+            layout.total_height() / 2.0,
+            layout.total_height() / 2.0 + 700.0,
+        );
         assert!(!range.is_empty());
         assert!(range.len() < 50);
         let before = layout.total_height();
