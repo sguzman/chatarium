@@ -67,10 +67,8 @@ fn virtual_reader_scrollarea_renders_bounded_contiguous_windows() {
                         }
                         let top = list_top + layout.offset(range.start);
                         let bottom = list_top + layout.offset(range.end);
-                        let rect = egui::Rect::from_x_y_ranges(
-                            ui.max_rect().x_range(),
-                            top..=bottom,
-                        );
+                        let rect =
+                            egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
                         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |inner| {
                             for index in range {
                                 inner.push_id(("synthetic-row", index), |row_ui| {
@@ -93,8 +91,15 @@ fn virtual_reader_scrollarea_renders_bounded_contiguous_windows() {
             });
         });
         assert!(!output.shapes.is_empty());
-        assert!(!drawn.is_empty(), "no visible synthetic rows at scroll step {step}");
-        assert!(drawn.len() < 48, "viewport laid out too many rows: {}", drawn.len());
+        assert!(
+            !drawn.is_empty(),
+            "no visible synthetic rows at scroll step {step}"
+        );
+        assert!(
+            drawn.len() < 48,
+            "viewport laid out too many rows: {}",
+            drawn.len()
+        );
         for pair in drawn.windows(2) {
             assert_eq!(pair[1].0, pair[0].0 + 1, "virtual rows were not contiguous");
             assert!(
