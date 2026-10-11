@@ -69,7 +69,7 @@ fn first_available_font(paths: &[&str]) -> Option<Vec<u8>> {
 /// first for ASCII/Latin glyphs.
 pub(super) fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let mut loaded = Vec::new();
+    let mut loaded: Vec<String> = Vec::new();
     #[cfg(target_os = "linux")]
     for fallback in FALLBACKS {
         if let Some(bytes) = first_available_font(fallback.candidates) {
