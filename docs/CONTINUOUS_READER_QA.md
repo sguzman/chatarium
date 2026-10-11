@@ -145,6 +145,13 @@ snapshot. Fast keypress-and-release sequences otherwise lose their modifiers
 before egui evaluates the event. Headless tests reproduce this released-chord
 case and confirm ordinary Tab and Alt-modified keys remain untouched.
 
+The actual desktop GUI regression established that the consumed shortcut and
+catalog activation both succeeded, while the painted transcript stayed stale
+until a later resize. Creating and switching local conversations now explicitly
+request a new egui frame after the active ID changes. The same repair applies
+to sidebar selection and global Ctrl+Shift+N, without bypassing draft or
+in-flight commit guards.
+
 Keyboard conversation navigation now requires a materially different actual
 painted transcript region, not merely an injected X11 key. The harness
 re-establishes window focus and retries a missed Ctrl+Tab/Ctrl+Shift+Tab

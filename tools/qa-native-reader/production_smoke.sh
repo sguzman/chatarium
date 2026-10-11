@@ -233,7 +233,7 @@ PY
     done
     echo "keyboard conversation navigation failed to repaint transcript: $chord" >&2
     # Log only key identity/modifiers from the isolated test process.
-    grep 'CHATARIUM_QA_SHORTCUT_' "$OUT/production.log" "$OUT/production-restarted.log" 2>/dev/null | tail -n 50 >&2 || true
+    grep -E 'CHATARIUM_QA_(SHORTCUT|CYCLE)_' "$OUT/production.log" "$OUT/production-restarted.log" 2>/dev/null | tail -n 50 >&2 || true
     return 1
 }
 

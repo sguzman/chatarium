@@ -7442,6 +7442,9 @@ impl eframe::App for ChatariumApp {
             let before = self.local_conversation_id;
             self.create_local_conversation();
             if self.local_conversation_id != before {
+                // The transcript snapshot was taken before this selection.
+                // Force a fresh frame rather than waiting for another event.
+                ctx.request_repaint();
                 // Newly created conversations are empty: show them even if a
                 // previous search filter would have hidden their sidebar row.
                 self.local_conversation_search_query.clear();
@@ -7467,7 +7470,13 @@ impl eframe::App for ChatariumApp {
                     self.local_conversation_id == local_conversation_id
                 );
             }
+            let before = self.local_conversation_id;
             self.activate_local_conversation(local_conversation_id);
+            if self.local_conversation_id != before {
+                // Display data was projected for the previous conversation at
+                // frame start. The next paint must project the new selection.
+                ctx.request_repaint();
+            }
             if trace_cycle {
                 eprintln!(
                     "CHATARIUM_QA_CYCLE_AFTER selected={}",
