@@ -6,7 +6,7 @@ import json
 import sys
 
 folder = Path(sys.argv[1])
-labels = ("top", "middle", "page-down", "page-up", "wheel", "bottom", "search", "resized", "edited", "appended", "alternate", "returned")
+labels = ("top", "middle", "page-down", "page-up", "wheel", "bottom", "search", "resized", "edited", "appended", "alternate", "returned", "bookmarked", "bookmark-returned")
 images = {}
 for label in labels:
     src = folder / f"{label}.png"
@@ -39,4 +39,4 @@ wide = images["search"].width
 narrow = images["resized"].width
 if narrow >= wide - 100:
     raise AssertionError(f"X11 resize not reflected in screenshots: {wide} -> {narrow}")
-print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: twelve nonblank, different X11 screenshots")
+print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: fourteen nonblank, different X11 screenshots")

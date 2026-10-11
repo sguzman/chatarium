@@ -55,11 +55,12 @@ does not open the user's journal, browser, account bridge, or network provider.
 
 The dedicated `native-reader-visual-qa` GitHub Actions workflow builds the
 actual desktop binary and runs it under Xvfb/Openbox with software graphics.
-X11 automation captures twelve PNG screenshots per scale: top, middle,
+X11 automation captures fourteen PNG screenshots per scale: top, middle,
 keyboard PageDown and PageUp (through the same scroll-state helper used
 by the production workspace), wheel scroll, end, long-distance search jump, automatic hit recovery after resizing and after a long earlier-message edit
 without reissuing Search,
-synthetic append, switching away, and switching back. The append marker
+synthetic append, switching away, switching back, and restoration of an
+independent mid-archive reading bookmark. The append marker
 survives the synthetic conversation switch. The shell preserves a
 separate measured virtual layout and saved offset for each conversation,
 just as the native workspace does, and verifies returned visibility again

@@ -141,6 +141,21 @@ sleep 0.7
 wait_state '.phase == "return" and .conversation == "primary" and .source_count == 4097 and .appended_message_visible == true'
 save_frame returned
 
+# Independent bookmark regression: returning near the tail is insufficient.
+# Restore a saved mid-archive pixel offset after a conversation switch.
+xdotool key --clearmodifiers F2
+wait_state '.phase == "middle" and .conversation == "primary" and .source_count == 4097 and .render_start > 1000 and .render_end < 3500'
+sleep 0.4
+save_frame bookmarked
+bookmark_offset="$(jq -r '.scroll_offset' "$STATE")"
+xdotool key --clearmodifiers F6
+wait_state '.phase == "alternate" and .conversation == "alternate" and .source_count == 256'
+xdotool key --clearmodifiers F7
+wait_state ".phase == \"return\" and .conversation == \"primary\" and .source_count == 4097 and (.scroll_offset - $bookmark_offset | abs) < 80"
+sleep 0.7
+wait_state ".phase == \"return\" and .conversation == \"primary\" and .source_count == 4097 and (.scroll_offset - $bookmark_offset | abs) < 80"
+save_frame bookmark-returned
+
 python3 tools/qa-native-reader/check_screenshots.py "$OUT"
 jq -n --arg window "$window" \
     --slurpfile initial "$OUT/top.json" \
@@ -155,8 +170,10 @@ jq -n --arg window "$window" \
     --slurpfile appended "$OUT/appended.json" \
     --slurpfile alternate "$OUT/alternate.json" \
     --slurpfile returned "$OUT/returned.json" \
+    --slurpfile bookmarked "$OUT/bookmarked.json" \
+    --slurpfile bookmark_returned "$OUT/bookmark-returned.json" \
     '{schema:"chatarium-native-reader-visual-qa-summary",version:1,status:"pass",
-      screenshots:12, window_id:$window,
+      screenshots:14, window_id:$window,
       first:$initial[0].render_start,middle:$middle[0].render_start,
       page_down_offset:$page_down[0].scroll_offset,
       page_up_offset:$page_up[0].scroll_offset,
@@ -170,5 +187,7 @@ jq -n --arg window "$window" \
       appended_count:$appended[0].source_count,
       alternate_count:$alternate[0].source_count,
       returned_count:$returned[0].source_count,
-      returned_append_visible:$returned[0].appended_message_visible}' >"$OUT/summary.json"
+      returned_append_visible:$returned[0].appended_message_visible,
+      bookmarked_scroll_offset:$bookmarked[0].scroll_offset,
+      restored_bookmark_scroll_offset:$bookmark_returned[0].scroll_offset}' >"$OUT/summary.json"
 echo "CHATARIUM_NATIVE_VISUAL_QA $(cat "$OUT/summary.json")"
