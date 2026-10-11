@@ -526,6 +526,86 @@ mod tests {
     }
 
     #[test]
+    fn headless_egui_reader_bubbles_keep_separate_bounds_after_reflow() {
+        use eframe::egui;
+
+        // Drive the real production bubble renderer through an egui frame.
+        // No GPU, window server, private transcript, or screenshot fixture is
+        // required. Paint output and bubble geometry must remain well-formed.
+        let mut records = vec![
+            message(1, "A short local user turn"),
+            message(
+                2,
+                "# Heading\n\nA paragraph with Español, 日本語, العربية and 🪐.\n\n- First\n- Second\n\n`rust\nlet x = 1;\n`",
+            ),
+            message(3, &("This paragraph needs to wrap naturally. ".repeat(115))),
+            message(4, "first line\nsecond line\nthird line\n"),
+        ];
+        records[1].role = DisplayRole::Assistant;
+        records[3].role = DisplayRole::Assistant;
+
+        let mut former_heights = Vec::new();
+        for width in [460.0_f32, 700.0, 1_200.0] {
+            let context = egui::Context::default();
+            let mut bounds = Vec::new();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 1_200.0),
+                )),
+                ..Default::default()
+            };
+            let output = context.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for record in &records {
+                        let response = super::draw_reader_bubble(
+                            ui,
+                            record,
+                            "",
+                            false,
+                            ctx,
+                        );
+                        bounds.push(response.rect);
+                        ui.add_space(12.0);
+                    }
+                });
+            });
+            assert!(!output.shapes.is_empty(), "egui did not emit paint output");
+            assert_eq!(bounds.len(), records.len());
+
+            for (index, rect) in bounds.iter().enumerate() {
+                assert!(
+                    rect.width().is_finite()
+                        && rect.height().is_finite()
+                        && rect.width() > 0.0
+                        && rect.height() > 0.0,
+                    "invalid rendered bubble {index} at width {width}: {rect:?}"
+                );
+                assert!(
+                    rect.left() >= -1.0 && rect.right() <= width + 1.0,
+                    "bubble {index} escaped horizontal bounds at width {width}: {rect:?}"
+                );
+            }
+            for pair in bounds.windows(2) {
+                assert!(
+                    pair[1].top() >= pair[0].bottom(),
+                    "actual egui bubble rectangles overlap vertically at width {width}: {pair:?}"
+                );
+            }
+            if !former_heights.is_empty() {
+                // The long paragraph should not become taller when more width
+                // is available. The other bubbles include hard line breaks
+                // and may retain the same height.
+                assert!(
+                    bounds[2].height() <= former_heights[2] + 2.0,
+                    "long paragraph became taller on a wider reader"
+                );
+            }
+            former_heights = bounds.iter().map(egui::Rect::height).collect();
+        }
+    }
+
+    #[test]
     fn huge_archives_use_a_bounded_row_subset_and_ignore_bad_heights() {
         let source = Arc::new((0..16_384).map(|i| message(i, "one row")).collect());
         let mut layout = VirtualReaderLayout::default();
