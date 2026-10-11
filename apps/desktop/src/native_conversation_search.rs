@@ -253,9 +253,9 @@ struct NativeRowsCache {
     rows: Arc<Vec<NativeSearchRow>>,
 }
 
-/// Experimental single-pass reference used by the ignored same-run
-/// performance profile only. The runtime retains the faster two-pass path.
-#[cfg(test)]
+/// Build one native search row with a single message scan. Same-run
+/// release-mode profiling favors this over the former two-pass row builder.
+/// The older path remains a test-only comparison reference.
 fn collect_native_search_row(
     needle: &str,
     catalog_index: usize,
@@ -330,6 +330,7 @@ pub fn cached_rows(
         }
     }
 
+    let needle = query.trim().to_lowercase();
     let mut rows = Vec::new();
     for (catalog_index, entry) in entries.iter().enumerate() {
         if entry.archived && !show_archived {
@@ -342,36 +343,8 @@ pub fn cached_rows(
             .filter(|title| !title.trim().is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| derived_conversation_title(messages));
-        if let Some((kind, hit)) = find_match_with_position(
-            query,
-            &title,
-            messages.iter().map(|message| message.text.as_str()),
-        ) {
-            let (message_index, preview, matching_message_indices) = match hit {
-                Some((first, preview)) => {
-                    let needle = query.trim().to_lowercase();
-                    let mut indices = vec![first];
-                    indices.extend(messages.iter().enumerate().skip(first + 1).filter_map(
-                        |(position, message)| {
-                            message
-                                .text
-                                .to_lowercase()
-                                .contains(&needle)
-                                .then_some(position)
-                        },
-                    ));
-                    (Some(first), Some(preview), indices)
-                }
-                None => (None, None, Vec::new()),
-            };
-            rows.push(NativeSearchRow {
-                catalog_index,
-                title,
-                kind,
-                preview,
-                message_index,
-                matching_message_indices,
-            });
+        if let Some(row) = collect_native_search_row(&needle, catalog_index, title, messages) {
+            rows.push(row);
         }
     }
     let rows = Arc::new(rows);
@@ -938,6 +911,72 @@ mod tests {
                 .iter()
                 .all(|message| { !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT") })
         );
+    }
+
+    #[test]
+    fn single_pass_row_preserves_unicode_title_and_multi_hit_semantics() {
+        let bodies = [
+            "İstanbul and İzmir",
+            "El NIÑO sonríe",
+            "ΑΘΗΝΑ και Ελλάδα",
+            "مرحبا بالعالم 🌿",
+            "日本語の世界",
+        ];
+        let messages = bodies
+            .iter()
+            .enumerate()
+            .map(|(index, body)| DisplayMessage {
+                role: super::super::DisplayRole::User,
+                text: (*body).to_owned(),
+                sequence: index as u64 + 1,
+                timestamp: None,
+                provenance_label: None,
+            })
+            .collect::<Vec<_>>();
+        let title = "Title-only fallback";
+        for query in [
+            "i", "İ", "niño", "αθηνα", "ΕΛΛΑΔΑ", "مرحبا", "🌿", "世界",
+            "fallback", "nonexistent",
+        ] {
+            let needle = query.trim().to_lowercase();
+            let row = collect_native_search_row(&needle, 0, title.to_owned(), &messages);
+            let reference = find_match_with_position(
+                query,
+                title,
+                messages.iter().map(|message| message.text.as_str()),
+            );
+            assert_eq!(
+                row.as_ref().map(|row| row.kind),
+                reference.as_ref().map(|(kind, _)| *kind),
+                "classification differs for {query}"
+            );
+            assert_eq!(
+                row.as_ref().and_then(|row| row.message_index),
+                reference
+                    .as_ref()
+                    .and_then(|(_, hit)| hit.as_ref().map(|(index, _)| *index)),
+                "first match differs for {query}"
+            );
+            assert_eq!(
+                row.as_ref().and_then(|row| row.preview.as_ref()),
+                reference
+                    .as_ref()
+                    .and_then(|(_, hit)| hit.as_ref().map(|(_, excerpt)| excerpt)),
+                "preview differs for {query}"
+            );
+            let expected = messages
+                .iter()
+                .enumerate()
+                .filter_map(|(index, message)| {
+                    message.text.to_lowercase().contains(&needle).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            if let Some(row) = row {
+                assert_eq!(row.matching_message_indices, expected, "hits differ for {query}");
+            } else {
+                assert!(expected.is_empty());
+            }
+        }
     }
 
     #[test]
