@@ -263,6 +263,8 @@ pub const READER_AUTO_PAGE_THRESHOLD: usize = 1_024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReaderWindow {
     pub enabled: bool,
+    /// Opt-in variable-height viewport rendering; mutually exclusive with pages.
+    pub virtualized: bool,
     start: usize,
     follow_tail: bool,
     observed_count: usize,
@@ -274,6 +276,7 @@ impl ReaderWindow {
     pub fn new(count: usize, enabled: bool) -> Self {
         Self {
             enabled,
+            virtualized: false,
             start: count.saturating_sub(READER_PAGE_SIZE),
             follow_tail: true,
             observed_count: count,

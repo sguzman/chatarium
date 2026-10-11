@@ -22,6 +22,7 @@ pub struct VirtualReaderLayout {
     width: f32,
     dirty_from: Option<usize>,
     last_search: Option<(String, Option<usize>)>,
+    last_view_offset: Option<f32>,
 }
 
 impl VirtualReaderLayout {
@@ -68,6 +69,17 @@ impl VirtualReaderLayout {
         self.prefix = vec![0.0; self.heights.len() + 1];
         self.dirty_from = Some(0);
         self.finish_measurements();
+    }
+
+    #[must_use]
+    pub fn saved_view_offset(&self) -> Option<f32> {
+        self.last_view_offset
+    }
+
+    pub fn remember_view_offset(&mut self, offset: f32) {
+        if offset.is_finite() && offset >= 0.0 {
+            self.last_view_offset = Some(offset);
+        }
     }
 
     #[must_use]

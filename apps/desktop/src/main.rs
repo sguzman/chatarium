@@ -13530,6 +13530,11 @@ impl eframe::App for ChatariumApp {
         let mut reader_hit_from_button = self.reader_search_hit;
         let mut reader_output_offset = None;
 
+        let virtual_id = egui::Id::new(("chatarium-native-virtual-layout", &reader_key));
+        let mut virtual_layout = ctx
+            .data_mut(|data| data.get_temp::<virtual_reader::VirtualReaderLayout>(virtual_id))
+            .unwrap_or_default();
+
         // Paging is a local UI projection, not a change to journal contents,
         // inference context or authorization. Keep restored full-reader
         // positions intact when the user already has a saved scroll position.
@@ -13564,9 +13569,21 @@ impl eframe::App for ChatariumApp {
             )
             .show(ctx, |ui| {
                 if !historical_mode && display_messages.len() > offline_reader::READER_PAGE_SIZE {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let was_virtualized = reader_window.virtualized;
+                        ui.checkbox(&mut reader_window.virtualized, "Continuous reader");
+                        if reader_window.virtualized != was_virtualized {
+                            if reader_window.virtualized {
+                                reader_window.enabled = false;
+                            }
+                            set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+                            ctx.request_repaint();
+                        }
                         let was_enabled = reader_window.enabled;
                         ui.checkbox(&mut reader_window.enabled, "Paged reader");
+                        if reader_window.enabled {
+                            reader_window.virtualized = false;
+                        }
                         if reader_window.enabled != was_enabled {
                             if reader_window.enabled {
                                 reader_window.latest(display_messages.len());
@@ -13575,6 +13592,9 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                             set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+                        }
+                        if reader_window.virtualized {
+                            ui.label("Virtualized · scroll for older messages");
                         }
                         if reader_window.enabled {
                             let range = reader_window.range(display_messages.len());
@@ -13610,13 +13630,18 @@ impl eframe::App for ChatariumApp {
                     .stick_to_bottom(true)
                     .auto_shrink([false, false]);
                 if let Some(offset) = restore_reader_offset {
-                    // A newly enabled page represents the tail of the archive,
-                    // not the full transcript's saved pixel coordinate.
-                    reader_scroll = reader_scroll.vertical_scroll_offset(
-                        if reader_window.enabled { f32::MAX } else { offset },
-                    );
+                    // Full-reader pixel offsets refer to an entirely different
+                    // content extent, so do not apply them to a virtual layout.
+                    let resolved_offset = if reader_window.virtualized {
+                        virtual_layout.saved_view_offset().unwrap_or(f32::MAX)
+                    } else if reader_window.enabled {
+                        f32::MAX
+                    } else {
+                        offset
+                    };
+                    reader_scroll = reader_scroll.vertical_scroll_offset(resolved_offset);
                 }
-                let reader_output = reader_scroll.show(ui, |ui| {
+                let reader_output = reader_scroll.show_viewport(ui, |ui, viewport| {
                         if !self.reader_search_query.trim().is_empty()
                             && !reader_hit_targets.is_empty()
                         {
@@ -13720,68 +13745,121 @@ impl eframe::App for ChatariumApp {
                             });
                         } else {
                             ui.add_space(8.0);
-                            let window = if historical_mode {
-                                0..display_messages.len()
-                            } else {
-                                reader_window.range(display_messages.len())
-                            };
-                            for (message_index, message) in display_messages
-                                .iter()
-                                .enumerate()
-                                .skip(window.start)
-                                .take(window.end - window.start)
-                            {
-                                let message_is_active_hit = active_reader_message == Some(message_index);
-                                match message.role {
-                                    DisplayRole::User => {
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Min),
-                                            |ui| {
-                                                let response = transcript_bubble(
-                                                    ui,
-                                                    message,
-                                                    egui::Color32::from_rgb(38, 42, 52),
-                                                    "You",
-                                                    &self.reader_search_query,
-                                                    message_is_active_hit,
-                                                    ctx,
+                            if reader_window.virtualized && !historical_mode {
+                                let source = native_search_index
+                                    .message_projection(self.local_conversation_id);
+                                virtual_layout.sync(source, ui.available_width());
+                                let list_top = ui.cursor().top();
+                                let content_top = ui.max_rect().top();
+                                let header_height = list_top - content_top;
+                                if let Some(offset) = virtual_layout.new_search_offset(
+                                    &self.reader_search_query,
+                                    active_reader_message,
+                                ) {
+                                    set_reader_scroll(
+                                        ctx,
+                                        transcript_scroll_id,
+                                        header_height + offset,
+                                    );
+                                    ctx.request_repaint();
+                                }
+                                let range = virtual_layout.visible_range(
+                                    viewport.min.y - header_height,
+                                    viewport.max.y - header_height,
+                                );
+                                let total_height = virtual_layout.total_height();
+                                ui.set_min_height(header_height + total_height);
+                                if !range.is_empty() {
+                                    let top = list_top + virtual_layout.offset(range.start);
+                                    let bottom = list_top + virtual_layout.offset(range.end);
+                                    let rect = egui::Rect::from_x_y_ranges(
+                                        ui.max_rect().x_range(),
+                                        top..=bottom,
+                                    );
+                                    ui.scope_builder(
+                                        egui::UiBuilder::new().max_rect(rect),
+                                        |viewport_ui| {
+                                            for message_index in range {
+                                                viewport_ui.push_id(
+                                                    (
+                                                        "native-virtual-bubble",
+                                                        message_index,
+                                                        display_messages[message_index].sequence,
+                                                    ),
+                                                    |row_ui| {
+                                                        let before = row_ui.cursor().top();
+                                                        draw_reader_bubble(
+                                                            row_ui,
+                                                            &display_messages[message_index],
+                                                            &self.reader_search_query,
+                                                            false,
+                                                            ctx,
+                                                        );
+                                                        row_ui.add_space(12.0);
+                                                        let actual_height =
+                                                            row_ui.cursor().top() - before;
+                                                        virtual_layout.measure(
+                                                            message_index,
+                                                            actual_height,
+                                                        );
+                                                    },
                                                 );
-                                                if message_is_active_hit {
-                                                    response.scroll_to_me(Some(egui::Align::Center));
-                                                }
-                                            },
-                                        );
-                                    }
-                                    DisplayRole::Assistant => {
-                                        ui.with_layout(
-                                            egui::Layout::left_to_right(egui::Align::Min),
-                                            |ui| {
-                                                let response = transcript_bubble(
-                                                    ui,
-                                                    message,
-                                                    egui::Color32::from_rgb(29, 31, 36),
-                                                    "Assistant",
-                                                    &self.reader_search_query,
-                                                    message_is_active_hit,
-                                                    ctx,
-                                                );
-                                                if message_is_active_hit {
-                                                    response.scroll_to_me(Some(egui::Align::Center));
-                                                }
-                                            },
-                                        );
+                                            }
+                                        },
+                                    );
+                                    if virtual_layout.finish_measurements() {
+                                        ctx.request_repaint();
                                     }
                                 }
-                                ui.add_space(12.0);
+                            } else {
+                                let window = if historical_mode {
+                                    0..display_messages.len()
+                                } else {
+                                    reader_window.range(display_messages.len())
+                                };
+                                for (message_index, message) in display_messages
+                                    .iter()
+                                    .enumerate()
+                                    .skip(window.start)
+                                    .take(window.end - window.start)
+                                {
+                                    let message_is_active_hit =
+                                        active_reader_message == Some(message_index);
+                                    let response = draw_reader_bubble(
+                                        ui,
+                                        message,
+                                        &self.reader_search_query,
+                                        message_is_active_hit,
+                                        ctx,
+                                    );
+                                    if message_is_active_hit {
+                                        response.scroll_to_me(Some(egui::Align::Center));
+                                    }
+                                    ui.add_space(12.0);
+                                }
                             }
                         }
                     });
                 reader_output_offset = Some(reader_output.state.offset.y);
             });
 
-        ctx.data_mut(|data| data.insert_temp(paging_id, reader_window.clone()));
+        if reader_window.virtualized {
+            if let Some(offset) = reader_output_offset {
+                virtual_layout.remember_view_offset(offset);
+            }
+        }
+        ctx.data_mut(|data| {
+            data.insert_temp(paging_id, reader_window.clone());
+            data.insert_temp(virtual_id, virtual_layout);
+        });
+        let selection_changed = self.reader_search_hit != reader_hit_from_button;
         self.reader_search_hit = reader_hit_from_button;
-        if let Some(offset) = reader_output_offset.filter(|_| !reader_window.enabled) {
+        if selection_changed {
+            ctx.request_repaint();
+        }
+        if let Some(offset) = reader_output_offset
+            .filter(|_| !reader_window.enabled && !reader_window.virtualized)
+        {
             if (offset - self.reader_last_saved_offset).abs() > 1.0
                 && self.reader_last_position_write.elapsed() > Duration::from_millis(250)
             {
@@ -13800,6 +13878,45 @@ impl eframe::App for ChatariumApp {
             || self.historical_load_pending.is_some()
         {
             ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+}
+
+fn draw_reader_bubble(
+    ui: &mut egui::Ui,
+    message: &DisplayMessage,
+    search_query: &str,
+    active_hit: bool,
+    ctx: &egui::Context,
+) -> egui::Response {
+    match message.role {
+        DisplayRole::User => {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                transcript_bubble(
+                    ui,
+                    message,
+                    egui::Color32::from_rgb(38, 42, 52),
+                    "You",
+                    search_query,
+                    active_hit,
+                    ctx,
+                )
+            })
+            .inner
+        }
+        DisplayRole::Assistant => {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                transcript_bubble(
+                    ui,
+                    message,
+                    egui::Color32::from_rgb(29, 31, 36),
+                    "Assistant",
+                    search_query,
+                    active_hit,
+                    ctx,
+                )
+            })
+            .inner
         }
     }
 }
