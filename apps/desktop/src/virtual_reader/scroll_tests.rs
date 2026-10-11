@@ -125,7 +125,7 @@ fn scroll_area_keyboard_offset_uses_parent_scoped_state_id() {
         };
         context.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let scroll_id = ui.make_persistent_id(salt);
+                let scroll_id = ui.make_persistent_id(egui::IdSalt::new(salt));
                 actual_id = Some(scroll_id);
                 if frame == 1 {
                     super::super::adjust_reader_scroll(ctx, scroll_id, 480.0);

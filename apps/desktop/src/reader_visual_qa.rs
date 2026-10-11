@@ -174,7 +174,7 @@ impl eframe::App for ReaderQa {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
-                let actual_scroll_id = ui.make_persistent_id(scroll_id);
+                let actual_scroll_id = ui.make_persistent_id(egui::IdSalt::new(scroll_id));
                 if page_down {
                     super::adjust_reader_scroll(ctx, actual_scroll_id, 480.0);
                 }
