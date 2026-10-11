@@ -100,6 +100,25 @@ user/assistant journal observations invalidate that projection, while
 unrelated draft, tool and controller events can reuse it. The underlying
 append-only journal and conversation ownership boundaries remain unchanged.
 
+### Bounded native transcript reader
+
+Large native conversations (1,024 or more visible messages) now default to a
+**160-message paged reader** when no previous nonzero full-transcript scroll
+position needs restoring. Earlier and Later navigate contiguous message pages.
+The explicit **Paged reader** toggle restores the complete reader whenever
+requested. Home and End select the first and last page, respectively, without
+altering the existing text-input keyboard focus rules. A selected native search
+hit automatically reveals its source message even when it lies outside the
+current page.
+
+This is **bounded page rendering**, not variable-height scroll virtualization:
+the current page still renders its messages normally, and the paging buttons
+are used to reach older material. The underlying transcript, search index,
+memory permissions, source event sequences and request-context composition
+remain complete and unchanged. The paged view does not overwrite persisted
+pixel offsets from full-transcript reading. Imported and mirrored historical
+readers continue to use their original full projection.
+
 ### Native conversation navigation
 
 The native workspace supports a stable, keyboard-driven chat cycle:

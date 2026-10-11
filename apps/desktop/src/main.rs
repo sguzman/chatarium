@@ -13487,6 +13487,8 @@ impl eframe::App for ChatariumApp {
         }
         let mut next_reader_hit = false;
         let mut previous_reader_hit = false;
+        let mut reader_home_requested = false;
+        let mut reader_end_requested = false;
         let transcript_scroll_id = egui::Id::new("transcript-reader-scroll");
         if conversation_keybindings::may_consume_reader_navigation(ctx.wants_keyboard_input()) {
             ctx.input_mut(|input| {
@@ -13503,9 +13505,11 @@ impl eframe::App for ChatariumApp {
                     adjust_reader_scroll(ctx, transcript_scroll_id, -480.0);
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
+                    reader_home_requested = true;
                     set_reader_scroll(ctx, transcript_scroll_id, 0.0);
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
+                    reader_end_requested = true;
                     set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
                 }
             });
@@ -13529,19 +13533,27 @@ impl eframe::App for ChatariumApp {
         // inference context or authorization. Keep restored full-reader
         // positions intact when the user already has a saved scroll position.
         let paging_id = egui::Id::new(("chatarium-native-reader-page", &reader_key));
-        let mut reader_window = ctx.data_mut(|data| {
-            data.get_temp::<offline_reader::ReaderWindow>(paging_id)
-        }).unwrap_or_else(|| {
-            let enable = !historical_mode
-                && display_messages.len() >= offline_reader::READER_AUTO_PAGE_THRESHOLD
-                && restore_reader_offset.unwrap_or(0.0) <= 0.0;
-            offline_reader::ReaderWindow::new(display_messages.len(), enable)
-        });
+        let mut reader_window = ctx
+            .data_mut(|data| data.get_temp::<offline_reader::ReaderWindow>(paging_id))
+            .unwrap_or_else(|| {
+                let enable = !historical_mode
+                    && display_messages.len() >= offline_reader::READER_AUTO_PAGE_THRESHOLD
+                    && restore_reader_offset.unwrap_or(0.0) <= 0.0;
+                offline_reader::ReaderWindow::new(display_messages.len(), enable)
+            });
         reader_window.sync(
             display_messages.len(),
             &self.reader_search_query,
             active_reader_message,
         );
+        if reader_window.enabled {
+            if reader_home_requested {
+                reader_window.first();
+            }
+            if reader_end_requested {
+                reader_window.latest(display_messages.len());
+            }
+        }
 
         egui::CentralPanel::default()
             .frame(
@@ -13557,11 +13569,9 @@ impl eframe::App for ChatariumApp {
                         if reader_window.enabled != was_enabled {
                             if reader_window.enabled {
                                 reader_window.latest(display_messages.len());
-                                reader_window.sync(
-                                    display_messages.len(),
-                                    &self.reader_search_query,
-                                    active_reader_message,
-                                );
+                                if let Some(target) = active_reader_message {
+                                    reader_window.reveal(display_messages.len(), target);
+                                }
                             }
                             set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
                         }
@@ -13599,7 +13609,11 @@ impl eframe::App for ChatariumApp {
                     .stick_to_bottom(true)
                     .auto_shrink([false, false]);
                 if let Some(offset) = restore_reader_offset {
-                    reader_scroll = reader_scroll.vertical_scroll_offset(offset);
+                    // A newly enabled page represents the tail of the archive,
+                    // not the full transcript's saved pixel coordinate.
+                    reader_scroll = reader_scroll.vertical_scroll_offset(
+                        if reader_window.enabled { f32::MAX } else { offset },
+                    );
                 }
                 let reader_output = reader_scroll.show(ui, |ui| {
                         if !self.reader_search_query.trim().is_empty()

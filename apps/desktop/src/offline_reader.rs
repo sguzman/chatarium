@@ -301,15 +301,23 @@ impl ReaderWindow {
         self.start = self.start.min(count.saturating_sub(READER_PAGE_SIZE));
         let changed = self.last_query != query || self.last_search_message != hit_message;
         if self.enabled && changed {
-            if let Some(target) = hit_message.filter(|target| *target < count) {
-                self.start = target
-                    .saturating_sub(READER_PAGE_SIZE / 2)
-                    .min(count.saturating_sub(READER_PAGE_SIZE));
-                self.follow_tail = false;
+            if let Some(target) = hit_message {
+                self.reveal(count, target);
             }
         }
         self.last_query = query.to_owned();
         self.last_search_message = hit_message;
+    }
+
+    /// Reframe a newly selected search hit, retaining all source message
+    /// indices and avoiding implicit cross-conversation content inclusion.
+    pub fn reveal(&mut self, count: usize, target: usize) {
+        if target < count {
+            self.start = target
+                .saturating_sub(READER_PAGE_SIZE / 2)
+                .min(count.saturating_sub(READER_PAGE_SIZE));
+            self.follow_tail = false;
+        }
     }
 
     pub fn earlier(&mut self) {
@@ -410,6 +418,8 @@ mod tests {
         assert_eq!(state.range(4_097), 0..160);
         state.sync(4_097, "needle", Some(2_050));
         assert!(state.range(4_097).contains(&2_050));
+        state.reveal(4_097, 3_900);
+        assert!(state.range(4_097).contains(&3_900));
         state.latest(4_097);
         state.sync(4_099, "needle", Some(2_050));
         assert_eq!(state.range(4_099), 3_939..4_099);
