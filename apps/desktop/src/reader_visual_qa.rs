@@ -151,19 +151,20 @@ impl ReaderQa {
 impl eframe::App for ReaderQa {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
-        let (top, middle, bottom, search, append, away, back, edit, background) = ctx.input_mut(|input| {
-            (
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F3),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F4),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F5),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F8),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F9),
-            )
-        });
+        let (top, middle, bottom, search, append, away, back, edit, background) =
+            ctx.input_mut(|input| {
+                (
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F3),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F4),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F5),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F8),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F9),
+                )
+            });
         let page_down =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::PageDown));
         let page_up =

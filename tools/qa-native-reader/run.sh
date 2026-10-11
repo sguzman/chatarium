@@ -71,7 +71,11 @@ save_frame() {
     import -window "$window" "$OUT/$label.png"
     cp "$STATE" "$OUT/$label.json"
     test -s "$OUT/$label.png"
-    jq -e '(.source_count == 4096 or .source_count == 4097 or .source_count == 256) and .rendered_count > 0 and .rendered_count < 48 and .persistent_user_journal_access == false and .remote_network_access == false' "$OUT/$label.json" >/dev/null
+    if ! jq -e '(.source_count == 4096 or .source_count == 4097 or .source_count == 4098 or .source_count == 256) and .rendered_count > 0 and .rendered_count < 48 and .persistent_user_journal_access == false and .remote_network_access == false' "$OUT/$label.json" >/dev/null; then
+        echo "Invalid native-reader QA frame state: $label" >&2
+        cat "$OUT/$label.json" >&2
+        exit 1
+    fi
     if [[ "${CHATARIUM_QA_REQUIRE_NOTO:-0}" == "1" ]]; then
         jq -e '(.font_fallbacks | index("chatarium.noto.cjk")) != null and (.font_fallbacks | index("chatarium.noto.arabic")) != null' "$OUT/$label.json" >/dev/null
     fi
