@@ -23,6 +23,7 @@ jobs:
     env:
       LIBGL_ALWAYS_SOFTWARE: "1"
       CHATARIUM_QA_REQUIRE_NOTO: "1"
+      CHATARIUM_QA_ISOLATED_XVFB: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -37,6 +38,7 @@ jobs:
       - name: Lint native GUI QA harness before compiling
         run: |
           bash -n tools/qa-native-reader/run.sh
+          bash -n tools/qa-native-reader/require_isolated_xvfb.sh
           bash -n tools/qa-native-reader/production_smoke.sh
           bash -n tools/qa-native-reader/production_long_reader_smoke.sh
           python3 -m py_compile tools/qa-native-reader/check_screenshots.py tools/qa-native-reader/check_empty_conversation.py tools/qa-native-reader/check_replay.py

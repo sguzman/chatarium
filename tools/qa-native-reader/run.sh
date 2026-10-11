@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+# Check display isolation before creating fixtures or launching a window manager.
+source "$ROOT/tools/qa-native-reader/require_isolated_xvfb.sh"
 : "${CHATARIUM_READER_QA_OUTPUT:=.qa-native-reader}"
 OUT="$ROOT/$CHATARIUM_READER_QA_OUTPUT"
 mkdir -p "$OUT"

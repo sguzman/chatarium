@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+# Check display isolation before creating fixtures or launching a window manager.
+source "$ROOT/tools/qa-native-reader/require_isolated_xvfb.sh"
 OUT="$ROOT/.qa-native-long-reader"
 if [[ -e "$OUT" || -L "$OUT" ]]; then
     echo "refusing to reuse an existing disposable long-reader fixture" >&2

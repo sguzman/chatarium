@@ -93,6 +93,18 @@ messages inside the ordinary ChatariumApp (rather than this isolated shell),
 reviewed typographic screenshot comparisons and tests in the full
 production workspace.
 
+## X11 desktop isolation guard
+
+Every GUI QA harness now fails closed unless the caller explicitly enables
+`CHATARIUM_QA_ISOLATED_XVFB=1` **and** the current local `DISPLAY` matches
+a live, local `Xvfb` process. The test aborts before starting Openbox,
+creating fixtures, or injecting any mouse/keyboard events otherwise. This
+guards the user's Hyprland/XWayland desktop against accidental QA automation.
+The dedicated GitHub Actions runner opts in only while its disposable Xvfb
+server supplies the display. Remote display connections are never supported.
+The guard was independently tested against missing opt-in, a nonexistent
+Xvfb display, and a live isolated Xvfb session.
+
 ## Isolated actual-workspace GUI smoke
 
 In addition to the synthetic virtual-reader shell, the visual QA workflow now
