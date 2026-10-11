@@ -172,6 +172,15 @@ The long-archive production test now runs independently after a successful
 build, even if the earlier two-conversation GUI smoke fails; its result
 is collected in the same CI run instead of being skipped.
 
+The first independent 257-message production run exposed an egui NaN layout
+panic when switching to Continuous reader after End navigation. Its cause is
+an obsolete `f32::MAX` ScrollArea offset in the mode-toggle and restore
+paths. All native tail/restore offsets now use the same bounded finite value
+already established by the Home/End regression fix. The disposable app also
+runs with `RUST_BACKTRACE=1` so future native layout panics retain actionable
+stack traces. Keyboard QA additionally records boolean-only activation guard
+and result evidence after a shortcut is consumed.
+
 ## Isolated long-archive production GUI QA
 
 The dedicated `chatarium-reader-seed` test executable writes exactly 257

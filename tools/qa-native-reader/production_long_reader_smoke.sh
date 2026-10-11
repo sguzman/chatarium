@@ -67,6 +67,7 @@ env -i \
     XAUTHORITY="$(printenv XAUTHORITY || true)" \
     LIBGL_ALWAYS_SOFTWARE=1 \
     CHATARIUM_DATA_DIR="$OUT/data" \
+    RUST_BACKTRACE=1 \
     "$ROOT/target/debug/chatarium-desktop" >"$OUT/production.log" 2>&1 &
 app_pid=$!
 window=""

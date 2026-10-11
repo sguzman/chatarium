@@ -61,7 +61,14 @@ pub fn consume_native_conversation_shortcuts(
     let trace = std::env::var("CHATARIUM_QA_SHORTCUT_TRACE").as_deref() == Ok("1");
     if trace {
         for event in &input.events {
-            if let egui::Event::Key { key, pressed, repeat, modifiers, .. } = event {
+            if let egui::Event::Key {
+                key,
+                pressed,
+                repeat,
+                modifiers,
+                ..
+            } = event
+            {
                 if modifiers.ctrl || *key == egui::Key::Tab {
                     eprintln!(
                         "CHATARIUM_QA_SHORTCUT_EVENT key={key:?} pressed={pressed} repeat={repeat} ctrl={} shift={} alt={} snapshot_ctrl={} snapshot_shift={}",

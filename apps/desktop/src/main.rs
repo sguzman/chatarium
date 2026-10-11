@@ -7452,7 +7452,28 @@ impl eframe::App for ChatariumApp {
             }
         } else if let Some(local_conversation_id) = select_local_requested {
             let can_switch = !self.local_conversation_busy();
+            // Diagnostic evidence is enabled only for disposable production GUI QA.
+            // Never log conversation identities, drafts or message contents.
+            let trace_cycle = cycle_from_keyboard
+                && std::env::var("CHATARIUM_QA_SHORTCUT_TRACE").as_deref() == Ok("1");
+            if trace_cycle {
+                eprintln!(
+                    "CHATARIUM_QA_CYCLE_BEFORE busy={} unsaved_draft={} pending_commit={} pending_remote={} active_remote={} same_target={}",
+                    !can_switch,
+                    self.saved_revision < self.draft_revision,
+                    self.commit_in_flight.is_some(),
+                    self.pending_remote_turn.is_some(),
+                    self.active_remote_turn.is_some(),
+                    self.local_conversation_id == local_conversation_id
+                );
+            }
             self.activate_local_conversation(local_conversation_id);
+            if trace_cycle {
+                eprintln!(
+                    "CHATARIUM_QA_CYCLE_AFTER selected={}",
+                    self.local_conversation_id == local_conversation_id
+                );
+            }
             if cycle_from_keyboard
                 && can_switch
                 && self.local_conversation_id == local_conversation_id
@@ -13478,6 +13499,7 @@ impl eframe::App for ChatariumApp {
         let mut reader_home_requested = false;
         let mut reader_end_requested = false;
         let mut reader_page_delta = 0.0_f32;
+        const READER_BOTTOM_SCROLL_OFFSET: f32 = 100_000_000.0;
         let transcript_scroll_id = egui::Id::new("transcript-reader-scroll");
         // ScrollArea adds its parent Ui ID to this salt. Resolve its actual
         // persistent state key only after the parent Ui has been created.
@@ -13578,7 +13600,7 @@ impl eframe::App for ChatariumApp {
                     // geometry and unexpectedly move to the beginning.
                     // A bounded, finite offset is enough to clamp to the
                     // actual bottom of realistic native conversations.
-                    set_reader_scroll(ctx, reader_scroll_state_id, 100_000_000.0);
+                    set_reader_scroll(ctx, reader_scroll_state_id, READER_BOTTOM_SCROLL_OFFSET);
                 }
                 if !historical_mode && display_messages.len() > offline_reader::READER_PAGE_SIZE {
                     ui.horizontal_wrapped(|ui| {
@@ -13588,7 +13610,7 @@ impl eframe::App for ChatariumApp {
                             if reader_window.virtualized {
                                 reader_window.enabled = false;
                             }
-                            set_reader_scroll(ctx, reader_scroll_state_id, f32::MAX);
+                            set_reader_scroll(ctx, reader_scroll_state_id, READER_BOTTOM_SCROLL_OFFSET);
                             ctx.request_repaint();
                         }
                         let was_enabled = reader_window.enabled;
@@ -13603,7 +13625,7 @@ impl eframe::App for ChatariumApp {
                                     reader_window.reveal(display_messages.len(), target);
                                 }
                             }
-                            set_reader_scroll(ctx, reader_scroll_state_id, f32::MAX);
+                            set_reader_scroll(ctx, reader_scroll_state_id, READER_BOTTOM_SCROLL_OFFSET);
                         }
                         if reader_window.virtualized {
                             ui.label("Virtualized · scroll for older messages");
@@ -13646,15 +13668,15 @@ impl eframe::App for ChatariumApp {
                 if reader_home_requested {
                     reader_scroll = reader_scroll.vertical_scroll_offset(0.0);
                 } else if reader_end_requested {
-                    reader_scroll = reader_scroll.vertical_scroll_offset(100_000_000.0);
+                    reader_scroll = reader_scroll.vertical_scroll_offset(READER_BOTTOM_SCROLL_OFFSET);
                 }
                 if let Some(offset) = restore_reader_offset {
                     // Full-reader pixel offsets refer to an entirely different
                     // content extent, so do not apply them to a virtual layout.
                     let resolved_offset = if reader_window.virtualized {
-                        virtual_layout.saved_view_offset().unwrap_or(f32::MAX)
+                        virtual_layout.saved_view_offset().unwrap_or(READER_BOTTOM_SCROLL_OFFSET)
                     } else if reader_window.enabled {
-                        f32::MAX
+                        READER_BOTTOM_SCROLL_OFFSET
                     } else {
                         offset
                     };
