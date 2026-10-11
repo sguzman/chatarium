@@ -55,12 +55,16 @@ does not open the user's journal, browser, account bridge, or network provider.
 
 The dedicated `native-reader-visual-qa` GitHub Actions workflow builds the
 actual desktop binary and runs it under Xvfb/Openbox with software graphics.
-X11 automation captures six PNG screenshots: top, middle, wheel scroll, end,
+X11 automation captures six PNG screenshots per scale: top, middle,
+wheel scroll, end,
 long-distance search jump, and resize after search. It checks for nonblank
 screenshots, changed pixel contents between scroll positions, bounded visible
 row counts, expected source indices, and search-target visibility.
 
-Evidence is uploaded from a hidden disposable QA directory with
+The workflow repeats the scenarios under `WINIT_X11_SCALE_FACTOR=1.25`
+in a separate Xvfb display and synthetic output directory.
+
+Evidence is uploaded from hidden disposable QA directories with
 `include-hidden-files: true`, and the job fails if screenshot artifacts are
 missing. Artifacts are retained for seven days; no PNG or telemetry file is
 checked into Git. The test prints a machine-readable synthetic-only
@@ -80,7 +84,7 @@ Do **not** enable Continuous reader by default based on performance timings
 alone. Before promotion, automated native UI QA must exercise first/last,
 search jump, wheel/page scroll, resize, appending, and conversation switching
 in a real desktop session; capture screenshots and compare visual content, not
-just egui rectangle bounds. Include high-DPI and long-code fixtures.
+just egui rectangle bounds. Keep long-code and production-app fixture coverage before promotion.
 
 QA owns setup, data generation, launching, interaction, screenshots, and
 recovery. No principal-operated regression clicks or private-session exports

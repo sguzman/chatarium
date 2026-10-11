@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-OUT="$ROOT/.qa-native-reader"
+: "${CHATARIUM_READER_QA_OUTPUT:=.qa-native-reader}"
+OUT="$ROOT/$CHATARIUM_READER_QA_OUTPUT"
 mkdir -p "$OUT"
 export CHATARIUM_READER_QA_DIR="$OUT"
 STATE="$OUT/reader-state.json"
