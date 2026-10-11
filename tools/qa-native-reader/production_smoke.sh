@@ -5,6 +5,11 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 OUT="$ROOT/.qa-native-production"
+# Fail closed rather than sharing an earlier QA journal or following a stale link.
+if [[ -e "$OUT" || -L "$OUT" ]]; then
+    echo "refusing to reuse an existing disposable production QA directory" >&2
+    exit 1
+fi
 mkdir -p "$OUT"/{home,config,data,cache,runtime}
 chmod 700 "$OUT/runtime"
 LOG="$OUT/production.log"
@@ -36,6 +41,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+activate_window() {
+    local target="$1"
+    # Never wait unboundedly for a wedged window manager to grant focus.
+    for _ in $(seq 1 40); do
+        xdotool windowactivate "$target" >/dev/null 2>&1 || true
+        if [[ "$(xdotool getactivewindow 2>/dev/null || true)" == "$target" ]]; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    echo "native QA window activation timed out: $target" >&2
+    return 1
+}
+
 env -i \
     PATH="$PATH" \
     HOME="$OUT/home" \
@@ -65,7 +84,7 @@ if [[ -z "$window" ]]; then
     tail -n 120 "$LOG" >&2 || true
     exit 1
 fi
-xdotool windowactivate --sync "$window"
+activate_window "$window"
 sleep 1
 import -window "$window" "$OUT/production-initial.png"
 
@@ -236,7 +255,7 @@ if [[ -z "$window" ]]; then
     tail -n 120 "$OUT/production-restarted.log" >&2 || true
     exit 1
 fi
-xdotool windowactivate --sync "$window"
+activate_window "$window"
 xdotool windowsize "$window" 930 650
 sleep 1.2
 import -window "$window" "$OUT/production-restarted.png"

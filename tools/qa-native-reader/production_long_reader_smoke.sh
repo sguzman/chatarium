@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 OUT="$ROOT/.qa-native-long-reader"
-if [[ -e "$OUT" ]]; then
+if [[ -e "$OUT" || -L "$OUT" ]]; then
     echo "refusing to reuse an existing disposable long-reader fixture" >&2
     exit 1
 fi
@@ -40,6 +40,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+activate_window() {
+    local target="$1"
+    # Never wait unboundedly for a wedged window manager to grant focus.
+    for _ in $(seq 1 40); do
+        xdotool windowactivate "$target" >/dev/null 2>&1 || true
+        if [[ "$(xdotool getactivewindow 2>/dev/null || true)" == "$target" ]]; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    echo "native QA window activation timed out: $target" >&2
+    return 1
+}
+
 env -i \
     PATH="$PATH" \
     HOME="$OUT/home" \
@@ -69,7 +83,7 @@ if [[ -z "$window" ]]; then
     tail -n 100 "$OUT/production.log" >&2 || true
     exit 1
 fi
-xdotool windowactivate --sync "$window"
+activate_window "$window"
 sleep 1
 import -window "$window" "$OUT/long-initial.png"
 xdotool mousemove --window "$window" 740 250 click 1
@@ -88,6 +102,8 @@ import -window "$window" "$OUT/long-end.png"
 # The production control is available only for long archives. Switch it on
 # through real X11 clicks rather than mutating egui state or faking a session.
 xdotool mousemove --window "$window" 489 99 click 1
+# Remove hover styling before comparing the persistent checkbox state.
+xdotool mousemove --window "$window" 740 250
 sleep 0.8
 import -window "$window" "$OUT/long-continuous-enabled.png"
 xdotool mousemove --window "$window" 740 250 click 1
