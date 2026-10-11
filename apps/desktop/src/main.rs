@@ -6073,25 +6073,8 @@ impl eframe::App for ChatariumApp {
         // Native chat navigation is an intentional global shortcut, unlike
         // reader Home/End keys that belong to a focused text editor. Consume
         // the exact modifier chord before egui advances keyboard focus.
-        let (new_chat_shortcut, cycle_shortcut) = ctx.input_mut(|input| {
-            let modifiers = input.modifiers;
-            let new_chat = modifiers.ctrl
-                && modifiers.shift
-                && !modifiers.alt
-                && input.consume_key(modifiers, egui::Key::N);
-            let cycle =
-                if modifiers.ctrl && !modifiers.alt && input.consume_key(modifiers, egui::Key::Tab)
-                {
-                    Some(if modifiers.shift {
-                        conversation_navigation::CycleDirection::Backward
-                    } else {
-                        conversation_navigation::CycleDirection::Forward
-                    })
-                } else {
-                    None
-                };
-            (new_chat, cycle)
-        });
+        let (new_chat_shortcut, cycle_shortcut) =
+            ctx.input_mut(conversation_keybindings::consume_native_conversation_shortcuts);
         if new_chat_shortcut {
             create_local_requested = true;
         } else if let Some(direction) = cycle_shortcut {

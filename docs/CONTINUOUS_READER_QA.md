@@ -139,6 +139,12 @@ QA retries using the actual sidebar New local button and verifies the
 empty view again. No second message is typed into the first conversation
 under a missed-shortcut condition.
 
+The global Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+Shift+N handlers consume
+modifiers recorded on each keypress event rather than the frame-end held-key
+snapshot. Fast keypress-and-release sequences otherwise lose their modifiers
+before egui evaluates the event. Headless tests reproduce this released-chord
+case and confirm ordinary Tab and Alt-modified keys remain untouched.
+
 Keyboard conversation navigation now requires a materially different actual
 painted transcript region, not merely an injected X11 key. The harness
 re-establishes window focus and retries a missed Ctrl+Tab/Ctrl+Shift+Tab

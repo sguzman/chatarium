@@ -21,9 +21,118 @@ pub const fn may_consume_reader_navigation(text_input_focused: bool) -> bool {
     !text_input_focused
 }
 
+
+/// Read the modifiers *on the pressed key event*, not the modifier snapshot
+/// left over at the end of the frame. A short Ctrl+Tab may be released before
+/// egui renders; the pressed event still correctly remembers Ctrl and Shift.
+fn pressed_chord_modifiers(
+    events: &[egui::Event],
+    key: egui::Key,
+    require_shift: Option<bool>,
+) -> Option<egui::Modifiers> {
+    events.iter().find_map(|event| match event {
+        egui::Event::Key {
+            key: event_key,
+            pressed: true,
+            repeat: false,
+            modifiers,
+            ..
+        } if *event_key == key
+            && modifiers.ctrl
+            && !modifiers.alt
+            && require_shift.map_or(true, |shift| modifiers.shift == shift) =>
+        {
+            Some(*modifiers)
+        }
+        _ => None,
+    })
+}
+
+/// Consume only explicitly recognized global navigation chords. In particular,
+/// ordinary Tab stays available to text fields and keyboard focus traversal.
+pub fn consume_native_conversation_shortcuts(
+    input: &mut egui::InputState,
+) -> (bool, Option<super::conversation_navigation::CycleDirection>) {
+    use super::conversation_navigation::CycleDirection;
+
+    let new_chat = pressed_chord_modifiers(&input.events, egui::Key::N, Some(true))
+        .is_some_and(|modifiers| input.consume_key(modifiers, egui::Key::N));
+    let cycle = pressed_chord_modifiers(&input.events, egui::Key::Tab, None).and_then(
+        |modifiers| {
+            input.consume_key(modifiers, egui::Key::Tab).then_some(
+                if modifiers.shift {
+                    CycleDirection::Backward
+                } else {
+                    CycleDirection::Forward
+                },
+            )
+        },
+    );
+    (new_chat, cycle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key_pressed(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn released_ctrl_shift_still_cycles_backward_using_event_modifiers() {
+        let mut input = egui::InputState::default();
+        let mut pressed_modifiers = egui::Modifiers::CTRL;
+        pressed_modifiers.shift = true;
+        input.events.push(key_pressed(egui::Key::Tab, pressed_modifiers));
+        // Simulate a fast X11 chord released before the frame is rendered.
+        assert!(!input.modifiers.ctrl && !input.modifiers.shift);
+        assert_eq!(
+            consume_native_conversation_shortcuts(&mut input),
+            (false, Some(super::super::conversation_navigation::CycleDirection::Backward))
+        );
+        assert!(input.events.is_empty());
+    }
+
+    #[test]
+    fn released_ctrl_still_cycles_forward_using_event_modifiers() {
+        let mut input = egui::InputState::default();
+        input.events.push(key_pressed(egui::Key::Tab, egui::Modifiers::CTRL));
+        assert_eq!(
+            consume_native_conversation_shortcuts(&mut input),
+            (false, Some(super::super::conversation_navigation::CycleDirection::Forward))
+        );
+    }
+
+    #[test]
+    fn released_ctrl_shift_still_creates_new_local_conversation() {
+        let mut input = egui::InputState::default();
+        let mut mods = egui::Modifiers::CTRL;
+        mods.shift = true;
+        input.events.push(key_pressed(egui::Key::N, mods));
+        assert_eq!(consume_native_conversation_shortcuts(&mut input), (true, None));
+    }
+
+    #[test]
+    fn non_shortcut_tab_and_alt_modified_chords_remain_unconsumed() {
+        let mut input = egui::InputState::default();
+        input.events.push(key_pressed(egui::Key::Tab, egui::Modifiers::NONE));
+        assert_eq!(consume_native_conversation_shortcuts(&mut input), (false, None));
+        assert_eq!(input.events.len(), 1);
+
+        let mut alt_ctrl = egui::Modifiers::CTRL;
+        alt_ctrl.alt = true;
+        input.events.push(key_pressed(egui::Key::Tab, alt_ctrl));
+        assert_eq!(consume_native_conversation_shortcuts(&mut input), (false, None));
+        assert_eq!(input.events.len(), 2);
+    }
+
 
     #[test]
     fn focus_composer_is_native_only_and_does_not_depend_on_editor_focus() {
