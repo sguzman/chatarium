@@ -18,9 +18,10 @@ pub struct VirtualReaderLayout {
     signatures: Vec<u64>,
     heights: Vec<f32>,
     measured: Vec<bool>,
-    prefix: Vec<f32>,
+    /// Fenwick sums permit O(log n) height changes without rebuilding the tail.
+    height_tree: Vec<f64>,
     width: f32,
-    dirty_from: Option<usize>,
+    changed: bool,
     last_search: Option<(String, Option<usize>)>,
     last_view_offset: Option<f32>,
 }
@@ -37,7 +38,7 @@ impl VirtualReaderLayout {
         };
         let width = width.max(1.0);
         let same_width = (self.width - width).abs() <= 1.0;
-        if stable_source && same_width && self.prefix.len() == self.heights.len() + 1 {
+        if stable_source && same_width && self.height_tree.len() == self.heights.len() + 1 {
             return;
         }
         let mut next_signatures = Vec::new();
@@ -66,9 +67,8 @@ impl VirtualReaderLayout {
         self.heights = next_heights;
         self.measured = next_measured;
         self.width = width;
-        self.prefix = vec![0.0; self.heights.len() + 1];
-        self.dirty_from = Some(0);
-        self.finish_measurements();
+        self.rebuild_height_tree();
+        self.changed = false;
     }
 
     #[must_use]
@@ -82,37 +82,86 @@ impl VirtualReaderLayout {
         }
     }
 
+    /// Build a Fenwick tree in linear time. f64 internal sums minimize
+    /// cumulative rounding over large archives; egui coordinates remain f32.
+    fn rebuild_height_tree(&mut self) {
+        let count = self.heights.len();
+        self.height_tree = vec![0.0; count + 1];
+        for index in 1..=count {
+            self.height_tree[index] += f64::from(self.heights[index - 1]);
+            let parent = index + (index & index.wrapping_neg());
+            if parent <= count {
+                self.height_tree[parent] += self.height_tree[index];
+            }
+        }
+    }
+
+    fn add_height_delta(&mut self, index: usize, delta: f64) {
+        let mut position = index + 1;
+        while position < self.height_tree.len() {
+            self.height_tree[position] += delta;
+            position += position & position.wrapping_neg();
+        }
+    }
+
+    fn height_sum(&self, length: usize) -> f64 {
+        let mut position = length.min(self.heights.len());
+        let mut sum = 0.0;
+        while position > 0 {
+            sum += self.height_tree[position];
+            position -= position & position.wrapping_neg();
+        }
+        sum
+    }
+
     #[must_use]
     pub fn total_height(&self) -> f32 {
-        self.prefix.last().copied().unwrap_or(0.0)
+        self.height_sum(self.heights.len()) as f32
     }
 
     #[must_use]
     pub fn offset(&self, index: usize) -> f32 {
-        self.prefix
-            .get(index.min(self.heights.len()))
-            .copied()
-            .unwrap_or(0.0)
+        self.height_sum(index) as f32
     }
 
     #[must_use]
     pub fn visible_range(&self, top: f32, bottom: f32) -> Range<usize> {
-        if self.heights.is_empty() {
+        let count = self.heights.len();
+        if count == 0 {
             return 0..0;
         }
-        let top = (top - OVERSCAN_PX).max(0.0);
-        let bottom = (bottom + OVERSCAN_PX).max(top);
-        // Prefix sums remain monotonic for nonnegative measured heights.
-        let start = self.prefix[1..].partition_point(|end| *end <= top);
-        let end = self.prefix[..self.heights.len()]
-            .partition_point(|start| *start < bottom)
-            .max(start.saturating_add(1))
-            .min(self.heights.len());
-        start.min(self.heights.len())..end
+        let top = f64::from((top - OVERSCAN_PX).max(0.0));
+        let bottom = f64::from((bottom + OVERSCAN_PX).max(top as f32));
+
+        // Find the first row whose end lies strictly after the viewport top.
+        let mut low = 0;
+        let mut high = count;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if self.height_sum(mid + 1) <= top {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let start = low;
+
+        // Find the first row whose start reaches the viewport bottom.
+        low = 0;
+        high = count;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if self.height_sum(mid) < bottom {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        start..low.max(start.saturating_add(1)).min(count)
     }
 
     /// Record only heights measured by egui from actually rendered bubbles.
-    /// Coalesce recalculation into one tail prefix rebuild per frame.
+    /// A point update is O(log n), even for bubbles near the archive start.
     pub fn measure(&mut self, index: usize, height: f32) {
         if !height.is_finite() || height < MIN_ROW_HEIGHT {
             return;
@@ -121,24 +170,18 @@ impl VirtualReaderLayout {
             return;
         };
         if !self.measured[index] || (*previous - height).abs() > 0.5 {
+            let delta = f64::from(height) - f64::from(*previous);
             *previous = height;
             self.measured[index] = true;
-            self.dirty_from = Some(self.dirty_from.map_or(index, |prior| prior.min(index)));
+            self.add_height_delta(index, delta);
+            self.changed = true;
         }
     }
 
-    /// Returns true if the layout's total height or row positions changed.
+    /// Reports whether measurements changed since the last frame; no
+    /// downstream prefix rebuild is necessary.
     pub fn finish_measurements(&mut self) -> bool {
-        let Some(start) = self.dirty_from.take() else {
-            return false;
-        };
-        if self.prefix.len() != self.heights.len() + 1 {
-            self.prefix.resize(self.heights.len() + 1, 0.0);
-        }
-        for index in start..self.heights.len() {
-            self.prefix[index + 1] = self.prefix[index] + self.heights[index];
-        }
-        true
+        std::mem::take(&mut self.changed)
     }
 
     /// Navigate to a new result using virtual offsets without requiring
@@ -259,6 +302,27 @@ mod tests {
         layout.remember_view_offset(245.0);
         layout.remember_view_offset(f32::NAN);
         assert_eq!(layout.saved_view_offset(), Some(245.0));
+    }
+
+    #[test]
+    fn changing_early_rows_updates_distant_offsets_without_rebuilding_the_tail() {
+        let source = Arc::new((0..32_768).map(|i| message(i, "entry")).collect());
+        let mut layout = VirtualReaderLayout::default();
+        layout.sync(Some(source), 850.0);
+        let old_first = layout.offset(1);
+        let old_tail = layout.total_height();
+        layout.measure(0, 500.0);
+        layout.measure(0, 600.0);
+        layout.measure(16_384, 380.0);
+        assert!(layout.finish_measurements());
+        assert!(!layout.finish_measurements());
+        assert_eq!(layout.offset(1), 600.0);
+        let expected_tail = old_tail + 600.0 - old_first + 380.0 - old_first;
+        assert!((layout.total_height() - expected_tail).abs() < 1.0);
+        assert!(layout.visible_range(layout.offset(20_000), layout.offset(20_000) + 650.0).contains(&20_000));
+        // Unchanged measurements are not reported as another mutation.
+        layout.measure(0, 600.0);
+        assert!(!layout.finish_measurements());
     }
 
     #[test]
