@@ -21328,7 +21328,8 @@ fn projected_local_display_messages(
     // Project borrowed journal events directly; cloning large raw payloads
     // into a temporary vector is unnecessary during transcript rendering
     // and before request-context composition.
-    projected_display_messages_iter(events.iter().filter(|event| match event.kind {
+    projected_display_messages_iter(events.iter().filter(|event| {
+        match event.kind {
             EventKind::UserMessageCommitted => matches!(
                 decode_user_message_commit(event),
                 Ok(Some(DecodedUserMessageCommit::Typed(message)))
@@ -21339,7 +21340,8 @@ fn projected_local_display_messages(
                 .as_ref()
                 .is_some_and(|scope| local_turn_scopes.contains(scope)),
             _ => false,
-        }))
+        }
+    }))
 }
 
 fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
