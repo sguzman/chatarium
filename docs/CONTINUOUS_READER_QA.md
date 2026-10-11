@@ -55,10 +55,10 @@ does not open the user's journal, browser, account bridge, or network provider.
 
 The dedicated `native-reader-visual-qa` GitHub Actions workflow builds the
 actual desktop binary and runs it under Xvfb/Openbox with software graphics.
-X11 automation captures eleven PNG screenshots per scale: top, middle,
+X11 automation captures twelve PNG screenshots per scale: top, middle,
 keyboard PageDown and PageUp (through the same scroll-state helper used
-by the production workspace), wheel scroll, end, long-distance search jump, automatic hit recovery after resizing without
-reissuing Search,
+by the production workspace), wheel scroll, end, long-distance search jump, automatic hit recovery after resizing and after a long earlier-message edit
+without reissuing Search,
 synthetic append, switching away, and switching back. The append marker
 survives the synthetic conversation switch. The shell preserves a
 separate measured virtual layout and saved offset for each conversation,
@@ -88,8 +88,8 @@ complete screenshot acceptance test of the ordinary authenticated
 was painted and changed; they do not establish typographic correctness.
 Remaining work includes exercising conversation switching and user-authored
 messages inside the ordinary ChatariumApp (rather than this isolated shell),
-search result changes after source edits and reviewed
-image comparisons.
+reviewed typographic screenshot comparisons and tests in the full
+production workspace.
 
 ## ScrollArea ID correctness
 

@@ -6,7 +6,7 @@ import json
 import sys
 
 folder = Path(sys.argv[1])
-labels = ("top", "middle", "page-down", "page-up", "wheel", "bottom", "search", "resized", "appended", "alternate", "returned")
+labels = ("top", "middle", "page-down", "page-up", "wheel", "bottom", "search", "resized", "edited", "appended", "alternate", "returned")
 images = {}
 for label in labels:
     src = folder / f"{label}.png"
@@ -22,7 +22,7 @@ for label in labels:
         raise AssertionError(f"unbounded/missing virtual rows: {label}")
     if state["visible_count"] <= 0 or state["visible_count"] > state["rendered_count"]:
         raise AssertionError(f"invalid in-clip bubble count: {label}")
-    if label in ("search", "resized") and state["search_bubble_visible_height"] < 48:
+    if label in ("search", "resized", "edited") and state["search_bubble_visible_height"] < 48:
         raise AssertionError(f"search target not visibly painted: {label}")
     if label in ("appended", "returned") and state["appended_bubble_visible_height"] < 48:
         raise AssertionError(f"appended message not visibly painted: {label}")
@@ -39,4 +39,4 @@ wide = images["search"].width
 narrow = images["resized"].width
 if narrow >= wide - 100:
     raise AssertionError(f"X11 resize not reflected in screenshots: {wide} -> {narrow}")
-print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: eleven nonblank, different X11 screenshots")
+print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: twelve nonblank, different X11 screenshots")

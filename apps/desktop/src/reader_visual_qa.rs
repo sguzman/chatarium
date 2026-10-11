@@ -10,6 +10,7 @@ use std::time::Duration;
 const COUNT: usize = 4_096;
 const SEARCH_TARGET: usize = 3_017;
 const APPEND_TEXT: &str = "APPENDED SYNTHETIC USER MESSAGE";
+const EDITED_PREFIX: &str = "EDITED SYNTHETIC PREFIX";
 
 struct ReaderQa {
     source: Arc<Vec<DisplayMessage>>,
@@ -128,6 +129,8 @@ impl ReaderQa {
             "render_start": rendered.first(),
             "render_end": rendered.last(),
             "search_target": SEARCH_TARGET,
+            "search_anchor_offset": self.layout.offset(SEARCH_TARGET),
+            "prefix_edited": self.primary[42].text.starts_with(EDITED_PREFIX),
             "font_fallbacks": super::system_fonts::loaded_names(ctx),
             "rendered_search_hit": search_bubble_visible_height >= 48.0,
             "search_bubble_visible_height": search_bubble_visible_height,
@@ -145,7 +148,7 @@ impl ReaderQa {
 impl eframe::App for ReaderQa {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
-        let (top, middle, bottom, search, append, away, back) = ctx.input_mut(|input| {
+        let (top, middle, bottom, search, append, away, back, edit) = ctx.input_mut(|input| {
             (
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
@@ -154,6 +157,7 @@ impl eframe::App for ReaderQa {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F5),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F8),
             )
         });
         let page_down =
@@ -234,10 +238,22 @@ impl eframe::App for ReaderQa {
                 if search {
                     self.phase = "search";
                 }
+                if edit && self.conversation == "primary" {
+                    // Mutate a distant earlier row after the search hit was
+                    // selected. Source hashing must invalidate the search
+                    // anchor and reveal the same hit again automatically.
+                    let messages = Arc::make_mut(&mut self.primary);
+                    messages[42].text = format!(
+                        "{EDITED_PREFIX}\n{}",
+                        "expanded early synthetic message with wrapping ".repeat(140)
+                    );
+                    self.source = Arc::clone(&self.primary);
+                    self.phase = "edited";
+                }
                 // Use the same virtual-layout search state as the production
                 // reader. A width change invalidates measured rows and must
                 // reveal the selected hit again without another F4 press.
-                if self.phase == "search" {
+                if matches!(self.phase, "search" | "edited") {
                     if let Some(offset) = self
                         .layout
                         .new_search_offset("ARCHIVE NEEDLE", Some(SEARCH_TARGET))
@@ -251,7 +267,7 @@ impl eframe::App for ReaderQa {
                         .strong()
                         .color(egui::Color32::from_rgb(185, 215, 243)),
                 );
-                ui.label("F1 Top · F2 Middle · F3 End · F4 Search · F5 Append · F6 Away · F7 Back");
+                ui.label("F1 Top · F2 Middle · F3 End · F4 Search · F5 Append · F6 Away · F7 Back · F8 Edit");
                 ui.label(format!(
                     "Mode: continuous | Conversation: {} | Phase: {} | Messages: {}",
                     self.conversation,
@@ -302,12 +318,13 @@ impl eframe::App for ReaderQa {
                                 let bubble = draw_reader_bubble(
                                     row,
                                     &self.source[index],
-                                    if self.phase == "search" {
+                                    if matches!(self.phase, "search" | "edited") {
                                         "ARCHIVE NEEDLE"
                                     } else {
                                         ""
                                     },
-                                    index == SEARCH_TARGET && self.phase == "search",
+                                    index == SEARCH_TARGET
+                                        && matches!(self.phase, "search" | "edited"),
                                     ctx,
                                 );
                                 if bubble.rect.intersects(row.clip_rect()) {

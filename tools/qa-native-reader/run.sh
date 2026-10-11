@@ -117,6 +117,14 @@ xdotool windowsize "$window" 970 740
 wait_state '.phase == "search" and .viewport_width < 1000 and .rendered_search_hit == true'
 save_frame resized
 
+# Retain the selected search hit across mutation of a much earlier row.
+# Never press F4 again: invalidation and target recovery belong to the
+# shipping VirtualReaderLayout::sync/new_search_offset state machine.
+previous_anchor="$(jq -r '.search_anchor_offset' "$STATE")"
+xdotool key --clearmodifiers F8
+wait_state ".phase == \"edited\" and .prefix_edited == true and .search_anchor_offset > ($previous_anchor + 500) and .rendered_search_hit == true"
+save_frame edited
+
 xdotool key --clearmodifiers F5
 wait_state '.phase == "append" and .conversation == "primary" and .source_count == 4097 and .appended_message_visible == true'
 save_frame appended
@@ -143,11 +151,12 @@ jq -n --arg window "$window" \
     --slurpfile bottom "$OUT/bottom.json" \
     --slurpfile search "$OUT/search.json" \
     --slurpfile resized "$OUT/resized.json" \
+    --slurpfile edited "$OUT/edited.json" \
     --slurpfile appended "$OUT/appended.json" \
     --slurpfile alternate "$OUT/alternate.json" \
     --slurpfile returned "$OUT/returned.json" \
     '{schema:"chatarium-native-reader-visual-qa-summary",version:1,status:"pass",
-      screenshots:11, window_id:$window,
+      screenshots:12, window_id:$window,
       first:$initial[0].render_start,middle:$middle[0].render_start,
       page_down_offset:$page_down[0].scroll_offset,
       page_up_offset:$page_up[0].scroll_offset,
@@ -156,6 +165,8 @@ jq -n --arg window "$window" \
       search_visible_height:$search[0].search_bubble_visible_height,
       resized_hit:$resized[0].rendered_search_hit,
       resized_search_visible_height:$resized[0].search_bubble_visible_height,
+      edited_search_visible_height:$edited[0].search_bubble_visible_height,
+      edited_search_anchor_offset:$edited[0].search_anchor_offset,
       appended_count:$appended[0].source_count,
       alternate_count:$alternate[0].source_count,
       returned_count:$returned[0].source_count,
