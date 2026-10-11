@@ -143,6 +143,16 @@ screenshots pass. A highlighted multilingual search target makes missing-glyph
 problems visible in captured images. Hebrew is optional but exercised when
 its font is installed.
 
+## Human-readable conversation timestamps
+
+Native conversation bubbles format journal Unix-second timestamps into
+`YYYY-MM-DD HH:MM UTC` instead of displaying a raw Unix number with an
+incorrect `s` duration suffix. UTC is explicit rather than pretending to
+know the reader's local timezone. An invalid or unsupported timestamp falls
+back to the existing provenance/event-label display; it never produces a
+nonsensical date. Pure-Rust date-conversion unit tests include the epoch,
+leap-day boundaries, fractional seconds and invalid values.
+
 ## Promotion criteria
 
 Do **not** enable Continuous reader by default based on performance timings

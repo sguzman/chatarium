@@ -29,6 +29,7 @@ mod offline_reader;
 mod reader_visual_qa;
 mod siwc_bridge;
 mod system_fonts;
+mod timestamp_display;
 mod virtual_reader;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
@@ -14031,9 +14032,8 @@ fn transcript_bubble(
                 ui.add_space(5.0);
                 let metadata = message
                     .timestamp
-                    .map(|timestamp| {
-                        format!("{} · {} · {:.0}s", label, message.sequence, timestamp)
-                    })
+                    .and_then(timestamp_display::utc_minute)
+                    .map(|timestamp| format!("{label} · {timestamp}"))
                     .unwrap_or_else(|| {
                         format!(
                             "{} · {}",
