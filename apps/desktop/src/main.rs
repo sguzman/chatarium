@@ -13867,6 +13867,9 @@ fn render_reader_lines(
     monospace: bool,
     active_hit: bool,
 ) {
+    // Count once, not once per rendered line: the latter is quadratic
+    // for large multiline pasted messages and code blocks.
+    let line_count = text.lines().count();
     for (line_index, line) in text.split('\n').enumerate() {
         ui.horizontal_wrapped(|ui| {
             for (segment, inline_code) in offline_reader::inline_segments(line) {
@@ -13909,7 +13912,7 @@ fn render_reader_lines(
                 }
             }
         });
-        if line_index + 1 < text.lines().count() {
+        if line_index + 1 < line_count {
             ui.add_space(2.0);
         }
     }

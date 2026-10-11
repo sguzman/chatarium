@@ -1135,6 +1135,7 @@ mod tests {
             cached_reader_hits(&ctx, &original, owner, "hello").as_slice(),
             &[(0, 0, 5), (0, 6, 11)],
         );
+        let warm_before_unrelated = cached_reader_hits(&ctx, &original, owner, "hello");
 
         author(&mut store, unrelated, "different private append");
         let unrelated_append = cached_index(&ctx, store.events());
@@ -1144,8 +1145,7 @@ mod tests {
             unrelated_append.messages.get(&owner).unwrap(),
         ));
         let original_again = cached_reader_hits(&ctx, &unrelated_append, owner, "hello");
-        // The cache contains the latest query, so the explicit intervening
-        // "absent" query above changed its identity. Compare a warm repeat.
+        assert!(Arc::ptr_eq(&warm_before_unrelated, &original_again));
         assert!(Arc::ptr_eq(
             &original_again,
             &cached_reader_hits(&ctx, &unrelated_append, owner, "hello"),
