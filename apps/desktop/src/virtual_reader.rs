@@ -158,7 +158,7 @@ impl VirtualReaderLayout {
         }
         hit_message
             .filter(|index| *index < self.heights.len())
-            .map(|index| (self.offset(index) - 100.0).max(0.0))
+            .map(|index| self.offset(index))
     }
 }
 
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(layout.offset(2), 575.0);
         assert_eq!(layout.total_height(), 665.0);
         assert_eq!(layout.visible_range(450.0, 455.0), 0..3);
-        assert_eq!(layout.new_search_offset("last", Some(2)), Some(475.0));
+        assert_eq!(layout.new_search_offset("last", Some(2)), Some(575.0));
         assert_eq!(layout.new_search_offset("last", Some(2)), None);
         assert_eq!(layout.new_search_offset("last", Some(99)), None);
         assert_eq!(layout.new_search_offset("", Some(2)), None);
@@ -257,6 +257,10 @@ mod tests {
         assert_ne!(layout.offset(1), 399.0);
         layout.sync(None, 450.0);
         assert_eq!(layout.visible_range(0.0, 300.0), 0..0);
+        assert_eq!(layout.saved_view_offset(), None);
+        layout.remember_view_offset(245.0);
+        layout.remember_view_offset(f32::NAN);
+        assert_eq!(layout.saved_view_offset(), Some(245.0));
     }
 
     #[test]

@@ -13756,11 +13756,16 @@ impl eframe::App for ChatariumApp {
                                     &self.reader_search_query,
                                     active_reader_message,
                                 ) {
-                                    set_reader_scroll(
-                                        ctx,
-                                        transcript_scroll_id,
-                                        header_height + offset,
+                                    // ScrollArea::end owns its state; mutating
+                                    // that state inside show_viewport would be
+                                    // overwritten when the callback returns.
+                                    // This request survives and can target a
+                                    // bubble that has not been rendered yet.
+                                    let target = egui::Rect::from_min_size(
+                                        egui::pos2(ui.max_rect().left(), list_top + offset),
+                                        egui::vec2(2.0, 32.0),
                                     );
+                                    ui.scroll_to_rect(target, Some(egui::Align::Center));
                                     ctx.request_repaint();
                                 }
                                 let range = virtual_layout.visible_range(

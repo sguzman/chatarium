@@ -111,13 +111,22 @@ altering the existing text-input keyboard focus rules. A selected native search
 hit automatically reveals its source message even when it lies outside the
 current page.
 
-This is **bounded page rendering**, not variable-height scroll virtualization:
-the current page still renders its messages normally, and the paging buttons
-are used to reach older material. The underlying transcript, search index,
-memory permissions, source event sequences and request-context composition
-remain complete and unchanged. The paged view does not overwrite persisted
-pixel offsets from full-transcript reading. Imported and mirrored historical
-readers continue to use their original full projection.
+The optional **Continuous reader** is now a separate variable-height viewport
+implementation for native conversations. It uses cached, content-sensitive
+per-message layout estimates and replaces them with measured egui bubble heights
+as messages enter the viewport. Search navigation targets source-message
+positions even before their widgets are rendered; changing window width
+invalidates affected height measurements. Only a neighborhood of messages is
+laid out on each frame. It is an opt-in alternative to the paged reader;
+switching between them does not change any local transcript or authorization
+state. As initially estimated heights are refined, virtual scroll positions can
+shift slightly; full-render and paged modes remain explicit fallbacks.
+
+The underlying transcript, search index, memory permissions, source event
+sequences and request-context composition remain complete and unchanged.
+Neither paged nor continuous view overwrites persisted pixel offsets from
+full-transcript reading. Imported and mirrored historical readers continue to
+use their original full projection.
 
 ### Native conversation navigation
 
