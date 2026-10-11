@@ -6,7 +6,7 @@ import json
 import sys
 
 folder = Path(sys.argv[1])
-labels = ("top", "middle", "wheel", "bottom", "search", "resized")
+labels = ("top", "middle", "wheel", "bottom", "search", "resized", "appended", "alternate", "returned")
 images = {}
 for label in labels:
     src = folder / f"{label}.png"
@@ -22,7 +22,7 @@ for label in labels:
         raise AssertionError(f"unbounded/missing virtual rows: {label}")
     images[label] = image
 
-for before, after in (("top", "middle"), ("middle", "wheel"), ("middle", "bottom"), ("bottom", "search")):
+for before, after in (("top", "middle"), ("middle", "wheel"), ("middle", "bottom"), ("bottom", "search"), ("resized", "appended"), ("appended", "alternate"), ("alternate", "returned")):
     left, right = images[before], images[after]
     area = (0, 100, min(left.width, right.width), min(left.height, right.height) - 15)
     delta = ImageChops.difference(left.crop(area), right.crop(area))
@@ -33,4 +33,4 @@ wide = images["search"].width
 narrow = images["resized"].width
 if narrow >= wide - 100:
     raise AssertionError(f"X11 resize not reflected in screenshots: {wide} -> {narrow}")
-print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: six nonblank, different X11 screenshots")
+print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: nine nonblank, different X11 screenshots")

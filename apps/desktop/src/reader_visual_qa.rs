@@ -9,9 +9,13 @@ use std::time::Duration;
 
 const COUNT: usize = 4_096;
 const SEARCH_TARGET: usize = 3_017;
+const APPEND_TEXT: &str = "APPENDED SYNTHETIC USER MESSAGE";
 
 struct ReaderQa {
     source: Arc<Vec<DisplayMessage>>,
+    primary: Arc<Vec<DisplayMessage>>,
+    alternate: Arc<Vec<DisplayMessage>>,
+    conversation: &'static str,
     layout: VirtualReaderLayout,
     output_dir: PathBuf,
     phase: &'static str,
@@ -56,8 +60,27 @@ fn fixture() -> Arc<Vec<DisplayMessage>> {
 
 impl ReaderQa {
     fn new(output_dir: PathBuf) -> Self {
+        let primary = fixture();
+        let alternate = Arc::new(
+            (0..256)
+                .map(|index| DisplayMessage {
+                    role: if index.is_multiple_of(2) {
+                        DisplayRole::User
+                    } else {
+                        DisplayRole::Assistant
+                    },
+                    text: format!("ALTERNATE SYNTHETIC CONVERSATION, distinct row {index}"),
+                    sequence: 100_001 + index as u64,
+                    timestamp: None,
+                    provenance_label: Some("ALTERNATE SYNTHETIC QA".to_owned()),
+                })
+                .collect::<Vec<_>>(),
+        );
         Self {
-            source: fixture(),
+            source: Arc::clone(&primary),
+            primary,
+            alternate,
+            conversation: "primary",
             layout: VirtualReaderLayout::default(),
             output_dir,
             phase: "top",
@@ -78,7 +101,14 @@ impl ReaderQa {
             "version": 1,
             "mode": "synthetic-continuous-reader",
             "source_count": self.source.len(),
+            "conversation": self.conversation,
             "phase": self.phase,
+            "last_sequence": self.source.last().map(|item| item.sequence),
+            "appended_message_visible": self
+                .source
+                .last()
+                .is_some_and(|message| message.text == APPEND_TEXT)
+                && rendered.contains(&(self.source.len() - 1)),
             "frame": self.frame,
             "viewport_width": panel_width,
             "scroll_offset": scroll_offset,
@@ -103,14 +133,18 @@ impl ReaderQa {
 impl eframe::App for ReaderQa {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
-        let (top, middle, bottom, search) = ctx.input_mut(|input| {
-            (
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F3),
-                input.consume_key(egui::Modifiers::NONE, egui::Key::F4),
-            )
-        });
+        let (top, middle, bottom, search, append, away, back) =
+            ctx.input_mut(|input| {
+                (
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F3),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F4),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F5),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
+                )
+            });
         let mut panel_width = 0.0;
         let mut rendered = Vec::new();
         let mut scroll_offset = 0.0;
@@ -123,6 +157,39 @@ impl eframe::App for ReaderQa {
             )
             .show(ctx, |ui| {
                 panel_width = ui.available_width();
+                if append {
+                    let messages = Arc::make_mut(&mut self.primary);
+                    messages.push(DisplayMessage {
+                        role: DisplayRole::User,
+                        text: APPEND_TEXT.to_owned(),
+                        sequence: messages.len() as u64 + 1,
+                        timestamp: None,
+                        provenance_label: Some("SYNTHETIC QA".to_owned()),
+                    });
+                    self.source = Arc::clone(&self.primary);
+                    self.conversation = "primary";
+                    self.phase = "append";
+                    self.layout = VirtualReaderLayout::default();
+                    self.layout
+                        .sync(Some(Arc::clone(&self.source)), panel_width);
+                    self.jump_to = Some(self.layout.total_height());
+                }
+                if away {
+                    self.source = Arc::clone(&self.alternate);
+                    self.conversation = "alternate";
+                    self.phase = "alternate";
+                    self.layout = VirtualReaderLayout::default();
+                    self.jump_to = Some(0.0);
+                }
+                if back {
+                    self.source = Arc::clone(&self.primary);
+                    self.conversation = "primary";
+                    self.phase = "return";
+                    self.layout = VirtualReaderLayout::default();
+                    self.layout
+                        .sync(Some(Arc::clone(&self.source)), panel_width);
+                    self.jump_to = Some(self.layout.total_height());
+                }
                 self.layout
                     .sync(Some(Arc::clone(&self.source)), panel_width);
                 if top {
@@ -147,15 +214,17 @@ impl eframe::App for ReaderQa {
                         .strong()
                         .color(egui::Color32::from_rgb(185, 215, 243)),
                 );
-                ui.label("F1 Top   ·   F2 Middle   ·   F3 End   ·   F4 Find ARCHIVE NEEDLE");
+                ui.label("F1 Top · F2 Middle · F3 End · F4 Search · F5 Append · F6 Away · F7 Back");
                 ui.label(format!(
-                    "Mode: continuous  |  Phase: {}  |  Messages: {COUNT}",
-                    self.phase
+                    "Mode: continuous | Conversation: {} | Phase: {} | Messages: {}",
+                    self.conversation,
+                    self.phase,
+                    self.source.len()
                 ));
                 ui.separator();
 
                 let mut scroller = egui::ScrollArea::vertical()
-                    .id_salt("qa-native-virtual-transcript")
+                    .id_salt(("qa-native-virtual-transcript", self.conversation))
                     .auto_shrink([false, false])
                     .stick_to_bottom(false);
                 if let Some(jump) = self.jump_to.take() {

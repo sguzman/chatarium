@@ -55,9 +55,10 @@ does not open the user's journal, browser, account bridge, or network provider.
 
 The dedicated `native-reader-visual-qa` GitHub Actions workflow builds the
 actual desktop binary and runs it under Xvfb/Openbox with software graphics.
-X11 automation captures six PNG screenshots per scale: top, middle,
-wheel scroll, end,
-long-distance search jump, and resize after search. It checks for nonblank
+X11 automation captures nine PNG screenshots per scale: top, middle,
+wheel scroll, end, long-distance search jump, resize after search,
+synthetic append, switching away, and switching back. The append marker
+survives the synthetic conversation switch. It checks for nonblank
 screenshots, changed pixel contents between scroll positions, bounded visible
 row counts, expected source indices, and search-target visibility.
 
@@ -74,9 +75,10 @@ This is **native screenshot coverage of a synthetic reader shell**, not yet a
 complete screenshot acceptance test of the ordinary authenticated
 `ChatariumApp` workspace. Pixel-difference checks establish that real content
 was painted and changed; they do not establish typographic correctness.
-Remaining work includes whole-app conversation switching, typed-message
-appends, search result changes after reflow, keyboard PageUp/PageDown, high-DPI
-coverage, and reviewed image comparisons.
+Remaining work includes exercising conversation switching and user-authored
+messages inside the ordinary ChatariumApp (rather than this isolated shell),
+search result changes after reflow, keyboard PageUp/PageDown, and reviewed
+image comparisons.
 
 ## Linux Unicode font fallback
 

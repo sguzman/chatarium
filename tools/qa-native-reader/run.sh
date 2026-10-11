@@ -71,7 +71,7 @@ save_frame() {
     import -window "$window" "$OUT/$label.png"
     cp "$STATE" "$OUT/$label.json"
     test -s "$OUT/$label.png"
-    jq -e '.source_count == 4096 and .rendered_count > 0 and .rendered_count < 48 and .persistent_user_journal_access == false and .remote_network_access == false' "$OUT/$label.json" >/dev/null
+    jq -e '(.source_count == 4096 or .source_count == 4097 or .source_count == 256) and .rendered_count > 0 and .rendered_count < 48 and .persistent_user_journal_access == false and .remote_network_access == false' "$OUT/$label.json" >/dev/null
     if [[ "${CHATARIUM_QA_REQUIRE_NOTO:-0}" == "1" ]]; then
         jq -e '(.font_fallbacks | index("chatarium.noto.cjk")) != null and (.font_fallbacks | index("chatarium.noto.arabic")) != null' "$OUT/$label.json" >/dev/null
     fi
@@ -104,6 +104,18 @@ xdotool key --clearmodifiers F4
 wait_state '.phase == "search" and .viewport_width < 1000 and .rendered_search_hit == true'
 save_frame resized
 
+xdotool key --clearmodifiers F5
+wait_state '.phase == "append" and .conversation == "primary" and .source_count == 4097 and .appended_message_visible == true'
+save_frame appended
+
+xdotool key --clearmodifiers F6
+wait_state '.phase == "alternate" and .conversation == "alternate" and .source_count == 256 and .render_start == 0'
+save_frame alternate
+
+xdotool key --clearmodifiers F7
+wait_state '.phase == "return" and .conversation == "primary" and .source_count == 4097 and .appended_message_visible == true'
+save_frame returned
+
 python3 tools/qa-native-reader/check_screenshots.py "$OUT"
 jq -n --arg window "$window" \
     --slurpfile initial "$OUT/top.json" \
@@ -112,10 +124,17 @@ jq -n --arg window "$window" \
     --slurpfile bottom "$OUT/bottom.json" \
     --slurpfile search "$OUT/search.json" \
     --slurpfile resized "$OUT/resized.json" \
+    --slurpfile appended "$OUT/appended.json" \
+    --slurpfile alternate "$OUT/alternate.json" \
+    --slurpfile returned "$OUT/returned.json" \
     '{schema:"chatarium-native-reader-visual-qa-summary",version:1,status:"pass",
-      screenshots:6, window_id:$window,
+      screenshots:9, window_id:$window,
       first:$initial[0].render_start,middle:$middle[0].render_start,
       wheel_offset:$wheel[0].scroll_offset,end:$bottom[0].render_end,
       search_hit:$search[0].rendered_search_hit,
-      resized_hit:$resized[0].rendered_search_hit}' >"$OUT/summary.json"
+      resized_hit:$resized[0].rendered_search_hit,
+      appended_count:$appended[0].source_count,
+      alternate_count:$alternate[0].source_count,
+      returned_count:$returned[0].source_count,
+      returned_append_visible:$returned[0].appended_message_visible}' >"$OUT/summary.json"
 echo "CHATARIUM_NATIVE_VISUAL_QA $(cat "$OUT/summary.json")"
