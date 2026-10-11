@@ -127,6 +127,10 @@ save_frame alternate
 
 xdotool key --clearmodifiers F7
 wait_state '.phase == "return" and .conversation == "primary" and .source_count == 4097 and .appended_message_visible == true'
+# Require that restoration survives subsequent paint and height measurements,
+# not just that the bubble was momentarily visible on the first return frame.
+sleep 0.7
+wait_state '.phase == "return" and .conversation == "primary" and .source_count == 4097 and .appended_message_visible == true'
 save_frame returned
 
 python3 tools/qa-native-reader/check_screenshots.py "$OUT"

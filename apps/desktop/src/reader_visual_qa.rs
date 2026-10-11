@@ -17,6 +17,8 @@ struct ReaderQa {
     alternate: Arc<Vec<DisplayMessage>>,
     conversation: &'static str,
     layout: VirtualReaderLayout,
+    primary_layout: Option<VirtualReaderLayout>,
+    alternate_layout: Option<VirtualReaderLayout>,
     output_dir: PathBuf,
     phase: &'static str,
     jump_to: Option<f32>,
@@ -82,6 +84,8 @@ impl ReaderQa {
             alternate,
             conversation: "primary",
             layout: VirtualReaderLayout::default(),
+            primary_layout: None,
+            alternate_layout: None,
             output_dir,
             phase: "top",
             jump_to: Some(0.0),
@@ -200,20 +204,26 @@ impl eframe::App for ReaderQa {
                     self.jump_to = Some(self.layout.total_height());
                 }
                 if away {
+                    self.primary_layout = Some(std::mem::take(&mut self.layout));
+                    self.layout = self.alternate_layout.take().unwrap_or_default();
                     self.source = Arc::clone(&self.alternate);
                     self.conversation = "alternate";
                     self.phase = "alternate";
-                    self.layout = VirtualReaderLayout::default();
-                    self.jump_to = Some(0.0);
+                    self.jump_to = Some(self.layout.saved_view_offset().unwrap_or(0.0));
                 }
                 if back {
+                    self.alternate_layout = Some(std::mem::take(&mut self.layout));
+                    self.layout = self.primary_layout.take().unwrap_or_default();
                     self.source = Arc::clone(&self.primary);
                     self.conversation = "primary";
                     self.phase = "return";
-                    self.layout = VirtualReaderLayout::default();
                     self.layout
                         .sync(Some(Arc::clone(&self.source)), panel_width);
-                    self.jump_to = Some(self.layout.total_height());
+                    self.jump_to = Some(
+                        self.layout
+                            .saved_view_offset()
+                            .unwrap_or_else(|| self.layout.total_height()),
+                    );
                 }
                 self.layout
                     .sync(Some(Arc::clone(&self.source)), panel_width);
@@ -322,6 +332,7 @@ impl eframe::App for ReaderQa {
                 });
                 scroll_offset = out.state.offset.y;
             });
+        self.layout.remember_view_offset(scroll_offset);
         self.write_status(
             ctx,
             scroll_offset,

@@ -60,7 +60,10 @@ keyboard PageDown and PageUp (through the same scroll-state helper used
 by the production workspace), wheel scroll, end, long-distance search jump, automatic hit recovery after resizing without
 reissuing Search,
 synthetic append, switching away, and switching back. The append marker
-survives the synthetic conversation switch. Overscan layout membership
+survives the synthetic conversation switch. The shell preserves a
+separate measured virtual layout and saved offset for each conversation,
+just as the native workspace does, and verifies returned visibility again
+after paint/reflow stabilization. Overscan layout membership
 alone does not prove a message is on screen: the visual harness requires the
 appended bubble's production-renderer rectangle to intersect the scroll clip
 by at least 48 logical pixels. The same rule now applies to the distant search
