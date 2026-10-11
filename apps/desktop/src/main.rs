@@ -21313,7 +21313,7 @@ fn projected_local_display_messages(
             std::collections::btree_map::Entry::Occupied(mut entry) => {
                 if entry
                     .get()
-                    .is_some_and(|previous| *previous != message.conversation_id)
+                    .is_some_and(|previous| previous != message.conversation_id)
                 {
                     entry.insert(None);
                 }
@@ -21325,9 +21325,10 @@ fn projected_local_display_messages(
         .filter_map(|(scope, owner)| (owner == Some(local_conversation_id)).then_some(scope))
         .collect::<HashSet<_>>();
 
-    let relevant = events
-        .iter()
-        .filter(|event| match event.kind {
+    // Project borrowed journal events directly; cloning large raw payloads
+    // into a temporary vector is unnecessary during transcript rendering
+    // and before request-context composition.
+    projected_display_messages_iter(events.iter().filter(|event| match event.kind {
             EventKind::UserMessageCommitted => matches!(
                 decode_user_message_commit(event),
                 Ok(Some(DecodedUserMessageCommit::Typed(message)))
@@ -21338,11 +21339,7 @@ fn projected_local_display_messages(
                 .as_ref()
                 .is_some_and(|scope| local_turn_scopes.contains(scope)),
             _ => false,
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    projected_display_messages(&relevant)
+        }))
 }
 
 fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
@@ -25085,10 +25082,16 @@ mod tests {
             assert!(!serialized.contains("AMBIGUOUS_PRIVATE_ASSISTANT_OUTPUT"));
         }
         let destination_view = projected_local_display_messages(store.events(), destination);
-        assert!(destination_view.iter().any(|message| message.text == "destination-owned answer"));
-        assert!(projected_local_display_messages(store.events(), source)
-            .iter()
-            .all(|message| message.text != "destination-owned answer"));
+        assert!(
+            destination_view
+                .iter()
+                .any(|message| message.text == "destination-owned answer")
+        );
+        assert!(
+            projected_local_display_messages(store.events(), source)
+                .iter()
+                .all(|message| message.text != "destination-owned answer")
+        );
     }
 
     #[test]
