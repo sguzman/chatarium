@@ -1499,8 +1499,13 @@ mod tests {
         let isolated = LocalConversationId::new();
         let mut store = MemoryEventStore::default();
         for body in [
-            "İstanbul first", "not related", "MÉXICO second", "the rust user guide",
-            "rust again", "مرحبا بالعالم", "emoji 🦀 second",
+            "İstanbul first",
+            "not related",
+            "MÉXICO second",
+            "the rust user guide",
+            "rust again",
+            "مرحبا بالعالم",
+            "emoji 🦀 second",
         ] {
             author(&mut store, owner, body);
         }
@@ -1509,13 +1514,27 @@ mod tests {
         let mut catalog = LocalConversationCatalog::default();
         catalog.create(owner, 1);
         catalog.create(isolated, 2);
-        catalog.rename(owner, Some("Rust México Title".to_owned()), 3).unwrap();
-        catalog.rename(isolated, Some("Other".to_owned()), 4).unwrap();
+        catalog
+            .rename(owner, Some("Rust México Title".to_owned()), 3)
+            .unwrap();
+        catalog
+            .rename(isolated, Some("Other".to_owned()), 4)
+            .unwrap();
         let entries = catalog.entries();
 
         for query in [
-            "", "  ", "rust", "RUST", " méxico ", "i", "İ", "🦀",
-            "مرحبا", "title", "missing", "private",
+            "",
+            "  ",
+            "rust",
+            "RUST",
+            " méxico ",
+            "i",
+            "İ",
+            "🦀",
+            "مرحبا",
+            "title",
+            "missing",
+            "private",
         ] {
             let rows = cached_rows(&ctx, &index, &entries, false, query);
             for entry in &entries {
@@ -1526,12 +1545,18 @@ mod tests {
                     &title,
                     messages.iter().map(|message| message.text.as_str()),
                 );
-                let actual = rows.iter().find(|row| entries[row.catalog_index].id == entry.id);
+                let actual = rows
+                    .iter()
+                    .find(|row| entries[row.catalog_index].id == entry.id);
                 match (reference, actual) {
                     (None, None) => {}
                     (Some((kind, hit)), Some(row)) => {
                         assert_eq!(row.kind, kind, "{query}");
-                        assert_eq!(row.message_index, hit.as_ref().map(|(position, _)| *position), "{query}");
+                        assert_eq!(
+                            row.message_index,
+                            hit.as_ref().map(|(position, _)| *position),
+                            "{query}"
+                        );
                         assert_eq!(row.preview, hit.map(|(_, excerpt)| excerpt), "{query}");
                         let needle = query.trim().to_lowercase();
                         let expected = if needle.is_empty() {
@@ -1541,7 +1566,11 @@ mod tests {
                                 .iter()
                                 .enumerate()
                                 .filter_map(|(position, message)| {
-                                    message.text.to_lowercase().contains(&needle).then_some(position)
+                                    message
+                                        .text
+                                        .to_lowercase()
+                                        .contains(&needle)
+                                        .then_some(position)
                                 })
                                 .collect::<Vec<_>>()
                         };
