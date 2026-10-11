@@ -118,9 +118,13 @@ continuous-reader navigation through a long persisted transcript.
 ## Actual-app restart and durable replay
 
 Before composing the second message, QA compares the production screenshot
-with the freshly launched empty-chat view. If the Ctrl+Shift+N shortcut is lost
-to focus, it retries using the actual sidebar New local button and verifies
-the empty view again. No second message is typed into the first conversation
+with the freshly launched empty-chat view. It aligns the actual title
+and central empty-state prompt independently within 45 horizontal pixels:
+the sidebar may grow when conversations appear, even though the selected
+content is identical. Both regions must match, so a missed shortcut cannot
+be mistaken for a legitimate layout shift. If Ctrl+Shift+N is lost to focus,
+QA retries using the actual sidebar New local button and verifies the
+empty view again. No second message is typed into the first conversation
 under a missed-shortcut condition.
 
 The isolated production GUI smoke now stops the native process after
