@@ -42,19 +42,15 @@ fn legacy_search_row(
         Some((first, preview)) => {
             let needle = query.trim().to_lowercase();
             let mut indices = vec![first];
-            indices.extend(
-                messages
-                    .iter()
-                    .enumerate()
-                    .skip(first + 1)
-                    .filter_map(|(position, message)| {
-                        message
-                            .text
-                            .to_lowercase()
-                            .contains(&needle)
-                            .then_some(position)
-                    }),
-            );
+            indices.extend(messages.iter().enumerate().skip(first + 1).filter_map(
+                |(position, message)| {
+                    message
+                        .text
+                        .to_lowercase()
+                        .contains(&needle)
+                        .then_some(position)
+                },
+            ));
             (Some(first), Some(preview), indices)
         }
         None => (None, None, Vec::new()),
