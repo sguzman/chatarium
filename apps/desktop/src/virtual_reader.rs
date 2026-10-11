@@ -398,7 +398,6 @@ mod tests {
         assert!(!layout.finish_measurements());
     }
 
-
     /// A simple linear reference independent of the Fenwick implementation.
     /// It deliberately uses f64 sums to catch cumulative rounding errors.
     fn reference_offset(heights: &[f32], index: usize) -> f64 {
