@@ -25,3 +25,4 @@ tools/qa-browser/node_modules/
 
 # Disposable synthetic native UI screenshots and telemetry.
 .qa-native-reader/
+.qa-native-reader-hidpi/

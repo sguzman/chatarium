@@ -56,7 +56,8 @@ does not open the user's journal, browser, account bridge, or network provider.
 The dedicated `native-reader-visual-qa` GitHub Actions workflow builds the
 actual desktop binary and runs it under Xvfb/Openbox with software graphics.
 X11 automation captures eleven PNG screenshots per scale: top, middle,
-keyboard PageDown and PageUp, wheel scroll, end, long-distance search jump, automatic hit recovery after resizing without
+keyboard PageDown and PageUp (through the same scroll-state helper used
+by the production workspace), wheel scroll, end, long-distance search jump, automatic hit recovery after resizing without
 reissuing Search,
 synthetic append, switching away, and switching back. The append marker
 survives the synthetic conversation switch. Overscan layout membership

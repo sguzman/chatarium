@@ -152,6 +152,20 @@ impl eframe::App for ReaderQa {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
             )
         });
+        let page_down =
+            ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::PageDown));
+        let page_up =
+            ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::PageUp));
+        // Mirror the production Chatarium reader keyboard handler:
+        // PageDown/PageUp scroll through scroll_area::State, rather than
+        // creating a second key-navigation path for the synthetic shell.
+        let scroll_id = egui::Id::new(("qa-native-virtual-transcript", self.conversation));
+        if page_down {
+            super::adjust_reader_scroll(ctx, scroll_id, 480.0);
+        }
+        if page_up {
+            super::adjust_reader_scroll(ctx, scroll_id, -480.0);
+        }
         let mut panel_width = 0.0;
         let mut rendered = Vec::new();
         let mut visible = Vec::new();
@@ -244,7 +258,7 @@ impl eframe::App for ReaderQa {
                 ui.separator();
 
                 let mut scroller = egui::ScrollArea::vertical()
-                    .id_salt(("qa-native-virtual-transcript", self.conversation))
+                    .id_salt(scroll_id)
                     .auto_shrink([false, false])
                     .stick_to_bottom(matches!(self.phase, "append" | "return"));
                 if let Some(jump) = self.jump_to.take() {
