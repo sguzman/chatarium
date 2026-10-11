@@ -22,3 +22,6 @@ protocol/private/
 # Local Playwright/browser tooling.
 .playwright-mcp/
 tools/qa-browser/node_modules/
+
+# Disposable synthetic native UI screenshots and telemetry.
+.qa-native-reader/

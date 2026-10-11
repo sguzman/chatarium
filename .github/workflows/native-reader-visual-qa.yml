@@ -1,0 +1,44 @@
+name: native-reader-visual-qa
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/desktop/src/main.rs"
+      - "apps/desktop/src/reader_visual_qa.rs"
+      - "apps/desktop/src/virtual_reader.rs"
+      - "tools/qa-native-reader/**"
+      - ".github/workflows/native-reader-visual-qa.yml"
+
+concurrency:
+  group: native-reader-visual-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshot-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install disposable X11 and screenshot tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb openbox xdotool imagemagick python3-pil jq libxkbcommon-x11-0 libegl1 libgl1
+      - name: Build native Chatarium binary
+        run: cargo build -p chatarium-desktop --bin chatarium-desktop
+      - name: Launch synthetic native reader and capture visual evidence
+        run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/run.sh
+      - name: Upload disposable screenshots and structural results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-reader-visual-qa
+          path: |
+            .qa-native-reader/*.png
+            .qa-native-reader/*.json
+            .qa-native-reader/*.log
+          if-no-files-found: warn
+          retention-days: 7

@@ -28,6 +28,7 @@ mod native_transcript_export;
 mod offline_reader;
 mod siwc_bridge;
 mod virtual_reader;
+mod reader_visual_qa;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::control::{
@@ -22088,6 +22089,9 @@ fn run_production_mirror_acceptance() {
 }
 
 fn main() -> eframe::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--qa-reader") {
+        return reader_visual_qa::run();
+    }
     diagnostics::init();
     if std::env::args().nth(1).as_deref() == Some("--production-mirror-acceptance") {
         run_production_mirror_acceptance();
