@@ -13582,7 +13582,7 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
-                reader_scroll_state_id = ui.make_persistent_id(egui::IdSalt::new(transcript_scroll_id));
+                reader_scroll_state_id = ui.make_persistent_id(egui::Id::new(transcript_scroll_id));
                 if reader_page_delta != 0.0 {
                     adjust_reader_scroll(ctx, reader_scroll_state_id, reader_page_delta);
                 }

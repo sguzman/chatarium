@@ -91,8 +91,8 @@ image comparisons.
 ## ScrollArea ID correctness
 
 egui scopes a ScrollArea's stored state to its parent Ui. It first hashes
-the argument to `ScrollArea::id_salt` into an `IdSalt`, then uses
-`ui.make_persistent_id(egui::IdSalt::new(scroll_salt))` for its state key.
+the argument to `ScrollArea::id_salt` into an `Id` in egui 0.33.3,
+then uses `ui.make_persistent_id(egui::Id::new(scroll_salt))` as its state key.
 Neither a raw `Id::new(...)` nor a directly parent-scoped raw ID matches. Chatarium computes the
 parent-scoped ID inside the reader's owning UI, and uses it for PageDown/Up,
 Home/End, paged-reader resets, and post-frame scroll-anchor corrections.
