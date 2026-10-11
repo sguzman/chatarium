@@ -70,8 +70,7 @@ impl VirtualReaderLayout {
             .as_ref()
             .and_then(|(_, target)| *target)
             .is_some_and(|target| {
-                !same_width
-                    || self.signatures.get(..=target) != next_signatures.get(..=target)
+                !same_width || self.signatures.get(..=target) != next_signatures.get(..=target)
             });
         if anchor_changed {
             self.last_search = None;
