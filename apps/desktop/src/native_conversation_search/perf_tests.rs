@@ -155,8 +155,11 @@ fn native_search_perf_profile() {
         let start = Instant::now();
         let rebuilt = NativeConversationSearchIndex::build(store.events());
         assert_eq!(rebuilt.messages(owners[0]).len(), MESSAGES_PER_CONVERSATION);
-        black_box(rebuilt);
+        black_box(&rebuilt);
         cold_build_samples_us.push(start.elapsed().as_micros());
+        // Exclude destruction of the previous sample's allocations from
+        // the next cold-build measurement.
+        drop(rebuilt);
     }
 
     let first_start = Instant::now();
