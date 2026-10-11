@@ -21296,17 +21296,34 @@ fn projected_local_display_messages(
     events: &[EventEnvelope],
     local_conversation_id: LocalConversationId,
 ) -> Vec<DisplayMessage> {
-    let mut local_turn_scopes = HashSet::new();
-
+    // Every assistant scope must have exactly one native conversation owner.
+    // A duplicate turn ID claimed across conversations is ambiguous and must
+    // never make assistant text visible in either transcript or model context.
+    // User-authored messages remain visible to their original conversation.
+    let mut owners = BTreeMap::<String, Option<LocalConversationId>>::new();
     for event in events {
         let Ok(Some(DecodedUserMessageCommit::Typed(message))) = decode_user_message_commit(event)
         else {
             continue;
         };
-        if message.conversation_id == local_conversation_id {
-            local_turn_scopes.insert(local_turn_scope(message.turn_id));
+        match owners.entry(local_turn_scope(message.turn_id)) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Some(message.conversation_id));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                if entry
+                    .get()
+                    .is_some_and(|previous| *previous != message.conversation_id)
+                {
+                    entry.insert(None);
+                }
+            }
         }
     }
+    let local_turn_scopes = owners
+        .into_iter()
+        .filter_map(|(scope, owner)| (owner == Some(local_conversation_id)).then_some(scope))
+        .collect::<HashSet<_>>();
 
     let relevant = events
         .iter()
@@ -24963,6 +24980,115 @@ mod tests {
         let serialized = context_plan.input_json().to_string();
         assert!(!serialized.contains("first private conversation"));
         assert!(!serialized.contains("first answer"));
+    }
+
+    #[test]
+    fn shared_turn_scope_cannot_cross_native_transcript_or_inference_boundaries() {
+        let source = LocalConversationId::new();
+        let destination = LocalConversationId::new();
+        let shared_turn = LocalTurnId::new();
+        let private_turn = LocalTurnId::new();
+        let mut store = chatarium_store::MemoryEventStore::default();
+
+        // Both authored inputs remain visible in their own local chats,
+        // but neither chat owns the shared assistant turn unambiguously.
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                source,
+                shared_turn,
+                LocalMessageId::new(),
+                "source-private authored input",
+            ),
+        )
+        .unwrap();
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                destination,
+                shared_turn,
+                LocalMessageId::new(),
+                "destination-private authored input",
+            ),
+        )
+        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(shared_turn)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(
+                    shared_turn,
+                    &shared_turn.to_string(),
+                    None,
+                    Some("AMBIGUOUS_PRIVATE_ASSISTANT_OUTPUT"),
+                    None,
+                ),
+            )
+            .unwrap();
+
+        // An unrelated, uniquely owned assistant scope must remain usable.
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                destination,
+                private_turn,
+                LocalMessageId::new(),
+                "destination followup",
+            ),
+        )
+        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(private_turn)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(
+                    private_turn,
+                    &private_turn.to_string(),
+                    None,
+                    Some("destination-owned answer"),
+                    None,
+                ),
+            )
+            .unwrap();
+
+        for (owner, own_text, other_text) in [
+            (
+                source,
+                "source-private authored input",
+                "destination-private authored input",
+            ),
+            (
+                destination,
+                "destination-private authored input",
+                "source-private authored input",
+            ),
+        ] {
+            let visible = projected_local_display_messages(store.events(), owner);
+            let joined = visible
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(joined.contains(own_text));
+            assert!(!joined.contains(other_text));
+            assert!(!joined.contains("AMBIGUOUS_PRIVATE_ASSISTANT_OUTPUT"));
+
+            // This is the actual composition path used by local inference.
+            let plan = context_composer::ContextPlan::compose(
+                context_composer::ContextPolicy::dispatch(),
+                "",
+                "",
+                context_transcript(&visible),
+            );
+            let serialized = plan.input_json().to_string();
+            assert!(!serialized.contains(other_text));
+            assert!(!serialized.contains("AMBIGUOUS_PRIVATE_ASSISTANT_OUTPUT"));
+        }
+        let destination_view = projected_local_display_messages(store.events(), destination);
+        assert!(destination_view.iter().any(|message| message.text == "destination-owned answer"));
+        assert!(projected_local_display_messages(store.events(), source)
+            .iter()
+            .all(|message| message.text != "destination-owned answer"));
     }
 
     #[test]
