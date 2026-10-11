@@ -13525,6 +13525,24 @@ impl eframe::App for ChatariumApp {
         let mut reader_hit_from_button = self.reader_search_hit;
         let mut reader_output_offset = None;
 
+        // Paging is a local UI projection, not a change to journal contents,
+        // inference context or authorization. Keep restored full-reader
+        // positions intact when the user already has a saved scroll position.
+        let paging_id = egui::Id::new(("chatarium-native-reader-page", &reader_key));
+        let mut reader_window = ctx.data_mut(|data| {
+            data.get_temp::<offline_reader::ReaderWindow>(paging_id)
+        }).unwrap_or_else(|| {
+            let enable = !historical_mode
+                && display_messages.len() >= offline_reader::READER_AUTO_PAGE_THRESHOLD
+                && restore_reader_offset.unwrap_or(0.0) <= 0.0;
+            offline_reader::ReaderWindow::new(display_messages.len(), enable)
+        });
+        reader_window.sync(
+            display_messages.len(),
+            &self.reader_search_query,
+            active_reader_message,
+        );
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -13532,6 +13550,50 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
+                if !historical_mode && display_messages.len() > offline_reader::READER_PAGE_SIZE {
+                    ui.horizontal(|ui| {
+                        let was_enabled = reader_window.enabled;
+                        ui.checkbox(&mut reader_window.enabled, "Paged reader");
+                        if reader_window.enabled != was_enabled {
+                            if reader_window.enabled {
+                                reader_window.latest(display_messages.len());
+                                reader_window.sync(
+                                    display_messages.len(),
+                                    &self.reader_search_query,
+                                    active_reader_message,
+                                );
+                            }
+                            set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+                        }
+                        if reader_window.enabled {
+                            let range = reader_window.range(display_messages.len());
+                            if ui
+                                .add_enabled(range.start > 0, egui::Button::new("← Earlier"))
+                                .clicked()
+                            {
+                                reader_window.earlier();
+                                set_reader_scroll(ctx, transcript_scroll_id, 0.0);
+                            }
+                            if ui
+                                .add_enabled(
+                                    range.end < display_messages.len(),
+                                    egui::Button::new("Later →"),
+                                )
+                                .clicked()
+                            {
+                                reader_window.later(display_messages.len());
+                                set_reader_scroll(ctx, transcript_scroll_id, 0.0);
+                            }
+                            let range = reader_window.range(display_messages.len());
+                            ui.label(format!(
+                                "{}–{} / {} messages",
+                                range.start + 1,
+                                range.end,
+                                display_messages.len(),
+                            ));
+                        }
+                    });
+                }
                 let mut reader_scroll = egui::ScrollArea::vertical()
                     .id_salt(transcript_scroll_id)
                     .stick_to_bottom(true)
@@ -13643,7 +13705,17 @@ impl eframe::App for ChatariumApp {
                             });
                         } else {
                             ui.add_space(8.0);
-                            for (message_index, message) in display_messages.iter().enumerate() {
+                            let window = if historical_mode {
+                                0..display_messages.len()
+                            } else {
+                                reader_window.range(display_messages.len())
+                            };
+                            for (message_index, message) in display_messages
+                                .iter()
+                                .enumerate()
+                                .skip(window.start)
+                                .take(window.end - window.start)
+                            {
                                 let message_is_active_hit = active_reader_message == Some(message_index);
                                 match message.role {
                                     DisplayRole::User => {
@@ -13692,8 +13764,9 @@ impl eframe::App for ChatariumApp {
                 reader_output_offset = Some(reader_output.state.offset.y);
             });
 
+        ctx.data_mut(|data| data.insert_temp(paging_id, reader_window.clone()));
         self.reader_search_hit = reader_hit_from_button;
-        if let Some(offset) = reader_output_offset {
+        if let Some(offset) = reader_output_offset.filter(|_| !reader_window.enabled) {
             if (offset - self.reader_last_saved_offset).abs() > 1.0
                 && self.reader_last_position_write.elapsed() > Duration::from_millis(250)
             {

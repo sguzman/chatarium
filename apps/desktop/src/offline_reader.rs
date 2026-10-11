@@ -254,6 +254,89 @@ pub fn next_hit(current: Option<usize>, hit_count: usize, backwards: bool) -> Op
     })
 }
 
+/// Native transcript paging limits expensive egui bubble layout without
+/// hiding older messages from explicit navigation or reader search.
+/// The user can always turn paging off to restore the full transcript.
+pub const READER_PAGE_SIZE: usize = 160;
+pub const READER_AUTO_PAGE_THRESHOLD: usize = 1_024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReaderWindow {
+    pub enabled: bool,
+    start: usize,
+    follow_tail: bool,
+    observed_count: usize,
+    last_query: String,
+    last_search_message: Option<usize>,
+}
+
+impl ReaderWindow {
+    pub fn new(count: usize, enabled: bool) -> Self {
+        Self {
+            enabled,
+            start: count.saturating_sub(READER_PAGE_SIZE),
+            follow_tail: true,
+            observed_count: count,
+            last_query: String::new(),
+            last_search_message: None,
+        }
+    }
+
+    #[must_use]
+    pub fn range(&self, count: usize) -> std::ops::Range<usize> {
+        if !self.enabled {
+            return 0..count;
+        }
+        let start = self.start.min(count.saturating_sub(READER_PAGE_SIZE));
+        start..start.saturating_add(READER_PAGE_SIZE).min(count)
+    }
+
+    /// Only new search selections can move the window automatically. Paging
+    /// manually away from a selected hit must not snap back on every frame.
+    pub fn sync(&mut self, count: usize, query: &str, hit_message: Option<usize>) {
+        if self.follow_tail && count != self.observed_count {
+            self.start = count.saturating_sub(READER_PAGE_SIZE);
+        }
+        self.observed_count = count;
+        self.start = self.start.min(count.saturating_sub(READER_PAGE_SIZE));
+        let changed = self.last_query != query || self.last_search_message != hit_message;
+        if self.enabled && changed {
+            if let Some(target) = hit_message.filter(|target| *target < count) {
+                self.start = target
+                    .saturating_sub(READER_PAGE_SIZE / 2)
+                    .min(count.saturating_sub(READER_PAGE_SIZE));
+                self.follow_tail = false;
+            }
+        }
+        self.last_query = query.to_owned();
+        self.last_search_message = hit_message;
+    }
+
+    pub fn earlier(&mut self) {
+        self.start = self.start.saturating_sub(READER_PAGE_SIZE);
+        self.follow_tail = false;
+    }
+
+    pub fn later(&mut self, count: usize) {
+        self.start = self
+            .start
+            .saturating_add(READER_PAGE_SIZE)
+            .min(count.saturating_sub(READER_PAGE_SIZE));
+        self.follow_tail = self.start == count.saturating_sub(READER_PAGE_SIZE);
+    }
+
+    pub fn first(&mut self) {
+        self.start = 0;
+        self.follow_tail = false;
+    }
+
+    pub fn latest(&mut self, count: usize) {
+        self.start = count.saturating_sub(READER_PAGE_SIZE);
+        self.follow_tail = true;
+        self.observed_count = count;
+    }
+}
+
 pub fn copy_payload(text: &str) -> String {
     text.to_owned()
 }
@@ -311,6 +394,48 @@ pub fn markdown_counts(texts: impl IntoIterator<Item = impl AsRef<str>>) -> (usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reader_window_pages_large_archives_without_discarding_search_targets() {
+        let mut state = ReaderWindow::new(4_096, true);
+        assert_eq!(state.range(4_096), 3_936..4_096);
+        state.earlier();
+        assert_eq!(state.range(4_096), 3_776..3_936);
+        state.sync(4_097, "", None);
+        assert_eq!(state.range(4_097), 3_776..3_936);
+        state.sync(4_097, "needle", Some(12));
+        assert_eq!(state.range(4_097), 0..160);
+        state.earlier();
+        state.sync(4_097, "needle", Some(12));
+        assert_eq!(state.range(4_097), 0..160);
+        state.sync(4_097, "needle", Some(2_050));
+        assert!(state.range(4_097).contains(&2_050));
+        state.latest(4_097);
+        state.sync(4_099, "needle", Some(2_050));
+        assert_eq!(state.range(4_099), 3_939..4_099);
+        state.first();
+        assert_eq!(state.range(4_099), 0..160);
+        state.later(4_099);
+        assert_eq!(state.range(4_099), 160..320);
+        state.enabled = false;
+        assert_eq!(state.range(4_099), 0..4_099);
+    }
+
+    #[test]
+    fn reader_window_handles_small_empty_and_truncated_archives() {
+        let mut state = ReaderWindow::new(0, true);
+        assert_eq!(state.range(0), 0..0);
+        state.earlier();
+        state.later(8);
+        assert_eq!(state.range(8), 0..8);
+        state.sync(8, "other", Some(12));
+        assert_eq!(state.range(8), 0..8);
+        state.latest(2);
+        assert_eq!(state.range(2), 0..2);
+        state.sync(0, "", None);
+        assert_eq!(state.range(0), 0..0);
+        assert_eq!(READER_AUTO_PAGE_THRESHOLD, 1_024);
+    }
 
     #[test]
     fn parses_reader_blocks_and_preserves_paragraph_lines() {
