@@ -208,7 +208,33 @@ env -i \
 app_pid=$!
 window=""
 for _ in $(seq 1 160); do
-    window="$(xdotool search --onlyvisible --name '^Chatarium
+    window="$(xdotool search --onlyvisible --name '^Chatarium$' 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$window" ]]; then break; fi
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "Production app failed to reopen its isolated journal" >&2
+        tail -n 120 "$OUT/production-restarted.log" >&2 || true
+        exit 1
+    fi
+    sleep 0.25
+done
+if [[ -z "$window" ]]; then
+    echo "Production app did not reopen a native window" >&2
+    tail -n 120 "$OUT/production-restarted.log" >&2 || true
+    exit 1
+fi
+xdotool windowactivate --sync "$window"
+xdotool windowsize "$window" 930 650
+sleep 1.2
+import -window "$window" "$OUT/production-restarted.png"
+xdotool key --clearmodifiers ctrl+shift+Tab
+sleep 0.8
+import -window "$window" "$OUT/production-restarted-switched.png"
+xdotool key --clearmodifiers ctrl+Tab
+sleep 0.8
+import -window "$window" "$OUT/production-restarted-returned.png"
+python3 tools/qa-native-reader/check_replay.py verify "$JOURNAL" "$OUT/production-before-restart.json" "$MARKER" "$SECOND_MARKER"
+
+python3 - "$OUT" <<'PY'
 import json
 from pathlib import Path
 from PIL import Image, ImageChops
