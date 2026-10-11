@@ -106,8 +106,26 @@ for label in ("initial", "home", "end"):
         raise AssertionError(f"production screenshot unexpectedly blank: {label}")
     images[label] = img
 region = (460, 85, 1150, 500)
-if ImageChops.difference(images["home"].crop(region), images["end"].crop(region)).getbbox() is None:
-    raise AssertionError("production reader failed to change between Home and End")
+from PIL import ImageStat
+def aligned_difference(a, b):
+    reference = images[a].crop((730, 135, 1060, 475))
+    candidates = []
+    for shift in range(-36, 37):
+        candidate = images[b].crop((730 + shift, 135, 1060 + shift, 475))
+        delta = ImageChops.difference(reference, candidate)
+        candidates.append(sum(ImageStat.Stat(delta).mean) / 3)
+    return min(candidates)
+
+home_distance = aligned_difference("initial", "home")
+end_distance = aligned_difference("initial", "end")
+if home_distance < 8.0:
+    raise AssertionError(
+        f"Home did not leave the initial tail view: distance={home_distance:.3f}"
+    )
+if end_distance > 7.0:
+    raise AssertionError(
+        f"End did not restore the initial tail view: distance={end_distance:.3f}"
+    )
 summary = {
     "schema": "chatarium-long-native-reader-qa",
     "version": 1,
@@ -116,7 +134,10 @@ summary = {
     "durable_messages": 257,
     "single_conversation_owner": True,
     "first_and_last_markers_persisted": True,
-    "home_and_end_change_transcript": True,
+    "home_leaves_tail": True,
+    "end_restores_tail": True,
+    "home_image_distance": round(home_distance, 3),
+    "end_image_distance": round(end_distance, 3),
     "screenshots": 3,
     "isolated_credentials_and_journal": True
 }

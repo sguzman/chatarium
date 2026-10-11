@@ -13591,7 +13591,11 @@ impl eframe::App for ChatariumApp {
                     set_reader_scroll(ctx, reader_scroll_state_id, 0.0);
                 }
                 if reader_end_requested {
-                    set_reader_scroll(ctx, reader_scroll_state_id, f32::MAX);
+                    // A maximum finite float can overflow egui's scroll
+                    // geometry and unexpectedly move to the beginning.
+                    // A bounded, finite offset is enough to clamp to the
+                    // actual bottom of realistic native conversations.
+                    set_reader_scroll(ctx, reader_scroll_state_id, 100_000_000.0);
                 }
                 if !historical_mode && display_messages.len() > offline_reader::READER_PAGE_SIZE {
                     ui.horizontal_wrapped(|ui| {
@@ -13652,8 +13656,15 @@ impl eframe::App for ChatariumApp {
                 }
                 let mut reader_scroll = egui::ScrollArea::vertical()
                     .id_salt(transcript_scroll_id)
-                    .stick_to_bottom(true)
+                    .stick_to_bottom(!reader_home_requested)
                     .auto_shrink([false, false]);
+                // An explicit reader navigation command must take priority
+                // over the ScrollArea's previous sticky-bottom state.
+                if reader_home_requested {
+                    reader_scroll = reader_scroll.vertical_scroll_offset(0.0);
+                } else if reader_end_requested {
+                    reader_scroll = reader_scroll.vertical_scroll_offset(100_000_000.0);
+                }
                 if let Some(offset) = restore_reader_offset {
                     // Full-reader pixel offsets refer to an entirely different
                     // content extent, so do not apply them to a virtual layout.
