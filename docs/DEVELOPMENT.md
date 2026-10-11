@@ -93,10 +93,13 @@ memory benchmarks against a real account archive. They do not access user
 data, launch providers or require manual QA. Real-world responsiveness and
 peak-memory measurements remain a separate validation task.
 
-Native query result construction now collects the first match preview and
-all matching message positions in a single pass per conversation, lowercasing
-the query only once per cache miss. It preserves message-first title fallback,
-bounded excerpts, source isolation, and separate memory admission.
+The runtime retains the original two-pass native search row collection.
+A proposed single-pass alternative was tested against the same result contract
+and profiled on the same hosted runner, alternating old/new execution order
+over 10 rounds on 16,384 synthetic messages. The original path took 324,985
+microseconds; the candidate took 356,357 microseconds (about 9.7% slower).
+The candidate is retained only as a test reference, not a product feature.
+The debug-runner result is informative but is not a production SLO.
 
 ## Opt-in synthetic native search profile
 

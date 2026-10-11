@@ -253,9 +253,9 @@ struct NativeRowsCache {
     rows: Arc<Vec<NativeSearchRow>>,
 }
 
-/// Build one native search row in a single pass. Keep exact positions in
-/// the owner projection, never copies of all matching message bodies.
-/// Message hits outrank title hits, including titles derived from messages.
+/// Experimental single-pass reference used by the ignored same-run
+/// performance profile only. The runtime retains the faster two-pass path.
+#[cfg(test)]
 fn collect_native_search_row(
     needle: &str,
     catalog_index: usize,
@@ -330,7 +330,6 @@ pub fn cached_rows(
         }
     }
 
-    let needle = query.trim().to_lowercase();
     let mut rows = Vec::new();
     for (catalog_index, entry) in entries.iter().enumerate() {
         if entry.archived && !show_archived {
@@ -343,8 +342,36 @@ pub fn cached_rows(
             .filter(|title| !title.trim().is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| derived_conversation_title(messages));
-        if let Some(row) = collect_native_search_row(&needle, catalog_index, title, messages) {
-            rows.push(row);
+        if let Some((kind, hit)) = find_match_with_position(
+            query,
+            &title,
+            messages.iter().map(|message| message.text.as_str()),
+        ) {
+            let (message_index, preview, matching_message_indices) = match hit {
+                Some((first, preview)) => {
+                    let needle = query.trim().to_lowercase();
+                    let mut indices = vec![first];
+                    indices.extend(messages.iter().enumerate().skip(first + 1).filter_map(
+                        |(position, message)| {
+                            message
+                                .text
+                                .to_lowercase()
+                                .contains(&needle)
+                                .then_some(position)
+                        },
+                    ));
+                    (Some(first), Some(preview), indices)
+                }
+                None => (None, None, Vec::new()),
+            };
+            rows.push(NativeSearchRow {
+                catalog_index,
+                title,
+                kind,
+                preview,
+                message_index,
+                matching_message_indices,
+            });
         }
     }
     let rows = Arc::new(rows);
@@ -1490,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn single_pass_native_rows_match_reference_search_semantics() {
+    fn native_rows_match_reference_search_semantics_across_scripts() {
         use super::super::local_conversations::LocalConversationCatalog;
         use chatarium_store::{EventStore, MemoryEventStore};
 
