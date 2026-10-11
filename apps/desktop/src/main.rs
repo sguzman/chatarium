@@ -13493,7 +13493,11 @@ impl eframe::App for ChatariumApp {
         let mut previous_reader_hit = false;
         let mut reader_home_requested = false;
         let mut reader_end_requested = false;
+        let mut reader_page_delta = 0.0_f32;
         let transcript_scroll_id = egui::Id::new("transcript-reader-scroll");
+        // ScrollArea adds its parent Ui ID to this salt. Resolve its actual
+        // persistent state key only after the parent Ui has been created.
+        let mut reader_scroll_state_id = transcript_scroll_id;
         if conversation_keybindings::may_consume_reader_navigation(ctx.wants_keyboard_input()) {
             ctx.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::CTRL, egui::Key::N) {
@@ -13503,18 +13507,16 @@ impl eframe::App for ChatariumApp {
                     previous_reader_hit = true;
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::PageDown) {
-                    adjust_reader_scroll(ctx, transcript_scroll_id, 480.0);
+                    reader_page_delta = 480.0;
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::PageUp) {
-                    adjust_reader_scroll(ctx, transcript_scroll_id, -480.0);
+                    reader_page_delta = -480.0;
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
                     reader_home_requested = true;
-                    set_reader_scroll(ctx, transcript_scroll_id, 0.0);
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::End) {
                     reader_end_requested = true;
-                    set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
                 }
             });
         }
@@ -13580,6 +13582,16 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
+                reader_scroll_state_id = ui.make_persistent_id(transcript_scroll_id);
+                if reader_page_delta != 0.0 {
+                    adjust_reader_scroll(ctx, reader_scroll_state_id, reader_page_delta);
+                }
+                if reader_home_requested {
+                    set_reader_scroll(ctx, reader_scroll_state_id, 0.0);
+                }
+                if reader_end_requested {
+                    set_reader_scroll(ctx, reader_scroll_state_id, f32::MAX);
+                }
                 if !historical_mode && display_messages.len() > offline_reader::READER_PAGE_SIZE {
                     ui.horizontal_wrapped(|ui| {
                         let was_virtualized = reader_window.virtualized;
@@ -13588,7 +13600,7 @@ impl eframe::App for ChatariumApp {
                             if reader_window.virtualized {
                                 reader_window.enabled = false;
                             }
-                            set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+                            set_reader_scroll(ctx, reader_scroll_state_id, f32::MAX);
                             ctx.request_repaint();
                         }
                         let was_enabled = reader_window.enabled;
@@ -13603,7 +13615,7 @@ impl eframe::App for ChatariumApp {
                                     reader_window.reveal(display_messages.len(), target);
                                 }
                             }
-                            set_reader_scroll(ctx, transcript_scroll_id, f32::MAX);
+                            set_reader_scroll(ctx, reader_scroll_state_id, f32::MAX);
                         }
                         if reader_window.virtualized {
                             ui.label("Virtualized · scroll for older messages");
@@ -13615,7 +13627,7 @@ impl eframe::App for ChatariumApp {
                                 .clicked()
                             {
                                 reader_window.earlier();
-                                set_reader_scroll(ctx, transcript_scroll_id, 0.0);
+                                set_reader_scroll(ctx, reader_scroll_state_id, 0.0);
                             }
                             if ui
                                 .add_enabled(
@@ -13625,7 +13637,7 @@ impl eframe::App for ChatariumApp {
                                 .clicked()
                             {
                                 reader_window.later(display_messages.len());
-                                set_reader_scroll(ctx, transcript_scroll_id, 0.0);
+                                set_reader_scroll(ctx, reader_scroll_state_id, 0.0);
                             }
                             let range = reader_window.range(display_messages.len());
                             ui.label(format!(
@@ -13889,7 +13901,7 @@ impl eframe::App for ChatariumApp {
                     // ScrollArea has finished writing its state. Apply the
                     // correction afterwards, never from inside its callback.
                     let corrected = (offset + delta).max(0.0);
-                    set_reader_scroll(ctx, transcript_scroll_id, corrected);
+                    set_reader_scroll(ctx, reader_scroll_state_id, corrected);
                     ctx.request_repaint();
                     corrected
                 } else {

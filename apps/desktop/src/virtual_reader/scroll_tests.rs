@@ -109,3 +109,48 @@ fn virtual_reader_scrollarea_renders_bounded_contiguous_windows() {
         }
     }
 }
+
+#[test]
+fn scroll_area_keyboard_offset_uses_parent_scoped_state_id() {
+    let context = egui::Context::default();
+    let salt = egui::Id::new("reader-keyboard-scroll-state");
+    for frame in 0..2 {
+        let mut actual_id = None;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(720.0, 960.0),
+            )),
+            ..Default::default()
+        };
+        context.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let scroll_id = ui.make_persistent_id(salt);
+                actual_id = Some(scroll_id);
+                if frame == 1 {
+                    super::super::adjust_reader_scroll(ctx, scroll_id, 480.0);
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(salt)
+                    .show_viewport(ui, |ui, _| {
+                        ui.set_min_height(6_000.0);
+                    });
+            });
+        });
+        let actual_id = actual_id.expect("a parent-scoped scroll ID");
+        assert_ne!(actual_id, salt, "a ScrollArea salt is not its state key");
+        assert!(
+            egui::scroll_area::State::load(&context, salt).is_none(),
+            "the raw salt must not own scroll state"
+        );
+        let state = egui::scroll_area::State::load(&context, actual_id)
+            .expect("the parent-scoped ID owns scroll state");
+        if frame == 1 {
+            assert!(
+                state.offset.y >= 400.0,
+                "PageDown helper failed to move the real scroll state: {}",
+                state.offset.y
+            );
+        }
+    }
+}

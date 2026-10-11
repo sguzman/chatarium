@@ -160,12 +160,6 @@ impl eframe::App for ReaderQa {
         // PageDown/PageUp scroll through scroll_area::State, rather than
         // creating a second key-navigation path for the synthetic shell.
         let scroll_id = egui::Id::new(("qa-native-virtual-transcript", self.conversation));
-        if page_down {
-            super::adjust_reader_scroll(ctx, scroll_id, 480.0);
-        }
-        if page_up {
-            super::adjust_reader_scroll(ctx, scroll_id, -480.0);
-        }
         let mut panel_width = 0.0;
         let mut rendered = Vec::new();
         let mut visible = Vec::new();
@@ -180,6 +174,13 @@ impl eframe::App for ReaderQa {
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
+                let actual_scroll_id = ui.make_persistent_id(scroll_id);
+                if page_down {
+                    super::adjust_reader_scroll(ctx, actual_scroll_id, 480.0);
+                }
+                if page_up {
+                    super::adjust_reader_scroll(ctx, actual_scroll_id, -480.0);
+                }
                 panel_width = ui.available_width();
                 if append {
                     let messages = Arc::make_mut(&mut self.primary);
