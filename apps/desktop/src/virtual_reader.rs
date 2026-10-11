@@ -558,9 +558,7 @@ mod tests {
             let output = context.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     for record in &records {
-                        let response = super::super::draw_reader_bubble(
-                            ui, record, "", false, ctx,
-                        );
+                        let response = super::super::draw_reader_bubble(ui, record, "", false, ctx);
                         bounds.push(response.rect);
                         ui.add_space(12.0);
                     }
