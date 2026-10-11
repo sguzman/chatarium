@@ -115,6 +115,20 @@ production startup, durable authored-message isolation, native conversation
 navigation, and basic layout reflow; it does **not** yet validate production
 continuous-reader navigation through a long persisted transcript.
 
+## Actual-app restart and durable replay
+
+The isolated production GUI smoke now stops the native process after
+committing messages in two independently owned conversations, then launches
+a **new Chatarium process** using the same disposable HOME and journal.
+The QA helper parses every JSONL event (rejecting truncated records) and
+verifies both typed `UserMessageCommitted` events survive with their exact
+conversation owners, without duplicated commits. The automated screenshots
+also compare the first and second conversation's actual painted title/message
+region before and after restart and require both to be reconstructed from
+the durable journal, independent of which conversation the application
+initially selects. This test uses screenshot similarity, not OCR, and never
+accesses the user's normal HOME, credentials, or journal.
+
 ## ScrollArea ID correctness
 
 egui scopes a ScrollArea's stored state to its parent Ui. It first hashes
