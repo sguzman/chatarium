@@ -64,7 +64,7 @@ xdotool mousemove --window "$window" 750 620 click 1
 xdotool type --clearmodifiers --delay 15 "$MARKER"
 
 is_committed() {
-    python3 - "$JOURNAL" "$MARKER" <<'PY'
+    python3 - "$JOURNAL" "$1" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -85,18 +85,80 @@ raise SystemExit(0 if matches == 1 else 1)
 PY
 }
 for _ in $(seq 1 35); do
-    if is_committed; then break; fi
+    if is_committed "$MARKER"; then break; fi
     # Shortcut submits only when the editor holds focus and draft is durable.
     xdotool key --clearmodifiers ctrl+Return
     sleep 0.4
 done
-if ! is_committed; then
+if ! is_committed "$MARKER"; then
     echo "Production UI did not durably commit its synthetic message" >&2
     tail -n 100 "$LOG" >&2 || true
     exit 1
 fi
 sleep 0.7
 import -window "$window" "$OUT/production-committed.png"
+
+# Exercise real native conversation creation (Ctrl+Shift+N), independent
+# durable message ownership, and forward/backward conversation navigation.
+SECOND_MARKER="CHATARIUM_QA_SECOND_CONVERSATION_271828"
+xdotool key --clearmodifiers ctrl+shift+n
+sleep 0.9
+import -window "$window" "$OUT/production-second-empty.png"
+xdotool mousemove --window "$window" 750 620 click 1
+xdotool type --clearmodifiers --delay 15 "$SECOND_MARKER"
+for _ in $(seq 1 35); do
+    if is_committed "$SECOND_MARKER"; then break; fi
+    xdotool key --clearmodifiers ctrl+Return
+    sleep 0.4
+done
+if ! is_committed "$SECOND_MARKER"; then
+    echo "Second local conversation did not durably commit its synthetic message" >&2
+    tail -n 100 "$LOG" >&2 || true
+    exit 1
+fi
+
+# Typed commit schema explicitly owns the conversation id; the two text
+# markers must belong to different conversations, not merely different turns.
+python3 - "$JOURNAL" "$MARKER" "$SECOND_MARKER" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+rows = Path(sys.argv[1]).read_text().splitlines()
+markers = sys.argv[2:]
+owners = {}
+for raw in rows:
+    event = json.loads(raw)
+    kind = "".join(ch.lower() for ch in str(event.get("kind", "")) if ch.isalnum())
+    if kind != "usermessagecommitted":
+        continue
+    payload = event.get("payload", "")
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if not isinstance(payload, dict):
+        continue
+    if payload.get("schema") != "chatarium-user-message-commit":
+        continue
+    for marker in markers:
+        if payload.get("text") == marker:
+            owners.setdefault(marker, []).append(payload.get("conversation_id"))
+if any(len(owners.get(marker, [])) != 1 for marker in markers):
+    raise AssertionError(f"expected one typed durable commit per marker: {owners}")
+if not all(owners[marker][0] for marker in markers):
+    raise AssertionError("typed commit missing owning conversation id")
+if owners[markers[0]][0] == owners[markers[1]][0]:
+    raise AssertionError("native new-chat shortcut did not establish distinct ownership")
+print("CHATARIUM_PRODUCTION_CONVERSATION_OWNERSHIP PASS")
+PY
+
+sleep 0.7
+import -window "$window" "$OUT/production-second-committed.png"
+xdotool key --clearmodifiers ctrl+shift+Tab
+sleep 0.8
+import -window "$window" "$OUT/production-first-returned.png"
+xdotool key --clearmodifiers ctrl+Tab
+sleep 0.8
+import -window "$window" "$OUT/production-second-returned.png"
 
 xdotool windowsize "$window" 930 650
 sleep 1
@@ -110,7 +172,11 @@ import sys
 
 out = Path(sys.argv[1])
 images = []
-for stem in ("production-initial", "production-committed", "production-resized"):
+for stem in (
+    "production-initial", "production-committed", "production-second-empty",
+    "production-second-committed", "production-first-returned",
+    "production-second-returned", "production-resized",
+):
     file = out / (stem + ".png")
     with Image.open(file) as src:
         img = src.convert("RGB")
@@ -119,16 +185,22 @@ for stem in ("production-initial", "production-committed", "production-resized")
     if len(img.resize((180, 120)).getcolors(180 * 120) or []) < 20:
         raise AssertionError(f"production window did not paint plausible UI: {stem}")
     images.append(img)
-if images[0].width - images[2].width < 120:
+if images[0].width - images[-1].width < 120:
     raise AssertionError("production window failed native resize")
 # The message itself must materially change the central transcript area.
 # Comparing only the title would miss a failure to display the committed turn.
 chat_rect = (460, 75, min(images[0].width, images[1].width), 520)
 if ImageChops.difference(images[0].crop(chat_rect), images[1].crop(chat_rect)).getbbox() is None:
     raise AssertionError("committed turn did not change the production transcript")
-w = min(images[1].width, images[2].width)
-h = min(images[1].height, images[2].height)
-if ImageChops.difference(images[1].crop((0, 0, w, h)), images[2].crop((0, 0, w, h))).getbbox() is None:
+for old, new in ((1, 2), (2, 3), (3, 4), (4, 5)):
+    w = min(images[old].width, images[new].width)
+    h = min(images[old].height, images[new].height)
+    body = (460, 75, w, min(520, h))
+    if ImageChops.difference(images[old].crop(body), images[new].crop(body)).getbbox() is None:
+        raise AssertionError(f"production conversation UI failed to change: {old} -> {new}")
+w = min(images[-2].width, images[-1].width)
+h = min(images[-2].height, images[-1].height)
+if ImageChops.difference(images[-2].crop((0, 0, w, h)), images[-1].crop((0, 0, w, h))).getbbox() is None:
     raise AssertionError("production UI did not respond visually to resize")
 (out / "production-summary.json").write_text(json.dumps({
     "schema": "chatarium-isolated-production-window",
@@ -137,9 +209,11 @@ if ImageChops.difference(images[1].crop((0, 0, w, h)), images[2].crop((0, 0, w, 
     "scenario": "fresh-offline-workspace",
     "initial_px": list(images[0].size),
     "committed_px": list(images[1].size),
-    "resized_px": list(images[2].size),
-    "screenshots": 3,
-    "durable_user_message": True,
+    "resized_px": list(images[-1].size),
+    "screenshots": 7,
+    "durable_user_messages": 2,
+    "distinct_message_conversations": True,
+    "keyboard_conversation_switching": True,
     "isolated_home": True,
     "isolated_data_dir": True,
 }, indent=2) + "\n")
@@ -149,4 +223,7 @@ test -d "$OUT/home"
 test -d "$OUT/data"
 test -s "$OUT/production-initial.png"
 test -s "$OUT/production-committed.png"
+test -s "$OUT/production-second-committed.png"
+test -s "$OUT/production-first-returned.png"
+test -s "$OUT/production-second-returned.png"
 test -s "$OUT/production-resized.png"
