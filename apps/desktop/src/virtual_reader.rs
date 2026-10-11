@@ -536,7 +536,7 @@ mod tests {
             message(1, "A short local user turn"),
             message(
                 2,
-                "# Heading\n\nA paragraph with Español, 日本語, العربية and 🪐.\n\n- First\n- Second\n\n`rust\nlet x = 1;\n`",
+                "# Heading\n\nA paragraph with Español, 日本語, العربية and 🪐.\n\n- First\n- Second\n\n```rust\nlet x = 1;\n```",
             ),
             message(3, &("This paragraph needs to wrap naturally. ".repeat(115))),
             message(4, "first line\nsecond line\nthird line\n"),
@@ -558,12 +558,8 @@ mod tests {
             let output = context.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     for record in &records {
-                        let response = super::draw_reader_bubble(
-                            ui,
-                            record,
-                            "",
-                            false,
-                            ctx,
+                        let response = super::super::draw_reader_bubble(
+                            ui, record, "", false, ctx,
                         );
                         bounds.push(response.rect);
                         ui.add_space(12.0);
