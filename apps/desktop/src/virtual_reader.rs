@@ -319,7 +319,11 @@ mod tests {
         assert_eq!(layout.offset(1), 600.0);
         let expected_tail = old_tail + 600.0 - old_first + 380.0 - old_first;
         assert!((layout.total_height() - expected_tail).abs() < 1.0);
-        assert!(layout.visible_range(layout.offset(20_000), layout.offset(20_000) + 650.0).contains(&20_000));
+        assert!(
+            layout
+                .visible_range(layout.offset(20_000), layout.offset(20_000) + 650.0)
+                .contains(&20_000)
+        );
         // Unchanged measurements are not reported as another mutation.
         layout.measure(0, 600.0);
         assert!(!layout.finish_measurements());
