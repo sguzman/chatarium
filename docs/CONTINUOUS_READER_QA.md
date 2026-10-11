@@ -139,6 +139,13 @@ QA retries using the actual sidebar New local button and verifies the
 empty view again. No second message is typed into the first conversation
 under a missed-shortcut condition.
 
+Keyboard conversation navigation now requires a materially different actual
+painted transcript region, not merely an injected X11 key. The harness
+re-establishes window focus and retries a missed Ctrl+Tab/Ctrl+Shift+Tab
+chord up to four times, failing rather than clicking a sidebar fallback.
+This guards against transient X11 focus loss while retaining keyboard
+navigation as the behavior under test.
+
 The isolated production GUI smoke now stops the native process after
 committing messages in two independently owned conversations, then launches
 a **new Chatarium process** using the same disposable HOME and journal.

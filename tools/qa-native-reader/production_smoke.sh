@@ -199,12 +199,43 @@ PY
 
 sleep 0.7
 import -window "$window" "$OUT/production-second-committed.png"
-xdotool key --clearmodifiers ctrl+shift+Tab
-sleep 0.8
-import -window "$window" "$OUT/production-first-returned.png"
-xdotool key --clearmodifiers ctrl+Tab
-sleep 0.8
-import -window "$window" "$OUT/production-second-returned.png"
+# Real X11 input can miss a chord when focus changes after a commit.
+# Recover by re-activating the actual app and retrying *that same shortcut*.
+# The test still fails if the target transcript never changes; a sidebar click
+# would not prove native keyboard navigation works.
+capture_switched_conversation() {
+    local chord="$1" before="$2" after="$3"
+    for _ in $(seq 1 4); do
+        activate_window "$window"
+        xdotool key --clearmodifiers "$chord"
+        sleep 0.8
+        import -window "$window" "$after"
+        if python3 - "$before" "$after" <<'PY'
+from pathlib import Path
+from PIL import Image, ImageChops, ImageStat
+import sys
+with Image.open(Path(sys.argv[1])) as before_source, Image.open(Path(sys.argv[2])) as after_source:
+    before = before_source.convert("RGB")
+    after = after_source.convert("RGB")
+    right = min(before.width, after.width)
+    bottom = min(520, before.height, after.height)
+    if right <= 460 or bottom <= 75:
+        raise SystemExit(1)
+    box = (460, 75, right, bottom)
+    delta = ImageChops.difference(before.crop(box), after.crop(box))
+    changed = sum(ImageStat.Stat(delta).mean) / 3
+    raise SystemExit(0 if changed >= 0.5 else 1)
+PY
+        then
+            return 0
+        fi
+    done
+    echo "keyboard conversation navigation failed to repaint transcript: $chord" >&2
+    return 1
+}
+
+capture_switched_conversation "ctrl+shift+Tab" "$OUT/production-second-committed.png" "$OUT/production-first-returned.png"
+capture_switched_conversation "ctrl+Tab" "$OUT/production-first-returned.png" "$OUT/production-second-returned.png"
 
 xdotool windowsize "$window" 930 650
 sleep 1
@@ -212,12 +243,8 @@ import -window "$window" "$OUT/production-resized.png"
 
 # Capture matched first/second conversation screenshots at precisely the
 # same window dimensions that the restarted app will use for comparison.
-xdotool key --clearmodifiers ctrl+shift+Tab
-sleep 0.8
-import -window "$window" "$OUT/production-resized-first.png"
-xdotool key --clearmodifiers ctrl+Tab
-sleep 0.8
-import -window "$window" "$OUT/production-resized-second.png"
+capture_switched_conversation "ctrl+shift+Tab" "$OUT/production-resized.png" "$OUT/production-resized-first.png"
+capture_switched_conversation "ctrl+Tab" "$OUT/production-resized-first.png" "$OUT/production-resized-second.png"
 
 # Snapshot typed durable ownership, terminate the real app, and relaunch
 # with EXACTLY the same empty-home allowlist. This is a separate process,
@@ -261,12 +288,8 @@ activate_window "$window"
 xdotool windowsize "$window" 930 650
 sleep 1.2
 import -window "$window" "$OUT/production-restarted.png"
-xdotool key --clearmodifiers ctrl+shift+Tab
-sleep 0.8
-import -window "$window" "$OUT/production-restarted-switched.png"
-xdotool key --clearmodifiers ctrl+Tab
-sleep 0.8
-import -window "$window" "$OUT/production-restarted-returned.png"
+capture_switched_conversation "ctrl+shift+Tab" "$OUT/production-restarted.png" "$OUT/production-restarted-switched.png"
+capture_switched_conversation "ctrl+Tab" "$OUT/production-restarted-switched.png" "$OUT/production-restarted-returned.png"
 python3 tools/qa-native-reader/check_replay.py verify "$JOURNAL" "$OUT/production-before-restart.json" "$MARKER" "$SECOND_MARKER"
 
 python3 - "$OUT" <<'PY'
