@@ -6,7 +6,7 @@ import json
 import sys
 
 folder = Path(sys.argv[1])
-labels = ("top", "middle", "wheel", "bottom", "search", "resized", "appended", "alternate", "returned")
+labels = ("top", "middle", "page-down", "page-up", "wheel", "bottom", "search", "resized", "appended", "alternate", "returned")
 images = {}
 for label in labels:
     src = folder / f"{label}.png"
@@ -28,7 +28,7 @@ for label in labels:
         raise AssertionError(f"appended message not visibly painted: {label}")
     images[label] = image
 
-for before, after in (("top", "middle"), ("middle", "wheel"), ("middle", "bottom"), ("bottom", "search"), ("resized", "appended"), ("appended", "alternate"), ("alternate", "returned")):
+for before, after in (("top", "middle"), ("middle", "page-down"), ("page-down", "page-up"), ("page-up", "wheel"), ("middle", "bottom"), ("bottom", "search"), ("resized", "appended"), ("appended", "alternate"), ("alternate", "returned")):
     left, right = images[before], images[after]
     area = (0, 100, min(left.width, right.width), min(left.height, right.height) - 15)
     delta = ImageChops.difference(left.crop(area), right.crop(area))
@@ -39,4 +39,4 @@ wide = images["search"].width
 narrow = images["resized"].width
 if narrow >= wide - 100:
     raise AssertionError(f"X11 resize not reflected in screenshots: {wide} -> {narrow}")
-print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: nine nonblank, different X11 screenshots")
+print("CHATARIUM_NATIVE_READER_SCREENSHOT_CHECK PASS: eleven nonblank, different X11 screenshots")

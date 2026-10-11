@@ -84,6 +84,19 @@ xdotool key --clearmodifiers F2
 wait_state '.phase == "middle" and .render_start > 1000 and .rendered_count > 0'
 save_frame middle
 
+# Real keyboard events delivered to egui's ScrollArea: mouse hovers the
+# transcript, but no synthetic F-key navigation is used for these two frames.
+middle_offset="$(jq -r '.scroll_offset' "$STATE")"
+xdotool mousemove --window "$window" 500 460
+xdotool key --clearmodifiers Page_Down
+wait_state ".phase == \"middle\" and .scroll_offset > ($middle_offset + 100)"
+save_frame page-down
+
+down_offset="$(jq -r '.scroll_offset' "$STATE")"
+xdotool key --clearmodifiers Page_Up
+wait_state ".phase == \"middle\" and .scroll_offset < ($down_offset - 100)"
+save_frame page-up
+
 original_offset="$(jq -r '.scroll_offset' "$STATE")"
 xdotool mousemove --window "$window" 500 460
 xdotool click --repeat 6 --delay 70 5
@@ -120,6 +133,8 @@ python3 tools/qa-native-reader/check_screenshots.py "$OUT"
 jq -n --arg window "$window" \
     --slurpfile initial "$OUT/top.json" \
     --slurpfile middle "$OUT/middle.json" \
+    --slurpfile page_down "$OUT/page-down.json" \
+    --slurpfile page_up "$OUT/page-up.json" \
     --slurpfile wheel "$OUT/wheel.json" \
     --slurpfile bottom "$OUT/bottom.json" \
     --slurpfile search "$OUT/search.json" \
@@ -128,8 +143,10 @@ jq -n --arg window "$window" \
     --slurpfile alternate "$OUT/alternate.json" \
     --slurpfile returned "$OUT/returned.json" \
     '{schema:"chatarium-native-reader-visual-qa-summary",version:1,status:"pass",
-      screenshots:9, window_id:$window,
+      screenshots:11, window_id:$window,
       first:$initial[0].render_start,middle:$middle[0].render_start,
+      page_down_offset:$page_down[0].scroll_offset,
+      page_up_offset:$page_up[0].scroll_offset,
       wheel_offset:$wheel[0].scroll_offset,end:$bottom[0].render_end,
       search_hit:$search[0].rendered_search_hit,
       search_visible_height:$search[0].search_bubble_visible_height,
