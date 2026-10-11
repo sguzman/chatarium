@@ -467,12 +467,16 @@ pub struct NativeConversationSearchIndex {
     // other conversation's projected message bodies without cloning them.
     messages: BTreeMap<LocalConversationId, Arc<Vec<DisplayMessage>>>,
     owners: Arc<BTreeMap<String, LocalConversationId>>,
+    // An authored scope claimed by different local conversations is never
+    // safe to attribute to either one, including after journal appends.
+    conflicted_scopes: Arc<BTreeSet<String>>,
     event_positions: BTreeMap<LocalConversationId, Arc<Vec<usize>>>,
 }
 
 impl NativeConversationSearchIndex {
     pub fn build(events: &[EventEnvelope]) -> Self {
         let mut owners = BTreeMap::new();
+        let mut conflicted_scopes = BTreeSet::new();
         let mut by_conversation: BTreeMap<LocalConversationId, Vec<usize>> = BTreeMap::new();
 
         // Typed user messages establish turn ownership and their own search
@@ -485,7 +489,22 @@ impl NativeConversationSearchIndex {
                 // Only typed authored user turns establish a conversation's
                 // native assistant scope. Tool, controller, and legacy
                 // payloads must never become native searchable messages.
-                owners.insert(local_turn_scope(message.turn_id), message.conversation_id);
+                let scope = local_turn_scope(message.turn_id);
+                if !conflicted_scopes.contains(&scope) {
+                    if owners
+                        .get(&scope)
+                        .is_some_and(|previous| *previous != message.conversation_id)
+                    {
+                        // Conflicting ownership is ambiguous: retain each
+                        // author's own message, but quarantine all assistant
+                        // observations for this scope instead of leaking them
+                        // across conversation boundaries.
+                        owners.remove(&scope);
+                        conflicted_scopes.insert(scope);
+                    } else {
+                        owners.insert(scope, message.conversation_id);
+                    }
+                }
                 by_conversation
                     .entry(message.conversation_id)
                     .or_default()
@@ -528,6 +547,7 @@ impl NativeConversationSearchIndex {
             revision: JournalRevision::capture(events),
             messages,
             owners: Arc::new(owners),
+            conflicted_scopes: Arc::new(conflicted_scopes),
             event_positions,
         }
     }
@@ -556,6 +576,10 @@ impl NativeConversationSearchIndex {
                 return None;
             };
             let scope = local_turn_scope(message.turn_id);
+            if self.conflicted_scopes.contains(&scope) {
+                // A quarantined scope cannot be revived incrementally.
+                return None;
+            }
             if owners
                 .get(&scope)
                 .is_some_and(|previous| *previous != message.conversation_id)
@@ -604,6 +628,7 @@ impl NativeConversationSearchIndex {
             revision: JournalRevision::capture(events),
             messages,
             owners,
+            conflicted_scopes: Arc::clone(&self.conflicted_scopes),
             event_positions: positions,
         })
     }
@@ -811,6 +836,95 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn conflicting_turn_owners_never_attribute_assistant_text_to_either_conversation() {
+        use chatarium_core::{AuthoredUserMessage, LocalMessageId, LocalTurnId};
+        use chatarium_store::authored::commit_user_message;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let shared_turn = LocalTurnId::new();
+        let scope = local_turn_scope(shared_turn);
+        let mut store = MemoryEventStore::default();
+        let ctx = egui::Context::default();
+
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                first,
+                shared_turn,
+                LocalMessageId::new(),
+                "First author's own message",
+            ),
+        )
+        .unwrap();
+        let original = cached_index(&ctx, store.events());
+        assert_eq!(original.messages(first).len(), 1);
+
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                second,
+                shared_turn,
+                LocalMessageId::new(),
+                "Second author's own message",
+            ),
+        )
+        .unwrap();
+        let quarantined = cached_index(&ctx, store.events());
+        assert!(quarantined.conflicted_scopes.contains(&scope));
+        assert!(!quarantined.owners.contains_key(&scope));
+
+        store
+            .append_scoped(
+                Some(scope.clone()),
+                EventKind::AssistantCompletionObserved,
+                super::super::remote_turn_payload(
+                    shared_turn,
+                    &shared_turn.to_string(),
+                    None,
+                    Some("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT"),
+                    None,
+                ),
+            )
+            .unwrap();
+        let rebuilt = cached_index(&ctx, store.events());
+        for (owner, expected, foreign) in [
+            (first, "First author's own message", "Second author's own message"),
+            (second, "Second author's own message", "First author's own message"),
+        ] {
+            let messages = rebuilt.messages(owner);
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].text, expected);
+            assert!(!messages[0].text.contains(foreign));
+            assert!(messages.iter().all(|message| {
+                !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT")
+            }));
+        }
+        assert!(rebuilt.conflicted_scopes.contains(&scope));
+        assert!(!rebuilt.owners.contains_key(&scope));
+
+        // A further authored event using the same conflicted turn must not
+        // revive the assistant scope through incremental cache extension.
+        commit_user_message(
+            &mut store,
+            &AuthoredUserMessage::new(
+                first,
+                shared_turn,
+                LocalMessageId::new(),
+                "Another first-author event",
+            ),
+        )
+        .unwrap();
+        let after_append = cached_index(&ctx, store.events());
+        assert!(after_append.conflicted_scopes.contains(&scope));
+        assert!(!after_append.owners.contains_key(&scope));
+        assert!(after_append.messages(second).iter().all(|message| {
+            !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT")
+        }));
     }
 
     #[test]
