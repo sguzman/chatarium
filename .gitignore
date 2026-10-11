@@ -29,3 +29,6 @@ tools/qa-browser/node_modules/
 
 # Disposable actual-workspace GUI smoke evidence (no user data).
 .qa-native-production/
+
+# Disposable long transcript GUI test; never commit a generated journal.
+.qa-native-long-reader/

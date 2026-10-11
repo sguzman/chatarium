@@ -139,6 +139,24 @@ the durable journal, independent of which conversation the application
 initially selects. This test uses screenshot similarity, not OCR, and never
 accesses the user's normal HOME, credentials, or journal.
 
+## Isolated long-archive production GUI QA
+
+The dedicated `chatarium-reader-seed` test executable writes exactly 257
+typed user-message commits into a new, named, disposable QA journal using
+Chatarium's own `commit_user_message` storage API. It refuses existing
+journals and paths outside `.qa-native-long-reader/data/journal.jsonl`. One
+conversation owns every message, including distinct first/last markers,
+multilingual text, and code/long-wrapping fixtures. No normal journal or
+account data is opened.
+
+A separate Xvfb test launches the **actual ChatariumApp** with that archive,
+captures startup, Home, and End screenshots, and verifies the durable event
+count, single conversation ownership, and visible transcript change between
+navigation positions. This initial scenario deliberately leaves the default
+paged/continuous reader choice unchanged. It establishes a production-backed
+long-archive baseline before enabling the opt-in continuous mode under
+automated GUI control.
+
 ## ScrollArea ID correctness
 
 egui scopes a ScrollArea's stored state to its parent Ui. It first hashes
