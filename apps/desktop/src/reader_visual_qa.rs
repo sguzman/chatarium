@@ -11,6 +11,7 @@ const COUNT: usize = 4_096;
 const SEARCH_TARGET: usize = 3_017;
 const APPEND_TEXT: &str = "APPENDED SYNTHETIC USER MESSAGE";
 const EDITED_PREFIX: &str = "EDITED SYNTHETIC PREFIX";
+const BACKGROUND_TEXT: &str = "BACKGROUND SYNTHETIC APPEND";
 
 struct ReaderQa {
     source: Arc<Vec<DisplayMessage>>,
@@ -131,6 +132,8 @@ impl ReaderQa {
             "search_target": SEARCH_TARGET,
             "search_anchor_offset": self.layout.offset(SEARCH_TARGET),
             "prefix_edited": self.primary[42].text.starts_with(EDITED_PREFIX),
+            "background_append_visible": self.source.last().is_some_and(|msg| msg.text == BACKGROUND_TEXT)
+                && visible.contains(&(self.source.len() - 1)),
             "font_fallbacks": super::system_fonts::loaded_names(ctx),
             "rendered_search_hit": search_bubble_visible_height >= 48.0,
             "search_bubble_visible_height": search_bubble_visible_height,
@@ -148,7 +151,7 @@ impl ReaderQa {
 impl eframe::App for ReaderQa {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
-        let (top, middle, bottom, search, append, away, back, edit) = ctx.input_mut(|input| {
+        let (top, middle, bottom, search, append, away, back, edit, background) = ctx.input_mut(|input| {
             (
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F1),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F2),
@@ -158,6 +161,7 @@ impl eframe::App for ReaderQa {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F6),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F7),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::F8),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::F9),
             )
         });
         let page_down =
@@ -238,6 +242,21 @@ impl eframe::App for ReaderQa {
                 if search {
                     self.phase = "search";
                 }
+                if background && self.conversation == "primary" {
+                    // A new distant tail message must not steal focus from
+                    // an operator who is reading an earlier part of the
+                    // archive. Unlike F5, this path never jumps to the tail.
+                    let messages = Arc::make_mut(&mut self.primary);
+                    messages.push(DisplayMessage {
+                        role: DisplayRole::Assistant,
+                        text: BACKGROUND_TEXT.to_owned(),
+                        sequence: messages.len() as u64 + 1,
+                        timestamp: None,
+                        provenance_label: Some("SYNTHETIC QA".to_owned()),
+                    });
+                    self.source = Arc::clone(&self.primary);
+                    self.phase = "background";
+                }
                 if edit && self.conversation == "primary" {
                     // Mutate a distant earlier row after the search hit was
                     // selected. Source hashing must invalidate the search
@@ -267,7 +286,7 @@ impl eframe::App for ReaderQa {
                         .strong()
                         .color(egui::Color32::from_rgb(185, 215, 243)),
                 );
-                ui.label("F1 Top · F2 Middle · F3 End · F4 Search · F5 Append · F6 Away · F7 Back · F8 Edit");
+                ui.label("F1 Top · F2 Middle · F3 End · F4 Search · F5 Append · F6 Away · F7 Back · F8 Edit · F9 Background");
                 ui.label(format!(
                     "Mode: continuous | Conversation: {} | Phase: {} | Messages: {}",
                     self.conversation,

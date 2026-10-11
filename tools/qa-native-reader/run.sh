@@ -156,6 +156,20 @@ sleep 0.7
 wait_state ".phase == \"return\" and .conversation == \"primary\" and .source_count == 4097 and (.scroll_offset - $bookmark_offset | abs) < 80"
 save_frame bookmark-returned
 
+# Background appends must not hijack a mid-archive reading position.
+# F9 appends a synthetic assistant turn without requesting any scroll jump.
+xdotool key --clearmodifiers F9
+wait_state ".phase == \"background\" and .source_count == 4098 and .background_append_visible == false and .render_end < 3500 and (.scroll_offset - $bookmark_offset | abs) < 80"
+sleep 0.7
+wait_state ".phase == \"background\" and .source_count == 4098 and .background_append_visible == false and .render_end < 3500 and (.scroll_offset - $bookmark_offset | abs) < 80"
+save_frame background
+
+# The appended turn must nevertheless be discoverable when explicitly
+# navigating to the tail.
+xdotool key --clearmodifiers F3
+wait_state '.phase == "bottom" and .source_count == 4098 and .render_end == 4097 and .background_append_visible == true'
+save_frame background-end
+
 python3 tools/qa-native-reader/check_screenshots.py "$OUT"
 jq -n --arg window "$window" \
     --slurpfile initial "$OUT/top.json" \
@@ -172,8 +186,10 @@ jq -n --arg window "$window" \
     --slurpfile returned "$OUT/returned.json" \
     --slurpfile bookmarked "$OUT/bookmarked.json" \
     --slurpfile bookmark_returned "$OUT/bookmark-returned.json" \
+    --slurpfile background "$OUT/background.json" \
+    --slurpfile background_end "$OUT/background-end.json" \
     '{schema:"chatarium-native-reader-visual-qa-summary",version:1,status:"pass",
-      screenshots:14, window_id:$window,
+      screenshots:16, window_id:$window,
       first:$initial[0].render_start,middle:$middle[0].render_start,
       page_down_offset:$page_down[0].scroll_offset,
       page_up_offset:$page_up[0].scroll_offset,
@@ -189,5 +205,7 @@ jq -n --arg window "$window" \
       returned_count:$returned[0].source_count,
       returned_append_visible:$returned[0].appended_message_visible,
       bookmarked_scroll_offset:$bookmarked[0].scroll_offset,
-      restored_bookmark_scroll_offset:$bookmark_returned[0].scroll_offset}' >"$OUT/summary.json"
+      restored_bookmark_scroll_offset:$bookmark_returned[0].scroll_offset,
+      background_scroll_offset:$background[0].scroll_offset,
+      background_last_visible:$background_end[0].background_append_visible}' >"$OUT/summary.json"
 echo "CHATARIUM_NATIVE_VISUAL_QA $(cat "$OUT/summary.json")"
