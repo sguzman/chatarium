@@ -935,8 +935,16 @@ mod tests {
             .collect::<Vec<_>>();
         let title = "Title-only fallback";
         for query in [
-            "i", "İ", "niño", "αθηνα", "ΕΛΛΑΔΑ", "مرحبا", "🌿", "世界",
-            "fallback", "nonexistent",
+            "i",
+            "İ",
+            "niño",
+            "αθηνα",
+            "ΕΛΛΑΔΑ",
+            "مرحبا",
+            "🌿",
+            "世界",
+            "fallback",
+            "nonexistent",
         ] {
             let needle = query.trim().to_lowercase();
             let row = collect_native_search_row(&needle, 0, title.to_owned(), &messages);
@@ -968,11 +976,18 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, message)| {
-                    message.text.to_lowercase().contains(&needle).then_some(index)
+                    message
+                        .text
+                        .to_lowercase()
+                        .contains(&needle)
+                        .then_some(index)
                 })
                 .collect::<Vec<_>>();
             if let Some(row) = row {
-                assert_eq!(row.matching_message_indices, expected, "hits differ for {query}");
+                assert_eq!(
+                    row.matching_message_indices, expected,
+                    "hits differ for {query}"
+                );
             } else {
                 assert!(expected.is_empty());
             }
