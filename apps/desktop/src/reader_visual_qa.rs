@@ -233,7 +233,7 @@ impl eframe::App for ReaderQa {
                 let mut scroller = egui::ScrollArea::vertical()
                     .id_salt(("qa-native-virtual-transcript", self.conversation))
                     .auto_shrink([false, false])
-                    .stick_to_bottom(true);
+                    .stick_to_bottom(matches!(self.phase, "append" | "return"));
                 if let Some(jump) = self.jump_to.take() {
                     scroller = scroller.vertical_scroll_offset(jump);
                 }
