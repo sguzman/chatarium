@@ -25,10 +25,8 @@ pub(super) fn utc_minute(timestamp: f64) -> Option<String> {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let day_of_era = z - era * 146_097;
-    let year_of_era = (day_of_era - day_of_era / 1_460
-        + day_of_era / 36_524
-        - day_of_era / 146_096)
-        / 365;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let year = year_of_era + era * 400;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_prime = (5 * day_of_year + 2) / 153;
@@ -52,7 +50,10 @@ mod tests {
     #[test]
     fn utc_minutes_render_epoch_and_leap_years() {
         assert_eq!(utc_minute(0.0).as_deref(), Some("1970-01-01 00:00 UTC"));
-        assert_eq!(utc_minute(86_400.0).as_deref(), Some("1970-01-02 00:00 UTC"));
+        assert_eq!(
+            utc_minute(86_400.0).as_deref(),
+            Some("1970-01-02 00:00 UTC")
+        );
         assert_eq!(
             utc_minute(951_782_400.0).as_deref(),
             Some("2000-02-29 00:00 UTC")
@@ -69,7 +70,14 @@ mod tests {
 
     #[test]
     fn malformed_epochs_do_not_become_misleading_metadata() {
-        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e99, -1e99, -12_000_000_000.0] {
+        for invalid in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e99,
+            -1e99,
+            -12_000_000_000.0,
+        ] {
             assert!(utc_minute(invalid).is_none());
         }
     }
