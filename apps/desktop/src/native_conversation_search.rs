@@ -893,16 +893,26 @@ mod tests {
             .unwrap();
         let rebuilt = cached_index(&ctx, store.events());
         for (owner, expected, foreign) in [
-            (first, "First author's own message", "Second author's own message"),
-            (second, "Second author's own message", "First author's own message"),
+            (
+                first,
+                "First author's own message",
+                "Second author's own message",
+            ),
+            (
+                second,
+                "Second author's own message",
+                "First author's own message",
+            ),
         ] {
             let messages = rebuilt.messages(owner);
             assert_eq!(messages.len(), 1);
             assert_eq!(messages[0].text, expected);
             assert!(!messages[0].text.contains(foreign));
-            assert!(messages.iter().all(|message| {
-                !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT")
-            }));
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| { !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT") })
+            );
         }
         assert!(rebuilt.conflicted_scopes.contains(&scope));
         assert!(!rebuilt.owners.contains_key(&scope));
@@ -922,9 +932,12 @@ mod tests {
         let after_append = cached_index(&ctx, store.events());
         assert!(after_append.conflicted_scopes.contains(&scope));
         assert!(!after_append.owners.contains_key(&scope));
-        assert!(after_append.messages(second).iter().all(|message| {
-            !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT")
-        }));
+        assert!(
+            after_append
+                .messages(second)
+                .iter()
+                .all(|message| { !message.text.contains("AMBIGUOUS_ASSISTANT_PRIVATE_TEXT") })
+        );
     }
 
     #[test]
