@@ -93,6 +93,23 @@ messages inside the ordinary ChatariumApp (rather than this isolated shell),
 reviewed typographic screenshot comparisons and tests in the full
 production workspace.
 
+## Isolated actual-workspace GUI smoke
+
+In addition to the synthetic virtual-reader shell, the visual QA workflow now
+launches the **actual ChatariumApp** with a fresh, empty `HOME`,
+`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, and
+`CHATARIUM_DATA_DIR`. Environment variables are allowlisted via `env -i`;
+existing credentials, ordinary journals, and the user's browser profile are
+not visible to this launch. There is no automated sign-in.
+
+Xvfb/Openbox captures a real production-window screenshot, resizes the app,
+and captures a second screenshot. The test checks the native window exists,
+the images are nonblank, the window actually shrank, and pixels changed after
+the resize. Screenshots and a small machine-readable summary share the
+seven-day CI artifact. This specifically validates production startup and
+basic layout reflow; it does **not** yet validate in-app conversation creation,
+message commit, or production continuous-reader navigation.
+
 ## ScrollArea ID correctness
 
 egui scopes a ScrollArea's stored state to its parent Ui. It first hashes

@@ -42,6 +42,8 @@ jobs:
           WINIT_X11_SCALE_FACTOR: "1.25"
           CHATARIUM_READER_QA_OUTPUT: ".qa-native-reader-hidpi"
         run: xvfb-run -a -s "-screen 0 1920x1200x24" bash tools/qa-native-reader/run.sh
+      - name: Smoke actual production workspace with isolated home and data
+        run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_smoke.sh
       - name: Upload disposable screenshots and structural results
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,6 +56,9 @@ jobs:
             .qa-native-reader-hidpi/*.png
             .qa-native-reader-hidpi/*.json
             .qa-native-reader-hidpi/*.log
+            .qa-native-production/*.png
+            .qa-native-production/*.json
+            .qa-native-production/*.log
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 7

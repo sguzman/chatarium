@@ -26,3 +26,6 @@ tools/qa-browser/node_modules/
 # Disposable synthetic native UI screenshots and telemetry.
 .qa-native-reader/
 .qa-native-reader-hidpi/
+
+# Disposable actual-workspace GUI smoke evidence (no user data).
+.qa-native-production/
