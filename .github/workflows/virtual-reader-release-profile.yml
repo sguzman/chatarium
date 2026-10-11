@@ -1,0 +1,23 @@
+name: virtual-reader-release-profile
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/desktop/src/virtual_reader.rs"
+      - "apps/desktop/src/virtual_reader/**"
+      - ".github/workflows/virtual-reader-release-profile.yml"
+
+concurrency:
+  group: virtual-reader-release-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Optimized synthetic virtual reader profile (non-gating timings)
+        run: cargo test --release -p chatarium-desktop --bin chatarium-desktop virtual_reader_perf_profile -- --ignored --nocapture

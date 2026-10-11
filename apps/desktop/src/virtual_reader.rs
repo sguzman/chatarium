@@ -617,3 +617,6 @@ mod tests {
         assert_eq!(layout.total_height(), before);
     }
 }
+
+#[cfg(test)]
+mod perf_tests;
