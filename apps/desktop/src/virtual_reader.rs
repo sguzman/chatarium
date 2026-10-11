@@ -62,6 +62,20 @@ impl VirtualReaderLayout {
                 next_measured.push(preserve);
             }
         }
+        // A selected search hit must be revealed again after reflow or an
+        // edit preceding its row. Pure tail appends leave its anchor intact
+        // and must not unexpectedly undo the reader's manual scrolling.
+        let anchor_changed = self
+            .last_search
+            .as_ref()
+            .and_then(|(_, target)| *target)
+            .is_some_and(|target| {
+                !same_width
+                    || self.signatures.get(..=target) != next_signatures.get(..=target)
+            });
+        if anchor_changed {
+            self.last_search = None;
+        }
         self.source = source;
         self.signatures = next_signatures;
         self.heights = next_heights;
@@ -191,13 +205,19 @@ impl VirtualReaderLayout {
         if self.last_search.as_ref() == Some(&selection) {
             return None;
         }
-        self.last_search = Some(selection);
         if query.trim().is_empty() {
+            self.last_search = Some(selection);
             return None;
         }
-        hit_message
+        let offset = hit_message
             .filter(|index| *index < self.heights.len())
-            .map(|index| self.offset(index))
+            .map(|index| self.offset(index));
+        // The search index and visible projection can briefly disagree while
+        // a journal append is applied. Do not consume an unreachable target.
+        if offset.is_some() || hit_message.is_none() {
+            self.last_search = Some(selection);
+        }
+        offset
     }
 }
 
@@ -280,7 +300,14 @@ mod tests {
             message(2, "two"),
             message(3, "three"),
         ]);
+        // An out-of-range hit is not consumed before the appended projection
+        // contains its actual row.
+        assert_eq!(layout.new_search_offset("three", Some(2)), None);
         layout.sync(Some(with_append), 700.0);
+        assert_eq!(
+            layout.new_search_offset("three", Some(2)),
+            Some(layout.offset(2))
+        );
         assert_eq!(layout.offset(1), 399.0);
         assert_eq!(layout.offset(2), 621.0);
 
@@ -289,11 +316,20 @@ mod tests {
             message(2, "another two"),
             message(3, "three"),
         ]);
+        assert_eq!(
+            layout.new_search_offset("two", Some(1)),
+            Some(layout.offset(1))
+        );
         layout.sync(Some(edited), 700.0);
+        assert_eq!(
+            layout.new_search_offset("two", Some(1)),
+            Some(layout.offset(1))
+        );
         assert_eq!(layout.offset(1), 399.0);
         assert_ne!(layout.offset(2), 621.0);
 
         layout.sync(Some(Arc::new(vec![message(1, "one")])), 450.0);
+        assert_eq!(layout.new_search_offset("one", Some(0)), Some(0.0));
         assert_eq!(layout.visible_range(0.0, 300.0), 0..1);
         assert_ne!(layout.offset(1), 399.0);
         layout.sync(None, 450.0);
