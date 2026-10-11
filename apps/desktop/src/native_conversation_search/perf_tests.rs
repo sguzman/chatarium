@@ -25,6 +25,76 @@ fn rss_kib() -> Option<u64> {
         .and_then(|value| value.parse().ok())
 }
 
+/// Reconstruct the prior two-pass query path inside the test only. It is
+/// never used by Chatarium's runtime search or copied into durable state.
+fn legacy_search_row(
+    query: &str,
+    title: &str,
+    catalog_index: usize,
+    messages: &[DisplayMessage],
+) -> Option<NativeSearchRow> {
+    let (kind, hit) = find_match_with_position(
+        query,
+        title,
+        messages.iter().map(|message| message.text.as_str()),
+    )?;
+    let (message_index, preview, matching_message_indices) = match hit {
+        Some((first, preview)) => {
+            let needle = query.trim().to_lowercase();
+            let mut indices = vec![first];
+            indices.extend(
+                messages
+                    .iter()
+                    .enumerate()
+                    .skip(first + 1)
+                    .filter_map(|(position, message)| {
+                        message
+                            .text
+                            .to_lowercase()
+                            .contains(&needle)
+                            .then_some(position)
+                    }),
+            );
+            (Some(first), Some(preview), indices)
+        }
+        None => (None, None, Vec::new()),
+    };
+    Some(NativeSearchRow {
+        catalog_index,
+        title: title.to_owned(),
+        kind,
+        preview,
+        message_index,
+        matching_message_indices,
+    })
+}
+
+/// Run uncached row construction on the same journal and queries. Alternating
+/// old/new order guards against one method always warming the other first.
+fn scan_query_profile(
+    index: &NativeConversationSearchIndex,
+    entries: &[LocalConversationEntry],
+    queries: &[&str],
+    legacy: bool,
+) -> usize {
+    let mut found = 0;
+    for query in queries {
+        let needle = query.trim().to_lowercase();
+        for (position, entry) in entries.iter().enumerate() {
+            let title = entry.title.as_deref().unwrap_or("");
+            let messages = index.messages(entry.id);
+            let row = if legacy {
+                legacy_search_row(query, title, position, messages)
+            } else {
+                collect_native_search_row(&needle, position, title.to_owned(), messages)
+            };
+            found += usize::from(row.is_some());
+            black_box(row);
+        }
+    }
+    found
+}
+
 #[test]
 #[ignore = "opt-in, non-gating synthetic search performance profile"]
 fn native_search_perf_profile() {
@@ -125,6 +195,52 @@ fn native_search_perf_profile() {
     ));
     let native_append_us = native_start.elapsed().as_micros();
 
+    // Compare both implementations inside the same runner, journal, and
+    // binary. Ten alternating rounds are observational, not a timing gate.
+    const COMPARISON_ROUNDS: usize = 10;
+    const COMPARISON_QUERIES: [&str; 7] = [
+        "needle",
+        "nonmatching",
+        "not-found",
+        "archive",
+        "message",
+        "needle",
+        "x",
+    ];
+    for query in COMPARISON_QUERIES {
+        let needle = query.trim().to_lowercase();
+        for (position, entry) in entries.iter().enumerate() {
+            let title = entry.title.as_deref().unwrap_or("");
+            assert_eq!(
+                legacy_search_row(query, title, position, index.messages(entry.id)),
+                collect_native_search_row(
+                    &needle,
+                    position,
+                    title.to_owned(),
+                    index.messages(entry.id),
+                ),
+            );
+        }
+    }
+    let mut legacy_scan_total_us = 0;
+    let mut single_pass_scan_total_us = 0;
+    for round in 0..COMPARISON_ROUNDS {
+        for legacy in if round % 2 == 0 {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let start = Instant::now();
+            let hits = scan_query_profile(&index, &entries, &COMPARISON_QUERIES, legacy);
+            assert!(hits > 0);
+            if legacy {
+                legacy_scan_total_us += start.elapsed().as_micros();
+            } else {
+                single_pass_scan_total_us += start.elapsed().as_micros();
+            }
+        }
+    }
+
     eprintln!(
         "CHATARIUM_SEARCH_PROFILE {}",
         serde_json::json!({
@@ -140,6 +256,9 @@ fn native_search_perf_profile() {
             "cached_queries_total_us": cached_queries_total_us,
             "query_edits": 7,
             "query_edits_total_us": query_edits_total_us,
+            "ab_comparison_rounds": COMPARISON_ROUNDS,
+            "ab_legacy_scan_total_us": legacy_scan_total_us,
+            "ab_single_pass_scan_total_us": single_pass_scan_total_us,
             "unrelated_append_us": unrelated_append_us,
             "native_append_us": native_append_us,
             "process_rss_kib_after_journal": setup_rss_kib,
