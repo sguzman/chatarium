@@ -20,7 +20,10 @@ fn message_text(index: usize) -> String {
     }
     match index % 7 {
         0 => format!("# Synthetic heading {index}\n\n- item A\n- item B\n\nA paragraph."),
-        1 => format!("Long wrapped message #{index}: {}", "repeated text ".repeat(32)),
+        1 => format!(
+            "Long wrapped message #{index}: {}",
+            "repeated text ".repeat(32)
+        ),
         2 => format!("Line 1 of {index}\nLine 2\nLine 3\nLine 4"),
         3 => format!("Español 日本語 العربية עברית — synthetic message {index}"),
         4 => format!("Code sample {index}\nfn main() {{ println!(\"fixture\"); }}"),
@@ -31,9 +34,9 @@ fn message_text(index: usize) -> String {
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let supplied = args
-        .next()
-        .ok_or_else(|| "usage: chatarium-reader-seed .qa-native-long-reader/data/journal.jsonl".to_owned())?;
+    let supplied = args.next().ok_or_else(|| {
+        "usage: chatarium-reader-seed .qa-native-long-reader/data/journal.jsonl".to_owned()
+    })?;
     if args.next().is_some() {
         return Err("expected exactly one disposable journal path".to_owned());
     }
@@ -42,7 +45,9 @@ fn run() -> Result<(), String> {
     // real archive, even if this dedicated QA executable is invoked manually.
     let journal = PathBuf::from(".qa-native-long-reader/data/journal.jsonl");
     if PathBuf::from(&supplied) != journal {
-        return Err("refusing any path outside the dedicated .qa-native-long-reader fixture".to_owned());
+        return Err(
+            "refusing any path outside the dedicated .qa-native-long-reader fixture".to_owned(),
+        );
     }
     if journal.exists() {
         return Err("refusing to overwrite an existing disposable QA journal".to_owned());
