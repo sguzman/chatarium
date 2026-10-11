@@ -113,7 +113,10 @@ fn virtual_reader_perf_profile() {
     let mut current = Arc::clone(&archive);
     for iteration in 0..COLD_SAMPLES {
         let mut next = current.as_ref().clone();
-        next.push(message((MESSAGES + iteration) as u64, "appended user turn".to_owned()));
+        next.push(message(
+            (MESSAGES + iteration) as u64,
+            "appended user turn".to_owned(),
+        ));
         let next = Arc::new(next);
         let start = Instant::now();
         planner.sync(Some(Arc::clone(&next)), 800.0);

@@ -127,6 +127,36 @@ impl VirtualReaderLayout {
         sum
     }
 
+    /// Fenwick binary lifting finds the largest prefix satisfying the bound
+    /// in O(log n), instead of binary-searching O(log n) prefix sums.
+    /// With positive row heights, this is also a monotonic row locator.
+    fn prefix_rank(&self, target: f64, inclusive: bool) -> usize {
+        let count = self.heights.len();
+        let mut step = 1_usize;
+        while step <= count / 2 {
+            step <<= 1;
+        }
+        let mut index = 0;
+        let mut sum = 0.0;
+        while step > 0 {
+            let next = index + step;
+            if next <= count {
+                let candidate = sum + self.height_tree[next];
+                let fits = if inclusive {
+                    candidate <= target
+                } else {
+                    candidate < target
+                };
+                if fits {
+                    index = next;
+                    sum = candidate;
+                }
+            }
+            step >>= 1;
+        }
+        index
+    }
+
     #[must_use]
     pub fn total_height(&self) -> f32 {
         self.height_sum(self.heights.len()) as f32
@@ -137,27 +167,11 @@ impl VirtualReaderLayout {
         self.height_sum(index) as f32
     }
 
-    /// Locate the row intersecting the un-overscanned viewport top. Keeping
-    /// its start position stable prevents upper overscan measurements from
-    /// visibly shifting the user's reading position.
+    /// Locate the row intersecting the un-overscanned viewport top.
     #[must_use]
     pub fn row_at(&self, top: f32) -> Option<usize> {
         let count = self.heights.len();
-        if count == 0 {
-            return None;
-        }
-        let top = f64::from(top.max(0.0));
-        let mut low = 0;
-        let mut high = count;
-        while low < high {
-            let mid = low + (high - low) / 2;
-            if self.height_sum(mid + 1) <= top {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        Some(low.min(count - 1))
+        (count > 0).then(|| self.prefix_rank(f64::from(top.max(0.0)), true).min(count - 1))
     }
 
     #[must_use]
@@ -169,31 +183,15 @@ impl VirtualReaderLayout {
         let top = f64::from((top - OVERSCAN_PX).max(0.0));
         let bottom = f64::from((bottom + OVERSCAN_PX).max(top as f32));
 
-        // Find the first row whose end lies strictly after the viewport top.
-        let mut low = 0;
-        let mut high = count;
-        while low < high {
-            let mid = low + (high - low) / 2;
-            if self.height_sum(mid + 1) <= top {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        let start = low;
-
-        // Find the first row whose start reaches the viewport bottom.
-        low = 0;
-        high = count;
-        while low < high {
-            let mid = low + (high - low) / 2;
-            if self.height_sum(mid) < bottom {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        start..low.max(start.saturating_add(1)).min(count)
+        // First row whose end is after top, and first row whose start
+        // reaches bottom. Both ranks use one Fenwick descent each.
+        let start = self.prefix_rank(top, true);
+        let end = self
+            .prefix_rank(bottom, false)
+            .saturating_add(1)
+            .max(start.saturating_add(1))
+            .min(count);
+        start..end
     }
 
     /// Record only heights measured by egui from actually rendered bubbles.
@@ -597,6 +595,31 @@ mod tests {
             }
             former_heights = bounds.iter().map(egui::Rect::height).collect();
         }
+    }
+
+    #[test]
+    fn fenwick_prefix_ranks_include_exact_boundaries() {
+        let source = Arc::new(vec![
+            message(0, "a"),
+            message(1, "b"),
+            message(2, "c"),
+        ]);
+        let mut layout = VirtualReaderLayout::default();
+        layout.sync(Some(source), 700.0);
+        for (index, height) in [100.0, 200.0, 300.0].into_iter().enumerate() {
+            layout.measure(index, height);
+        }
+        assert!(layout.finish_measurements());
+        assert_eq!(layout.prefix_rank(0.0, true), 0);
+        assert_eq!(layout.prefix_rank(100.0, true), 1);
+        assert_eq!(layout.prefix_rank(100.0, false), 0);
+        assert_eq!(layout.prefix_rank(300.0, true), 2);
+        assert_eq!(layout.prefix_rank(300.0, false), 1);
+        assert_eq!(layout.prefix_rank(600.0, true), 3);
+        assert_eq!(layout.prefix_rank(600.0, false), 2);
+        assert_eq!(layout.row_at(100.0), Some(1));
+        assert_eq!(layout.row_at(600.0), Some(2));
+        assert_eq!(layout.row_at(10_000.0), Some(2));
     }
 
     #[test]
