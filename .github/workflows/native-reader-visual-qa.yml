@@ -40,5 +40,6 @@ jobs:
             .qa-native-reader/*.png
             .qa-native-reader/*.json
             .qa-native-reader/*.log
-          if-no-files-found: warn
+          if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7

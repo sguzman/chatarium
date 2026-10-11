@@ -46,6 +46,34 @@ To run locally without human GUI interaction:
     cargo test -p chatarium-desktop --bin chatarium-desktop virtual_reader -- --nocapture
     cargo test --release -p chatarium-desktop --bin chatarium-desktop virtual_reader_perf_profile -- --ignored --nocapture
 
+## Synthetic native screenshot QA
+
+The isolated `--qa-reader` entry point creates a **disposable** 4,096-message
+synthetic reader, using the production bubble renderer and virtual layout inside
+a real native eframe window. It branches before normal application startup and
+does not open the user's journal, browser, account bridge, or network provider.
+
+The dedicated `native-reader-visual-qa` GitHub Actions workflow builds the
+actual desktop binary and runs it under Xvfb/Openbox with software graphics.
+X11 automation captures six PNG screenshots: top, middle, wheel scroll, end,
+long-distance search jump, and resize after search. It checks for nonblank
+screenshots, changed pixel contents between scroll positions, bounded visible
+row counts, expected source indices, and search-target visibility.
+
+Evidence is uploaded from a hidden disposable QA directory with
+`include-hidden-files: true`, and the job fails if screenshot artifacts are
+missing. Artifacts are retained for seven days; no PNG or telemetry file is
+checked into Git. The test prints a machine-readable synthetic-only
+`CHATARIUM_NATIVE_VISUAL_QA` summary.
+
+This is **native screenshot coverage of a synthetic reader shell**, not yet a
+complete screenshot acceptance test of the ordinary authenticated
+`ChatariumApp` workspace. Pixel-difference checks establish that real content
+was painted and changed; they do not establish typographic correctness.
+Remaining work includes whole-app conversation switching, typed-message
+appends, search result changes after reflow, keyboard PageUp/PageDown, high-DPI
+coverage, and reviewed image comparisons.
+
 ## Promotion criteria
 
 Do **not** enable Continuous reader by default based on performance timings
