@@ -113,10 +113,9 @@ mod tests {
 
     #[test]
     fn absent_system_font_paths_are_optional() {
-        assert!(first_available_font(&[
-            "/nonexistent/chatarium-no-fonts/never/font.otf"
-        ])
-        .is_none());
+        assert!(
+            first_available_font(&["/nonexistent/chatarium-no-fonts/never/font.otf"]).is_none()
+        );
         let context = egui::Context::default();
         assert!(loaded_names(&context).is_empty());
     }
