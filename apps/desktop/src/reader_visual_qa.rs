@@ -95,6 +95,8 @@ impl ReaderQa {
         scroll_offset: f32,
         panel_width: f32,
         rendered: &[usize],
+        visible: &[usize],
+        appended_bubble_visible_height: f32,
     ) {
         let status = json!({
             "schema": "chatarium-native-visual-qa",
@@ -108,7 +110,11 @@ impl ReaderQa {
                 .source
                 .last()
                 .is_some_and(|message| message.text == APPEND_TEXT)
-                && rendered.contains(&(self.source.len() - 1)),
+                && appended_bubble_visible_height >= 48.0,
+            "appended_bubble_visible_height": appended_bubble_visible_height,
+            "visible_count": visible.len(),
+            "visible_start": visible.first(),
+            "visible_end": visible.last(),
             "frame": self.frame,
             "viewport_width": panel_width,
             "scroll_offset": scroll_offset,
@@ -146,6 +152,8 @@ impl eframe::App for ReaderQa {
         });
         let mut panel_width = 0.0;
         let mut rendered = Vec::new();
+        let mut visible = Vec::new();
+        let mut appended_bubble_visible_height = 0.0;
         let mut scroll_offset = 0.0;
 
         egui::CentralPanel::default()
@@ -225,7 +233,7 @@ impl eframe::App for ReaderQa {
                 let mut scroller = egui::ScrollArea::vertical()
                     .id_salt(("qa-native-virtual-transcript", self.conversation))
                     .auto_shrink([false, false])
-                    .stick_to_bottom(false);
+                    .stick_to_bottom(true);
                 if let Some(jump) = self.jump_to.take() {
                     scroller = scroller.vertical_scroll_offset(jump);
                 }
@@ -249,7 +257,7 @@ impl eframe::App for ReaderQa {
                         for index in range {
                             inner.push_id(("qa-native-message", index), |row| {
                                 let before = row.cursor().top();
-                                draw_reader_bubble(
+                                let bubble = draw_reader_bubble(
                                     row,
                                     &self.source[index],
                                     if self.phase == "search" {
@@ -260,6 +268,17 @@ impl eframe::App for ReaderQa {
                                     index == SEARCH_TARGET && self.phase == "search",
                                     ctx,
                                 );
+                                if bubble.rect.intersects(row.clip_rect()) {
+                                    let clipped = bubble.rect.intersect(row.clip_rect());
+                                    if clipped.width() >= 20.0 && clipped.height() >= 10.0 {
+                                        visible.push(index);
+                                        if index == self.source.len() - 1
+                                            && self.source[index].text == APPEND_TEXT
+                                        {
+                                            appended_bubble_visible_height = clipped.height();
+                                        }
+                                    }
+                                }
                                 row.add_space(12.0);
                                 self.layout.measure(index, row.cursor().top() - before);
                                 rendered.push(index);
@@ -272,7 +291,14 @@ impl eframe::App for ReaderQa {
                 });
                 scroll_offset = out.state.offset.y;
             });
-        self.write_status(ctx, scroll_offset, panel_width, &rendered);
+        self.write_status(
+            ctx,
+            scroll_offset,
+            panel_width,
+            &rendered,
+            &visible,
+            appended_bubble_visible_height,
+        );
         ctx.request_repaint_after(Duration::from_millis(160));
     }
 }

@@ -58,7 +58,11 @@ actual desktop binary and runs it under Xvfb/Openbox with software graphics.
 X11 automation captures nine PNG screenshots per scale: top, middle,
 wheel scroll, end, long-distance search jump, resize after search,
 synthetic append, switching away, and switching back. The append marker
-survives the synthetic conversation switch. It checks for nonblank
+survives the synthetic conversation switch. Overscan layout membership
+alone does not prove a message is on screen: the visual harness requires the
+appended bubble's production-renderer rectangle to intersect the scroll clip
+by at least 48 logical pixels. This prevents a laid-out, offscreen row from
+being misreported as visible. It checks for nonblank
 screenshots, changed pixel contents between scroll positions, bounded visible
 row counts, expected source indices, and search-target visibility.
 
