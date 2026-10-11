@@ -13530,6 +13530,7 @@ impl eframe::App for ChatariumApp {
             .map(|(message_index, _, _)| *message_index);
         let mut reader_hit_from_button = self.reader_search_hit;
         let mut reader_output_offset = None;
+        let mut virtual_anchor_delta = None;
 
         let virtual_id = egui::Id::new(("chatarium-native-virtual-layout", &reader_key));
         // Egui clones temporary values on lookup. Keep the large height and
@@ -13761,10 +13762,17 @@ impl eframe::App for ChatariumApp {
                                 let list_top = ui.cursor().top();
                                 let content_top = ui.max_rect().top();
                                 let header_height = list_top - content_top;
+                                let anchor_row =
+                                    virtual_layout.row_at(viewport.min.y - header_height);
+                                let anchor_before = anchor_row.map(|row| virtual_layout.offset(row));
+                                let near_tail = viewport.max.y - header_height
+                                    >= virtual_layout.total_height() - 24.0;
+                                let mut search_scrolled = false;
                                 if let Some(offset) = virtual_layout.new_search_offset(
                                     &self.reader_search_query,
                                     active_reader_message,
                                 ) {
+                                    search_scrolled = true;
                                     // ScrollArea::end owns its state; mutating
                                     // that state inside show_viewport would be
                                     // overwritten when the callback returns.
@@ -13822,6 +13830,22 @@ impl eframe::App for ChatariumApp {
                                         },
                                     );
                                     if virtual_layout.finish_measurements() {
+                                        // The overscan neighborhood may include
+                                        // rows above the viewport. Their measured
+                                        // growth would otherwise push the reader's
+                                        // current text downward. Compensate only
+                                        // while browsing, not during a search jump
+                                        // or when following the transcript tail.
+                                        if !near_tail && !search_scrolled {
+                                            if let (Some(row), Some(before)) =
+                                                (anchor_row, anchor_before)
+                                            {
+                                                let delta = virtual_layout.offset(row) - before;
+                                                if delta.abs() > 0.5 {
+                                                    virtual_anchor_delta = Some(delta);
+                                                }
+                                            }
+                                        }
                                         ctx.request_repaint();
                                     }
                                 }
@@ -13859,7 +13883,17 @@ impl eframe::App for ChatariumApp {
 
         if reader_window.virtualized {
             if let Some(offset) = reader_output_offset {
-                virtual_layout.remember_view_offset(offset);
+                let resolved = if let Some(delta) = virtual_anchor_delta {
+                    // ScrollArea has finished writing its state. Apply the
+                    // correction afterwards, never from inside its callback.
+                    let corrected = (offset + delta).max(0.0);
+                    set_reader_scroll(ctx, transcript_scroll_id, corrected);
+                    ctx.request_repaint();
+                    corrected
+                } else {
+                    offset
+                };
+                virtual_layout.remember_view_offset(resolved);
             }
         }
         drop(virtual_layout);
