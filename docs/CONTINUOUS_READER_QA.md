@@ -78,6 +78,23 @@ Remaining work includes whole-app conversation switching, typed-message
 appends, search result changes after reflow, keyboard PageUp/PageDown, high-DPI
 coverage, and reviewed image comparisons.
 
+## Linux Unicode font fallback
+
+Native Chatarium now registers locally installed Noto CJK, Arabic and Hebrew
+faces as **last-resort glyph fallbacks** in egui's proportional and monospace
+families. The original Latin fonts retain priority. No font binaries are
+vendored; there are no font downloads, subprocesses, or external network calls
+at startup. Linux packages such as `noto-fonts`/`noto-fonts-cjk` on Arch and
+`fonts-noto-core`/`fonts-noto-cjk` on Ubuntu supply supported paths. Missing
+fonts are optional and never block launch.
+
+The synthetic visual-QA journal reports registered fallback names without
+exposing font bytes or filesystem paths. CI installs and checks the Noto Arabic
+and CJK fixtures, then asserts that both fallbacks were registered before any
+screenshots pass. A highlighted multilingual search target makes missing-glyph
+problems visible in captured images. Hebrew is optional but exercised when
+its font is installed.
+
 ## Promotion criteria
 
 Do **not** enable Continuous reader by default based on performance timings

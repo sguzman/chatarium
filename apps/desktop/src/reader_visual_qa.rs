@@ -25,7 +25,7 @@ fn fixture() -> Arc<Vec<DisplayMessage>> {
             .map(|i| {
                 let text = if i == SEARCH_TARGET {
                     "ARCHIVE NEEDLE -- unique synthetic search target.\n\n\
-                    This text marks the deterministic long-distance search jump."
+                    This text marks the deterministic long-distance search jump.\n\n                    日本語 / العربية / עברית"
                         .to_owned()
                 } else {
                     match i % 7 {
@@ -66,7 +66,13 @@ impl ReaderQa {
         }
     }
 
-    fn write_status(&self, scroll_offset: f32, panel_width: f32, rendered: &[usize]) {
+    fn write_status(
+        &self,
+        ctx: &egui::Context,
+        scroll_offset: f32,
+        panel_width: f32,
+        rendered: &[usize],
+    ) {
         let status = json!({
             "schema": "chatarium-native-visual-qa",
             "version": 1,
@@ -81,6 +87,7 @@ impl ReaderQa {
             "render_start": rendered.first(),
             "render_end": rendered.last(),
             "search_target": SEARCH_TARGET,
+            "font_fallbacks": super::system_fonts::loaded_names(ctx),
             "rendered_search_hit": rendered.contains(&SEARCH_TARGET),
             "persistent_user_journal_access": false,
             "remote_network_access": false
@@ -197,7 +204,7 @@ impl eframe::App for ReaderQa {
                 });
                 scroll_offset = out.state.offset.y;
             });
-        self.write_status(scroll_offset, panel_width, &rendered);
+        self.write_status(ctx, scroll_offset, panel_width, &rendered);
         ctx.request_repaint_after(Duration::from_millis(160));
     }
 }

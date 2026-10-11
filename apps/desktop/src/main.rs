@@ -28,6 +28,7 @@ mod native_transcript_export;
 mod offline_reader;
 mod reader_visual_qa;
 mod siwc_bridge;
+mod system_fonts;
 mod virtual_reader;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
@@ -21782,6 +21783,7 @@ fn payload_preview(payload: &str) -> String {
 }
 
 fn configure_ui(ctx: &egui::Context) {
+    system_fonts::install(ctx);
     let mut visuals = egui::Visuals::dark();
     visuals.panel_fill = egui::Color32::from_rgb(23, 24, 29);
     visuals.window_fill = egui::Color32::from_rgb(23, 24, 29);

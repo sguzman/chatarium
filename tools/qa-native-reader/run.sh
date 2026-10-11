@@ -72,6 +72,9 @@ save_frame() {
     cp "$STATE" "$OUT/$label.json"
     test -s "$OUT/$label.png"
     jq -e '.source_count == 4096 and .rendered_count > 0 and .rendered_count < 48 and .persistent_user_journal_access == false and .remote_network_access == false' "$OUT/$label.json" >/dev/null
+    if [[ "${CHATARIUM_QA_REQUIRE_NOTO:-0}" == "1" ]]; then
+        jq -e '(.font_fallbacks | index("chatarium.noto.cjk")) != null and (.font_fallbacks | index("chatarium.noto.arabic")) != null' "$OUT/$label.json" >/dev/null
+    fi
 }
 
 wait_state '.phase == "top" and .frame >= 3 and .render_start == 0'
