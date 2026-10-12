@@ -3843,15 +3843,7 @@ impl ChatariumApp {
                             self.remote_models.is_empty(),
                             self.model_list_pending,
                         ) {
-                            match self.remote.send(siwc_bridge::BridgeCommand::ListModels) {
-                                Ok(()) => {
-                                    self.model_list_pending = true;
-                                    self.remote_status = "loading ChatGPT models…".to_owned();
-                                }
-                                Err(error) => {
-                                    self.remote_status = error;
-                                }
-                            }
+                            self.request_chatgpt_models();
                         } else if !was_connected && !self.model_list_pending {
                             self.remote_status = "ChatGPT plan connected".to_owned();
                         }
@@ -4188,6 +4180,19 @@ impl ChatariumApp {
         self.remote_status = "disconnecting ChatGPT…".to_owned();
         if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::Disconnect) {
             self.remote_status = error;
+        }
+    }
+
+    fn request_chatgpt_models(&mut self) {
+        match self.remote.send(siwc_bridge::BridgeCommand::ListModels) {
+            Ok(()) => {
+                self.model_list_pending = true;
+                self.remote_status = "loading ChatGPT models…".to_owned();
+            }
+            Err(error) => {
+                self.model_list_pending = false;
+                self.remote_status = error;
+            }
         }
     }
 
@@ -6939,6 +6944,23 @@ impl eframe::App for ChatariumApp {
                                     .size(11.0)
                                     .color(egui::Color32::from_rgb(186, 189, 197)),
                             );
+                            if self.remote_models.is_empty() {
+                                if self.model_list_pending {
+                                    ui.label("Loading ChatGPT models…");
+                                } else if model_retry_available(
+                                    self.remote_connected(),
+                                    self.model_list_pending,
+                                    self.remote_models.is_empty(),
+                                ) && ui
+                                    .add_sized(
+                                        [sidebar_control_width, 30.0],
+                                        egui::Button::new("Retry model discovery"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.request_chatgpt_models();
+                                }
+                            }
                             if !self.remote_models.is_empty() {
                                 let selected_text = self
                                     .selected_model
@@ -20465,6 +20487,14 @@ fn capability_probe_block_reason(
     None
 }
 
+fn model_retry_available(
+    connected: bool,
+    request_pending: bool,
+    models_empty: bool,
+) -> bool {
+    connected && !request_pending && models_empty
+}
+
 fn should_request_models(
     was_connected: bool,
     account_changed: bool,
@@ -25880,6 +25910,14 @@ mod tests {
             interrupted_pending_remote_turn(&mut pending).is_none(),
             "the same uncertain turn cannot be interrupted twice"
         );
+    }
+
+    #[test]
+    fn models_can_be_retried_only_after_a_failed_or_empty_lookup() {
+        assert!(model_retry_available(true, false, true));
+        assert!(!model_retry_available(true, true, true));
+        assert!(!model_retry_available(true, false, false));
+        assert!(!model_retry_available(false, false, true));
     }
 
     #[test]
