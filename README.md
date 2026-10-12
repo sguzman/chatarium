@@ -99,11 +99,13 @@ Chatarium is not a claim that ChatGPT exposes a supported public consumer API. I
 
 ## Development
 
-For the current desktop alpha, launch normally:
+For the current desktop alpha, launch the actual GUI binary explicitly:
 
 ```sh
-cargo run -p chatarium-desktop
+cargo run -p chatarium-desktop --bin chatarium-desktop
 ```
+
+The desktop package declares `default-run = "chatarium-desktop"`, so `cargo run -p chatarium-desktop` also selects the GUI rather than failing when multiple binaries exist. `node tools/run-desktop.mjs` explicitly selects the same GUI binary. These commands launch the app but do not prove ChatGPT authentication or live inference, which still require separate real-account acceptance.
 
 Terminal diagnostics are enabled by default at INFO level. They are stage-oriented rather than payload-oriented: startup/journal replay, browser-bridge command timing, history discovery, candidate counts, mirror capture, validation, and durable persistence are printed with elapsed milliseconds and thread names.
 

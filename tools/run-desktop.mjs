@@ -49,4 +49,4 @@ process.stdout.write("Preparing pinned Sign in with ChatGPT runtime...\n");
 await run(process.execPath, [resolve(repoRoot, "tools/siwc-bridge/bootstrap.mjs")]);
 
 process.stdout.write("Launching Chatarium...\n");
-await run("cargo", ["run", "-p", "chatarium-desktop"]);
+await run("cargo", ["run", "-p", "chatarium-desktop", "--bin", "chatarium-desktop"]);

@@ -1,5 +1,6 @@
 [package]
 name = "chatarium-desktop"
+default-run = "chatarium-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

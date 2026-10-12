@@ -82,6 +82,9 @@ jobs:
           node tools/siwc-bridge/bootstrap.mjs
       - name: Smoke Sign in with ChatGPT runtime
         run: node tools/siwc-bridge/smoke.mjs
+      - name: Verify desktop alpha launch command selects GUI binary
+        run: |
+          node -e "const fs=require('node:fs');const p=fs.readFileSync('apps/desktop/Cargo.toml','utf8');const launcher=fs.readFileSync('tools/run-desktop.mjs','utf8');if(!/^default-run = \"chatarium-desktop\"$/m.test(p) || !launcher.includes('['+'\"run\", \"-p\", \"chatarium-desktop\", \"--bin\", \"chatarium-desktop\"'+']'))process.exit(1)"
       - name: Check Linux desktop
         run: cargo check -p chatarium-desktop
       - name: Test Linux desktop
