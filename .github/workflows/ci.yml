@@ -105,6 +105,8 @@ jobs:
         run: cargo check -p chatarium-capture --lib
       - name: Check Linux desktop
         run: cargo check -p chatarium-desktop
+      - name: Check full Linux workspace (matches local cbr build)
+        run: cargo check --workspace
       - name: Test Linux desktop
         run: cargo test -p chatarium-desktop
       - name: Profile native archive search (synthetic, non-gating)
