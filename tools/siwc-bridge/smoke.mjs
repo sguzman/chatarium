@@ -17,6 +17,8 @@ const lines = createInterface({
 });
 
 let ready = false;
+let requestedMalformedGuard = false;
+let malformedGuardResponses = 0;
 let requestedSession = false;
 let requestedProbeGuard = false;
 let requestedStreamGuard = false;
@@ -75,7 +77,30 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
 
     if (value?.type === "ready" && value?.protocol === 1) {
       ready = true;
-      if (!requestedSession) {
+      if (!requestedMalformedGuard) {
+        requestedMalformedGuard = true;
+        // Valid JSON primitives/arrays and a malformed JSON line must all
+        // return typed errors without terminating the process.
+        child.stdin.write('null\n[]\n"invalid"\n{not-json\n');
+      }
+      return;
+    }
+
+    if (ready && value?.type === "error" && value?.request_id === undefined) {
+      if (value?.error?.code !== "invalid_bridge_command") {
+        clearTimeout(timeout);
+        lines.close();
+        rejectPromise(new Error("Malformed command guard emitted an unexpected error."));
+        return;
+      }
+      malformedGuardResponses += 1;
+      if (malformedGuardResponses > 4) {
+        clearTimeout(timeout);
+        lines.close();
+        rejectPromise(new Error("Malformed command guard emitted excessive errors."));
+        return;
+      }
+      if (malformedGuardResponses === 4 && !requestedSession) {
         requestedSession = true;
         child.stdin.write(
           JSON.stringify({ type: "session", request_id: "smoke-session" }) + "\n",
@@ -169,6 +194,7 @@ const result = await new Promise((resolvePromise, rejectPromise) => {
       lines.close();
       resolvePromise({
         protocol: 1,
+        malformedGuardResponses,
         sessionStatus,
         probeGuard: "invalid_probe_patch",
         streamGuard: "invalid_stream_patch",
@@ -200,5 +226,5 @@ await new Promise((resolvePromise) => {
 });
 
 console.log(
-  `Chatarium SIWC bridge ready: protocol ${result.protocol}; session ${result.sessionStatus}; probe guard ${result.probeGuard}; stream guard ${result.streamGuard}`,
+  `Chatarium SIWC bridge ready: protocol ${result.protocol}; malformed command guard ${result.malformedGuardResponses}/4; session ${result.sessionStatus}; probe guard ${result.probeGuard}; stream guard ${result.streamGuard}`,
 );

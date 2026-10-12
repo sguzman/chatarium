@@ -490,8 +490,21 @@ chatgpt.subscribe((session) => {
 
 async function handle(command) {
   const requestId =
-    typeof command.request_id === "string" ? command.request_id : undefined;
+    command && typeof command === "object" && !Array.isArray(command) &&
+    typeof command.request_id === "string"
+      ? command.request_id
+      : undefined;
   try {
+    // JSON primitives and arrays are valid JSON but not bridge commands.
+    // Keep all validation inside the handler's error boundary: otherwise a
+    // malformed stdin line creates an unhandled rejection and kills the sidecar.
+    if (!command || typeof command !== "object" || Array.isArray(command) ||
+        typeof command.type !== "string" || !command.type) {
+      throw bridgeError(
+        "invalid_bridge_command",
+        "Chatarium sent a non-object or missing-type bridge command.",
+      );
+    }
     switch (command.type) {
       case "session": {
         const session = await chatgpt.getSession();
