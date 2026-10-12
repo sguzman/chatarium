@@ -13,7 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bridge = resolve(here, "../bridge.mjs");
 const preload = pathToFileURL(resolve(here, "offline-preload.mjs")).href;
 
-function attempt(path, requestId) {
+function attempt(path, requestId, timeoutMs = 8000) {
   return new Promise((accept, reject) => {
     const child = spawn(process.execPath, ["--import", preload, bridge], {
       env: { ...process.env, PATH: path, HOME: path, OPENAI_API_KEY: "" },
@@ -26,7 +26,7 @@ function attempt(path, requestId) {
     let complete = false;
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += String(chunk).slice(0, 400); });
-    const timeout = setTimeout(() => finish(new Error("Offline sign-in timeout")), 8000);
+    const timeout = setTimeout(() => finish(new Error("Offline sign-in timeout")), timeoutMs);
     function finish(error) {
       if (complete) return;
       complete = true;
@@ -108,6 +108,36 @@ test("SIWC sign-in fails closed without Secret Service and passes synthetic encr
   assert.equal(await readFile(protectedPath, "utf8"), existing);
 });
 
+
+test("stalled Secret Service lookup fails closed instead of hanging sign-in", async (t) => {
+  if (process.platform !== "linux") {
+    t.skip("Linux Secret Service implementation only");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "chatarium-siwc-key-timeout-"));
+  t.after(async () => { await rm(root, { recursive: true, force: true }); });
+  // A fake helper that never responds must be terminated; it cannot access
+  // the host keyring. A later store would be a credential-safety regression.
+  const helper = join(root, "secret-tool");
+  await writeFile(helper, [
+    "#!" + process.execPath,
+    'if (process.argv[2] === "lookup") {',
+    '  setInterval(() => {}, 1000);',
+    '} else if (process.argv[2] === "store") {',
+    '  require("node:fs").writeFileSync(process.env.HOME + "/unexpected-store", "yes");',
+    '  process.exit(0);',
+    '} else process.exit(2);',
+    "",
+  ].join("\n"), { mode: 0o700 });
+  await chmod(helper, 0o700);
+  const reply = await attempt(root, "offline-key-timeout", 21_000);
+  assert.equal(reply.type, "error");
+  assert.equal(reply.error.code, "bridge_error");
+  assert.match(reply.error.message, /secret service lookup timed out/i);
+  await assert.rejects(readFile(join(root, "unexpected-store"), "utf8"), {
+    code: "ENOENT",
+  });
+});
 
 test("overlapping Linux sign-ins initialize the same credential key once", async (t) => {
   if (process.platform !== "linux") {
