@@ -159,6 +159,15 @@ request a new egui frame after the active ID changes. The same repair applies
 to sidebar selection and global Ctrl+Shift+N, without bypassing draft or
 in-flight commit guards.
 
+Production visual-QA navigation now checks the selected conversation title
+and first message separately with a deterministic synthetic screenshot
+self-test. The original comparison averaged a sparse text change across a
+445-pixel-tall mostly blank panel and rejected real navigation (0.419 mean
+against a 0.5 cutoff). Four consecutive retries then cycled back to the
+starting conversation. The new checker requires substantial, high-contrast
+pixel changes in both content-bearing regions instead. It does not accept
+mere mouse movement, panel hover or status-bar activity.
+
 Keyboard conversation navigation now requires a materially different actual
 painted transcript region, not merely an injected X11 key. The harness
 re-establishes window focus and retries a missed Ctrl+Tab/Ctrl+Shift+Tab

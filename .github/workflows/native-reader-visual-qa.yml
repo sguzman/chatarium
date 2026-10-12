@@ -43,7 +43,8 @@ jobs:
           bash -n tools/qa-native-reader/require_isolated_xvfb.sh
           bash -n tools/qa-native-reader/production_smoke.sh
           bash -n tools/qa-native-reader/production_long_reader_smoke.sh
-          python3 -m py_compile tools/qa-native-reader/check_screenshots.py tools/qa-native-reader/check_empty_conversation.py tools/qa-native-reader/check_replay.py
+          python3 -m py_compile tools/qa-native-reader/check_screenshots.py tools/qa-native-reader/check_empty_conversation.py tools/qa-native-reader/check_replay.py tools/qa-native-reader/check_conversation_switch.py
+          python3 tools/qa-native-reader/check_conversation_switch.py --self-test
       - name: Build native Chatarium binary
         id: build
         run: cargo build -p chatarium-desktop --bin chatarium-desktop --bin chatarium-reader-seed

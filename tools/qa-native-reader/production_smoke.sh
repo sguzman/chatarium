@@ -211,22 +211,7 @@ capture_switched_conversation() {
         xdotool key --clearmodifiers "$chord"
         sleep 0.8
         import -window "$window" "$after"
-        if python3 - "$before" "$after" <<'PY'
-from pathlib import Path
-from PIL import Image, ImageChops, ImageStat
-import sys
-with Image.open(Path(sys.argv[1])) as before_source, Image.open(Path(sys.argv[2])) as after_source:
-    before = before_source.convert("RGB")
-    after = after_source.convert("RGB")
-    right = min(before.width, after.width)
-    bottom = min(520, before.height, after.height)
-    if right <= 460 or bottom <= 75:
-        raise SystemExit(1)
-    box = (460, 75, right, bottom)
-    delta = ImageChops.difference(before.crop(box), after.crop(box))
-    changed = sum(ImageStat.Stat(delta).mean) / 3
-    raise SystemExit(0 if changed >= 0.5 else 1)
-PY
+        if python3 tools/qa-native-reader/check_conversation_switch.py "$before" "$after"
         then
             return 0
         fi
