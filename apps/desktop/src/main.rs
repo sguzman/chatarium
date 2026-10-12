@@ -3825,10 +3825,10 @@ impl ChatariumApp {
                 }
                 siwc_bridge::BridgeEvent::Session(session) => {
                     let was_connected = self.remote_connected();
-                    let account_changed = self.remote_session.email != session.email
-                        || self.remote_session.profile_label != session.profile_label;
+                    let account_changed = session_identity_changed(&self.remote_session, &session);
 
-                    self.sign_in_pending = sign_in_pending_after_session(self.sign_in_pending, &session.status);
+                    self.sign_in_pending =
+                        sign_in_pending_after_session(self.sign_in_pending, &session.status);
                     self.remote_session = session;
 
                     if self.remote_session.status == "connected" && self.remote_session.sharing {
@@ -20502,6 +20502,15 @@ fn should_request_models(
     (!was_connected || account_changed || models_empty) && !model_list_pending
 }
 
+fn session_identity_changed(
+    previous: &siwc_bridge::SessionState,
+    next: &siwc_bridge::SessionState,
+) -> bool {
+    previous.profile_id != next.profile_id
+        || previous.email != next.email
+        || previous.profile_label != next.profile_label
+}
+
 fn sign_in_pending_after_session(was_pending: bool, status: &str) -> bool {
     match status {
         "connecting" => true,
@@ -25927,6 +25936,24 @@ mod tests {
         assert!(!model_retry_available(true, true, true));
         assert!(!model_retry_available(true, false, false));
         assert!(!model_retry_available(false, false, true));
+    }
+
+    #[test]
+    fn account_identity_uses_profile_id_even_with_identical_display_labels() {
+        let original = siwc_bridge::SessionState {
+            profile_id: Some("profile-a".to_owned()),
+            email: Some("test@example.invalid".to_owned()),
+            profile_label: Some("Same display".to_owned()),
+            ..Default::default()
+        };
+        assert!(!session_identity_changed(&original, &original));
+
+        let switched = siwc_bridge::SessionState {
+            profile_id: Some("profile-b".to_owned()),
+            ..original.clone()
+        };
+        assert!(session_identity_changed(&original, &switched));
+        assert!(session_identity_changed(&switched, &original));
     }
 
     #[test]
