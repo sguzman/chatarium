@@ -30,6 +30,9 @@ export function createChatGPT(config) {
       onSession(session);
       return session;
     },
+    // Mirrors the pinned DevKit method. A cancel before signIn starts must
+    // be a harmless no-op; the bridge is responsible for disarming preflight.
+    cancelSignIn() {},
     async listModels() {
       return [{ slug: "offline-alpha-model", displayName: "Offline Alpha Model" }];
     },
