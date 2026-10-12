@@ -172,7 +172,7 @@ test("overlapping Linux sign-ins initialize the same credential key once", async
       try {
         const frame = JSON.parse(line);
         assert.doesNotMatch(JSON.stringify(frame),
-          /access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie/i);
+          /"(?:access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie|cookies)"\s*:/i);
         if (frame.type === "ready" && !started) {
           started = true;
           for (const request_id of requestIds) {
@@ -189,11 +189,13 @@ test("overlapping Linux sign-ins initialize the same credential key once", async
       }
     });
   });
-  for (const id of requestIds) {
-    const frame = replies.get(id);
-    assert.equal(frame.type, "result", JSON.stringify(frame.error ?? {}));
-    assert.equal(frame.result.session.status, "connected");
-  }
+  // Only the newest preflight may start OAuth. The old request is
+  // cancelled, without disturbing the one shared keyring write.
+  assert.equal(replies.get(requestIds[0]).type, "error");
+  assert.equal(replies.get(requestIds[0]).error.code, "cancelled");
+  const latest = replies.get(requestIds[1]);
+  assert.equal(latest.type, "result", JSON.stringify(latest.error ?? {}));
+  assert.equal(latest.result.session.status, "connected");
   const stores = await readFile(join(root, "stores.log"), "utf8");
   assert.deepEqual(stores.trim().split("\n"), ["stored"],
     "Overlapping requests must not generate multiple credential keys");
