@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve } from "node:path";
+import { ResponsesLane } from "./response-lane.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
@@ -550,13 +551,8 @@ async function handle(command) {
           throw new Error("stream_response requires input");
         }
         const patch = validateStreamResponsePatch(command.request_patch ?? {});
-        if (responseProbeInFlight) {
-          throw bridgeError(
-            "probe_busy",
-            "Normal inference cannot start while a capability probe is active.",
-          );
-        }
-        activeResponseOperations += 1;
+        // The shared one-shot fetch patch must never intercept a different turn.
+        const releaseLane = responsesLane.acquire(requestId, "stream");
         const controller = new AbortController();
         if (requestId) responseControllers.set(requestId, controller);
         try {
@@ -583,10 +579,10 @@ async function handle(command) {
             result,
           });
         } finally {
-          activeResponseOperations -= 1;
           if (requestId && responseControllers.get(requestId) === controller) {
             responseControllers.delete(requestId);
           }
+          releaseLane();
         }
         break;
       }
@@ -601,14 +597,7 @@ async function handle(command) {
           throw new Error("probe_response requires input");
         }
         const patch = validateResponseProbePatch(command.request_patch ?? {});
-        if (responseProbeInFlight || activeResponseOperations > 0) {
-          throw bridgeError(
-            "probe_busy",
-            "Capability probes require an idle Responses bridge.",
-          );
-        }
-        responseProbeInFlight = true;
-        activeResponseOperations += 1;
+        const releaseLane = responsesLane.acquire(requestId, "probe");
         const controller = new AbortController();
         if (requestId) responseControllers.set(requestId, controller);
         try {
@@ -635,11 +624,10 @@ async function handle(command) {
             result,
           });
         } finally {
-          activeResponseOperations -= 1;
-          responseProbeInFlight = false;
           if (requestId && responseControllers.get(requestId) === controller) {
             responseControllers.delete(requestId);
           }
+          releaseLane();
         }
         break;
       }
@@ -675,8 +663,7 @@ const input = createInterface({
 
 const inFlight = new Set();
 const responseControllers = new Map();
-let responseProbeInFlight = false;
-let activeResponseOperations = 0;
+const responsesLane = new ResponsesLane();
 
 input.on("line", (line) => {
   let command;

@@ -30,6 +30,9 @@ jobs:
       - name: Sign in with ChatGPT bridge syntax
         run: |
           node --check tools/siwc-bridge/bridge.mjs
+          node --check tools/siwc-bridge/response-lane.mjs
+          node --check tools/siwc-bridge/response-lane.test.mjs
+          node --test tools/siwc-bridge/response-lane.test.mjs
           node --check tools/siwc-bridge/capability-probe.mjs
           node --check tools/siwc-bridge/bootstrap.mjs
           node --check tools/siwc-bridge/smoke.mjs
@@ -62,6 +65,9 @@ jobs:
       - name: Sign in with ChatGPT bridge syntax
         run: |
           node --check tools/siwc-bridge/bridge.mjs
+          node --check tools/siwc-bridge/response-lane.mjs
+          node --check tools/siwc-bridge/response-lane.test.mjs
+          node --test tools/siwc-bridge/response-lane.test.mjs
           node --check tools/siwc-bridge/capability-probe.mjs
           node --check tools/siwc-bridge/bootstrap.mjs
           node --check tools/siwc-bridge/smoke.mjs

@@ -69,7 +69,12 @@ Security boundary:
 - `model`, `store: false`, and `stream: true` remain controlled by the
   normal DevKit request;
 - the original global fetch is restored immediately after the probe;
-- normal desktop inference is rejected while the one-shot probe is active.
+- normal inference and probes share a single-flight Responses lane: concurrent
+  stream/probe requests receive `response_busy` or `probe_busy` instead of
+  risking cross-turn request-patch interception;
+- every Responses operation requires a bounded request ID for attribution and
+  cancellation; the lane is released after success, error, or cancellation,
+  with offline regressions in `response-lane.test.mjs`.
 
 The product UI exposes only the fixed probe suite. It does not expose arbitrary
 `probe_response` request patching. The raw command remains an internal bridge
