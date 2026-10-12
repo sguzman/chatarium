@@ -105,7 +105,7 @@ For the current desktop alpha, launch the actual GUI binary explicitly:
 cargo run -p chatarium-desktop --bin chatarium-desktop
 ```
 
-The desktop package declares `default-run = "chatarium-desktop"`, so `cargo run -p chatarium-desktop` also selects the GUI rather than failing when multiple binaries exist. `node tools/run-desktop.mjs` explicitly selects the same GUI binary. These commands launch the app but do not prove ChatGPT authentication or live inference, which still require separate real-account acceptance.
+The desktop package declares `default-run = "chatarium-desktop"`, so `cargo run -p chatarium-desktop` also selects the GUI rather than failing when multiple binaries exist. `node tools/run-desktop.mjs` explicitly selects the same GUI binary, without blocking first launch on downloading the Sign in with ChatGPT DevKit. Both launch paths open the local-first application even when authentication cannot be prepared; the app's background worker handles that separately. A successful launch does not prove ChatGPT authentication or live inference, which still require real-account acceptance.
 
 Terminal diagnostics are enabled by default at INFO level. They are stage-oriented rather than payload-oriented: startup/journal replay, browser-bridge command timing, history discovery, candidate counts, mirror capture, validation, and durable persistence are printed with elapsed milliseconds and thread names.
 
