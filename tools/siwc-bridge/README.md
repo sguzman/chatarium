@@ -94,3 +94,10 @@ overlap rejection, cancellation, recovered next-turn behavior, disconnect,
 and process shutdown. No credential provider, browser, API key, or account is
 accessed. These passing tests **do not establish** a successful live ChatGPT
 OAuth/Responses session; that remains the alpha gate in issue #89.
+
+
+On Linux, a missing Secret Service key is not silently replaced if the
+DevKit's encrypted chatgpt-auth.json already exists. The original file is
+left untouched so keyring restoration remains possible. Early failure of
+the secret-tool helper also cannot crash the sidecar through a broken stdin
+pipe. Both conditions are covered by isolated, credential-free preflight tests.

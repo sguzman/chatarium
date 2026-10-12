@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, mkdir, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,7 +16,7 @@ const preload = pathToFileURL(resolve(here, "offline-preload.mjs")).href;
 function attempt(path, requestId) {
   return new Promise((accept, reject) => {
     const child = spawn(process.execPath, ["--import", preload, bridge], {
-      env: { ...process.env, PATH: path, OPENAI_API_KEY: "" },
+      env: { ...process.env, PATH: path, HOME: path, OPENAI_API_KEY: "" },
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
     });
@@ -94,4 +94,16 @@ test("SIWC sign-in fails closed without Secret Service and passes synthetic encr
   assert.equal(accepted.result.session.status, "connected");
   assert.equal(accepted.result.session.sharing, true);
   assert.equal(accepted.result.session.profileId, "offline-fixture");
+
+  // If the key disappears while encrypted auth state remains, never silently
+  // generate and store a different key (which would orphan the state).
+  const authDir = join(root, ".config", "chatarium");
+  await mkdir(authDir, { recursive: true, mode: 0o700 });
+  const protectedPath = join(authDir, "chatgpt-auth.json");
+  const existing = '{"version":3,"provider":"synthetic","ciphertext":"protected"}\n';
+  await writeFile(protectedPath, existing, { mode: 0o600 });
+  const protectedLogin = await attempt(root, "offline-key-lost");
+  assert.equal(protectedLogin.type, "error");
+  assert.match(protectedLogin.error.message, /saved chatgpt sign-in data exists/i);
+  assert.equal(await readFile(protectedPath, "utf8"), existing);
 });

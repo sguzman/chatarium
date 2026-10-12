@@ -1,9 +1,11 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { writeSync } from "node:fs";
+import { lstat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { ResponsesLane } from "./response-lane.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -80,11 +82,15 @@ function runSecretTool(args, input) {
       shell: false,
     });
     const stdout = [];
+    let inputFailed = false;
     child.stdout.on("data", (chunk) => stdout.push(chunk));
+    // A locked or unavailable keyring can exit before reading stdin. EPIPE
+    // must become a failed helper result, not an uncaught sidecar crash.
+    child.stdin.on("error", () => { inputFailed = true; });
     child.once("error", (error) => rejectPromise(error));
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       resolvePromise({
-        code: code ?? 1,
+        code: inputFailed ? 1 : (code ?? 1),
         stdout: Buffer.concat(stdout).toString("utf8"),
       });
     });
@@ -127,6 +133,31 @@ async function loadCredentialKey() {
     }
     cachedCredentialKey = key;
     return key;
+  }
+
+  // The pinned DevKit stores encrypted connection state here by default.
+  // If Secret Service lookup fails while that state still exists, issuing a
+  // replacement key could orphan the original encrypted credentials. Never
+  // mutate the OS keyring in that ambiguous recovery situation.
+  const existingAuth = join(homedir(), ".config", "chatarium", "chatgpt-auth.json");
+  try {
+    await lstat(existingAuth);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw new Error(
+        "Could not verify saved ChatGPT credential state. No replacement encryption key was created.",
+      );
+    }
+  }
+  // A successful stat is an explicit no-overwrite boundary. A missing file
+  // (ENOENT) is the only state in which creating the initial key is allowed.
+  if (await lstat(existingAuth).then(() => true, (error) => {
+    if (error?.code === "ENOENT") return false;
+    throw new Error("Could not inspect saved ChatGPT credential state.");
+  })) {
+    throw new Error(
+      "Saved ChatGPT sign-in data exists, but its Secret Service encryption key could not be retrieved. Restore the original keyring access; saved data was preserved.",
+    );
   }
 
   const key = randomBytes(32);
