@@ -75,6 +75,9 @@ function safeError(error) {
   };
 }
 
+// A hung Secret Service helper must not leave native sign-in pending forever.
+const SECRET_TOOL_TIMEOUT_MS = 15_000;
+
 function runSecretTool(args, input) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn("secret-tool", args, {
@@ -83,15 +86,25 @@ function runSecretTool(args, input) {
     });
     const stdout = [];
     let inputFailed = false;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, SECRET_TOOL_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     // A locked or unavailable keyring can exit before reading stdin. EPIPE
     // must become a failed helper result, not an uncaught sidecar crash.
     child.stdin.on("error", () => { inputFailed = true; });
-    child.once("error", (error) => rejectPromise(error));
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
     child.once("close", (code) => {
+      clearTimeout(timer);
       resolvePromise({
-        code: inputFailed ? 1 : (code ?? 1),
+        code: timedOut || inputFailed ? 1 : (code ?? 1),
         stdout: Buffer.concat(stdout).toString("utf8"),
+        timedOut,
       });
     });
     if (input !== undefined) child.stdin.end(input);
@@ -134,6 +147,12 @@ async function loadCredentialKeyUncached() {
   } catch {
     throw new Error(
       "The Linux Secret Service helper 'secret-tool' is unavailable. Chatarium will not persist OAuth credentials without an OS-backed secret store.",
+    );
+  }
+
+  if (lookup.timedOut) {
+    throw new Error(
+      "The Linux Secret Service lookup timed out. Check that the keyring is unlocked and its service is responding. Saved credentials were not modified.",
     );
   }
 
@@ -183,6 +202,11 @@ async function loadCredentialKeyUncached() {
     ],
     key.toString("base64"),
   );
+  if (stored.timedOut) {
+    throw new Error(
+      "The Linux Secret Service store operation timed out. Chatarium will not continue sign-in without a protected credential key.",
+    );
+  }
   if (stored.code !== 0) {
     throw new Error(
       "Chatarium could not store its OAuth encryption key in the Linux Secret Service.",
