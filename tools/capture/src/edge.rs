@@ -1696,7 +1696,7 @@ fn pipe_profile_arguments(profile: &Path, start_url: &str, incognito: bool) -> V
     arguments
 }
 
-#[cfg(windows)]
+// Also used by the non-Windows plain-browser launch failure path.
 fn record_prelaunch_cleanup(
     run: &mut CaptureRun,
     lock_path: PathBuf,
