@@ -4024,7 +4024,12 @@ impl ChatariumApp {
                         self.dispatch_next_capability_probe();
                         continue;
                     }
-                    self.sign_in_pending = false;
+                    // Responses, model discovery, and cancellation failures may
+                    // arrive while OAuth is still running. Only the sign-in
+                    // request itself may clear its pending UI state.
+                    if failed_bridge_command_finishes_sign_in(request_id.as_deref()) {
+                        self.sign_in_pending = false;
+                    }
                     if request_id.as_deref() == Some("models") {
                         self.model_list_pending = false;
                     }
@@ -20469,6 +20474,10 @@ fn should_request_models(
     (!was_connected || account_changed || models_empty) && !model_list_pending
 }
 
+fn failed_bridge_command_finishes_sign_in(request_id: Option<&str>) -> bool {
+    request_id == Some("sign-in")
+}
+
 fn remote_error_is_observed_failure(error: &siwc_bridge::BridgeError) -> bool {
     error.status.is_some()
         || error.code.starts_with("subscription_sharing_")
@@ -25871,6 +25880,25 @@ mod tests {
             interrupted_pending_remote_turn(&mut pending).is_none(),
             "the same uncertain turn cannot be interrupted twice"
         );
+    }
+
+    #[test]
+    fn unrelated_bridge_failures_do_not_unlock_live_oauth() {
+        assert!(failed_bridge_command_finishes_sign_in(Some("sign-in")));
+        for request_id in [
+            None,
+            Some("models"),
+            Some("session"),
+            Some("cancel-sign-in"),
+            Some("cancel:turn-1"),
+            Some("turn-1"),
+            Some("probe:baseline"),
+        ] {
+            assert!(
+                !failed_bridge_command_finishes_sign_in(request_id),
+                "unrelated bridge command must not clear sign-in pending"
+            );
+        }
     }
 
     #[test]
