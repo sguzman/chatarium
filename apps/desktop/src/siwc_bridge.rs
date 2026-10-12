@@ -3,8 +3,9 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command as ProcessCommand, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 #[derive(Debug)]
 pub enum BridgeCommand {
@@ -295,7 +296,8 @@ fn bridge_worker(
             forward_bridge_output(BufReader::new(stdout), &reader_events, &reader_repaint);
         });
 
-    while let Ok(command) = commands.recv() {
+    // A dead sidecar must not retain a writable-looking command channel.
+    while let Some(command) = recv_command_while_sidecar_alive(&commands, &mut child) {
         if matches!(command, BridgeCommand::Shutdown) {
             break;
         }
@@ -321,9 +323,29 @@ fn bridge_worker(
     }
 }
 
-// The command writer can block on commands.recv() after the child has exited.
+// The reader independently reports EOF or the specific fatal error.
 // Always surface EOF to the desktop so an OAuth flow or active response cannot
 // remain indefinitely in the apparent "connecting"/"streaming" state.
+// Check child liveness before consuming a queued command and after each
+// bounded idle wait. Otherwise a crashed sidecar leaves an idle writer alive
+// indefinitely, and later commands are accepted despite having no recipient.
+fn recv_command_while_sidecar_alive(
+    commands: &Receiver<BridgeCommand>,
+    child: &mut Child,
+) -> Option<BridgeCommand> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return None,
+            Ok(None) => {}
+        }
+        match commands.recv_timeout(Duration::from_millis(100)) {
+            Ok(command) => return Some(command),
+            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
 fn forward_bridge_output(
     reader: impl BufRead,
     events: &Sender<BridgeEvent>,
@@ -592,6 +614,34 @@ fn parse_error(value: &Value) -> Option<BridgeError> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn exited_sidecar_drops_even_queued_commands_while_sender_is_open() {
+        let (sender, receiver) = mpsc::channel::<BridgeCommand>();
+        let mut child = ProcessCommand::new("node")
+            .args(["-e", "process.exit(0)"])
+            .spawn()
+            .expect("Node.js 22+ is available in CI");
+        child.wait().expect("reap synthetic sidecar");
+        sender.send(BridgeCommand::RefreshSession).unwrap();
+        assert!(recv_command_while_sidecar_alive(&receiver, &mut child).is_none());
+    }
+
+    #[test]
+    fn live_sidecar_accepts_shutdown_even_while_idle() {
+        let (sender, receiver) = mpsc::channel::<BridgeCommand>();
+        let mut child = ProcessCommand::new("node")
+            .args(["-e", "setTimeout(() => process.exit(0), 30000)"])
+            .spawn()
+            .expect("Node.js 22+ is available in CI");
+        sender.send(BridgeCommand::Shutdown).unwrap();
+        assert!(matches!(
+            recv_command_while_sidecar_alive(&receiver, &mut child),
+            Some(BridgeCommand::Shutdown)
+        ));
+        child.kill().expect("stop synthetic sidecar");
+        child.wait().expect("reap synthetic sidecar");
+    }
 
     #[test]
     fn sidecar_stdout_eof_does_not_leave_runtime_marked_ready() {
