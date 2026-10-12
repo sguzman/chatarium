@@ -117,6 +117,18 @@ xdotool key --clearmodifiers End
 sleep 0.8
 import -window "$window" "$OUT/long-continuous-end.png"
 
+# Confirm the virtualized reader remains navigable after a genuine desktop
+# resize, not merely inside the fixed-size synthetic reader QA shell.
+xdotool windowsize "$window" 930 650
+sleep 1
+activate_window "$window"
+xdotool key --clearmodifiers Home
+sleep 0.8
+import -window "$window" "$OUT/long-continuous-resized-home.png"
+xdotool key --clearmodifiers End
+sleep 0.8
+import -window "$window" "$OUT/long-continuous-resized-end.png"
+
 python3 - "$OUT" <<'PY'
 from pathlib import Path
 from PIL import Image, ImageChops
@@ -148,10 +160,13 @@ if not texts[0].startswith(fixture["first_marker"]) or not texts[-1].startswith(
     raise AssertionError("long fixture lost first or last marker")
 
 images = {}
-for label in ("initial", "tail-reference", "home", "end", "continuous-enabled", "continuous-home", "continuous-end"):
+for label in ("initial", "tail-reference", "home", "end", "continuous-enabled", "continuous-home", "continuous-end", "continuous-resized-home", "continuous-resized-end"):
     with Image.open(out / f"long-{label}.png") as src:
         img = src.convert("RGB")
-    if img.width < 1100 or img.height < 700:
+    if label.startswith("continuous-resized-"):
+        if not (900 <= img.width < 1060 and 630 <= img.height < 700):
+            raise AssertionError(f"native window failed to resize: {label} {img.size}")
+    elif img.width < 1100 or img.height < 700:
         raise AssertionError(f"real production window not painted: {label} {img.size}")
     if len(img.resize((180, 120)).getcolors(180 * 120) or []) < 20:
         raise AssertionError(f"production screenshot unexpectedly blank: {label}")
@@ -190,6 +205,13 @@ continuous_delta = ImageChops.difference(
 )
 if continuous_delta.getbbox() is None:
     raise AssertionError("continuous reader ignored Home/End navigation")
+resized_region = (460, 85, 900, 500)
+resized_delta = ImageChops.difference(
+    images["continuous-resized-home"].crop(resized_region),
+    images["continuous-resized-end"].crop(resized_region),
+)
+if resized_delta.getbbox() is None:
+    raise AssertionError("continuous reader ignored Home/End after native resize")
 summary = {
     "schema": "chatarium-long-native-reader-qa",
     "version": 1,
@@ -202,7 +224,9 @@ summary = {
     "end_restores_tail": True,
     "home_image_distance": round(home_distance, 3),
     "end_image_distance": round(end_distance, 3),
-    "screenshots": 7,
+    "screenshots": 9,
+    "resized_window_px": list(images["continuous-resized-end"].size),
+    "continuous_resize_home_and_end_distinct": True,
     "continuous_reader_toggled_in_production": True,
     "continuous_home_and_end_distinct": True,
     "isolated_credentials_and_journal": True

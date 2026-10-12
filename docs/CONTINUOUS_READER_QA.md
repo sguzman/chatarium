@@ -84,14 +84,13 @@ missing. Artifacts are retained for seven days; no PNG or telemetry file is
 checked into Git. The test prints a machine-readable synthetic-only
 `CHATARIUM_NATIVE_VISUAL_QA` summary.
 
-This is **native screenshot coverage of a synthetic reader shell**, not yet a
-complete screenshot acceptance test of the ordinary authenticated
-`ChatariumApp` workspace. Pixel-difference checks establish that real content
-was painted and changed; they do not establish typographic correctness.
-Remaining work includes exercising conversation switching and user-authored
-messages inside the ordinary ChatariumApp (rather than this isolated shell),
-reviewed typographic screenshot comparisons and tests in the full
-production workspace.
+These checks cover both the isolated 4,096-message synthetic reader
+shell and the **actual production ChatariumApp** on disposable local data.
+The separate production workflows exercise durable authored messages,
+keyboard conversation switching, restart replay, and a persisted
+257-message continuous reader. Pixel differences establish that the actual
+painted content changes; they are not a substitute for manual typographic
+review or authenticated-account end-to-end coverage.
 
 ## X11 desktop isolation guard
 
@@ -121,11 +120,11 @@ then creates another local conversation through `Ctrl+Shift+N`, commits a
 different synthetic message, and verifies that the typed journal events carry
 **distinct conversation owners**. `Ctrl+Shift+Tab` and `Ctrl+Tab` switch
 back and forth while production screenshots verify that the active transcript
-changes. A final resize checks layout reflow. The seven production screenshots
-and machine-readable summary join the seven-day CI artifact. This validates
-production startup, durable authored-message isolation, native conversation
-navigation, and basic layout reflow; it does **not** yet validate production
-continuous-reader navigation through a long persisted transcript.
+changes. A final resize checks layout reflow. Twelve production screenshots,
+plus a machine-readable summary, join the seven-day CI artifact. This validates
+production startup, durable authored-message isolation, navigation, real-process
+restart replay, and basic layout reflow. The independent long-archive production
+test validates the opt-in continuous reader against 257 persisted messages.
 
 ## Actual-app restart and durable replay
 
@@ -220,6 +219,13 @@ End key. Home must leave that reference and a second End must restore it.
 Screenshot comparison independently aligns the transcript to accommodate small
 sidebar width shifts; this rejects the earlier regression where Home stayed at
 the tail while End unexpectedly jumped to the first message.
+
+In addition to the fixed-size Home/End test, the production long-reader QA now
+resizes the actual native window to 930×650 while Continuous reader is active.
+It verifies that the resized screenshots have the expected window geometry,
+and that Home and End still paint distinct portions of the transcript. This
+covers a production egui reflow path that previously had only synthetic-shell
+coverage; the reader remains opt-in by default.
 
 The same disposable production run then clicks the actual Continuous reader
 checkbox through X11 (without changing the default), checks that the control
