@@ -198,3 +198,91 @@ test("overlapping Linux sign-ins initialize the same credential key once", async
   assert.deepEqual(stores.trim().split("\n"), ["stored"],
     "Overlapping requests must not generate multiple credential keys");
 });
+
+test("cancellation during Linux keyring preflight prevents delayed OAuth launch", async (t) => {
+  if (process.platform !== "linux") {
+    t.skip("Linux Secret Service implementation only");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "chatarium-siwc-cancel-preflight-"));
+  t.after(async () => { await rm(root, { recursive: true, force: true }); });
+
+  // Delay a disposable helper's key lookup to leave sign-in in preflight.
+  // The fake DevKit must never be allowed to complete signIn after cancellation.
+  const helper = join(root, "secret-tool");
+  await writeFile(helper, [
+    "#!" + process.execPath,
+    'if (process.argv[2] === "lookup") {',
+    '  setTimeout(() => process.exit(1), 150);',
+    '} else if (process.argv[2] === "store") {',
+    '  process.stdin.resume();',
+    '  process.stdin.on("end", () => process.exit(0));',
+    '} else process.exit(2);',
+    "",
+  ].join("\n"), { mode: 0o700 });
+  await chmod(helper, 0o700);
+
+  const requestIds = ["cancelled-before-oauth", "cancel-operation"];
+  const replies = await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, ["--import", preload, bridge], {
+      env: { ...process.env, HOME: root, PATH: root, OPENAI_API_KEY: "" },
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: false,
+    });
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    const responses = new Map();
+    let stderr = "";
+    let sent = false;
+    let finished = false;
+    const timeout = setTimeout(() => finish(new Error("Cancelled sign-in timed out")), 10000);
+    function finish(error) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      lines.close();
+      if (error) {
+        child.kill();
+        rejectPromise(error);
+      } else {
+        resolvePromise(responses);
+      }
+    }
+    child.stderr.on("data", (chunk) => { stderr += String(chunk).slice(0, 400); });
+    child.on("error", finish);
+    child.on("exit", (code) => {
+      if (code === 0 && responses.size === requestIds.length) finish();
+      else finish(new Error("Cancelled SIWC sidecar exited: " + stderr));
+    });
+    lines.on("line", (line) => {
+      if (finished) return;
+      try {
+        const frame = JSON.parse(line);
+        assert.doesNotMatch(JSON.stringify(frame),
+          /access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie/i);
+        if (frame.type === "ready" && !sent) {
+          sent = true;
+          child.stdin.write(JSON.stringify({
+            type: "sign_in", request_id: requestIds[0],
+          }) + "\n");
+          child.stdin.write(JSON.stringify({
+            type: "cancel_sign_in", request_id: requestIds[1],
+          }) + "\n");
+        }
+        if (requestIds.includes(frame.request_id) &&
+            (frame.type === "result" || frame.type === "error")) {
+          responses.set(frame.request_id, frame);
+          if (responses.size === requestIds.length) child.stdin.end();
+        }
+      } catch (error) {
+        finish(error);
+      }
+    });
+  });
+
+  assert.equal(replies.get(requestIds[1]).type, "result",
+    "The cancellation command must be acknowledged");
+  const cancelled = replies.get(requestIds[0]);
+  assert.equal(cancelled.type, "error", "Delayed OAuth must never start");
+  assert.equal(cancelled.error.code, "cancelled");
+  assert.match(cancelled.error.message, /cancelled before authorization/i);
+});
