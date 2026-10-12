@@ -581,8 +581,10 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let repaint = egui::Context::default();
         forward_bridge_output(
-            Cursor::new(br#"{\"type\":\"ready\",\"protocol\":1}
-"#),
+            Cursor::new(
+                br#"{"type":"ready","protocol":1}
+"#,
+            ),
             &sender,
             &repaint,
         );
@@ -600,7 +602,11 @@ mod tests {
     #[test]
     fn sidecar_stdout_empty_exits_with_runtime_failure() {
         let (sender, receiver) = mpsc::channel();
-        forward_bridge_output(Cursor::new(Vec::<u8>::new()), &sender, &egui::Context::default());
+        forward_bridge_output(
+            Cursor::new(Vec::<u8>::new()),
+            &sender,
+            &egui::Context::default(),
+        );
         assert!(matches!(
             receiver.try_recv(),
             Ok(BridgeEvent::RuntimeUnavailable(_))
