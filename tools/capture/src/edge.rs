@@ -1316,12 +1316,15 @@ impl LaunchedEdge {
 
     /// Explicitly terminate Edge, remove the harness lock, and durably journal cleanup.
     pub fn shutdown(&mut self, run: &mut CaptureRun) -> Result<(), TransportError> {
+        #[cfg(windows)]
         let pipe_close =
             if let Some(EdgeBrowserTransport::Pipe(transport)) = self.transport.as_mut() {
                 transport.close()
             } else {
                 Ok(())
             };
+        #[cfg(not(windows))]
+        let pipe_close: Result<(), TransportError> = Ok(());
         self.transport.take();
         // Process termination must still happen when canceling a reader reports an error.
         let process_result = self.process.shutdown();
@@ -1457,6 +1460,7 @@ impl LaunchedEdge {
             None
         } else {
             match self.transport.as_mut() {
+                #[cfg(windows)]
                 Some(EdgeBrowserTransport::Pipe(transport)) => {
                     let result = transport.request_browser_close();
                     close_request_attempted = !matches!(&result, Err(TransportError::Disconnected));
@@ -1586,6 +1590,7 @@ impl LaunchedEdge {
             }
         };
 
+        #[cfg(windows)]
         if let Some(EdgeBrowserTransport::Pipe(transport)) = self.transport.as_mut() {
             if let Err(error) = transport.close() {
                 cleanup_errors.push(format!("close DevTools pipe resources: {error}"));
