@@ -28,8 +28,8 @@ function run(command, args, options = {}) {
 
 const [nodeMajor] = process.versions.node.split(".").map(Number);
 if (nodeMajor < 22) {
-  throw new Error(
-    `Chatarium Sign in with ChatGPT requires Node.js 22 or newer; current runtime is ${process.version}.`,
+  process.stderr.write(
+    `warning: Node.js 22+ is needed for Sign in with ChatGPT (found ${process.version}). Local Chatarium will still open.\n`,
   );
 }
 
@@ -45,8 +45,8 @@ if (process.platform === "linux") {
   }
 }
 
-process.stdout.write("Preparing pinned Sign in with ChatGPT runtime...\n");
-await run(process.execPath, [resolve(repoRoot, "tools/siwc-bridge/bootstrap.mjs")]);
-
-process.stdout.write("Launching Chatarium...\n");
+// Always open the local-first desktop. The native bridge prepares the pinned
+// DevKit in a worker, so missing network/package tooling never blocks local
+// conversations or turns a first-launch bootstrap problem into a dead app.
+process.stdout.write("Launching Chatarium (ChatGPT sign-in prepares in the background)...\n");
 await run("cargo", ["run", "-p", "chatarium-desktop", "--bin", "chatarium-desktop"]);
