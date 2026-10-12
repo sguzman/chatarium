@@ -554,9 +554,18 @@ async function handle(command) {
         break;
       }
       case "sign_in": {
+        // Invalidate an earlier sign-in still waiting on credential preflight.
+        // Cancellation during that await must prevent OAuth from starting.
+        const generation = ++signInGeneration;
         // Fail before opening an OAuth flow if Chatarium cannot protect the
         // rotating credentials that a successful sign-in would create.
         await loadCredentialKey();
+        if (generation !== signInGeneration) {
+          throw bridgeError(
+            "cancelled",
+            "ChatGPT sign-in was cancelled before authorization.",
+          );
+        }
         const session = await chatgpt.signIn({
           ...(command.new_profile ? { newProfile: true } : {}),
           ...(typeof command.profile_id === "string"
@@ -568,6 +577,7 @@ async function handle(command) {
         break;
       }
       case "cancel_sign_in": {
+        signInGeneration += 1;
         chatgpt.cancelSignIn();
         emit({ type: "result", request_id: requestId, result: {} });
         break;
@@ -591,6 +601,8 @@ async function handle(command) {
         break;
       }
       case "disconnect": {
+        // Disconnect must also prevent an unstarted preflight from launching OAuth.
+        signInGeneration += 1;
         await chatgpt.disconnect();
         emit({ type: "result", request_id: requestId, result: {} });
         break;
@@ -717,6 +729,7 @@ const input = createInterface({
 });
 
 const inFlight = new Set();
+let signInGeneration = 0;
 const responseControllers = new Map();
 const responsesLane = new ResponsesLane();
 
