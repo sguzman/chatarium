@@ -3828,7 +3828,7 @@ impl ChatariumApp {
                     let account_changed = self.remote_session.email != session.email
                         || self.remote_session.profile_label != session.profile_label;
 
-                    self.sign_in_pending = session.status == "connecting";
+                    self.sign_in_pending = sign_in_pending_after_session(self.sign_in_pending, &session.status);
                     self.remote_session = session;
 
                     if self.remote_session.status == "connected" && self.remote_session.sharing {
@@ -3847,7 +3847,9 @@ impl ChatariumApp {
                         } else if !was_connected && !self.model_list_pending {
                             self.remote_status = "ChatGPT plan connected".to_owned();
                         }
-                    } else if self.remote_session.status == "connecting" {
+                    } else if self.sign_in_pending {
+                        // A stale disconnected session refresh cannot finish an
+                        // already requested OAuth flow.
                         self.remote_status = "waiting for ChatGPT sign-in…".to_owned();
                     } else if let Some(error) = &self.remote_session.error_message {
                         self.remote_status = error.clone();
@@ -20500,6 +20502,17 @@ fn should_request_models(
     (!was_connected || account_changed || models_empty) && !model_list_pending
 }
 
+fn sign_in_pending_after_session(was_pending: bool, status: &str) -> bool {
+    match status {
+        "connecting" => true,
+        "connected" => false,
+        // RefreshSession replies can be stale while a new OAuth request waits
+        // on keyring preflight. The sign-in command's terminal result, not a
+        // disconnected snapshot, is authoritative for stopping the spinner.
+        _ => was_pending,
+    }
+}
+
 fn failed_bridge_command_finishes_sign_in(request_id: Option<&str>) -> bool {
     request_id == Some("sign-in")
 }
@@ -25914,6 +25927,16 @@ mod tests {
         assert!(!model_retry_available(true, true, true));
         assert!(!model_retry_available(true, false, false));
         assert!(!model_retry_available(false, false, true));
+    }
+
+    #[test]
+    fn stale_session_refresh_does_not_finish_pending_oauth() {
+        assert!(!sign_in_pending_after_session(false, "disconnected"));
+        assert!(sign_in_pending_after_session(false, "connecting"));
+        assert!(sign_in_pending_after_session(true, "disconnected"));
+        assert!(sign_in_pending_after_session(true, "reauth_required"));
+        assert!(sign_in_pending_after_session(true, "connecting"));
+        assert!(!sign_in_pending_after_session(true, "connected"));
     }
 
     #[test]
