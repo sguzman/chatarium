@@ -333,7 +333,13 @@ fn forward_bridge_output(
         match line {
             Ok(line) => {
                 if let Some(event) = parse_bridge_event(&line) {
+                    let terminal = matches!(event, BridgeEvent::RuntimeUnavailable(_));
                     send_event(events, repaint, event);
+                    // Fatal DevKit errors are more actionable than a generic
+                    // EOF notice. Emit exactly one terminal failure.
+                    if terminal {
+                        return;
+                    }
                 }
             }
             Err(error) => {
@@ -612,6 +618,23 @@ mod tests {
         assert!(matches!(
             receiver.try_recv(),
             Ok(BridgeEvent::RuntimeUnavailable(_))
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn sidecar_fatal_keeps_specific_error_without_duplicate_eof() {
+        let (sender, receiver) = mpsc::channel();
+        forward_bridge_output(
+            Cursor::new(
+                br#"{"type":"fatal","error":{"code":"bootstrap_failed","message":"pin mismatch"}}"#,
+            ),
+            &sender,
+            &egui::Context::default(),
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(BridgeEvent::RuntimeUnavailable(message)) if message == "pin mismatch"
         ));
         assert!(receiver.try_recv().is_err());
     }
