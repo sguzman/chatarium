@@ -666,14 +666,12 @@ mod tests {
     fn fatal_after_connected_session_revokes_stale_connection_before_error() {
         let (sender, receiver) = mpsc::channel();
         forward_bridge_output(
-            Cursor::new(
-                concat!(
-                    r#"{"type":"session","session":{"status":"connected","sharing":true,"profileId":"offline"}}"#,
-                    "\n",
-                    r#"{"type":"fatal","error":{"code":"fatal","message":"sidecar stopped"}}"#,
-                    "\n"
-                ),
-            ),
+            Cursor::new(concat!(
+                r#"{"type":"session","session":{"status":"connected","sharing":true,"profileId":"offline"}}"#,
+                "\n",
+                r#"{"type":"fatal","error":{"code":"fatal","message":"sidecar stopped"}}"#,
+                "\n"
+            )),
             &sender,
             &egui::Context::default(),
         );
