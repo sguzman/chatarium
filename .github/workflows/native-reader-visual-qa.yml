@@ -49,6 +49,11 @@ jobs:
       - name: Build native Chatarium binary
         id: build
         run: cargo build -p chatarium-desktop --bin chatarium-desktop --bin chatarium-reader-seed
+      # Product acceptance is the priority: exercise the actual Chatarium window,
+      # composer, committed turns, conversation switching and restart before
+      # running the large synthetic reader stress cases.
+      - name: Smoke actual production workspace with isolated home and data
+        run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_smoke.sh
       - name: Launch synthetic native reader and capture visual evidence
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/run.sh
       - name: Repeat screenshots under non-default X11 pixel scaling
@@ -56,8 +61,6 @@ jobs:
           WINIT_X11_SCALE_FACTOR: "1.25"
           CHATARIUM_READER_QA_OUTPUT: ".qa-native-reader-hidpi"
         run: xvfb-run -a -s "-screen 0 1920x1200x24" bash tools/qa-native-reader/run.sh
-      - name: Smoke actual production workspace with isolated home and data
-        run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_smoke.sh
       - name: Verify unsent drafts remain isolated through native switching and restart
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_draft_smoke.sh
