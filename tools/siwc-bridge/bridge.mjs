@@ -376,7 +376,7 @@ function validateStreamResponsePatch(value) {
 }
 
 async function runWithStreamResponsePatch(patch, operation) {
-  if (Object.keys(patch).length === 0) return operation();
+  // Even without optional tuning, intercept the request to enforce\n  // store:false and stream:true on every ordinary inference turn.
 
   const originalFetch = globalThis.fetch;
   let patched = false;
