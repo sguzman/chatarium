@@ -589,7 +589,9 @@ mod tests {
             &repaint,
         );
         assert!(matches!(receiver.try_recv(), Ok(BridgeEvent::Ready)));
-        let event = receiver.try_recv().expect("EOF must become a runtime failure");
+        let event = receiver
+            .try_recv()
+            .expect("EOF must become a runtime failure");
         assert!(matches!(
             event,
             BridgeEvent::RuntimeUnavailable(message)
@@ -613,7 +615,6 @@ mod tests {
         ));
         assert!(receiver.try_recv().is_err());
     }
-
 
     #[test]
     fn stream_response_command_preserves_instructions() {
