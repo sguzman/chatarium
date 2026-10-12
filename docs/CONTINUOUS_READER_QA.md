@@ -126,6 +126,20 @@ production startup, durable authored-message isolation, navigation, real-process
 restart replay, and basic layout reflow. The independent long-archive production
 test validates the opt-in continuous reader against 257 persisted messages.
 
+## Unsent draft durability and isolation
+
+Production visual QA also launches the actual desktop against a disposable,
+offline journal and types two **unsent** drafts into two different local
+conversations. Both drafts must be durable `DraftChanged` events with distinct
+local-conversation scopes, and neither may appear as a
+`UserMessageCommitted` event. QA switches A → B → A → B and restarts the
+application while B is selected. It checks that both text editors repaint
+their own original unsent draft after switching and after process restart.
+The screenshot comparison uses only the composer rectangle with tolerant
+pixel differences for focus/caret changes. There is no OCR, authentication,
+browser profile, or access to an ordinary journal. A failed new-chat shortcut
+cannot pass merely by overwriting the first draft.
+
 ## Actual-app restart and durable replay
 
 Before composing the second message, QA compares the production screenshot

@@ -42,8 +42,9 @@ jobs:
           bash -n tools/qa-native-reader/run.sh
           bash -n tools/qa-native-reader/require_isolated_xvfb.sh
           bash -n tools/qa-native-reader/production_smoke.sh
+          bash -n tools/qa-native-reader/production_draft_smoke.sh
           bash -n tools/qa-native-reader/production_long_reader_smoke.sh
-          python3 -m py_compile tools/qa-native-reader/check_screenshots.py tools/qa-native-reader/check_empty_conversation.py tools/qa-native-reader/check_replay.py tools/qa-native-reader/check_conversation_switch.py
+          python3 -m py_compile tools/qa-native-reader/check_screenshots.py tools/qa-native-reader/check_empty_conversation.py tools/qa-native-reader/check_replay.py tools/qa-native-reader/check_conversation_switch.py tools/qa-native-reader/check_draft_recovery.py
           python3 tools/qa-native-reader/check_conversation_switch.py --self-test
       - name: Build native Chatarium binary
         id: build
@@ -57,6 +58,9 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1920x1200x24" bash tools/qa-native-reader/run.sh
       - name: Smoke actual production workspace with isolated home and data
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_smoke.sh
+      - name: Verify unsent drafts remain isolated through native switching and restart
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_draft_smoke.sh
       - name: Smoke actual desktop on a seeded long native archive
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: xvfb-run -a -s "-screen 0 1440x960x24" bash tools/qa-native-reader/production_long_reader_smoke.sh
@@ -78,6 +82,9 @@ jobs:
             .qa-native-long-reader/*.png
             .qa-native-long-reader/*.json
             .qa-native-long-reader/*.log
+            .qa-native-draft-recovery/*.png
+            .qa-native-draft-recovery/*.json
+            .qa-native-draft-recovery/*.log
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 7
