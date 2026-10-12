@@ -100,9 +100,22 @@ function runSecretTool(args, input) {
 }
 
 let cachedCredentialKey;
+let pendingCredentialKey;
 
+// Sign-in and DevKit encryption callbacks can overlap. Without a shared
+// initialization promise, simultaneous missing-key lookups can each generate
+// and store a different key, orphaning credentials written by one caller.
 async function loadCredentialKey() {
   if (cachedCredentialKey) return cachedCredentialKey;
+  if (!pendingCredentialKey) {
+    pendingCredentialKey = loadCredentialKeyUncached().finally(() => {
+      pendingCredentialKey = undefined;
+    });
+  }
+  return pendingCredentialKey;
+}
+
+async function loadCredentialKeyUncached() {
   if (process.platform !== "linux") {
     throw new Error(
       "This Chatarium alpha currently requires the Linux Secret Service credential backend.",
