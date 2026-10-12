@@ -52,8 +52,10 @@ export function createChatGPT(config) {
           model,
           input,
           instructions,
-          stream: true,
-          store: false,
+          // Deliberately conflict with Chatarium defaults in one test turn.
+          // The production bridge must enforce these fields even unpatched.
+          stream: input === "verify-store-override" ? false : true,
+          store: input === "verify-store-override",
         }),
       });
       const wire = await response.json();
