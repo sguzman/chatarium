@@ -4117,6 +4117,19 @@ impl ChatariumApp {
                             payload,
                         );
                     }
+                    // DispatchAttempted is journaled before the sidecar send.
+                    // If its acknowledgment is still pending at bridge death,
+                    // clear the intent before that notice can later dispatch
+                    // against a dead runtime. Never retry the ambiguous turn.
+                    if let Some((turn_id, payload)) =
+                        interrupted_pending_remote_turn(&mut self.pending_remote_turn)
+                    {
+                        let _ = self.queue_turn_event(
+                            turn_id,
+                            EventKind::TransportInterrupted,
+                            payload,
+                        );
+                    }
                     self.remote_status = detail;
                 }
                 siwc_bridge::BridgeEvent::CommandSucceeded { .. } => {}
@@ -20497,6 +20510,21 @@ fn remote_turn_payload(
     .expect("remote turn observation is JSON-serializable")
 }
 
+fn interrupted_pending_remote_turn(
+    pending_remote_turn: &mut Option<PendingRemoteTurn>,
+) -> Option<(LocalTurnId, String)> {
+    pending_remote_turn.take().map(|pending| {
+        let payload = remote_turn_payload(
+            pending.turn_id,
+            &pending.request_id,
+            Some(&pending.model),
+            None,
+            Some("Sign in with ChatGPT runtime became unavailable before stream dispatch"),
+        );
+        (pending.turn_id, payload)
+    })
+}
+
 fn local_conversation_topology(
     events: &[EventEnvelope],
     conversation_id: LocalConversationId,
@@ -25810,6 +25838,36 @@ mod tests {
         assert_eq!(projected[0].role, DisplayRole::Assistant);
         assert_eq!(projected[0].text, "hello");
         assert_eq!(projected[0].sequence, 2);
+    }
+
+    #[test]
+    fn sidecar_failure_clears_awaiting_dispatch_without_retry_or_losing_turn_identity() {
+        let turn_id = LocalTurnId::new();
+        let mut pending = Some(PendingRemoteTurn {
+            turn_id,
+            request_id: "synthetic-request".to_owned(),
+            model: "synthetic-model".to_owned(),
+            input: serde_json::json!([{"role":"user","content":"private synthetic text"}]),
+            instructions: Some("synthetic instruction".to_owned()),
+            request_patch: serde_json::json!({}),
+        });
+
+        let (interrupted_turn_id, payload) =
+            interrupted_pending_remote_turn(&mut pending).expect("pending turn interrupted");
+        assert_eq!(interrupted_turn_id, turn_id);
+        assert!(pending.is_none(), "the pending dispatch cannot block future turns");
+        let observation: serde_json::Value =
+            serde_json::from_str(&payload).expect("typed interruption payload");
+        assert_eq!(observation["details"]["local_turn_id"], turn_id.to_string());
+        assert_eq!(observation["details"]["request_id"], "synthetic-request");
+        assert_eq!(observation["details"]["model"], "synthetic-model");
+        assert!(observation["text"].is_null());
+        assert!(!payload.contains("private synthetic text"));
+        assert!(!payload.contains("synthetic instruction"));
+        assert!(
+            interrupted_pending_remote_turn(&mut pending).is_none(),
+            "the same uncertain turn cannot be interrupted twice"
+        );
     }
 
     #[test]
