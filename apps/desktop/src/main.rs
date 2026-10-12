@@ -25855,7 +25855,10 @@ mod tests {
         let (interrupted_turn_id, payload) =
             interrupted_pending_remote_turn(&mut pending).expect("pending turn interrupted");
         assert_eq!(interrupted_turn_id, turn_id);
-        assert!(pending.is_none(), "the pending dispatch cannot block future turns");
+        assert!(
+            pending.is_none(),
+            "the pending dispatch cannot block future turns"
+        );
         let observation: serde_json::Value =
             serde_json::from_str(&payload).expect("typed interruption payload");
         assert_eq!(observation["details"]["local_turn_id"], turn_id.to_string());
