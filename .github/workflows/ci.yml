@@ -36,6 +36,8 @@ jobs:
           node --check tools/siwc-bridge/test/offline-preload.mjs
           node --check tools/siwc-bridge/test/fake-devkit.mjs
           node --check tools/siwc-bridge/test/alpha-protocol.test.mjs
+          node --check tools/siwc-bridge/test/sign-in-preflight.test.mjs
+          node --test tools/siwc-bridge/test/sign-in-preflight.test.mjs
           node --test tools/siwc-bridge/test/alpha-protocol.test.mjs
           node --check tools/siwc-bridge/capability-probe.mjs
           node --check tools/siwc-bridge/bootstrap.mjs
@@ -75,6 +77,8 @@ jobs:
           node --check tools/siwc-bridge/test/offline-preload.mjs
           node --check tools/siwc-bridge/test/fake-devkit.mjs
           node --check tools/siwc-bridge/test/alpha-protocol.test.mjs
+          node --check tools/siwc-bridge/test/sign-in-preflight.test.mjs
+          node --test tools/siwc-bridge/test/sign-in-preflight.test.mjs
           node --test tools/siwc-bridge/test/alpha-protocol.test.mjs
           node --check tools/siwc-bridge/capability-probe.mjs
           node --check tools/siwc-bridge/bootstrap.mjs

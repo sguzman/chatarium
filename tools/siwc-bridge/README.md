@@ -88,7 +88,8 @@ Run `node --test tools/siwc-bridge/test/alpha-protocol.test.mjs` to
 exercise the **real Node bridge process** through its stdin/stdout protocol.
 The test-only `--import` preload substitutes a deterministic fake
 DevKit and replaces network `fetch` with an offline stub. It verifies
-session/model discovery, patched and unpatched streamed turns, delta ordering,
+session/model discovery, credential-free Linux Secret Service sign-in
+preflight (including fail-closed behavior), patched and unpatched streamed turns, delta ordering,
 overlap rejection, cancellation, recovered next-turn behavior, disconnect,
 and process shutdown. No credential provider, browser, API key, or account is
 accessed. These passing tests **do not establish** a successful live ChatGPT

@@ -11,7 +11,7 @@ const disconnected = { status: "disconnected", sharing: false };
 let session = connected;
 let onSession = () => {};
 
-export function createChatGPT() {
+export function createChatGPT(config) {
   return {
     subscribe(observer) {
       onSession = observer;
@@ -19,6 +19,17 @@ export function createChatGPT() {
       return () => { onSession = () => {}; };
     },
     async getSession() { return session; },
+    async signIn() {
+      // Only a synthetic sample, never an OAuth credential.
+      const sample = "OFFLINE_CRYPTO_ROUND_TRIP_ONLY";
+      const encrypted = await config.credentialEncryption.encrypt(sample);
+      if ((await config.credentialEncryption.decrypt(encrypted)) !== sample) {
+        throw new Error("Offline encryption round trip failed");
+      }
+      session = connected;
+      onSession(session);
+      return session;
+    },
     async listModels() {
       return [{ slug: "offline-alpha-model", displayName: "Offline Alpha Model" }];
     },
