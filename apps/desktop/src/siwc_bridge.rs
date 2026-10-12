@@ -292,26 +292,7 @@ fn bridge_worker(
     let reader = thread::Builder::new()
         .name("chatarium-siwc-reader".to_owned())
         .spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if let Some(event) = parse_bridge_event(&line) {
-                            send_event(&reader_events, &reader_repaint, event);
-                        }
-                    }
-                    Err(error) => {
-                        send_event(
-                            &reader_events,
-                            &reader_repaint,
-                            BridgeEvent::RuntimeUnavailable(format!(
-                                "Sign in with ChatGPT bridge output failed: {error}"
-                            )),
-                        );
-                        break;
-                    }
-                }
-            }
+            forward_bridge_output(BufReader::new(stdout), &reader_events, &reader_repaint);
         });
 
     while let Ok(command) = commands.recv() {
@@ -338,6 +319,42 @@ fn bridge_worker(
     if let Ok(reader) = reader {
         let _ = reader.join();
     }
+}
+
+// The command writer can block on commands.recv() after the child has exited.
+// Always surface EOF to the desktop so an OAuth flow or active response cannot
+// remain indefinitely in the apparent "connecting"/"streaming" state.
+fn forward_bridge_output(
+    reader: impl BufRead,
+    events: &Sender<BridgeEvent>,
+    repaint: &egui::Context,
+) {
+    for line in reader.lines() {
+        match line {
+            Ok(line) => {
+                if let Some(event) = parse_bridge_event(&line) {
+                    send_event(events, repaint, event);
+                }
+            }
+            Err(error) => {
+                send_event(
+                    events,
+                    repaint,
+                    BridgeEvent::RuntimeUnavailable(format!(
+                        "Sign in with ChatGPT bridge output failed: {error}"
+                    )),
+                );
+                return;
+            }
+        }
+    }
+    send_event(
+        events,
+        repaint,
+        BridgeEvent::RuntimeUnavailable(
+            "Sign in with ChatGPT bridge exited unexpectedly; the pending sign-in or response has not been confirmed.".to_owned(),
+        ),
+    );
 }
 
 fn send_event(events: &Sender<BridgeEvent>, repaint: &egui::Context, event: BridgeEvent) {
@@ -557,6 +574,40 @@ fn parse_error(value: &Value) -> Option<BridgeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn sidecar_stdout_eof_does_not_leave_runtime_marked_ready() {
+        let (sender, receiver) = mpsc::channel();
+        let repaint = egui::Context::default();
+        forward_bridge_output(
+            Cursor::new(br#"{\"type\":\"ready\",\"protocol\":1}
+"#),
+            &sender,
+            &repaint,
+        );
+        assert!(matches!(receiver.try_recv(), Ok(BridgeEvent::Ready)));
+        let event = receiver.try_recv().expect("EOF must become a runtime failure");
+        assert!(matches!(
+            event,
+            BridgeEvent::RuntimeUnavailable(message)
+                if message.contains("exited unexpectedly") &&
+                   message.contains("pending sign-in or response")
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn sidecar_stdout_empty_exits_with_runtime_failure() {
+        let (sender, receiver) = mpsc::channel();
+        forward_bridge_output(Cursor::new(Vec::<u8>::new()), &sender, &egui::Context::default());
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(BridgeEvent::RuntimeUnavailable(_))
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
 
     #[test]
     fn stream_response_command_preserves_instructions() {
