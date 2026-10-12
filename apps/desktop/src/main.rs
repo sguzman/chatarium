@@ -20487,11 +20487,7 @@ fn capability_probe_block_reason(
     None
 }
 
-fn model_retry_available(
-    connected: bool,
-    request_pending: bool,
-    models_empty: bool,
-) -> bool {
+fn model_retry_available(connected: bool, request_pending: bool, models_empty: bool) -> bool {
     connected && !request_pending && models_empty
 }
 
