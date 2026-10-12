@@ -140,8 +140,10 @@ async function loadCredentialKey() {
   // replacement key could orphan the original encrypted credentials. Never
   // mutate the OS keyring in that ambiguous recovery situation.
   const existingAuth = join(homedir(), ".config", "chatarium", "chatgpt-auth.json");
+  let savedAuthExists = false;
   try {
     await lstat(existingAuth);
+    savedAuthExists = true;
   } catch (error) {
     if (error?.code !== "ENOENT") {
       throw new Error(
@@ -149,12 +151,8 @@ async function loadCredentialKey() {
       );
     }
   }
-  // A successful stat is an explicit no-overwrite boundary. A missing file
-  // (ENOENT) is the only state in which creating the initial key is allowed.
-  if (await lstat(existingAuth).then(() => true, (error) => {
-    if (error?.code === "ENOENT") return false;
-    throw new Error("Could not inspect saved ChatGPT credential state.");
-  })) {
+  // ENOENT is the only state in which creating an initial key is allowed.
+  if (savedAuthExists) {
     throw new Error(
       "Saved ChatGPT sign-in data exists, but its Secret Service encryption key could not be retrieved. Restore the original keyring access; saved data was preserved.",
     );
