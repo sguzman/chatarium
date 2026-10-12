@@ -4152,6 +4152,14 @@ impl ChatariumApp {
     }
 
     fn cancel_chatgpt_sign_in(&mut self) {
+        // The runtime can take time to bootstrap. Cancel a sign-in that has
+        // not been dispatched yet instead of leaving an armed request that
+        // will unexpectedly open the browser once the sidecar is ready.
+        if self.sign_in_requested {
+            self.sign_in_requested = false;
+            self.remote_status = "ChatGPT sign-in cancelled before launch".to_owned();
+            return;
+        }
         self.remote_status = "cancelling ChatGPT sign-in…".to_owned();
         if let Err(error) = self.remote.send(siwc_bridge::BridgeCommand::CancelSignIn) {
             self.remote_status = error;
