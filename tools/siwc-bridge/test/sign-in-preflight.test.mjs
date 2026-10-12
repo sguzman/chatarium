@@ -257,8 +257,9 @@ test("cancellation during Linux keyring preflight prevents delayed OAuth launch"
       if (finished) return;
       try {
         const frame = JSON.parse(line);
+        // Check credential-bearing JSON keys, not safe error prose.
         assert.doesNotMatch(JSON.stringify(frame),
-          /access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie/i);
+          /"(?:access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie|cookies)"\s*:/i);
         if (frame.type === "ready" && !sent) {
           sent = true;
           child.stdin.write(JSON.stringify({
