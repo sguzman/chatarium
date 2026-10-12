@@ -80,3 +80,16 @@ The product UI exposes only the fixed probe suite. It does not expose arbitrary
 `probe_response` request patching. The raw command remains an internal bridge
 mechanism used to turn the capability ledger's remaining unknowns into finite,
 reproducible experiments.
+
+
+## Offline alpha transport contract
+
+Run `node --test tools/siwc-bridge/test/alpha-protocol.test.mjs` to
+exercise the **real Node bridge process** through its stdin/stdout protocol.
+The test-only `--import` preload substitutes a deterministic fake
+DevKit and replaces network `fetch` with an offline stub. It verifies
+session/model discovery, patched and unpatched streamed turns, delta ordering,
+overlap rejection, cancellation, recovered next-turn behavior, disconnect,
+and process shutdown. No credential provider, browser, API key, or account is
+accessed. These passing tests **do not establish** a successful live ChatGPT
+OAuth/Responses session; that remains the alpha gate in issue #89.
