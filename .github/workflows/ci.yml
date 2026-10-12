@@ -43,6 +43,8 @@ jobs:
           node --check tools/siwc-bridge/bootstrap.mjs
           node --check tools/siwc-bridge/smoke.mjs
           node --check tools/run-desktop.mjs
+          node --check tools/run-desktop.test.mjs
+          node --test tools/run-desktop.test.mjs
       - name: Build pinned Sign in with ChatGPT DevKit
         run: |
           node tools/siwc-bridge/bootstrap.mjs
@@ -84,6 +86,8 @@ jobs:
           node --check tools/siwc-bridge/bootstrap.mjs
           node --check tools/siwc-bridge/smoke.mjs
           node --check tools/run-desktop.mjs
+          node --check tools/run-desktop.test.mjs
+          node --test tools/run-desktop.test.mjs
       - name: Install pnpm fallback harness
         run: npm install --global pnpm@10.18.3
       - name: Build pinned Sign in with ChatGPT DevKit without system npm
