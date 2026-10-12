@@ -149,6 +149,21 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
   assert.equal(normal.store, false);
   assert.equal(normal.stream, true);
 
+  // A normal request with no optional patch must still enforce Chatarium's
+  // privacy and streaming invariants, even if the DevKit supplies opposites.
+  send("stream_response", "offline-enforced-defaults", {
+    model: "offline-alpha-model",
+    input: "verify-store-override",
+    request_patch: {},
+  });
+  const enforced = await until(
+    (event) => event.type === "result" &&
+      event.request_id === "offline-enforced-defaults",
+  );
+  const enforcedWire = JSON.parse(enforced.result.text.slice("OFFLINE:".length));
+  assert.equal(enforcedWire.store, false);
+  assert.equal(enforcedWire.stream, true);
+
   send("disconnect", "offline-disconnect");
   await until((event) => event.type === "result" &&
     event.request_id === "offline-disconnect");
