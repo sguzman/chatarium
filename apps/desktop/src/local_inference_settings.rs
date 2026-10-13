@@ -151,16 +151,22 @@ impl InferenceSettingsStore {
     ) -> ConversationInferenceSettings {
         let mut settings = self.for_conversation(conversation_id);
         if agent_defaults.seed_new_conversations
-            && !self.explicit_mcp_preferences.contains(&conversation_id.to_string())
+            && !self
+                .explicit_mcp_preferences
+                .contains(&conversation_id.to_string())
         {
             settings.mcp_enabled = true;
             if !agent_defaults.bootstrap.is_empty()
-                && !settings.developer_context.contains(&agent_defaults.bootstrap)
+                && !settings
+                    .developer_context
+                    .contains(&agent_defaults.bootstrap)
             {
                 if !settings.developer_context.is_empty() {
                     settings.developer_context.push_str("\n\n");
                 }
-                settings.developer_context.push_str(&agent_defaults.bootstrap);
+                settings
+                    .developer_context
+                    .push_str(&agent_defaults.bootstrap);
             }
         }
         settings
@@ -282,8 +288,16 @@ mod tests {
         settings.set(conversation, old_settings).unwrap();
         let migrated = settings.for_conversation_with_mcp_defaults(conversation, &defaults);
         assert!(migrated.mcp_enabled);
-        assert!(migrated.developer_context.starts_with("Keep responses brief."));
-        assert!(migrated.developer_context.contains("chatarium.builtin::tools.list"));
+        assert!(
+            migrated
+                .developer_context
+                .starts_with("Keep responses brief.")
+        );
+        assert!(
+            migrated
+                .developer_context
+                .contains("chatarium.builtin::tools.list")
+        );
 
         let mut explicit_off = migrated;
         explicit_off.mcp_enabled = false;
@@ -319,12 +333,20 @@ mod tests {
         let mut store = InferenceSettingsStore::load(&path).unwrap();
         let migrated = store.for_conversation_with_mcp_defaults(conversation, &defaults);
         assert!(migrated.mcp_enabled);
-        assert!(migrated.developer_context.contains("chatarium.builtin::tools.list"));
+        assert!(
+            migrated
+                .developer_context
+                .contains("chatarium.builtin::tools.list")
+        );
         assert_eq!(migrated.instructions, "Be brief");
         store.set(conversation, migrated.clone()).unwrap();
         store.save_atomic(&path).unwrap();
         let mut restored = InferenceSettingsStore::load(&path).unwrap();
-        assert!(restored.for_conversation_with_mcp_defaults(conversation, &defaults).mcp_enabled);
+        assert!(
+            restored
+                .for_conversation_with_mcp_defaults(conversation, &defaults)
+                .mcp_enabled
+        );
 
         let mut off = migrated;
         off.mcp_enabled = false;
@@ -332,7 +354,10 @@ mod tests {
         restored.set(conversation, off.clone()).unwrap();
         restored.save_atomic(&path).unwrap();
         let reloaded = InferenceSettingsStore::load(&path).unwrap();
-        assert_eq!(reloaded.for_conversation_with_mcp_defaults(conversation, &defaults), off);
+        assert_eq!(
+            reloaded.for_conversation_with_mcp_defaults(conversation, &defaults),
+            off
+        );
         let _ = fs::remove_file(path);
     }
 

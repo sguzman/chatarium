@@ -4679,7 +4679,8 @@ impl ChatariumApp {
             defaults: self.mcp_agent_defaults.clone(),
         }) {
             Ok(()) => {
-                self.status = "MCP bootstrap and exact tool policies queued for local save.".to_owned();
+                self.status =
+                    "MCP bootstrap and exact tool policies queued for local save.".to_owned();
             }
             Err(error) => self.status = format!("MCP defaults could not be queued: {error}"),
         }
