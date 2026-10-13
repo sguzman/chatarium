@@ -619,15 +619,19 @@ impl NativeConversationSearchIndex {
         events: &[EventEnvelope],
         first_new_position: usize,
     ) -> Option<Self> {
-        // A new tool outcome or admission can change a historical tool row.
-        // Recompute verified correlation rather than trying to splice
-        // unverified tool payloads into the incremental user/assistant path.
-        if events[first_new_position..].iter().any(|event| {
-            super::mcp_transcript::changes_activity(event.kind)
-                || event.kind == EventKind::SiwcAgentActivityObserved
-        }) {
+        // MCP correlation can revise an earlier audit row, so fall back to
+        // the full verified projection. SIWC lifecycle updates are different:
+        // re-project only the activity cards while preserving existing
+        // immutable authored/assistant transcript vectors.
+        if events[first_new_position..]
+            .iter()
+            .any(|event| super::mcp_transcript::changes_activity(event.kind))
+        {
             return None;
         }
+        let activity_changed = events[first_new_position..]
+            .iter()
+            .any(|event| event.kind == EventKind::SiwcAgentActivityObserved);
         let mut owners = Arc::clone(&self.owners);
 
         // Resolve every new typed turn before attributing assistant events,
@@ -685,10 +689,47 @@ impl NativeConversationSearchIndex {
         let mut messages = self.messages.clone();
         for owner in touched {
             let owned_positions = positions.get(&owner)?;
-            let visible = projected_display_messages_iter(
+            let mut visible = projected_display_messages_iter(
                 owned_positions.iter().map(|position| &events[*position]),
             );
+            // A new ordinary message must not erase already verified
+            // non-authored MCP/activity cards from the same conversation.
+            if let Some(existing) = self.messages.get(&owner) {
+                visible.extend(
+                    existing
+                        .iter()
+                        .filter(|entry| {
+                            matches!(entry.role, super::DisplayRole::Mcp | super::DisplayRole::Activity)
+                        })
+                        .cloned(),
+                );
+                visible.sort_by_key(|entry| entry.sequence);
+            }
             messages.insert(owner, Arc::new(visible));
+        }
+        if activity_changed {
+            // Replay the trusted activity audit, not raw sidecar JSON.
+            // If any record is malformed, the verifier yields no activity:
+            // remove previously cached cards rather than showing stale or
+            // cross-conversation observations.
+            let mut verified = super::siwc_activity_transcript::verified_activity(events);
+            let mut affected = messages
+                .iter()
+                .filter(|(_, entries)| {
+                    entries
+                        .iter()
+                        .any(|entry| entry.role == super::DisplayRole::Activity)
+                })
+                .map(|(owner, _)| *owner)
+                .collect::<BTreeSet<_>>();
+            affected.extend(verified.keys().copied());
+            for owner in affected {
+                let entries = messages.entry(owner).or_insert_with(|| Arc::new(Vec::new()));
+                let visible = Arc::make_mut(entries);
+                visible.retain(|entry| entry.role != super::DisplayRole::Activity);
+                visible.extend(verified.remove(&owner).unwrap_or_default());
+                visible.sort_by_key(|entry| entry.sequence);
+            }
         }
         Some(Self {
             revision: JournalRevision::capture(events),
