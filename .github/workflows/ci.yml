@@ -33,6 +33,9 @@ jobs:
           node --check tools/siwc-bridge/response-lane.mjs
           node --check tools/siwc-bridge/response-lane.test.mjs
           node --test tools/siwc-bridge/response-lane.test.mjs
+          node --check tools/siwc-bridge/retry-policy.mjs
+          node --check tools/siwc-bridge/retry-policy.test.mjs
+          node --test tools/siwc-bridge/retry-policy.test.mjs
           node --check tools/siwc-bridge/test/offline-preload.mjs
           node --check tools/siwc-bridge/test/fake-devkit.mjs
           node --check tools/siwc-bridge/test/alpha-protocol.test.mjs
@@ -76,6 +79,9 @@ jobs:
           node --check tools/siwc-bridge/response-lane.mjs
           node --check tools/siwc-bridge/response-lane.test.mjs
           node --test tools/siwc-bridge/response-lane.test.mjs
+          node --check tools/siwc-bridge/retry-policy.mjs
+          node --check tools/siwc-bridge/retry-policy.test.mjs
+          node --test tools/siwc-bridge/retry-policy.test.mjs
           node --check tools/siwc-bridge/test/offline-preload.mjs
           node --check tools/siwc-bridge/test/fake-devkit.mjs
           node --check tools/siwc-bridge/test/alpha-protocol.test.mjs
