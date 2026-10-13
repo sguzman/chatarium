@@ -217,21 +217,26 @@ pub fn replay_tool_call_outcome_audit(
                 )
             })?;
         if route.request.class != RouteClass::ToolCall
-            || route.initial_policy != RoutePolicy::RequireApproval
+            || route.initial_policy == RoutePolicy::Deny
         {
             return Err(format!(
-                "tool outcome at sequence {} references route {} without explicit-approval tool policy",
+                "tool outcome at sequence {} references route {} without an executable tool policy",
                 event.sequence,
                 route_id.get()
             ));
         }
+        let authority = match route.initial_policy {
+            RoutePolicy::Allow => DecisionAuthority::Policy,
+            RoutePolicy::RequireApproval => DecisionAuthority::User,
+            RoutePolicy::Deny => unreachable!(),
+        };
         if route.gate_state
             != (RouteGateState::Dispatched {
-                authorized_by: DecisionAuthority::User,
+                authorized_by: authority,
             })
         {
             return Err(format!(
-                "tool outcome at sequence {} references route {} before explicitly approved dispatch",
+                "tool outcome at sequence {} references route {} without matching dispatch authority",
                 event.sequence,
                 route_id.get()
             ));
