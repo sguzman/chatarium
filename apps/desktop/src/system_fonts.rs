@@ -11,6 +11,25 @@ use std::sync::Arc;
 
 const STATUS_KEY: &str = "chatarium.system_font_fallbacks.v1";
 
+/// A real heavyweight face for authored Markdown, not RichText::strong(),
+/// which only raises contrast and does not select bold glyph outlines.
+pub(super) const MARKDOWN_BOLD_FAMILY: &str = "chatarium.markdown.bold";
+const MARKDOWN_BOLD_FACE: &str = "chatarium.markdown.bold.face";
+
+#[cfg(target_os = "linux")]
+const MARKDOWN_BOLD_PATHS: &[&str] = &[
+    "/usr/share/fonts/TTF/AtkinsonHyperlegibleNext-Bold.ttf",
+    "/usr/share/fonts/TTF/AtkinsonHyperlegible-Bold.ttf",
+    "/usr/share/fonts/truetype/atkinson-hyperlegible-next/AtkinsonHyperlegibleNext-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/TTF/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+];
+
 struct FontFallback {
     name: &'static str,
     candidates: &'static [&'static str],
@@ -64,6 +83,27 @@ fn first_available_font(paths: &[&str]) -> Option<Vec<u8>> {
     })
 }
 
+/// Fontconfig locates user-installed fonts (including those under ~/.local/share/fonts)
+/// that are not in the standard package-managed directories. It is optional:
+/// no package installation, network, or hard dependency on the helper.
+#[cfg(target_os = "linux")]
+fn bold_from_fontconfig() -> Option<Vec<u8>> {
+    let output = std::process::Command::new("fc-match")
+        .args(["-f", "%{style}\\n%{file}\\n", "sans:style=Bold"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = std::str::from_utf8(&output.stdout).ok()?;
+    let mut lines = text.lines();
+    let style = lines.next()?.to_ascii_lowercase();
+    if !style.contains("bold") && !style.contains("black") && !style.contains("heavy") {
+        return None;
+    }
+    first_available_font(&[lines.next()?])
+}
+
 /// Optional system fallbacks are used for every native egui surface, not just
 /// the synthetic reader; default proportional and monospace choices remain
 /// first for ASCII/Latin glyphs.
@@ -83,6 +123,21 @@ pub(super) fn install(ctx: &egui::Context) {
             loaded.push(name);
         }
     }
+    #[cfg(target_os = "linux")]
+    if let Some(bytes) = first_available_font(MARKDOWN_BOLD_PATHS).or_else(bold_from_fontconfig) {
+        let name = MARKDOWN_BOLD_FACE.to_owned();
+        fonts
+            .font_data
+            .insert(name.clone(), Arc::new(egui::FontData::from_owned(bytes)));
+        let mut chain = vec![name];
+        if let Some(fallbacks) = fonts.families.get(&egui::FontFamily::Proportional) {
+            chain.extend(fallbacks.iter().cloned());
+        }
+        fonts
+            .families
+            .insert(egui::FontFamily::Name(MARKDOWN_BOLD_FAMILY.into()), chain);
+        loaded.push(MARKDOWN_BOLD_FAMILY.to_owned());
+    }
     if !loaded.is_empty() {
         ctx.set_fonts(fonts);
     }
@@ -96,6 +151,11 @@ pub(super) fn loaded_names(ctx: &egui::Context) -> Vec<String> {
         data.get_temp::<Vec<String>>(egui::Id::new(STATUS_KEY))
             .unwrap_or_default()
     })
+}
+
+/// Indicates whether the native UI has a genuine bold font family.
+pub(super) fn markdown_bold_available(ctx: &egui::Context) -> bool {
+    loaded_names(ctx).iter().any(|name| name == MARKDOWN_BOLD_FAMILY)
 }
 
 #[cfg(test)]
@@ -118,5 +178,6 @@ mod tests {
         );
         let context = egui::Context::default();
         assert!(loaded_names(&context).is_empty());
+        assert!(!markdown_bold_available(&context));
     }
 }

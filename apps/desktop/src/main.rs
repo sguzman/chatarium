@@ -15671,6 +15671,7 @@ fn render_markdown_lines(
     active_hit: bool,
     heading_level: Option<u8>,
 ) {
+    let has_bold_face = system_fonts::markdown_bold_available(ui.ctx());
     for line in text.split('\n') {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -15716,6 +15717,19 @@ fn render_markdown_lines(
                             3 => 17.0,
                             _ => 15.0,
                         });
+                    }
+                    // egui RichText::strong() only changes contrast, not the
+                    // actual glyph weight. Select a real heavyweight face;
+                    // preserve monospace code and retain a visible fallback.
+                    if span.bold || heading_level.is_some() {
+                        rich = rich.color(egui::Color32::WHITE);
+                        if !span.code && has_bold_face {
+                            rich = rich.family(egui::FontFamily::Name(
+                                system_fonts::MARKDOWN_BOLD_FAMILY.into(),
+                            ));
+                        } else if !span.code && heading_level.is_none() {
+                            rich = rich.size(15.0);
+                        }
                     }
                     if highlighted {
                         rich = rich.background_color(if active_hit {
