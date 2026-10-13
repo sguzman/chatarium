@@ -23,6 +23,7 @@ pub struct ConversationInferenceSettings {
     pub model: Option<String>,
     pub instructions: String,
     pub developer_context: String,
+    pub mcp_enabled: bool,
     pub slow_warning_seconds: u32,
 }
 
@@ -32,6 +33,7 @@ impl Default for ConversationInferenceSettings {
             model: None,
             instructions: String::new(),
             developer_context: String::new(),
+            mcp_enabled: false,
             slow_warning_seconds: DEFAULT_SLOW_WARNING_SECONDS,
         }
     }
@@ -83,6 +85,8 @@ impl InferenceSettingsStore {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
+            // Previous local settings did not contain MCP activation state.
+            let mcp_enabled = object.get("mcp_enabled").and_then(Value::as_bool).unwrap_or(false);
             // Preserve compatibility with existing version 1 settings.
             let slow_warning_seconds = match object.get("slow_warning_seconds") {
                 None => DEFAULT_SLOW_WARNING_SECONDS,
@@ -95,6 +99,7 @@ impl InferenceSettingsStore {
                 model: model.clone(),
                 instructions: instructions.clone(),
                 developer_context: developer_context.clone(),
+                mcp_enabled,
                 slow_warning_seconds,
             })?;
             entries.insert(
@@ -103,6 +108,7 @@ impl InferenceSettingsStore {
                     model,
                     instructions,
                     developer_context,
+                    mcp_enabled,
                     slow_warning_seconds,
                 },
             );
@@ -146,6 +152,7 @@ impl InferenceSettingsStore {
                         "model": settings.model,
                         "instructions": settings.instructions,
                         "developer_context": settings.developer_context,
+                        "mcp_enabled": settings.mcp_enabled,
                         "slow_warning_seconds": settings.slow_warning_seconds,
                     }),
                 )
@@ -215,6 +222,7 @@ mod tests {
                     model: Some("gpt-example".to_owned()),
                     instructions: "first instructions".to_owned(),
                     developer_context: "first developer context".to_owned(),
+                    mcp_enabled: true,
                     slow_warning_seconds: 20,
                 },
             )
@@ -239,6 +247,7 @@ mod tests {
             model: Some("gpt-example".to_owned()),
             instructions: "Keep answers compact.".to_owned(),
             developer_context: "Lifecycle: working".to_owned(),
+            mcp_enabled: true,
             slow_warning_seconds: 27,
         };
         store.set(conversation, expected.clone()).unwrap();
