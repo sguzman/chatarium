@@ -6586,6 +6586,13 @@ impl eframe::App for ChatariumApp {
                                 "No local chats match. Clear the search or enable Show archived.",
                             );
                         }
+                        // Scroll the conversation catalog separately from status/settings.
+                        egui::ScrollArea::vertical()
+                            .id_salt("local-chats-scroll")
+                            .max_height((ctx.content_rect().height() * 0.50).clamp(180.0, 620.0))
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_width(sidebar_control_width);
                         for row in native_rows.iter() {
                             let entry = &native_entries[row.catalog_index];
                             let messages = native_search_index.messages(entry.id);
@@ -6781,8 +6788,9 @@ impl eframe::App for ChatariumApp {
                                         }
                                     }
                                 });
-                            ui.add_space(4.0);
+                            ui.add_space(2.0);
                         }
+                            });
                         if !self.local_conversation_search_query.trim().is_empty() {
                             ui.label(
                                 egui::RichText::new(format!(
@@ -8080,11 +8088,12 @@ impl eframe::App for ChatariumApp {
                 // Context tools can be much taller than the window. Bound them to
                 // their own scroll viewport so the transcript and composer stay usable.
                 egui::ScrollArea::vertical()
-                    .id_salt("inference-controls-scroll")
+                    .id_salt(("inference-controls-scroll", self.local_conversation_id))
                     .max_height((ctx.content_rect().height() * 0.42).clamp(180.0, 450.0))
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        egui::CollapsingHeader::new("Context & inference controls")
+                        egui::CollapsingHeader::new("Advanced · context, MCP tools and inference")
+                            .id_salt(("inference-controls", self.local_conversation_id))
                             .default_open(false)
                             .show(ui, |ui| {
                         ui.label(
