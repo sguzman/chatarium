@@ -706,4 +706,66 @@ mod tests {
         let candidate = "/usr/bin/chatarium-nonexistent-test-executable-981293";
         assert!(validate_trusted_binary(candidate).is_err());
     }
+    /// Real three-tool provider through the same prlimit/bwrap transport as
+    /// desktop-approved MCP calls. Only CI explicitly opts in after installing
+    /// the built demo executable as trusted root-owned /usr/bin code.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_demo_mcp_provider_end_to_end() {
+        if std::env::var_os("CHATARIUM_TEST_LINUX_MCP_DEMO").is_none() {
+            return;
+        }
+        use chatarium_protocol::mcp_wire::{
+            encode_stdio_frame, tools_call_request, tools_list_request,
+        };
+        let executable = "/usr/bin/chatarium-mcp-demo";
+        let list_frame = encode_stdio_frame(&tools_list_request(96, None).unwrap()).unwrap();
+        let list_raw = run_one_shot(executable, &[], &list_frame, 96).unwrap();
+        let catalog: serde_json::Value = serde_json::from_str(&list_raw).unwrap();
+        assert_eq!(catalog["result"]["tools"].as_array().unwrap().len(), 3);
+
+        for (id, tool_name, args) in [
+            (97, "hello", serde_json::json!({})),
+            (98, "time.now", serde_json::json!({})),
+            (
+                99,
+                "shell.command",
+                serde_json::json!({"command":"echo","args":["sandbox", "ok"]}),
+            ),
+            (
+                100,
+                "shell.command",
+                serde_json::json!({"command":"sh","args":["-c","cat /home/private"]}),
+            ),
+        ] {
+            let frame = encode_stdio_frame(&tools_call_request(id, tool_name, &args).unwrap())
+                .unwrap();
+            let raw = run_one_shot(executable, &[], &frame, id).unwrap();
+            let reply: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(reply["id"], id);
+            assert_eq!(reply["result"]["resultType"], "complete");
+            match id {
+                97 => {
+                    assert_eq!(reply["result"]["structuredContent"]["message"], "hello");
+                    assert_eq!(reply["result"]["isError"], false);
+                }
+                98 => {
+                    assert!(reply["result"]["structuredContent"]["utc"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with('Z'));
+                }
+                99 => {
+                    assert_eq!(
+                        reply["result"]["structuredContent"]["stdout"],
+                        "sandbox ok\n"
+                    );
+                    assert_eq!(reply["result"]["isError"], false);
+                }
+                100 => assert_eq!(reply["result"]["isError"], true),
+                _ => unreachable!(),
+            }
+        }
+    }
+
 }
