@@ -17,6 +17,7 @@ mod local_inference_settings;
 mod local_stdio_host_diagnostics;
 mod local_stdio_runner;
 mod local_tool_adapter;
+mod markdown_inline;
 mod local_tool_provider_control;
 mod mcp_agent_defaults;
 #[cfg(test)]
@@ -6760,6 +6761,9 @@ impl eframe::App for ChatariumApp {
                 .unwrap_or_else(|| {
                     display_preferences::DisplayPreferences::load(&display_preferences_path)
                 })
+        });
+        ctx.data_mut(|data| {
+            data.insert_temp(display_preferences_id, display_preferences.clone())
         });
 
         // Consume global native chat navigation before resolving conversation
@@ -15549,9 +15553,18 @@ fn transcript_bubble(
                             });
                     });
                 } else {
-                    for block in offline_reader::parse_markdown(&message.text) {
-                        render_markdown_block(ui, &block, search_query, active_hit, ctx);
-                        ui.add_space(6.0);
+                    let show_markdown = ctx.data_mut(|data| {
+                        data.get_temp::<display_preferences::DisplayPreferences>(
+                            egui::Id::new("chatarium-display-preferences"),
+                        )
+                    }).unwrap_or_default().render_markdown;
+                    if show_markdown {
+                        for block in offline_reader::parse_markdown(&message.text) {
+                            render_markdown_block(ui, &block, search_query, active_hit, ctx);
+                            ui.add_space(6.0);
+                        }
+                    } else {
+                        render_reader_lines(ui, &message.text, search_query, false, active_hit);
                     }
                 }
                 ui.add_space(5.0);
@@ -15583,21 +15596,16 @@ fn render_markdown_block(
 ) {
     match block {
         offline_reader::MarkdownBlock::Paragraph(text) => {
-            render_reader_lines(ui, text, search_query, false, active_hit);
+            render_markdown_lines(ui, text, search_query, active_hit, None);
         }
         offline_reader::MarkdownBlock::Heading { level, text } => {
-            render_reader_lines(ui, text, search_query, false, active_hit);
-            ui.label(
-                egui::RichText::new(format!("heading {level}"))
-                    .size(9.0)
-                    .color(egui::Color32::from_rgb(123, 128, 140)),
-            );
+            render_markdown_lines(ui, text, search_query, active_hit, Some(*level));
         }
         offline_reader::MarkdownBlock::UnorderedList(items) => {
             for item in items {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("•").strong());
-                    render_reader_lines(ui, item, search_query, false, active_hit);
+                    render_markdown_lines(ui, item, search_query, active_hit, None);
                 });
             }
         }
@@ -15605,7 +15613,7 @@ fn render_markdown_block(
             for (index, item) in items.iter().enumerate() {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new(format!("{}.", index + 1)).strong());
-                    render_reader_lines(ui, item, search_query, false, active_hit);
+                    render_markdown_lines(ui, item, search_query, active_hit, None);
                 });
             }
         }
@@ -15619,7 +15627,7 @@ fn render_markdown_block(
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     for line in lines {
-                        render_reader_lines(ui, line, search_query, false, active_hit);
+                        render_markdown_lines(ui, line, search_query, active_hit, None);
                     }
                 });
         }
@@ -15645,6 +15653,66 @@ fn render_markdown_block(
                     });
                 });
         }
+    }
+}
+
+/// Render inline emphasis only in user/agent messages. No HTML, network
+/// lookups or context changes. Raw source is kept for copying and searching.
+fn render_markdown_lines(
+    ui: &mut egui::Ui,
+    text: &str,
+    search_query: &str,
+    active_hit: bool,
+    heading_level: Option<u8>,
+) {
+    for line in text.split('\n') {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for span in markdown_inline::parse(line) {
+                let hits = offline_reader::search_hits(&span.text, search_query);
+                let mut pieces = Vec::new();
+                if hits.is_empty() {
+                    pieces.push((span.text.as_str(), false));
+                } else {
+                    let mut at = 0;
+                    for (start, end) in hits {
+                        if start > at {
+                            pieces.push((&span.text[at..start], false));
+                        }
+                        pieces.push((&span.text[start..end], true));
+                        at = end;
+                    }
+                    if at < span.text.len() {
+                        pieces.push((&span.text[at..], false));
+                    }
+                }
+                for (fragment, highlighted) in pieces {
+                    let mut rich = egui::RichText::new(fragment.to_owned())
+                        .color(egui::Color32::from_rgb(232, 234, 239));
+                    if span.bold { rich = rich.strong(); }
+                    if span.italic { rich = rich.italics(); }
+                    if span.strike { rich = rich.strikethrough(); }
+                    if span.code {
+                        rich = rich.monospace().background_color(
+                            egui::Color32::from_rgb(20, 23, 30),
+                        );
+                    }
+                    if let Some(level) = heading_level {
+                        rich = rich.strong().size(match level {
+                            1 => 22.0, 2 => 19.0, 3 => 17.0, _ => 15.0,
+                        });
+                    }
+                    if highlighted {
+                        rich = rich.background_color(if active_hit {
+                            egui::Color32::from_rgb(161, 120, 43)
+                        } else {
+                            egui::Color32::from_rgb(91, 78, 38)
+                        });
+                    }
+                    ui.label(rich);
+                }
+            }
+        });
     }
 }
 
