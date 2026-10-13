@@ -17,8 +17,8 @@ mod local_inference_settings;
 mod local_stdio_host_diagnostics;
 mod local_stdio_runner;
 mod local_tool_adapter;
-mod markdown_inline;
 mod local_tool_provider_control;
+mod markdown_inline;
 mod mcp_agent_defaults;
 #[cfg(test)]
 mod mcp_async_tests;
@@ -6762,9 +6762,7 @@ impl eframe::App for ChatariumApp {
                     display_preferences::DisplayPreferences::load(&display_preferences_path)
                 })
         });
-        ctx.data_mut(|data| {
-            data.insert_temp(display_preferences_id, display_preferences.clone())
-        });
+        ctx.data_mut(|data| data.insert_temp(display_preferences_id, display_preferences.clone()));
 
         // Consume global native chat navigation before resolving conversation
         // title, visible transcript, search projection or reader state. Doing
@@ -15553,11 +15551,14 @@ fn transcript_bubble(
                             });
                     });
                 } else {
-                    let show_markdown = ctx.data_mut(|data| {
-                        data.get_temp::<display_preferences::DisplayPreferences>(
-                            egui::Id::new("chatarium-display-preferences"),
-                        )
-                    }).unwrap_or_default().render_markdown;
+                    let show_markdown = ctx
+                        .data_mut(|data| {
+                            data.get_temp::<display_preferences::DisplayPreferences>(egui::Id::new(
+                                "chatarium-display-preferences",
+                            ))
+                        })
+                        .unwrap_or_default()
+                        .render_markdown;
                     if show_markdown {
                         for block in offline_reader::parse_markdown(&message.text) {
                             render_markdown_block(ui, &block, search_query, active_hit, ctx);
@@ -15694,17 +15695,26 @@ fn render_markdown_lines(
                 for (fragment, highlighted) in pieces {
                     let mut rich = egui::RichText::new(fragment.to_owned())
                         .color(egui::Color32::from_rgb(232, 234, 239));
-                    if span.bold { rich = rich.strong(); }
-                    if span.italic { rich = rich.italics(); }
-                    if span.strike { rich = rich.strikethrough(); }
+                    if span.bold {
+                        rich = rich.strong();
+                    }
+                    if span.italic {
+                        rich = rich.italics();
+                    }
+                    if span.strike {
+                        rich = rich.strikethrough();
+                    }
                     if span.code {
-                        rich = rich.monospace().background_color(
-                            egui::Color32::from_rgb(20, 23, 30),
-                        );
+                        rich = rich
+                            .monospace()
+                            .background_color(egui::Color32::from_rgb(20, 23, 30));
                     }
                     if let Some(level) = heading_level {
                         rich = rich.strong().size(match level {
-                            1 => 22.0, 2 => 19.0, 3 => 17.0, _ => 15.0,
+                            1 => 22.0,
+                            2 => 19.0,
+                            3 => 17.0,
+                            _ => 15.0,
                         });
                     }
                     if highlighted {
