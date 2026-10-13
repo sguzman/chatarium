@@ -100,7 +100,7 @@ test("observed HTTP 429 is a confirmed rejection, not a lost response", () => {
   assert.equal(events[2].http_status, 429);
   assert.equal(events[3].http_status, 429);
   assert.equal(events[3].delivery_evidence, "http_rejected");
-  assert.throws(() => activity.completed(), /terminal/);
+  assert.throws(() => activity.completed(), /rejected HTTP response/);
   const other = fixture();
   other.activity.started();
   assert.throws(() => other.activity.rejected(429), /invalid HTTP rejection/);
