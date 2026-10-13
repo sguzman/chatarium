@@ -72,8 +72,8 @@ impl PreparedAttachment {
     }
 }
 
-/// Attach the staged source to the exact last matching authored user message.
-/// Does not alter other conversation turns, admitted tool results, or instructions.
+/// Attach a staged source only to the final user turn in the composed input.
+/// A previous message with identical wording is never a valid fallback.
 pub fn attach_to_authored_input(
     mut input: Value,
     authored_text: &str,
@@ -85,11 +85,11 @@ pub fn attach_to_authored_input(
     let row = rows
         .iter_mut()
         .rev()
-        .find(|row| {
-            row.get("role").and_then(Value::as_str) == Some("user")
-                && row.get("content").and_then(Value::as_str) == Some(authored_text)
-        })
-        .ok_or_else(|| "exact authored user message not found in composed input".to_owned())?;
+        .find(|row| row.get("role").and_then(Value::as_str) == Some("user"))
+        .ok_or_else(|| "composed Responses input has no user turn".to_owned())?;
+    if row.get("content").and_then(Value::as_str) != Some(authored_text) {
+        return Err("last user turn does not match exact authored attachment text".to_owned());
+    }
     row["content"] = json!([
         {"type": "input_text", "text": authored_text},
         content
@@ -258,6 +258,22 @@ mod tests {
         assert_eq!(output[2]["content"][0]["text"], "same");
         assert_eq!(output[2]["content"][1], file);
         assert_eq!(output[3]["content"], "irrelevant");
+    }
+
+    #[test]
+    fn stale_identical_text_is_not_a_safe_attachment_target() {
+        let input = json!([
+            {"role": "user", "content": "repeat"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "newer"}
+        ]);
+        assert!(attach_to_authored_input(
+            input,
+            "repeat",
+            json!({"type": "input_file", "filename": "file.txt", "file_data": "x"})
+        )
+        .unwrap_err()
+        .contains("last user turn"));
     }
 
     #[test]
