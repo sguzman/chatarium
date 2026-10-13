@@ -22956,6 +22956,7 @@ fn projected_display_messages_iter<'a>(
             provenance_label: Some(match role {
                 DisplayRole::User => "local journal · authored".to_owned(),
                 DisplayRole::Assistant => "ChatGPT Responses · remote assistant".to_owned(),
+                DisplayRole::Mcp => "verified local MCP audit".to_owned(),
             }),
         });
     }
