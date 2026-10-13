@@ -49,6 +49,39 @@ impl Attempt {
             .map(|t| t.duration_since(self.started_at).as_secs_f64())
     }
 
+    /// Time spent locally between durable commit and the first HTTP attempt.
+    pub fn queued_seconds(&self) -> Option<f64> {
+        self.wire_at
+            .and_then(|wire| wire.checked_duration_since(self.started_at))
+            .map(|duration| duration.as_secs_f64())
+    }
+
+    /// HTTP attempt to observed transport acknowledgment, excluding queue time.
+    /// This is not proof that the model has begun generating.
+    pub fn network_ack_seconds(&self) -> Option<f64> {
+        self.wire_at
+            .zip(self.acknowledged_at)
+            .and_then(|(wire, ack)| ack.checked_duration_since(wire))
+            .map(|duration| duration.as_secs_f64())
+    }
+
+    /// Transport acknowledgment to first observed assistant output.
+    /// It includes any remote waiting, setup, and pre-output generation.
+    pub fn post_ack_wait_seconds(&self) -> Option<f64> {
+        self.acknowledged_at
+            .zip(self.first_output_at)
+            .and_then(|(ack, output)| output.checked_duration_since(ack))
+            .map(|duration| duration.as_secs_f64())
+    }
+
+    /// First observed output to completed response, excluding prior delay.
+    pub fn streaming_seconds(&self) -> Option<f64> {
+        self.first_output_at
+            .zip(self.finished_at)
+            .and_then(|(first, finished)| finished.checked_duration_since(first))
+            .map(|duration| duration.as_secs_f64())
+    }
+
     pub fn label(&self) -> &'static str {
         match self.phase {
             Phase::Durable => "Saved locally · not yet dispatched",
@@ -238,4 +271,36 @@ mod tests {
         assert!(timeline.mean_response_seconds("chat").is_some());
         assert_eq!(timeline.for_conversation("chat").count(), 2);
     }
+    #[test]
+    fn latency_phases_do_not_conflate_local_queue_network_ack_and_generation() {
+        let mut timeline = Timeline::default();
+        timeline.begin("chat".to_owned(), "turn".to_owned());
+        let first = timeline.attempts.first_mut().unwrap();
+        let origin = Instant::now();
+        first.started_at = origin;
+        first.wire_at = Some(origin + Duration::from_secs(2));
+        first.acknowledged_at = Some(origin + Duration::from_secs(5));
+        first.first_output_at = Some(origin + Duration::from_secs(11));
+        first.finished_at = Some(origin + Duration::from_secs(17));
+        assert_eq!(first.queued_seconds(), Some(2.0));
+        assert_eq!(first.network_ack_seconds(), Some(3.0));
+        assert_eq!(first.post_ack_wait_seconds(), Some(6.0));
+        assert_eq!(first.streaming_seconds(), Some(6.0));
+        assert_eq!(first.time_to_acknowledgment(), Some(5.0));
+        assert_eq!(first.time_to_first_output(), Some(11.0));
+    }
+
+    #[test]
+    fn missing_or_reversed_transport_observations_never_invent_stage_durations() {
+        let mut timeline = Timeline::default();
+        timeline.begin("chat".to_owned(), "turn".to_owned());
+        let first = timeline.attempts.first_mut().unwrap();
+        assert_eq!(first.network_ack_seconds(), None);
+        assert_eq!(first.post_ack_wait_seconds(), None);
+        assert_eq!(first.streaming_seconds(), None);
+        first.wire_at = Some(first.started_at + Duration::from_secs(5));
+        first.acknowledged_at = Some(first.started_at + Duration::from_secs(2));
+        assert_eq!(first.network_ack_seconds(), None);
+    }
+
 }
