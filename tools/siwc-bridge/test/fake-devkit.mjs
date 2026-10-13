@@ -68,6 +68,16 @@ export function createChatGPT(config) {
         }),
       });
       const wire = await response.json();
+      if (input === "simulate-devkit-repost") {
+        // A second upstream POST must be rejected before the network stub.
+        // The real stream interceptor must stay active until completion.
+        await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          body: JSON.stringify({
+            model, input, instructions, store: true, stream: false,
+          }),
+        });
+      }
       const text = "OFFLINE:" + JSON.stringify(wire);
       onDelta("OFFLINE:");
       if (input === "hold-for-cancel") {
