@@ -87,6 +87,10 @@ pub enum BridgeEvent {
         request_id: String,
         stage: String,
     },
+    AgentActivity {
+        request_id: String,
+        frame: String,
+    },
     ResponseCompleted {
         request_id: String,
         text: String,
@@ -491,6 +495,16 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
     match value.get("type")?.as_str()? {
         "ready" => Some(BridgeEvent::Ready),
         "session" => parse_session(value.get("session")?).map(BridgeEvent::Session),
+        "agent_activity" => {
+            // The sidecar frame is bounded and validated before forwarding.
+            // The durable worker separately parses and strips unknown fields.
+            let request_id = value.get("request_id")?.as_str()?.to_owned();
+            agent_activity_diagnostic(line)?;
+            Some(BridgeEvent::AgentActivity {
+                request_id,
+                frame: line.to_owned(),
+            })
+        }
         "transport_progress" => {
             let request_id = value.get("request_id")?.as_str()?.to_owned();
             let stage = value.get("stage")?.as_str()?;
@@ -1065,6 +1079,18 @@ mod tests {
         );
         let forged = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":4,"stage":"failed","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":130.0,"delivery_evidence":"wire_unconfirmed","http_status":429}"#;
         assert!(agent_activity_diagnostic(forged).is_none());
+    }
+
+    #[test]
+    fn passes_validated_agent_activity_to_native_journal_sink() {
+        let raw = r#"{"type":"agent_activity","request_id":"turn-1","source":"siwc_bridge_observation","sequence":1,"stage":"started","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0.0}"#;
+        let event = parse_bridge_event(raw).unwrap();
+        assert!(matches!(
+            event,
+            BridgeEvent::AgentActivity { request_id, frame }
+                if request_id == "turn-1" && frame == raw
+        ));
+        assert!(parse_bridge_event(r#"{"type":"agent_activity","request_id":"turn-1","source":"siwc_bridge_observation","sequence":1,"stage":"started","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0.0,"access_token":"forbidden"}"#).is_some_and(|event| matches!(event, BridgeEvent::RuntimeUnavailable(_))));
     }
 
     #[test]
