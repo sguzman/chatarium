@@ -11,6 +11,7 @@ const SCHEMA: &str = "chatarium-mcp-agent-defaults";
 // explicit user intent. Migrate once; subsequent saves preserve a real opt-out.
 const ACTIVATION_DEFAULT_VERSION: u64 = 2;
 const MAX_PROMPT: usize = 32 * 1024;
+const PRIOR_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentDefaults {
@@ -37,7 +38,7 @@ impl Default for AgentDefaults {
                 "Never claim to have called a tool unless its actual result appears in context. ",
                 "If execution requires approval, wait for the user to approve it."
             ).to_owned(),
-            policy_rules: "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask".to_owned(),
+            policy_rules: format!("{PRIOR_DEFAULT_POLICY}\nchatarium.builtin::time.now = automatic"),
             max_calls: 8,
             seed_new_conversations: true,
         }
@@ -171,6 +172,13 @@ impl AgentDefaults {
                 .unwrap_or(false),
         };
         settings.validate()?;
+        // An exact untouched prior built-in policy can safely gain the
+        // user-requested read-only clock. Custom authorization files are left
+        // unchanged, and any missing rule continues to require approval.
+        if settings.policy_rules == PRIOR_DEFAULT_POLICY {
+            settings.policy_rules = Self::default().policy_rules;
+            settings.save_atomic(path)?;
+        }
         if value
             .get("activation_default_version")
             .and_then(Value::as_u64)
@@ -354,6 +362,7 @@ mod tests {
             tool_policy(&loaded.policy_rules, "chatarium.builtin", "tools.list"),
             Ok(ToolPolicy::Automatic)
         );
+        assert_eq!(tool_policy(&loaded.policy_rules, "chatarium.builtin", "time.now"), Ok(ToolPolicy::Automatic));
         assert!(path.is_file());
         assert_eq!(loaded, AgentDefaults::load(&path).unwrap());
         let _ = fs::remove_file(path);
@@ -409,6 +418,27 @@ mod tests {
         assert_eq!(settings, AgentDefaults::load(&path).unwrap());
         let _ = fs::remove_file(path);
     }
+    #[test]
+    fn clock_policy_migrates_only_the_exact_previous_default() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-clock-migration-{}-{}.json", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        let mut current = AgentDefaults::default();
+        current.policy_rules = PRIOR_DEFAULT_POLICY.to_owned();
+        current.save_atomic(&path).unwrap();
+        let migrated = AgentDefaults::load(&path).unwrap();
+        assert_eq!(tool_policy(&migrated.policy_rules, "chatarium.builtin", "time.now"),
+            Ok(ToolPolicy::Automatic));
+        current.policy_rules.push_str("\nchatarium.demo::other = ask");
+        current.save_atomic(&path).unwrap();
+        let unchanged = AgentDefaults::load(&path).unwrap();
+        assert_eq!(unchanged.policy_rules, current.policy_rules);
+        assert_eq!(tool_policy(&unchanged.policy_rules, "chatarium.builtin", "time.now"),
+            Ok(ToolPolicy::Ask));
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn explicit_policies_fail_closed_without_wildcards() {
         let rules = "demo::hello = automatic\ndemo::shell.command = ask\ndemo::blocked = disabled";
