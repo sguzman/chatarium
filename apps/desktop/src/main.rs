@@ -23519,6 +23519,7 @@ mod tests {
             PersistNotice::DraftSaved { .. } => "draft_saved",
             PersistNotice::MessageCommitted { .. } => "message_committed",
             PersistNotice::TurnEventAppended { .. } => "turn_event_appended",
+            PersistNotice::AgentActivityAppended { .. } => "agent_activity_appended",
             PersistNotice::HistoricalConversationLoaded { .. } => "historical_loaded",
             PersistNotice::HistoricalConversationLoadFailed { .. } => "historical_load_failed",
             PersistNotice::LiveConversationLoaded { .. } => "live_loaded",
