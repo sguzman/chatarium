@@ -20,6 +20,8 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
       OPENAI_API_KEY: "",
       OPENAI_ORG_ID: "",
       OPENAI_PROJECT_ID: "",
+      // The fake DevKit returns a synthetic HTTP 429 on the first model read.
+      CHATARIUM_QA_MODEL_RETRY_ONCE: "1",
     },
   });
   let stderr = "";
@@ -78,10 +80,25 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
   assert.equal(session.result.session.sharing, true);
 
   send("models", "offline-models");
+  const readRetry = await until(
+    (event) => event.type === "read_retry_scheduled" &&
+      event.request_id === "offline-models",
+  );
+  assert.equal(readRetry.operation, "models");
+  assert.equal(readRetry.category, "rate_limit");
+  assert.equal(readRetry.status, 429);
+  assert.equal(readRetry.attempt, 1);
+  assert.equal(readRetry.next_attempt, 2);
+  assert.ok(readRetry.delay_ms >= 0 && readRetry.delay_ms <= 3000);
   const models = await until(
     (event) => event.type === "result" && event.request_id === "offline-models",
   );
   assert.equal(models.result.models[0].slug, "offline-alpha-model");
+  assert.equal(
+    seen.filter((event) => event.type === "read_retry_scheduled" &&
+      event.request_id === "offline-models").length,
+    1,
+  );
 
   // Exercise real production request_patch interception and two delta frames.
   send("stream_response", "offline-patched", {
