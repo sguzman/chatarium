@@ -51,7 +51,9 @@ fn classify(text: &str) -> Option<SuspectedTextMarker> {
                     .take(4)
                     .take_while(|c| c.is_whitespace() || !c.is_alphanumeric())
                     .collect::<String>();
-                if !prefix.is_empty() && after_role[prefix.len()..].starts_with(channel) {
+                if prefix.chars().any(|character| !character.is_whitespace())
+                    && after_role[prefix.len()..].starts_with(channel)
+                {
                     return Some(SuspectedTextMarker::AdjacentRoleChannel);
                 }
                 remaining = after_role;
