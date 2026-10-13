@@ -38,6 +38,43 @@ impl Default for AgentDefaults {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolPolicy {
+    Automatic,
+    Ask,
+    Manual,
+    Disabled,
+}
+impl ToolPolicy {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Ask => "ask",
+            Self::Manual => "manual",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+/// Policy is resolved by exact provider + operation names. Wildcards and
+/// inferred permissions are forbidden; no matching rule means Ask.
+pub fn tool_policy(rules: &str, provider: &str, operation: &str) -> Result<ToolPolicy, String> {
+    let target = format!("{provider}::{operation}");
+    let mut matching = None;
+    for line in rules.lines().filter(|line| !line.trim().is_empty()) {
+        let (key, value) = line.split_once('=').ok_or("invalid MCP policy line")?;
+        if key.trim() != target { continue; }
+        if matching.is_some() { return Err("duplicate MCP tool rule".to_owned()); }
+        matching = Some(match value.trim() {
+            "automatic" => ToolPolicy::Automatic,
+            "ask" => ToolPolicy::Ask,
+            "manual" => ToolPolicy::Manual,
+            "disabled" => ToolPolicy::Disabled,
+            _ => return Err("invalid MCP execution mode".to_owned()),
+        });
+    }
+    Ok(matching.unwrap_or(ToolPolicy::Ask))
+}
+
 impl AgentDefaults {
     pub fn validate(&self) -> Result<(), String> {
         if self.bootstrap.len() > MAX_PROMPT
@@ -237,4 +274,15 @@ mod tests {
         assert_eq!(settings, AgentDefaults::load(&path).unwrap());
         let _ = fs::remove_file(path);
     }
+    #[test]
+    fn explicit_policies_fail_closed_without_wildcards() {
+        let rules = "demo::hello = automatic\ndemo::shell.command = ask\ndemo::blocked = disabled";
+        assert_eq!(tool_policy(rules, "demo", "hello"), Ok(ToolPolicy::Automatic));
+        assert_eq!(tool_policy(rules, "demo", "shell.command"), Ok(ToolPolicy::Ask));
+        assert_eq!(tool_policy(rules, "demo", "blocked"), Ok(ToolPolicy::Disabled));
+        assert_eq!(tool_policy(rules, "other", "hello"), Ok(ToolPolicy::Ask));
+        assert_eq!(tool_policy(rules, "demo", "hello2"), Ok(ToolPolicy::Ask));
+        assert!(tool_policy("demo::hello = automatic\ndemo::hello = disabled", "demo", "hello").is_err());
+    }
+
 }
