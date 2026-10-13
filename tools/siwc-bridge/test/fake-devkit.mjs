@@ -10,6 +10,7 @@ const connected = {
 const disconnected = { status: "disconnected", sharing: false };
 let session = connected;
 let onSession = () => {};
+let modelListAttempts = 0;
 
 export function createChatGPT(config) {
   return {
@@ -34,6 +35,14 @@ export function createChatGPT(config) {
     // be a harmless no-op; the bridge is responsible for disarming preflight.
     cancelSignIn() {},
     async listModels() {
+      modelListAttempts++;
+      if (process.env.CHATARIUM_QA_MODEL_RETRY_ONCE === "1" &&
+          modelListAttempts === 1) {
+        const error = new Error("synthetic model discovery throttling");
+        error.status = 429;
+        error.retryable = true;
+        throw error;
+      }
       return [{ slug: "offline-alpha-model", displayName: "Offline Alpha Model" }];
     },
     async disconnect() {
