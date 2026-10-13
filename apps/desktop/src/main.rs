@@ -6295,13 +6295,16 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
-                // Do not lock the inner UI's minimum width to the previous frame.
-                // That turns the resizable sidebar into a one-way grow-only panel.
-
+                // Give the scroll area's CONTENT a fixed width from this frame's
+                // allocated sidebar, rather than letting long conversation titles,
+                // rename fields and status labels force the outer panel wider.
+                // Recompute each frame: the splitter must still resize both ways.
+                let sidebar_width = ui.available_width();
                 egui::ScrollArea::vertical()
                     .id_salt("sidebar-scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.set_width(sidebar_width);
                         let sidebar_control_width = ui.available_width();
                         ui.add_space(6.0);
                         ui.label(
