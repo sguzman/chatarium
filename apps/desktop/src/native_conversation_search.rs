@@ -1087,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn native_index_cache_ignores_unrelated_draft_and_tool_journal_appends() {
+    fn native_index_cache_reuses_drafts_but_invalidates_for_tool_audit_appends() {
         use chatarium_store::{EventStore, MemoryEventStore};
         let ctx = egui::Context::default();
         let owner = LocalConversationId::new();
@@ -1111,7 +1111,13 @@ mod tests {
             )
             .unwrap();
         let after_tool = cached_index(&ctx, store.events());
-        assert!(Arc::ptr_eq(&base, &after_tool));
+        assert!(!Arc::ptr_eq(&base, &after_tool));
+        assert!(
+            after_tool
+                .messages(owner)
+                .iter()
+                .all(|message| !message.text.contains("tool outcome must not be indexed"))
+        );
 
         store
             .append_scoped(
