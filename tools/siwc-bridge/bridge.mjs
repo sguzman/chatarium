@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { ResponsesLane } from "./response-lane.mjs";
+import { retryReadOnly } from "./retry-policy.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
@@ -626,7 +627,19 @@ async function handle(command) {
         break;
       }
       case "models": {
-        const models = await chatgpt.listModels();
+        // Model discovery is a read-only operation, unlike stream_response.
+        // A retry cannot duplicate a user-authored inference turn.
+        const models = await retryReadOnly(
+          () => chatgpt.listModels(),
+          {
+            onRetry: (retry) => emit({
+              type: "read_retry_scheduled",
+              request_id: requestId,
+              operation: "models",
+              ...retry,
+            }),
+          },
+        );
         emit({ type: "result", request_id: requestId, result: { models } });
         break;
       }
