@@ -71,18 +71,18 @@ pub fn preview_stdio_tool_invocation(
     let authorized = match route.initial_policy {
         RoutePolicy::RequireApproval => {
             route.latest_user_decision == Some(RouteUserDecision::Allow)
-                && route.gate_state == RouteGateState::Allowed {
+                && route.gate_state == (RouteGateState::Allowed {
                     by: DecisionAuthority::User,
-                }
+                })
                 && call.route_bound_sequence.is_some_and(|sequence| {
                     sequence < route.last_sequence
                 })
         }
         RoutePolicy::Allow => {
             route.latest_user_decision.is_none()
-                && route.gate_state == RouteGateState::Allowed {
+                && route.gate_state == (RouteGateState::Allowed {
                     by: DecisionAuthority::Policy,
-                }
+                })
                 && call.route_bound_sequence.is_some_and(|sequence| {
                     sequence > route.proposed_sequence
                 })
