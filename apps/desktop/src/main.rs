@@ -16,9 +16,9 @@ mod local_stdio_host_diagnostics;
 mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
+mod mcp_agent_defaults;
 #[cfg(test)]
 mod mcp_async_tests;
-mod mcp_agent_defaults;
 mod mcp_call_review;
 mod mcp_context_inventory;
 mod mcp_dispatch_manifest;
@@ -1229,7 +1229,8 @@ impl ChatariumApp {
                     inference_settings.for_conversation(local_conversation_id);
                 let mcp_agent_defaults = mcp_agent_defaults::AgentDefaults::load(
                     &data_dir.join(mcp_agent_defaults::FILE_NAME),
-                ).unwrap_or_default();
+                )
+                .unwrap_or_default();
                 let behavior_profile_path = local_behavior_profile_path(&journal_path);
                 let behavior_profiles =
                     match behavior_profile::BehaviorProfileStore::load(&behavior_profile_path) {
@@ -1461,8 +1462,12 @@ impl ChatariumApp {
                 .unwrap_or_default();
         let active_inference_settings = inference_settings.for_conversation(local_conversation_id);
         let mcp_agent_defaults = mcp_agent_defaults::AgentDefaults::load(
-            &journal_path.parent().unwrap_or_else(|| std::path::Path::new(".")).join(mcp_agent_defaults::FILE_NAME)
-        ).unwrap_or_default();
+            &journal_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(mcp_agent_defaults::FILE_NAME),
+        )
+        .unwrap_or_default();
         let behavior_profiles = behavior_profile::BehaviorProfileStore::load(
             &local_behavior_profile_path(&journal_path),
         )
@@ -4109,25 +4114,36 @@ impl ChatariumApp {
                     // Do not consume a permit or start a provider here.
                     match mcp_agent_defaults::parse_model_tool_request(&final_text) {
                         Ok(Some(proposal)) if !self.tool_command_pending => {
-                            let provider = replay_tool_provider_audit(&self.events)
-                                .ok()
-                                .and_then(|providers| providers.into_iter().find(|p| {
-                                    p.name.as_str() == proposal.provider
-                                }));
+                            let provider = replay_tool_provider_audit(&self.events).ok().and_then(
+                                |providers| {
+                                    providers
+                                        .into_iter()
+                                        .find(|p| p.name.as_str() == proposal.provider)
+                                },
+                            );
                             if let Some(provider) = provider {
                                 let allowed = if provider.name.as_str()
                                     == local_tool_adapter::BUILTIN_PROVIDER_NAME
                                 {
                                     local_tool_adapter::supports_builtin(
-                                        provider.name.as_str(), &proposal.tool)
+                                        provider.name.as_str(),
+                                        &proposal.tool,
+                                    )
                                 } else {
                                     replay_tool_transport_config_audit(&self.events)
                                         .ok()
-                                        .and_then(|configs| configs.into_iter().find(|config| {
-                                            config.provider_id == provider.provider_id
-                                        }))
-                                        .is_some_and(|config| config.config.allowed_operations()
-                                            .iter().any(|op| op.as_str() == proposal.tool))
+                                        .and_then(|configs| {
+                                            configs.into_iter().find(|config| {
+                                                config.provider_id == provider.provider_id
+                                            })
+                                        })
+                                        .is_some_and(|config| {
+                                            config
+                                                .config
+                                                .allowed_operations()
+                                                .iter()
+                                                .any(|op| op.as_str() == proposal.tool)
+                                        })
                                 };
                                 if allowed {
                                     self.tool_selected_provider = Some(provider.provider_id);
@@ -4138,14 +4154,17 @@ impl ChatariumApp {
                                     self.status = "Assistant proposed an MCP operation not in the configured allowlist. No tool ran.".to_owned();
                                 }
                             } else {
-                                self.status = "Assistant proposed an unregistered MCP provider. No tool ran.".to_owned();
+                                self.status =
+                                    "Assistant proposed an unregistered MCP provider. No tool ran."
+                                        .to_owned();
                             }
                         }
                         Ok(Some(_)) => {
                             self.status = "Assistant proposed a tool, but another tool action is pending. Nothing executed.".to_owned();
                         }
                         Err(error) => {
-                            self.status = format!("Malformed model tool proposal was ignored: {error}");
+                            self.status =
+                                format!("Malformed model tool proposal was ignored: {error}");
                         }
                         Ok(None) => {}
                     }
@@ -18694,7 +18713,9 @@ fn persistence_worker(
     while let Ok(command) = commands.recv() {
         match command {
             PersistCommand::SaveMcpAgentDefaults { defaults } => {
-                if let Err(error) = defaults.save_atomic(&data_dir.join(mcp_agent_defaults::FILE_NAME)) {
+                if let Err(error) =
+                    defaults.save_atomic(&data_dir.join(mcp_agent_defaults::FILE_NAME))
+                {
                     let _ = notices.send(PersistNotice::Failed {
                         operation: "MCP agent defaults save",
                         revision: None,
