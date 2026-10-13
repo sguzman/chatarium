@@ -41,6 +41,23 @@ only to its verified local conversation.
 Browser/network delivery failure recovery remains separate work; MCP visibility
 must not be confused with guaranteed retriability of ambiguous remote requests.
 
+## Native live agent activity timeline
+
+Source-observed Responses lifecycle events now appear in separate, expandable
+**amber** cards in native conversation history. They show sequential events,
+UTC observation timestamps, source-measured elapsed milliseconds, HTTP status
+when observed, and explicit evidence of uncertain versus confirmed delivery.
+The journal is conversation/turn scoped and survives restart and archive
+backup/restore. Native search and transcript export can inspect these cards,
+but the content is never inserted into model context.
+
+Only events actually observed by the SIWC bridge are represented. Private
+reasoning, unexposed action streams and model-internal thinking are **not**
+invented. Read-only model discovery has configurable bounded retry classes;
+unknown-delivery inference POSTs cannot be blindly replayed. Native settings
+controls for the read-only retry policy, attachment telemetry and genuine
+upstream reasoning summaries remain unfinished.
+
 ## Core invariants
 
 - **User-authored text must never exist only in transient UI state.**

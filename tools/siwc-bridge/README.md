@@ -139,7 +139,7 @@ network drop after attempted dispatch and asserts exactly one attempted
 request and no read-only retry; unit tests cover failure classification,
 cooldowns, and attempt limits. Both test suites are in Windows and Linux CI.
 
-## Live inference activity evidence (bridge substrate)
+## Live inference activity evidence (native journal and reader)
 
 Ordinary `stream_response` turns now emit separate
 `agent_activity` NDJSON observations with a bounded request identity,
@@ -155,11 +155,13 @@ rejections rather than reporting a known HTTP 429 as an ambiguous lost reply.
 These events contain no prompt bodies, delta text, credentials, fabricated
 reasoning transcripts, or invented tool actions. The original `delta`,
 `transport_progress`, and `result` frames remain compatible. The native
-side currently accepts and validates the activity metadata into **debug
-diagnostics** (`CHATARIUM_LOG=debug`). It is not yet a persisted in-chat
-activity timeline. Durable journal projection, per-event UI controls,
-and any genuine reasoning-summary or action streams exposed by a future
-eligible model/DevKit surface remain separate future work.
+side validates and appends activity under the exact locally owned
+conversation/turn identity, replays it from the durable journal, and shows a
+searchable amber activity card in the chat reader. `CHATARIUM_LOG=debug`
+also exposes sanitized diagnostic metadata. Cards are never model-authored
+messages or automatically admitted inference context. Genuine upstream
+reasoning-summary/action streams, when available, and richer per-event
+filter/controls remain future work.
 
 The offline bridge integration tests assert that an actual synthetic streamed
 turn emits ordered activity events, and that a disconnected inference POST is

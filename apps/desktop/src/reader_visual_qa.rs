@@ -31,7 +31,14 @@ fn fixture() -> Arc<Vec<DisplayMessage>> {
     Arc::new(
         (0..COUNT)
             .map(|i| {
-                let text = if i == SEARCH_TARGET {
+                let text = if i == 3 {
+                    "Observed SIWC inference lifecycle · SYNTHETIC QA
+#1 started +0.000 ms · source=siwc_bridge_observation
+#2 wire_attempted +7.300 ms · HTTP delivery unconfirmed
+#3 acknowledged +22.400 ms · server reply observed
+#4 first_text_delta +61.700 ms · source text excluded"
+                        .to_owned()
+                } else if i == SEARCH_TARGET {
                     "ARCHIVE NEEDLE -- unique synthetic search target.\n\n\
                     This text marks the deterministic long-distance search jump.\n\n                    日本語 / العربية / עברית"
                         .to_owned()
@@ -47,7 +54,9 @@ fn fixture() -> Arc<Vec<DisplayMessage>> {
                     }
                 };
                 DisplayMessage {
-                    role: if i.is_multiple_of(2) {
+                    role: if i == 3 {
+                        DisplayRole::Activity
+                    } else if i.is_multiple_of(2) {
                         DisplayRole::User
                     } else {
                         DisplayRole::Assistant
