@@ -163,13 +163,15 @@ mod tests {
         let mut store = MemoryEventStore::default();
         for data in [
             frame("r", 1, "started", json!({})),
-            frame("r", 2, "text_delta", json!({"delta_chars": 5})),
-            frame("r", 3, "text_delta", json!({"delta_chars": 7})),
+            frame("r", 2, "wire_attempted", json!({})),
+            frame("r", 3, "acknowledged", json!({})),
+            frame("r", 4, "first_text_delta", json!({"delta_chars": 5})),
+            frame("r", 5, "text_delta", json!({"delta_chars": 7})),
         ] {
             append_siwc_agent_activity_checked(&mut store, owner, turn, &data).unwrap();
         }
         let text = &verified_activity(store.events())[&owner][0].text;
-        assert!(text.contains("3 events · 2 text chunks · 12 characters"));
+        assert!(text.contains("5 events · 2 text chunks · 12 characters"));
         assert!(text.contains("first text +0.0s"));
         assert!(text.contains("not private model thinking"));
         assert!(text.contains("received 7 text characters"));
