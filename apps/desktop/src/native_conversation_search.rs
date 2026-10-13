@@ -844,14 +844,22 @@ mod tests {
         for (sequence, stage, extra) in [
             (1, "started", serde_json::json!({})),
             (2, "wire_attempted", serde_json::json!({})),
-            (3, "failed", serde_json::json!({
-                "delivery_evidence": "wire_unconfirmed",
-                "cancelled": false
-            })),
+            (
+                3,
+                "failed",
+                serde_json::json!({
+                    "delivery_evidence": "wire_unconfirmed",
+                    "cancelled": false
+                }),
+            ),
         ] {
             append_siwc_agent_activity_checked(
-                &mut store, owner, turn, &activity_frame(sequence, stage, extra)
-            ).unwrap();
+                &mut store,
+                owner,
+                turn,
+                &activity_frame(sequence, stage, extra),
+            )
+            .unwrap();
         }
         let index = NativeConversationSearchIndex::build(store.events());
         let owner_messages = index.messages(owner);
@@ -860,24 +868,36 @@ mod tests {
         assert!(owner_messages[1].text.contains("wire_unconfirmed"));
         assert_eq!(
             find_match(
-                "wire_unconfirmed", "",
+                "wire_unconfirmed",
+                "",
                 owner_messages.iter().map(|message| message.text.as_str())
             ),
             Some(NativeSearchMatch::Message)
         );
         assert_eq!(
             find_match(
-                "wire_unconfirmed", "",
-                index.messages(other).iter().map(|message| message.text.as_str())
+                "wire_unconfirmed",
+                "",
+                index
+                    .messages(other)
+                    .iter()
+                    .map(|message| message.text.as_str())
             ),
             None
         );
         let context = super::super::context_transcript(owner_messages);
-        assert_eq!(context.len(), 1, "audit-only events are never model context");
+        assert_eq!(
+            context.len(),
+            1,
+            "audit-only events are never model context"
+        );
         assert!(!context[0].text.contains("wire_unconfirmed"));
-        assert!(store.events().iter().any(|event| {
-            event.kind == EventKind::SiwcAgentActivityObserved
-        }));
+        assert!(
+            store
+                .events()
+                .iter()
+                .any(|event| { event.kind == EventKind::SiwcAgentActivityObserved })
+        );
     }
 
     #[test]

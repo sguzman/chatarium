@@ -429,7 +429,9 @@ fn validate_transition(
         {
             return Ok(());
         }
-        return Err("SIWC activity cannot restart after ambiguous or completed delivery".to_owned());
+        return Err(
+            "SIWC activity cannot restart after ambiguous or completed delivery".to_owned(),
+        );
     }
     // Validate only the current attempt. An earlier rejected 429 is kept
     // durably but must not make this attempt look already acknowledged.
@@ -709,39 +711,81 @@ mod tests {
         for frame in [
             frame("same-request", 1, "started", json!({})),
             frame("same-request", 2, "wire_attempted", json!({})),
-            frame("same-request", 3, "http_rejected", json!({"http_status":429})),
-            frame("same-request", 4, "failed", json!({
-                "http_status":429, "cancelled":false, "delivery_evidence":"http_rejected"
-            })),
+            frame(
+                "same-request",
+                3,
+                "http_rejected",
+                json!({"http_status":429}),
+            ),
+            frame(
+                "same-request",
+                4,
+                "failed",
+                json!({
+                    "http_status":429, "cancelled":false, "delivery_evidence":"http_rejected"
+                }),
+            ),
             frame("same-request", 1, "started", json!({})),
             frame("same-request", 2, "wire_attempted", json!({})),
             frame("same-request", 3, "acknowledged", json!({})),
-            frame("same-request", 4, "first_text_delta", json!({"delta_chars":5})),
-            frame("same-request", 5, "completed", json!({
-                "delivery_evidence":"assistant_delta_seen"
-            })),
+            frame(
+                "same-request",
+                4,
+                "first_text_delta",
+                json!({"delta_chars":5}),
+            ),
+            frame(
+                "same-request",
+                5,
+                "completed",
+                json!({
+                    "delivery_evidence":"assistant_delta_seen"
+                }),
+            ),
         ] {
             append_siwc_agent_activity_checked(&mut store, c, t, &frame).unwrap();
         }
-        assert_eq!(replay_siwc_agent_activity_audit(store.events()).unwrap().len(), 9);
-        assert!(append_siwc_agent_activity_checked(
-            &mut store, c, t, &frame("same-request", 1, "started", json!({}))
-        ).is_err());
+        assert_eq!(
+            replay_siwc_agent_activity_audit(store.events())
+                .unwrap()
+                .len(),
+            9
+        );
+        assert!(
+            append_siwc_agent_activity_checked(
+                &mut store,
+                c,
+                t,
+                &frame("same-request", 1, "started", json!({}))
+            )
+            .is_err()
+        );
 
         let uncertain_turn = LocalTurnId::new();
         for frame in [
             frame("uncertain", 1, "started", json!({})),
             frame("uncertain", 2, "wire_attempted", json!({})),
-            frame("uncertain", 3, "failed", json!({
-                "cancelled":false, "delivery_evidence":"wire_unconfirmed"
-            })),
+            frame(
+                "uncertain",
+                3,
+                "failed",
+                json!({
+                    "cancelled":false, "delivery_evidence":"wire_unconfirmed"
+                }),
+            ),
         ] {
             append_siwc_agent_activity_checked(&mut store, c, uncertain_turn, &frame).unwrap();
         }
         let prior_len = store.events().len();
-        assert!(append_siwc_agent_activity_checked(
-            &mut store, c, uncertain_turn, &frame("uncertain", 1, "started", json!({}))
-        ).is_err());
+        assert!(
+            append_siwc_agent_activity_checked(
+                &mut store,
+                c,
+                uncertain_turn,
+                &frame("uncertain", 1, "started", json!({}))
+            )
+            .is_err()
+        );
         assert_eq!(store.events().len(), prior_len);
     }
 
