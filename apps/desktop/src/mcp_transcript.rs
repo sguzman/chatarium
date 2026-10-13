@@ -199,6 +199,57 @@ mod tests {
     }
 
     #[test]
+    fn actual_builtin_mcp_cycle_is_visible_durable_and_conversation_isolated() {
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let proposal = super::super::mcp_agent_defaults::ModelToolRequest {
+            provider: super::super::local_tool_adapter::BUILTIN_PROVIDER_NAME.to_owned(),
+            tool: super::super::local_tool_adapter::TOOLS_LIST_OPERATION.to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let (call_id, route_id, _) = super::super::append_agent_mcp_call_checked(
+            &mut store,
+            owner,
+            &proposal,
+            super::super::mcp_agent_defaults::ToolPolicy::Automatic,
+        )
+        .unwrap();
+        super::super::append_builtin_hello_checked(&mut store, route_id).unwrap();
+        let projected = verified_activity(store.events());
+        assert!(!projected.contains_key(&other));
+        let rows = projected.get(&owner).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].role, DisplayRole::Mcp);
+        assert!(rows[0].text.contains("tools.list"));
+        assert!(rows[0].text.contains("Exact tool arguments"));
+        assert!(rows[1].text.contains("Exact adapter output"));
+        assert!(rows[1].text.contains("tools.list"));
+        assert!(!rows[1].text.contains("Exact agent continuation payload"));
+        assert!(super::super::context_transcript(rows).is_empty());
+        // Replaying the immutable journal after a simulated reader restart
+        // preserves the same two tool entries and their original sequences.
+        let replayed = verified_activity(store.events());
+        assert_eq!(
+            rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+            replayed[&owner].iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        );
+        chatarium_store::tool_result_context_audit::append_tool_result_context_decision_checked(
+            &mut store,
+            call_id,
+            owner,
+            ToolResultContextDecision::Admit,
+        )
+        .unwrap();
+        let admitted = verified_activity(store.events());
+        let result = &admitted[&owner][1];
+        assert!(result.text.contains("Exact agent continuation payload"));
+        assert!(result.text.contains("Admitted to agent context"));
+        assert!(super::super::context_transcript(&admitted[&owner]).is_empty());
+    }
+
+    #[test]
     fn audited_tool_projection_changes_are_explicitly_indexed() {
         for kind in [
             EventKind::ToolCallRecorded,
