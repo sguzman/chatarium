@@ -6300,7 +6300,10 @@ impl eframe::App for ChatariumApp {
                 // rename fields and status labels force the outer panel wider.
                 // Recompute each frame: the splitter must still resize both ways.
                 let sidebar_width = ui.available_width();
-                egui::ScrollArea::vertical()
+                // Overflowing horizontal content belongs to the scroll area,
+                // not to the user-resizable panel. A vertical-only scroll area
+                // allows a long child to increase the panel's intrinsic width.
+                egui::ScrollArea::both()
                     .id_salt("sidebar-scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
