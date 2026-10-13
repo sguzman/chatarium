@@ -1709,6 +1709,10 @@ impl ChatariumApp {
             return;
         }
         self.apply_local_conversation(conversation_id);
+        if self.mcp_agent_defaults.seed_new_conversations {
+            self.conversation_developer_context = self.mcp_agent_defaults.bootstrap.clone();
+            self.persist_current_inference_settings();
+        }
         self.status = "new isolated local conversation created".to_owned();
     }
 
@@ -9720,6 +9724,10 @@ impl eframe::App for ChatariumApp {
                             ui.collapsing("Agent defaults · bootstrap / tool policies", |ui| {
                                 ui.label("Global, locally saved draft for future automatic MCP turns.");
                                 ui.label("These settings do NOT yet enable automatic model-to-tool execution.");
+                                ui.checkbox(
+                                    &mut self.mcp_agent_defaults.seed_new_conversations,
+                                    "Seed newly created local chats with MCP proposal instructions",
+                                ).on_hover_text("Opt-in only: new chats receive a snapshot of this template as developer context. Tool proposals still require separate Allow and Run.");
                                 ui.label("Model-facing MCP instructions (editable):");
                                 ui.add(
                                     egui::TextEdit::multiline(&mut self.mcp_agent_defaults.bootstrap)
