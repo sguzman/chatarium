@@ -3555,17 +3555,20 @@ impl ChatariumApp {
                     }
                     let record = replay_tool_call_audit(&self.events)
                         .ok()
-                        .and_then(|calls| calls.into_iter()
-                            .find(|call| call.call_id == call_id));
-                    let provider_is_builtin = record.and_then(|call| {
-                        replay_tool_provider_audit(&self.events)
-                            .ok()
-                            .and_then(|providers| providers.into_iter().find(|provider| {
-                                provider.provider_id == call.provider_id
-                            }))
-                    }).is_some_and(|provider| {
-                        provider.name.as_str() == local_tool_adapter::BUILTIN_PROVIDER_NAME
-                    });
+                        .and_then(|calls| calls.into_iter().find(|call| call.call_id == call_id));
+                    let provider_is_builtin = record
+                        .and_then(|call| {
+                            replay_tool_provider_audit(&self.events)
+                                .ok()
+                                .and_then(|providers| {
+                                    providers
+                                        .into_iter()
+                                        .find(|provider| provider.provider_id == call.provider_id)
+                                })
+                        })
+                        .is_some_and(|provider| {
+                            provider.name.as_str() == local_tool_adapter::BUILTIN_PROVIDER_NAME
+                        });
                     if policy == mcp_agent_defaults::ToolPolicy::Automatic {
                         if provider_is_builtin {
                             self.dispatch_builtin_hello(route_id);
@@ -3613,13 +3616,12 @@ impl ChatariumApp {
                         if count == 1 { "" } else { "s" },
                     );
                     let tool = self.agent_mcp_flow.as_ref().and_then(|flow| {
-                        (flow.pending_route == Some(route_id)).then_some(flow.pending_call).flatten()
+                        (flow.pending_route == Some(route_id))
+                            .then_some(flow.pending_call)
+                            .flatten()
                     });
                     if let Some(call_id) = tool {
-                        self.decide_tool_result_context(
-                            call_id,
-                            ToolResultContextDecision::Admit,
-                        );
+                        self.decide_tool_result_context(call_id, ToolResultContextDecision::Admit);
                     }
                 }
                 PersistNotice::SandboxHostChecked { result } => {
@@ -3656,13 +3658,12 @@ impl ChatariumApp {
                         "external MCP call {} {status}; outcome durably recorded",
                         call_id.get()
                     );
-                    if self.agent_mcp_flow.as_ref()
+                    if self
+                        .agent_mcp_flow
+                        .as_ref()
                         .is_some_and(|flow| flow.pending_call == Some(call_id))
                     {
-                        self.decide_tool_result_context(
-                            call_id,
-                            ToolResultContextDecision::Admit,
-                        );
+                        self.decide_tool_result_context(call_id, ToolResultContextDecision::Admit);
                     }
                 }
                 PersistNotice::ToolResultContextDecisionUpdated { call_id, event } => {
@@ -3672,20 +3673,26 @@ impl ChatariumApp {
                         "tool call {} context admission durably updated",
                         call_id.get()
                     );
-                    if self.agent_mcp_flow.as_ref()
+                    if self
+                        .agent_mcp_flow
+                        .as_ref()
                         .is_some_and(|flow| flow.pending_call == Some(call_id))
                     {
                         let admitted = replay_tool_result_context_audit(&self.events)
                             .ok()
-                            .is_some_and(|decisions| decisions.iter().any(|decision| {
-                                decision.call_id == call_id
-                                    && decision.decision == ToolResultContextDecision::Admit
-                            }));
+                            .is_some_and(|decisions| {
+                                decisions.iter().any(|decision| {
+                                    decision.call_id == call_id
+                                        && decision.decision == ToolResultContextDecision::Admit
+                                })
+                            });
                         if admitted {
                             self.continue_agent_after_admitted_result(call_id);
                         } else {
                             self.agent_mcp_flow = None;
-                            self.status = "MCP turn stopped: result was excluded or admission is unverified".to_owned();
+                            self.status =
+                                "MCP turn stopped: result was excluded or admission is unverified"
+                                    .to_owned();
                         }
                     }
                 }
@@ -3931,7 +3938,9 @@ impl ChatariumApp {
                     if operation.starts_with("tool ") || operation.starts_with("agent MCP") {
                         self.tool_command_pending = false;
                     }
-                    if (operation.starts_with("tool ") || operation.starts_with("agent MCP")) && self.agent_mcp_flow.is_some() {
+                    if (operation.starts_with("tool ") || operation.starts_with("agent MCP"))
+                        && self.agent_mcp_flow.is_some()
+                    {
                         self.agent_mcp_flow = None;
                     }
                     if operation.starts_with("local memory ") {
@@ -5141,7 +5150,9 @@ impl ChatariumApp {
             self.status = "MCP call stopped: another tool action is pending".to_owned();
             return;
         }
-        let count = self.agent_mcp_flow.as_ref()
+        let count = self
+            .agent_mcp_flow
+            .as_ref()
             .map(|flow| flow.call_count)
             .unwrap_or(0)
             .saturating_add(1);
@@ -5212,26 +5223,25 @@ impl ChatariumApp {
     /// Exactly the admitted result from the durable journal is returned to the
     /// model; no manual or model-authored result string can be substituted.
     fn continue_agent_after_admitted_result(&mut self, call_id: ToolCallId) {
-        let Some(mut flow) = self.agent_mcp_flow.take() else { return; };
-        if flow.pending_call != Some(call_id)
-            || flow.conversation_id != self.local_conversation_id
+        let Some(mut flow) = self.agent_mcp_flow.take() else {
+            return;
+        };
+        if flow.pending_call != Some(call_id) || flow.conversation_id != self.local_conversation_id
         {
             self.agent_mcp_flow = Some(flow);
             return;
         }
-        let admitted = match replay_admitted_tool_results(
-            &self.events,
-            flow.conversation_id,
-        ) {
+        let admitted = match replay_admitted_tool_results(&self.events, flow.conversation_id) {
             Ok(results) => results,
             Err(error) => {
                 self.status = format!("MCP continuation blocked by result audit: {error}");
                 return;
             }
         };
-        let Some(outcome) = admitted.into_iter()
-            .find(|result| result.record.call_id == call_id) else
-        {
+        let Some(outcome) = admitted
+            .into_iter()
+            .find(|result| result.record.call_id == call_id)
+        else {
             self.status = "MCP continuation stopped: no exact admitted tool result".to_owned();
             return;
         };
@@ -5252,7 +5262,8 @@ impl ChatariumApp {
             instructions,
             request_patch,
             ..
-        } = flow.command.clone() else {
+        } = flow.command.clone()
+        else {
             self.status = "MCP continuation requires a Responses stream command".to_owned();
             return;
         };
@@ -5269,7 +5280,8 @@ impl ChatariumApp {
             "content": tool_context.text,
         }));
         let request_id = format!("{}-mcp-{}", flow.turn_id, flow.call_count);
-        self.delivery.begin(flow.conversation_id.to_string(), request_id.clone());
+        self.delivery
+            .begin(flow.conversation_id.to_string(), request_id.clone());
         let pending = PendingRemoteTurn {
             turn_id: flow.turn_id,
             request_id: request_id.clone(),
@@ -5293,7 +5305,8 @@ impl ChatariumApp {
         flow.pending_route = None;
         self.pending_remote_turn = Some(pending);
         self.agent_mcp_flow = Some(flow);
-        self.status = "MCP result admitted; resuming assistant without a new user message".to_owned();
+        self.status =
+            "MCP result admitted; resuming assistant without a new user message".to_owned();
     }
 
     fn check_sandbox_host_readiness(&mut self) {
@@ -16218,8 +16231,7 @@ fn append_tool_call_proposal_checked(
         destination: provider_endpoint.endpoint_id(),
         class: RouteClass::ToolCall,
     };
-    record_route_proposed(store, request, policy)
-        .map_err(|error| error.to_string())?;
+    record_route_proposed(store, request, policy).map_err(|error| error.to_string())?;
     record_tool_call_route_bound(store, call_id, route_id).map_err(|error| error.to_string())?;
 
     let replayed = replay_tool_call_audit(store.events())?
@@ -16298,9 +16310,7 @@ fn append_agent_mcp_call_checked(
     let mut registered = replay_tool_provider_audit(store.events())?
         .into_iter()
         .find(|record| record.name == provider_name);
-    if registered.is_none()
-        && proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME
-    {
+    if registered.is_none() && proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
         let provider_id = next_available_tool_provider_id(store.events())?;
         append_tool_provider_registration_checked(store, provider_id, provider_name.clone())?;
         let endpoint = next_available_route_endpoint_id(store.events())?;
@@ -16322,7 +16332,10 @@ fn append_agent_mcp_call_checked(
             .into_iter()
             .find(|record| record.provider_id == provider.provider_id)
             .ok_or("agent MCP external provider has no immutable stdio configuration")?;
-        if !config.config.allowed_operations().iter()
+        if !config
+            .config
+            .allowed_operations()
+            .iter()
             .any(|op| op.as_str() == proposal.tool)
         {
             return Err("agent MCP operation is outside the provider allowlist".to_owned());
@@ -16459,12 +16472,20 @@ fn append_builtin_hello_checked(
         .find(|route| route.request.id == route_id)
         .ok_or_else(|| format!("tool route {} does not exist", route_id.get()))?;
     let allowed = match route.initial_policy {
-        RoutePolicy::Allow => route.gate_state == (RouteGateState::Allowed {
-            by: DecisionAuthority::Policy,
-        }) && route.latest_user_decision.is_none(),
-        RoutePolicy::RequireApproval => route.gate_state == (RouteGateState::Allowed {
-            by: DecisionAuthority::User,
-        }) && route.latest_user_decision == Some(RouteUserDecision::Allow),
+        RoutePolicy::Allow => {
+            route.gate_state
+                == (RouteGateState::Allowed {
+                    by: DecisionAuthority::Policy,
+                })
+                && route.latest_user_decision.is_none()
+        }
+        RoutePolicy::RequireApproval => {
+            route.gate_state
+                == (RouteGateState::Allowed {
+                    by: DecisionAuthority::User,
+                })
+                && route.latest_user_decision == Some(RouteUserDecision::Allow)
+        }
         RoutePolicy::Deny => false,
     };
     if route.request.class != RouteClass::ToolCall || !allowed {
@@ -19405,20 +19426,30 @@ fn persistence_worker(
                         &data_dir.join(mcp_agent_defaults::FILE_NAME),
                     );
                     match saved {
-                        Ok(config) if mcp_agent_defaults::tool_policy(
-                            &config.policy_rules,
-                            &proposal.provider,
-                            &proposal.tool,
-                        ) == Ok(mcp_agent_defaults::ToolPolicy::Automatic) => {
+                        Ok(config)
+                            if mcp_agent_defaults::tool_policy(
+                                &config.policy_rules,
+                                &proposal.provider,
+                                &proposal.tool,
+                            ) == Ok(mcp_agent_defaults::ToolPolicy::Automatic) =>
+                        {
                             append_agent_mcp_call_checked(
-                                &mut store, source_conversation_id, &proposal, policy
+                                &mut store,
+                                source_conversation_id,
+                                &proposal,
+                                policy,
                             )
                         }
-                        _ => Err("no persisted user authorization for automatic MCP tool".to_owned()),
+                        _ => {
+                            Err("no persisted user authorization for automatic MCP tool".to_owned())
+                        }
                     }
                 } else {
                     append_agent_mcp_call_checked(
-                        &mut store, source_conversation_id, &proposal, policy
+                        &mut store,
+                        source_conversation_id,
+                        &proposal,
+                        policy,
                     )
                 };
                 match checked {
@@ -22350,11 +22381,12 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
         // Only the most recent dispatch step determines recovery. An earlier
         // failed/completed model attempt cannot mask an interrupted MCP
         // continuation under the same user-authored turn.
-        let latest_dispatch = kinds.iter()
+        let latest_dispatch = kinds
+            .iter()
             .rposition(|kind| *kind == EventKind::DispatchAttempted)
             .unwrap_or(kinds.len());
-        let already_interrupted = kinds[latest_dispatch..]
-            .contains(&EventKind::TransportInterrupted);
+        let already_interrupted =
+            kinds[latest_dispatch..].contains(&EventKind::TransportInterrupted);
         let evidence = TurnEvidence::replay_event_kinds(kinds)
             .map_err(|error| format!("turn {turn_id} replay failed: {error}"))?;
 
@@ -23554,17 +23586,28 @@ mod tests {
             source,
             &proposal,
             mcp_agent_defaults::ToolPolicy::Automatic,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(created.len() >= 8); // topology + endpoint + provider + call + route
         let routed = replay_routing_audit(store.events()).unwrap();
         let agent_route = routed.iter().find(|r| r.request.id == route_id).unwrap();
         assert_eq!(agent_route.initial_policy, RoutePolicy::Allow);
         assert_eq!(
             agent_route.gate_state,
-            RouteGateState::Allowed { by: DecisionAuthority::Policy }
+            RouteGateState::Allowed {
+                by: DecisionAuthority::Policy
+            }
         );
         let recorded = replay_tool_call_audit(store.events()).unwrap();
-        assert_eq!(recorded.iter().find(|r| r.call_id == call_id).unwrap().operation.as_str(), "tools.list");
+        assert_eq!(
+            recorded
+                .iter()
+                .find(|r| r.call_id == call_id)
+                .unwrap()
+                .operation
+                .as_str(),
+            "tools.list"
+        );
         let emitted = append_builtin_hello_checked(&mut store, route_id).unwrap();
         assert_eq!(emitted.len(), 2);
         let outcomes = replay_tool_call_outcome_audit(store.events()).unwrap();
@@ -23572,9 +23615,15 @@ mod tests {
         assert_eq!(actual.kind, ToolCallOutcomeKind::Result);
         assert!(actual.text.contains("tools.list"));
         assert_eq!(
-            replay_routing_audit(store.events()).unwrap().into_iter()
-                .find(|r| r.request.id == route_id).unwrap().gate_state,
-            RouteGateState::Dispatched { authorized_by: DecisionAuthority::Policy }
+            replay_routing_audit(store.events())
+                .unwrap()
+                .into_iter()
+                .find(|r| r.request.id == route_id)
+                .unwrap()
+                .gate_state,
+            RouteGateState::Dispatched {
+                authorized_by: DecisionAuthority::Policy
+            }
         );
         assert!(append_builtin_hello_checked(&mut store, route_id).is_err());
     }
@@ -23589,20 +23638,32 @@ mod tests {
             arguments: serde_json::json!({}),
         };
         let (_call, route_id, _) = append_agent_mcp_call_checked(
-            &mut store, LocalConversationId::new(), &proposal,
+            &mut store,
+            LocalConversationId::new(),
+            &proposal,
             mcp_agent_defaults::ToolPolicy::Ask,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(
             replay_routing_audit(store.events()).unwrap()[0].gate_state,
             RouteGateState::PendingApproval
         );
         assert!(append_builtin_hello_checked(&mut store, route_id).is_err());
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
         let count = store.events().len();
-        assert!(append_agent_mcp_call_checked(
-            &mut store, LocalConversationId::new(), &proposal,
-            mcp_agent_defaults::ToolPolicy::Disabled,
-        ).is_err());
+        assert!(
+            append_agent_mcp_call_checked(
+                &mut store,
+                LocalConversationId::new(),
+                &proposal,
+                mcp_agent_defaults::ToolPolicy::Disabled,
+            )
+            .is_err()
+        );
         assert_eq!(store.events().len(), count);
     }
 

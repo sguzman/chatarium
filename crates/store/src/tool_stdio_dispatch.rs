@@ -66,15 +66,19 @@ pub fn reserve_activated_stdio_tool_dispatch(
         .find(|record| record.request.id == route_id)
         .ok_or_else(|| "approved external tool route disappeared".to_owned())?;
     let authorized = match route.initial_policy {
-        RoutePolicy::Allow => route.latest_user_decision.is_none()
-            && route.gate_state == (RouteGateState::Allowed {
-                by: DecisionAuthority::Policy,
-            }),
+        RoutePolicy::Allow => {
+            route.latest_user_decision.is_none()
+                && route.gate_state
+                    == (RouteGateState::Allowed {
+                        by: DecisionAuthority::Policy,
+                    })
+        }
         RoutePolicy::RequireApproval => {
             route.latest_user_decision == Some(RouteUserDecision::Allow)
-                && route.gate_state == (RouteGateState::Allowed {
-                    by: DecisionAuthority::User,
-                })
+                && route.gate_state
+                    == (RouteGateState::Allowed {
+                        by: DecisionAuthority::User,
+                    })
         }
         RoutePolicy::Deny => false,
     };

@@ -71,21 +71,23 @@ pub fn preview_stdio_tool_invocation(
     let authorized = match route.initial_policy {
         RoutePolicy::RequireApproval => {
             route.latest_user_decision == Some(RouteUserDecision::Allow)
-                && route.gate_state == (RouteGateState::Allowed {
-                    by: DecisionAuthority::User,
-                })
-                && call.route_bound_sequence.is_some_and(|sequence| {
-                    sequence < route.last_sequence
-                })
+                && route.gate_state
+                    == (RouteGateState::Allowed {
+                        by: DecisionAuthority::User,
+                    })
+                && call
+                    .route_bound_sequence
+                    .is_some_and(|sequence| sequence < route.last_sequence)
         }
         RoutePolicy::Allow => {
             route.latest_user_decision.is_none()
-                && route.gate_state == (RouteGateState::Allowed {
-                    by: DecisionAuthority::Policy,
-                })
-                && call.route_bound_sequence.is_some_and(|sequence| {
-                    sequence > route.proposed_sequence
-                })
+                && route.gate_state
+                    == (RouteGateState::Allowed {
+                        by: DecisionAuthority::Policy,
+                    })
+                && call
+                    .route_bound_sequence
+                    .is_some_and(|sequence| sequence > route.proposed_sequence)
         }
         RoutePolicy::Deny => false,
     };
@@ -208,7 +210,7 @@ pub fn preview_stdio_tool_invocation(
         argv: configured.config.args().to_vec(),
         operation: call.operation.as_str().to_owned(),
         configured_sequence: configured.configured_sequence,
-        approved_sequence,
+        approved_sequence: route.last_sequence,
         request_frame,
     })
 }

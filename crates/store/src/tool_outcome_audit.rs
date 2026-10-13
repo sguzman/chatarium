@@ -216,8 +216,7 @@ pub fn replay_tool_call_outcome_audit(
                     route_id.get()
                 )
             })?;
-        if route.request.class != RouteClass::ToolCall
-            || route.initial_policy == RoutePolicy::Deny
+        if route.request.class != RouteClass::ToolCall || route.initial_policy == RoutePolicy::Deny
         {
             return Err(format!(
                 "tool outcome at sequence {} references route {} without an executable tool policy",

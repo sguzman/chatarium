@@ -86,7 +86,10 @@ impl InferenceSettingsStore {
                 .unwrap_or_default()
                 .to_owned();
             // Previous local settings did not contain MCP activation state.
-            let mcp_enabled = object.get("mcp_enabled").and_then(Value::as_bool).unwrap_or(false);
+            let mcp_enabled = object
+                .get("mcp_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             // Preserve compatibility with existing version 1 settings.
             let slow_warning_seconds = match object.get("slow_warning_seconds") {
                 None => DEFAULT_SLOW_WARNING_SECONDS,

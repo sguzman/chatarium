@@ -62,8 +62,12 @@ pub fn tool_policy(rules: &str, provider: &str, operation: &str) -> Result<ToolP
     let mut matching = None;
     for line in rules.lines().filter(|line| !line.trim().is_empty()) {
         let (key, value) = line.split_once('=').ok_or("invalid MCP policy line")?;
-        if key.trim() != target { continue; }
-        if matching.is_some() { return Err("duplicate MCP tool rule".to_owned()); }
+        if key.trim() != target {
+            continue;
+        }
+        if matching.is_some() {
+            return Err("duplicate MCP tool rule".to_owned());
+        }
         matching = Some(match value.trim() {
             "automatic" => ToolPolicy::Automatic,
             "ask" => ToolPolicy::Ask,
@@ -277,12 +281,27 @@ mod tests {
     #[test]
     fn explicit_policies_fail_closed_without_wildcards() {
         let rules = "demo::hello = automatic\ndemo::shell.command = ask\ndemo::blocked = disabled";
-        assert_eq!(tool_policy(rules, "demo", "hello"), Ok(ToolPolicy::Automatic));
-        assert_eq!(tool_policy(rules, "demo", "shell.command"), Ok(ToolPolicy::Ask));
-        assert_eq!(tool_policy(rules, "demo", "blocked"), Ok(ToolPolicy::Disabled));
+        assert_eq!(
+            tool_policy(rules, "demo", "hello"),
+            Ok(ToolPolicy::Automatic)
+        );
+        assert_eq!(
+            tool_policy(rules, "demo", "shell.command"),
+            Ok(ToolPolicy::Ask)
+        );
+        assert_eq!(
+            tool_policy(rules, "demo", "blocked"),
+            Ok(ToolPolicy::Disabled)
+        );
         assert_eq!(tool_policy(rules, "other", "hello"), Ok(ToolPolicy::Ask));
         assert_eq!(tool_policy(rules, "demo", "hello2"), Ok(ToolPolicy::Ask));
-        assert!(tool_policy("demo::hello = automatic\ndemo::hello = disabled", "demo", "hello").is_err());
+        assert!(
+            tool_policy(
+                "demo::hello = automatic\ndemo::hello = disabled",
+                "demo",
+                "hello"
+            )
+            .is_err()
+        );
     }
-
 }
