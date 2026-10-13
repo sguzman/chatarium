@@ -82,6 +82,35 @@ mechanism used to turn the capability ledger's remaining unknowns into finite,
 reproducible experiments.
 
 
+## Bounded read-only network recovery
+
+The active `models` command is explicitly read-only and now uses
+`retryReadOnly` from `retry-policy.mjs`. It retries only recognized transient
+read failures: HTTP 408/429/500/502/503/504, or a narrow set of transport
+error codes. A returned 400/401/403, malformed request, or cancellation is
+terminal even if an upstream error happens to claim `retryable`.
+
+The default ceiling is **three total attempts**, with exponential delay
+starting at 300 ms, bounded jitter, a 3-second maximum individual delay,
+and a 6-second aggregate delay budget. A `Retry-After` header takes
+precedence; if it exceeds the allowed delay, Chatarium does not retry early.
+Retry notices are credential-free `read_retry_scheduled` bridge events carrying
+request ID, operation, failure category, status, attempt, next attempt, and
+scheduled delay. They are diagnostic events, not proof of server receipt.
+
+**This helper is never applied to ordinary `stream_response` inference POSTs
+or to MCP/tool execution.** A network reset without a response after a POST
+may leave remote delivery unknowable; it must not cause a blind resend.
+The existing native 429/recovery mechanism is separate and is not replaced
+by this read-only model discovery policy. The current increment does not
+claim to be the full granular native retry configuration UI.
+
+The offline bridge test injects one model-discovery 429 and asserts a single
+scheduled retry followed by success. It separately simulates an inference
+network drop after attempted dispatch and asserts exactly one attempted
+request and no read-only retry; unit tests cover failure classification,
+cooldowns, and attempt limits. Both test suites are in Windows and Linux CI.
+
 ## Offline alpha transport contract
 
 Run `node --test tools/siwc-bridge/test/alpha-protocol.test.mjs` to
