@@ -3500,7 +3500,7 @@ impl ChatariumApp {
                     self.events.extend(appended_events);
                     self.tool_command_pending = false;
                     self.status = format!(
-                        "builtin hello route {} completed · {} durable event{}",
+                        "builtin tool route {} completed · {} durable event{}",
                         route_id.get(),
                         count,
                         if count == 1 { "" } else { "s" },
@@ -4996,19 +4996,19 @@ impl ChatariumApp {
             return;
         }
         let Some(sender) = &self.persist_tx else {
-            self.status = "cannot execute builtin hello: persistence unavailable".to_owned();
+            self.status = "cannot execute local builtin: persistence unavailable".to_owned();
             return;
         };
         match sender.send(PersistCommand::DispatchBuiltinHello { route_id }) {
             Ok(()) => {
                 self.tool_command_pending = true;
                 self.status = format!(
-                    "validating approved builtin hello route {} and consuming one-shot dispatch authority…",
+                    "validating approved builtin route {} and consuming one-shot dispatch authority…",
                     route_id.get(),
                 );
             }
             Err(error) => {
-                self.status = format!("failed to queue builtin hello dispatch: {error}");
+                self.status = format!("failed to queue builtin dispatch: {error}");
             }
         }
     }
@@ -9874,7 +9874,7 @@ impl eframe::App for ChatariumApp {
                                                     if let Some(provider_id) = self.tool_selected_provider {
                                                         if let Some(provider) = providers.iter().find(|p| p.provider_id == provider_id) {
                                                             if provider.name.as_str() == local_tool_adapter::BUILTIN_PROVIDER_NAME {
-                                                                ui.label("Builtin hello cannot use external transport.");
+                                                                ui.label("Local builtins hello and tools.list cannot use external transport.");
                                                             } else if provider.endpoint_binding.is_none() {
                                                                 ui.label("Bind this provider's routing endpoint first.");
                                                             } else if let Some(configured) = configs.iter().find(|r| r.provider_id == provider_id) {
@@ -10252,13 +10252,13 @@ impl eframe::App for ChatariumApp {
                                                                 let builtin_hello = providers.iter().find(|provider| {
                                                                     provider.provider_id == call.provider_id
                                                                 }).is_some_and(|provider| {
-                                                                    local_tool_adapter::supports_hello(
+                                                                    local_tool_adapter::supports_builtin(
                                                                         provider.name.as_str(),
                                                                         call.operation.as_str(),
                                                                     )
                                                                 });
                                                                 if builtin_hello {
-                                                                    ui.label("User Allow is recorded for the side-effect-free builtin hello. Run is a separate deliberate action.");
+                                                                    ui.label("Approved side-effect-free local builtin (hello or tools.list). Run separately.");
                                                                     if ui.add_enabled(
                                                                         matches!(
                                                                             route.gate_state,
@@ -10268,7 +10268,7 @@ impl eframe::App for ChatariumApp {
                                                                         )
                                                                             && !self.tool_command_pending
                                                                             && self.persist_tx.is_some(),
-                                                                        egui::Button::new("Run approved local hello · once"),
+                                                                        egui::Button::new("Run approved local builtin · once"),
                                                                     ).clicked() {
                                                                         self.dispatch_builtin_hello(route.request.id);
                                                                     }
@@ -15894,9 +15894,9 @@ fn append_builtin_hello_checked(
                 call.provider_id.get()
             )
         })?;
-    if !local_tool_adapter::supports_hello(provider.name.as_str(), call.operation.as_str()) {
+    if !local_tool_adapter::supports_builtin(provider.name.as_str(), call.operation.as_str()) {
         return Err(format!(
-            "tool call {} is not supported by the restricted local hello adapter",
+            "tool call {} is not supported by the restricted local builtin adapter",
             call.call_id.get()
         ));
     }
@@ -15951,7 +15951,7 @@ fn append_builtin_hello_checked(
 
     // Prepare and validate the pure hello output before consuming any permit.
     // This function performs no filesystem, process, network, or tool side effects.
-    let result_text = local_tool_adapter::prepare_hello_response(&call)?;
+    let result_text = local_tool_adapter::prepare_builtin_response(&call, store.events())?;
     let mut gate = route_gate_before_dispatch(&route)?;
     let permit = gate
         .authorize_dispatch(route_id)
@@ -19064,7 +19064,7 @@ fn persistence_worker(
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
-                            operation: "tool builtin hello dispatch",
+                            operation: "tool builtin dispatch",
                             revision: None,
                             request_id: None,
                             turn_id: None,
