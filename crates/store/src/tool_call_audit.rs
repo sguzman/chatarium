@@ -221,18 +221,27 @@ pub fn replay_tool_call_audit(
                         route_id.get()
                     ));
                 }
-                if route.initial_policy != RoutePolicy::RequireApproval {
-                    return Err(format!(
-                        "tool route {} must begin under RequireApproval policy",
-                        route_id.get()
-                    ));
-                }
-                if route.gate_state != RouteGateState::PendingApproval
+                // Tool routes can be either user-approved per call or allowed
+                // by a previously saved, exact tool policy. Deny is never a
+                // valid callable route. Replay retains Policy vs User authority.
+                let initial_gate = match route.initial_policy {
+                    RoutePolicy::RequireApproval => RouteGateState::PendingApproval,
+                    RoutePolicy::Allow => RouteGateState::Allowed {
+                        by: chatarium_core::routing::DecisionAuthority::Policy,
+                    },
+                    RoutePolicy::Deny => {
+                        return Err(format!(
+                            "tool route {} cannot bind under Deny policy",
+                            route_id.get()
+                        ));
+                    }
+                };
+                if route.gate_state != initial_gate
                     || route.latest_user_decision.is_some()
                     || route.dispatch_sequence.is_some()
                 {
                     return Err(format!(
-                        "tool route {} must still be pending explicit approval when call {} is bound",
+                        "tool route {} must be unconsumed and at its initial gate when call {} is bound",
                         route_id.get(),
                         call_id.get()
                     ));
@@ -543,14 +552,14 @@ mod tests {
     }
 
     #[test]
-    fn route_binding_requires_tool_class_and_require_approval() {
+    fn route_binding_requires_tool_class_and_rejects_denied_policy() {
         for (class, policy, expected) in [
             (
                 RouteClass::SessionMessage,
                 RoutePolicy::RequireApproval,
                 "non-tool route",
             ),
-            (RouteClass::ToolCall, RoutePolicy::Allow, "RequireApproval"),
+            (RouteClass::ToolCall, RoutePolicy::Deny, "Deny policy"),
         ] {
             let mut store = MemoryEventStore::default();
             setup_addressable(&mut store);
@@ -563,6 +572,24 @@ mod tests {
                     .contains(expected)
             );
         }
+    }
+
+    #[test]
+    fn route_binding_preserves_automatic_policy_authority() {
+        let mut store = MemoryEventStore::default();
+        setup_addressable(&mut store);
+        record_call(&mut store);
+        propose(&mut store, RouteClass::ToolCall, RoutePolicy::Allow);
+        record_tool_call_route_bound(&mut store, CALL, ROUTE).unwrap();
+        let records = replay_tool_call_audit(store.events()).unwrap();
+        assert_eq!(records.len(), 1);
+        let route = replay_routing_audit(store.events()).unwrap();
+        assert_eq!(
+            route[0].gate_state,
+            RouteGateState::Allowed {
+                by: chatarium_core::routing::DecisionAuthority::Policy
+            }
+        );
     }
 
     #[test]
