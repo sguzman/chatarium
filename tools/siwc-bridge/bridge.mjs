@@ -399,7 +399,7 @@ function validateStreamResponsePatch(value) {
   return patch;
 }
 
-async function runWithStreamResponsePatch(patch, operation) {
+async function runWithStreamResponsePatch(patch, operation, onTransportProgress = () => {}) {
   // Even without optional tuning, intercept the request to enforce\n  // store:false and stream:true on every ordinary inference turn.
 
   const originalFetch = globalThis.fetch;
@@ -449,7 +449,9 @@ async function runWithStreamResponsePatch(patch, operation) {
 
     patched = true;
     if (globalThis.fetch === streamFetch) globalThis.fetch = originalFetch;
-    return originalFetch(input, {
+    // Local transport attempt is not evidence that the server received it.
+    onTransportProgress("wire_attempted");
+    const response = await originalFetch(input, {
       ...init,
       body: JSON.stringify({
         ...body,
@@ -461,6 +463,10 @@ async function runWithStreamResponsePatch(patch, operation) {
         stream: true,
       }),
     });
+    // An HTTP success is the earliest proof that the server accepted this
+    // request. No response at all must stay marked as delivery-unknown.
+    if (response.ok) onTransportProgress("acknowledged");
+    return response;
   };
 
   globalThis.fetch = streamFetch;
@@ -663,7 +669,9 @@ async function handle(command) {
                 });
               },
             });
-          const result = await runWithStreamResponsePatch(patch, operation);
+          const result = await runWithStreamResponsePatch(patch, operation, (stage) => {
+            emit({ type: "transport_progress", request_id: requestId, stage });
+          });
           emit({
             type: "result",
             request_id: requestId,
