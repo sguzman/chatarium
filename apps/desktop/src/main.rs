@@ -26868,9 +26868,8 @@ mod tests {
         assert!(origin.contains("read 1.2 ms") || origin.contains("read 1.3 ms"));
         assert!(!origin.contains("YWJj"));
         assert!(!projected[0].text.contains("YWJj"));
-        let cached = native_conversation_search::NativeConversationSearchIndex::build(
-            store.events(),
-        );
+        let cached =
+            native_conversation_search::NativeConversationSearchIndex::build(store.events());
         assert_eq!(
             cached.messages(message.conversation_id)[0].provenance_label,
             projected[0].provenance_label
