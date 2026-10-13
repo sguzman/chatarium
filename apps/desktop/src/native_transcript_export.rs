@@ -10,6 +10,7 @@ fn role_name(role: DisplayRole) -> &'static str {
         DisplayRole::User => "You",
         DisplayRole::Assistant => "Assistant",
         DisplayRole::Mcp => "MCP tool",
+        DisplayRole::Activity => "Agent activity",
     }
 }
 
@@ -18,6 +19,7 @@ fn role_key(role: DisplayRole) -> &'static str {
         DisplayRole::User => "user",
         DisplayRole::Assistant => "assistant",
         DisplayRole::Mcp => "mcp_tool",
+        DisplayRole::Activity => "agent_activity",
     }
 }
 
@@ -105,7 +107,7 @@ pub fn json_value(
         "version": 1,
         "conversation_id": conversation_id.to_string(),
         "title": safe_title(title),
-        "coverage": "visible_user_assistant_and_verified_mcp_activity",
+        "coverage": "visible_user_assistant_and_verified_mcp_and_siwc_activity",
         "remote_delivery_not_proven": true,
         "assistant_stream_may_be_partial": true,
         "message_count": messages.len(),

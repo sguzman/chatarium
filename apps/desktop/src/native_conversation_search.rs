@@ -591,6 +591,15 @@ impl NativeConversationSearchIndex {
             Arc::make_mut(visible).extend(tool_entries);
             Arc::make_mut(visible).sort_by_key(|message| message.sequence);
         }
+        // Agent lifecycle has its own scoped, verified durable audit and
+        // does not become authored or assistant transcript context.
+        for (owner, lifecycle) in super::siwc_activity_transcript::verified_activity(events) {
+            let visible = messages
+                .entry(owner)
+                .or_insert_with(|| Arc::new(Vec::new()));
+            Arc::make_mut(visible).extend(lifecycle);
+            Arc::make_mut(visible).sort_by_key(|message| message.sequence);
+        }
         Self {
             revision: JournalRevision::capture(events),
             messages,
@@ -615,7 +624,10 @@ impl NativeConversationSearchIndex {
         // unverified tool payloads into the incremental user/assistant path.
         if events[first_new_position..]
             .iter()
-            .any(|event| super::mcp_transcript::changes_activity(event.kind))
+            .any(|event| {
+                super::mcp_transcript::changes_activity(event.kind)
+                    || event.kind == EventKind::SiwcAgentActivityObserved
+            })
         {
             return None;
         }
@@ -716,7 +728,8 @@ fn changes_native_messages(kind: EventKind) -> bool {
     super::mcp_transcript::changes_activity(kind)
         || matches!(
             kind,
-            EventKind::UserMessageCommitted
+            EventKind::SiwcAgentActivityObserved
+                | EventKind::UserMessageCommitted
                 | EventKind::AssistantSnapshotObserved
                 | EventKind::AssistantCompletionObserved
         )
