@@ -6766,6 +6766,27 @@ impl eframe::App for ChatariumApp {
                                             );
                                         }
                                     });
+                                    // A compact latest-message excerpt distinguishes
+                                    // similarly named chats without opening them. Search
+                                    // result excerpts below remain separate and exact.
+                                    if self.local_conversation_search_query.trim().is_empty() {
+                                        let latest = messages.last().map(|message| {
+                                            message.text.split_whitespace()
+                                                .take(12)
+                                                .collect::<Vec<_>>()
+                                                .join(" ")
+                                        }).filter(|value| !value.is_empty());
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(
+                                                    latest.as_deref().unwrap_or("New conversation")
+                                                )
+                                                .size(10.0)
+                                                .color(egui::Color32::from_rgb(156, 160, 171)),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
                                     if row.matching_message_indices.len() > 1 {
                                         ui.horizontal(|ui| {
                                             if ui.small_button("Prev hit").clicked() {
