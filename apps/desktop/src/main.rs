@@ -17,6 +17,7 @@ mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
 mod mcp_agent_defaults;
+mod mcp_transcript;
 #[cfg(test)]
 mod mcp_async_tests;
 mod mcp_call_review;
@@ -884,6 +885,8 @@ enum LiveMirrorFetchNotice {
 enum DisplayRole {
     User,
     Assistant,
+    /// Audited local tool activity; never user-authored or assistant-authored.
+    Mcp,
 }
 
 #[derive(Debug, Clone)]
@@ -14963,6 +14966,20 @@ fn draw_reader_bubble(
             })
             .inner
         }
+        DisplayRole::Mcp => {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                transcript_bubble(
+                    ui,
+                    message,
+                    egui::Color32::from_rgb(42, 31, 56),
+                    "MCP tool",
+                    search_query,
+                    active_hit,
+                    ctx,
+                )
+            })
+            .inner
+        }
     }
 }
 
@@ -15005,8 +15022,10 @@ fn transcript_bubble(
                     ui.label(egui::RichText::new(label).size(10.0).strong().color(
                         if label == "You" {
                             egui::Color32::from_rgb(147, 191, 238)
-                        } else {
+                        } else if label == "Agent" {
                             egui::Color32::from_rgb(163, 221, 178)
+                        } else {
+                            egui::Color32::from_rgb(203, 166, 247)
                         },
                     ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -15016,9 +15035,29 @@ fn transcript_bubble(
                     });
                 });
                 ui.add_space(4.0);
-                for block in offline_reader::parse_markdown(&message.text) {
-                    render_markdown_block(ui, &block, search_query, active_hit, ctx);
-                    ui.add_space(6.0);
+                if message.role == DisplayRole::Mcp {
+                    // Keep tool-supplied bytes verbatim and non-executable: no
+                    // Markdown role spoofing, embedded images or active links.
+                    egui::CollapsingHeader::new("Exact tool activity · expand to inspect")
+                        .id_salt(("mcp-activity", message.sequence))
+                        .default_open(message.text.len() < 720)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(&message.text)
+                                            .monospace()
+                                            .size(11.0),
+                                    );
+                                });
+                        });
+                } else {
+                    for block in offline_reader::parse_markdown(&message.text) {
+                        render_markdown_block(ui, &block, search_query, active_hit, ctx);
+                        ui.add_space(6.0);
+                    }
                 }
                 ui.add_space(5.0);
                 let origin = message
@@ -22008,15 +22047,20 @@ fn worker_phase_label(phase: WorkerPhase) -> &'static str {
 fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::TranscriptMessage> {
     messages
         .iter()
-        .map(|message| {
-            context_composer::TranscriptMessage::durable(
-                match message.role {
-                    DisplayRole::User => context_composer::TranscriptRole::User,
-                    DisplayRole::Assistant => context_composer::TranscriptRole::Assistant,
-                },
+        .filter_map(|message| {
+            // MCP records are reader/audit evidence, not a synthetic message
+            // from the user. The separately verified admission pipeline alone
+            // supplies tool results to the model.
+            let role = match message.role {
+                DisplayRole::User => context_composer::TranscriptRole::User,
+                DisplayRole::Assistant => context_composer::TranscriptRole::Assistant,
+                DisplayRole::Mcp => return None,
+            };
+            Some(context_composer::TranscriptMessage::durable(
+                role,
                 message.text.clone(),
                 message.sequence,
-            )
+            ))
         })
         .collect()
 }
@@ -22966,6 +23010,7 @@ fn payload_message_identity(payload: &str, role: DisplayRole) -> Option<String> 
     let paths: &[&str] = match role {
         DisplayRole::User => &["/details/observed_message_id", "/details/observed_id"],
         DisplayRole::Assistant => &["/details/local_turn_id", "/details/observed_id"],
+        DisplayRole::Mcp => return None,
     };
 
     paths

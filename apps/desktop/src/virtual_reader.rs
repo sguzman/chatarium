@@ -250,6 +250,7 @@ fn message_signature(message: &DisplayMessage) -> u64 {
     match message.role {
         DisplayRole::User => 0_u8,
         DisplayRole::Assistant => 1_u8,
+        DisplayRole::Mcp => 2_u8,
     }
     .hash(&mut hasher);
     message.text.hash(&mut hasher);

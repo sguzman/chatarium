@@ -581,6 +581,16 @@ impl NativeConversationSearchIndex {
             messages.insert(owner, Arc::new(visible));
             event_positions.insert(owner, Arc::new(positions));
         }
+        // Project only independently verified tool audit records. The native
+        // journal is still authoritative; forged standalone event payloads
+        // cannot enter the visible transcript or another owner's conversation.
+        for (owner, tool_entries) in super::mcp_transcript::verified_activity(events) {
+            let visible = messages
+                .entry(owner)
+                .or_insert_with(|| Arc::new(Vec::new()));
+            Arc::make_mut(visible).extend(tool_entries);
+            Arc::make_mut(visible).sort_by_key(|message| message.sequence);
+        }
         Self {
             revision: JournalRevision::capture(events),
             messages,
@@ -600,6 +610,15 @@ impl NativeConversationSearchIndex {
         events: &[EventEnvelope],
         first_new_position: usize,
     ) -> Option<Self> {
+        // A new tool outcome or admission can change a historical tool row.
+        // Recompute verified correlation rather than trying to splice
+        // unverified tool payloads into the incremental user/assistant path.
+        if events[first_new_position..]
+            .iter()
+            .any(|event| super::mcp_transcript::changes_activity(event.kind))
+        {
+            return None;
+        }
         let mut owners = Arc::clone(&self.owners);
 
         // Resolve every new typed turn before attributing assistant events,
@@ -694,12 +713,13 @@ impl NativeConversationSearchIndex {
 /// tool events and controller state may advance the append-only journal
 /// without changing any searchable native conversation.
 fn changes_native_messages(kind: EventKind) -> bool {
-    matches!(
-        kind,
-        EventKind::UserMessageCommitted
-            | EventKind::AssistantSnapshotObserved
-            | EventKind::AssistantCompletionObserved
-    )
+    super::mcp_transcript::changes_activity(kind)
+        || matches!(
+            kind,
+            EventKind::UserMessageCommitted
+                | EventKind::AssistantSnapshotObserved
+                | EventKind::AssistantCompletionObserved
+        )
 }
 
 #[derive(Clone)]

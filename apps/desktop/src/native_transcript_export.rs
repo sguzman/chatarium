@@ -9,6 +9,7 @@ fn role_name(role: DisplayRole) -> &'static str {
     match role {
         DisplayRole::User => "You",
         DisplayRole::Assistant => "Assistant",
+        DisplayRole::Mcp => "MCP tool",
     }
 }
 
@@ -16,6 +17,7 @@ fn role_key(role: DisplayRole) -> &'static str {
     match role {
         DisplayRole::User => "user",
         DisplayRole::Assistant => "assistant",
+        DisplayRole::Mcp => "mcp_tool",
     }
 }
 
@@ -65,7 +67,7 @@ pub fn markdown(
         "*Chatarium native transcript · conversation {conversation_id}*\n\n",
     ));
     text.push_str(
-        "*Visible local user/assistant messages only. Assistant streaming may be incomplete. This is not an archive backup.*\n",
+        "*Visible local user/assistant messages and journal-verified MCP activity. Assistant streaming may be incomplete. This is not an archive backup.*\n",
     );
     if messages.is_empty() {
         text.push_str("\n*No visible messages recorded.*\n");
@@ -103,7 +105,7 @@ pub fn json_value(
         "version": 1,
         "conversation_id": conversation_id.to_string(),
         "title": safe_title(title),
-        "coverage": "visible_user_assistant_messages_only",
+        "coverage": "visible_user_assistant_and_verified_mcp_activity",
         "remote_delivery_not_proven": true,
         "assistant_stream_may_be_partial": true,
         "message_count": messages.len(),
