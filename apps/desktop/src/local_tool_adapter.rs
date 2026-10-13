@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 pub const BUILTIN_PROVIDER_NAME: &str = "chatarium.builtin";
 pub const HELLO_OPERATION: &str = "hello";
 pub const TOOLS_LIST_OPERATION: &str = "tools.list";
+pub const TIME_NOW_OPERATION: &str = "time.now";
 pub const MAX_DIRECTORY_OPERATIONS: usize = 128;
 
 /// Whether an inert registered provider/call is eligible for the restricted
@@ -31,7 +32,7 @@ pub fn supports_hello(provider_name: &str, operation: &str) -> bool {
 #[must_use]
 pub fn supports_builtin(provider_name: &str, operation: &str) -> bool {
     provider_name == BUILTIN_PROVIDER_NAME
-        && matches!(operation, HELLO_OPERATION | TOOLS_LIST_OPERATION)
+        && matches!(operation, HELLO_OPERATION | TOOLS_LIST_OPERATION | TIME_NOW_OPERATION)
 }
 
 /// Create a bounded local MCP directory from replayed provider configuration.
@@ -51,6 +52,7 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             TOOLS_LIST_OPERATION,
             "List locally registered MCP provider tools and their descriptions",
         ),
+        (TIME_NOW_OPERATION, "Read the actual current UTC time from the local system clock"),
     ] {
         tools.push(json!({
             "provider": BUILTIN_PROVIDER_NAME,
@@ -109,6 +111,9 @@ pub fn prepare_builtin_response(
     if call.operation.as_str() == HELLO_OPERATION {
         return prepare_hello_response(call);
     }
+    if call.operation.as_str() == TIME_NOW_OPERATION {
+        return prepare_time_response(call);
+    }
     if call.operation.as_str() != TOOLS_LIST_OPERATION {
         return Err("unsupported builtin tool".to_owned());
     }
@@ -131,6 +136,67 @@ pub fn prepare_builtin_response(
     let directory = local_tool_directory(events)?;
     format_legacy_tool_success(&legacy_id, TOOLS_LIST_OPERATION, directory)
         .map_err(|error| format!("cannot format builtin directory result: {error:?}"))
+}
+
+
+/// Current UTC system time, captured at tool execution rather than fabricated
+/// by the model. Empty arguments only; execution is still policy-gated/audited.
+pub fn prepare_time_response(call: &ToolCallAuditRecord) -> Result<String, String> {
+    if call.operation.as_str() != TIME_NOW_OPERATION {
+        return Err("builtin time adapter received another operation".to_owned());
+    }
+    let input = call.arguments_text.trim();
+    let (id, args): (String, Value) = if input.starts_with("<tool_call") {
+        let parsed = parse_legacy_tool_call(input)
+            .map_err(|error| format!("invalid time tool envelope: {error:?}"))?;
+        if parsed.name != TIME_NOW_OPERATION {
+            return Err("time envelope names another operation".to_owned());
+        }
+        (parsed.id, parsed.arguments)
+    } else {
+        (format!("call_{}", call.call_id.get()),
+            serde_json::from_str(input).map_err(|error| format!("invalid time arguments: {error}"))?)
+    };
+    if args != json!({}) {
+        return Err("time.now requires empty arguments".to_owned());
+    }
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| format!("system clock precedes Unix epoch: {error}"))?;
+    let unix_seconds = i64::try_from(elapsed.as_secs())
+        .map_err(|_| "system time exceeds i64 range".to_owned())?;
+    let milliseconds = elapsed.subsec_millis();
+    let date = utc_iso_timestamp(unix_seconds, milliseconds);
+    format_legacy_tool_success(&id, TIME_NOW_OPERATION, json!({
+        "utc": date,
+        "timezone": "UTC",
+        "unix_seconds": unix_seconds,
+        "unix_milliseconds": unix_seconds * 1000 + i64::from(milliseconds),
+    }))
+    .map_err(|error| format!("cannot format time result: {error:?}"))
+}
+
+/// Gregorian UTC conversion using integer arithmetic, independent of locale
+/// and external network/time services.
+fn utc_iso_timestamp(unix_seconds: i64, milliseconds: u32) -> String {
+    let days = unix_seconds.div_euclid(86_400);
+    let seconds = unix_seconds.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{milliseconds:03}Z",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60,
+    )
 }
 
 /// Prepare the canonical legacy tool result for the side-effect-free hello.
@@ -241,6 +307,24 @@ mod tests {
         assert!(!supports_hello("chatarium.builtin", "clock.now"));
     }
     #[test]
+    fn utc_clock_is_real_bounded_and_requires_no_arguments() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let response = prepare_time_response(&call("time.now", "{}")).unwrap();
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let result = parse_legacy_tool_result(&response).unwrap();
+        assert_eq!(result.name, "time.now");
+        assert_eq!(result.payload["timezone"], "UTC");
+        let observed = result.payload["unix_seconds"].as_u64().unwrap();
+        assert!(observed >= before && observed <= after);
+        assert!(result.payload["utc"].as_str().unwrap().ends_with('Z'));
+        assert!(prepare_time_response(&call("time.now", r#"{"zone":"local"}"#)).is_err());
+        assert_eq!(utc_iso_timestamp(0, 0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(utc_iso_timestamp(1_792_000_000, 125), "2026-10-14T01:46:40.125Z");
+    }
+
+    #[test]
     fn tools_list_is_bounded_and_does_not_infer_execution_permission() {
         use chatarium_store::EventStore;
         use chatarium_store::MemoryEventStore;
@@ -251,6 +335,7 @@ mod tests {
         assert_eq!(parsed.payload["ok"], true);
         assert_eq!(parsed.payload["tools"][0]["name"], "hello");
         assert_eq!(parsed.payload["tools"][1]["name"], "tools.list");
+        assert_eq!(parsed.payload["tools"][2]["name"], "time.now");
         assert_eq!(
             parsed.payload["tools"][1]["execution_permission"],
             "exact standing policy or per-call user approval"
