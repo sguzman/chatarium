@@ -821,6 +821,69 @@ mod tests {
     }
 
     #[test]
+    fn native_activity_survives_search_and_never_becomes_model_context() {
+        use chatarium_store::siwc_agent_activity_audit::append_siwc_agent_activity_checked;
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let owner = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let turn = author(&mut store, owner, "What happened to the network?");
+        author(&mut store, other, "Separate confidential conversation");
+        let activity_frame = |sequence, stage, extra: serde_json::Value| {
+            let mut frame = serde_json::json!({
+                "type": "agent_activity",
+                "source": "siwc_bridge_observation",
+                "request_id": "retry-test",
+                "sequence": sequence,
+                "stage": stage,
+                "observed_at_utc": "2026-10-13T19:00:00.000Z",
+                "elapsed_ms": sequence as f64 * 10.0,
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                frame[key] = value.clone();
+            }
+            frame.to_string()
+        };
+        for (sequence, stage, extra) in [
+            (1, "started", serde_json::json!({})),
+            (2, "wire_attempted", serde_json::json!({})),
+            (3, "failed", serde_json::json!({
+                "delivery_evidence": "wire_unconfirmed",
+                "cancelled": false
+            })),
+        ] {
+            append_siwc_agent_activity_checked(
+                &mut store, owner, turn, &activity_frame(sequence, stage, extra)
+            ).unwrap();
+        }
+        let index = NativeConversationSearchIndex::build(store.events());
+        let owner_messages = index.messages(owner);
+        assert_eq!(owner_messages.len(), 2);
+        assert_eq!(owner_messages[1].role, super::super::DisplayRole::Activity);
+        assert!(owner_messages[1].text.contains("wire_unconfirmed"));
+        assert_eq!(
+            find_match(
+                "wire_unconfirmed", "",
+                owner_messages.iter().map(|message| message.text.as_str())
+            ),
+            Some(NativeSearchMatch::Message)
+        );
+        assert_eq!(
+            find_match(
+                "wire_unconfirmed", "",
+                index.messages(other).iter().map(|message| message.text.as_str())
+            ),
+            None
+        );
+        let context = super::super::context_transcript(owner_messages);
+        assert_eq!(context.len(), 1, "audit-only events are never model context");
+        assert!(!context[0].text.contains("wire_unconfirmed"));
+        assert!(store.events().iter().any(|event| {
+            event.kind == EventKind::SiwcAgentActivityObserved
+        }));
+    }
+
+    #[test]
     fn native_index_matches_reference_projection_and_isolates_other_conversations() {
         use chatarium_store::{EventStore, MemoryEventStore};
         let first = LocalConversationId::new();
