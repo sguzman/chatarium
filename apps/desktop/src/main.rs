@@ -14940,7 +14940,7 @@ fn draw_reader_bubble(
                 transcript_bubble(
                     ui,
                     message,
-                    egui::Color32::from_rgb(38, 42, 52),
+                    egui::Color32::from_rgb(27, 43, 65),
                     "You",
                     search_query,
                     active_hit,
@@ -14954,8 +14954,8 @@ fn draw_reader_bubble(
                 transcript_bubble(
                     ui,
                     message,
-                    egui::Color32::from_rgb(29, 31, 36),
-                    "Assistant",
+                    egui::Color32::from_rgb(26, 44, 36),
+                    "Agent",
                     search_query,
                     active_hit,
                     ctx,
@@ -14986,6 +14986,16 @@ fn transcript_bubble(
 
     egui::Frame::default()
         .fill(fill)
+        .stroke(egui::Stroke::new(
+            1.3,
+            if label == "You" {
+                egui::Color32::from_rgb(66, 139, 228)
+            } else if label == "Agent" {
+                egui::Color32::from_rgb(65, 166, 108)
+            } else {
+                egui::Color32::from_rgb(155, 109, 215)
+            },
+        ))
         .corner_radius(egui::CornerRadius::same(12))
         .inner_margin(egui::Margin::symmetric(14, 11))
         .show(ui, |ui| {
