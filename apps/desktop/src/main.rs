@@ -7727,11 +7727,11 @@ impl eframe::App for ChatariumApp {
 
         egui::TopBottomPanel::top("conversation_header")
             .resizable(false)
-            .exact_height(72.0)
+            .exact_height(91.0)
             .frame(
                 egui::Frame::default()
                     .fill(egui::Color32::from_rgb(23, 24, 29))
-                    .inner_margin(egui::Margin::symmetric(22, 12)),
+                    .inner_margin(egui::Margin::symmetric(22, 10)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -7809,6 +7809,28 @@ impl eframe::App for ChatariumApp {
                             });
                     });
                 });
+                if !historical_mode {
+                    let conversation_id = self.local_conversation_id.to_string();
+                    let last = self.delivery.for_conversation(&conversation_id).last();
+                    let color = last.map(delivery_status_color).unwrap_or_else(|| {
+                        if self.remote_connected() {
+                            egui::Color32::from_rgb(126, 210, 156)
+                        } else {
+                            egui::Color32::from_rgb(225, 194, 108)
+                        }
+                    });
+                    let label = last.map(|a| {
+                        if a.slow() {
+                            format!("● SLOW · {} · {:.1}s", a.label(), a.seconds())
+                        } else {
+                            format!("● {} · {:.1}s", a.label(), a.seconds())
+                        }
+                    }).unwrap_or_else(|| {
+                        if self.remote_connected() { "● Ready for your message".to_owned() }
+                        else { "● Local-only · connect ChatGPT to send".to_owned() }
+                    });
+                    ui.label(egui::RichText::new(label).size(10.0).color(color));
+                }
             });
 
         egui::TopBottomPanel::bottom("composer_panel")
@@ -14100,6 +14122,10 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                         }
+                        if !historical_mode {
+                            let conversation_id = self.local_conversation_id.to_string();
+                            draw_delivery_timeline(ui, &self.delivery, &conversation_id);
+                        }
                     });
                 reader_output_offset = Some(reader_output.state.offset.y);
             });
@@ -14151,6 +14177,75 @@ impl eframe::App for ChatariumApp {
         {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
+    }
+}
+
+fn delivery_status_color(attempt: &delivery_telemetry::Attempt) -> egui::Color32 {
+    use delivery_telemetry::Phase;
+    if attempt.slow() || attempt.phase == Phase::RetryScheduled {
+        egui::Color32::from_rgb(242, 167, 79)
+    } else {
+        match attempt.phase {
+            Phase::Complete => egui::Color32::from_rgb(126, 210, 156),
+            Phase::Failed | Phase::Unconfirmed => egui::Color32::from_rgb(235, 105, 107),
+            _ => egui::Color32::from_rgb(238, 207, 103),
+        }
+    }
+}
+
+fn draw_delivery_timeline(
+    ui: &mut egui::Ui,
+    timeline: &delivery_telemetry::Timeline,
+    conversation_id: &str,
+) {
+    let attempts = timeline.for_conversation(conversation_id).collect::<Vec<_>>();
+    if attempts.is_empty() {
+        return;
+    }
+    ui.add_space(8.0);
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("DELIVERY HISTORY · ChatGPT Responses").size(11.0).strong());
+        if let Some(mean) = timeline.mean_response_seconds(conversation_id) {
+            ui.label(egui::RichText::new(format!("session average {:.1}s", mean))
+                .size(10.0).color(egui::Color32::from_rgb(151, 154, 163)));
+        }
+    });
+    ui.label(egui::RichText::new(
+        "Receipt only after HTTP success. Timings in this display reset on app restart; journaled turns remain durable.",
+    ).size(9.0).color(egui::Color32::from_rgb(125, 129, 139)));
+    for attempt in attempts.iter().rev().take(8).rev() {
+        let color = delivery_status_color(attempt);
+        let label = if attempt.slow() { "SLOW · waiting for first response" } else { attempt.label() };
+        egui::Frame::default()
+            .fill(egui::Color32::from_rgb(29, 31, 36))
+            .corner_radius(egui::CornerRadius::same(7))
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("● {label}")).strong().size(10.0).color(color));
+                    ui.label(egui::RichText::new(format!("elapsed {:.1}s", attempt.seconds()))
+                        .size(10.0).color(egui::Color32::from_rgb(195, 198, 205)));
+                    if let Some(first) = attempt.time_to_first_output() {
+                        ui.label(egui::RichText::new(format!("first response {:.1}s", first))
+                            .size(10.0).color(egui::Color32::from_rgb(151, 154, 163)));
+                    }
+                    if attempt.retries > 0 {
+                        ui.label(egui::RichText::new(format!("retry {}", attempt.retries))
+                            .size(10.0).color(egui::Color32::from_rgb(242, 167, 79)));
+                    }
+                    if let Some(at) = attempt.retry_at {
+                        ui.label(egui::RichText::new(format!(
+                            "next attempt in {:.1}s", at.saturating_duration_since(Instant::now()).as_secs_f32()))
+                            .size(10.0).color(color));
+                    }
+                });
+                if let Some(error) = &attempt.error {
+                    ui.label(egui::RichText::new(error).size(9.0)
+                        .color(egui::Color32::from_rgb(170, 173, 183)));
+                }
+            });
+        ui.add_space(4.0);
     }
 }
 
@@ -14238,20 +14333,15 @@ fn transcript_bubble(
                     ui.add_space(6.0);
                 }
                 ui.add_space(5.0);
+                let origin = message
+                    .provenance_label
+                    .as_deref()
+                    .unwrap_or("source not specified");
                 let metadata = message
                     .timestamp
                     .and_then(timestamp_display::utc_minute)
-                    .map(|timestamp| format!("{label} · {timestamp}"))
-                    .unwrap_or_else(|| {
-                        format!(
-                            "{} · {}",
-                            label,
-                            message
-                                .provenance_label
-                                .clone()
-                                .unwrap_or_else(|| format!("event #{}", message.sequence))
-                        )
-                    });
+                    .map(|timestamp| format!("{label} · {timestamp} · {origin}"))
+                    .unwrap_or_else(|| format!("{label} · {origin} · event #{}", message.sequence));
                 ui.label(
                     egui::RichText::new(metadata)
                         .size(10.0)
@@ -21922,7 +22012,10 @@ fn projected_display_messages_iter<'a>(
             text,
             sequence: event.sequence,
             timestamp: Some(event.at_unix_ms as f64 / 1000.0),
-            provenance_label: None,
+            provenance_label: Some(match role {
+                DisplayRole::User => "local journal · authored".to_owned(),
+                DisplayRole::Assistant => "ChatGPT Responses · remote assistant".to_owned(),
+            }),
         });
     }
 
