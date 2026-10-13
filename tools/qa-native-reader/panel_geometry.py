@@ -11,7 +11,8 @@ from PIL import Image
 # Must match the native sidebar frame fill in apps/desktop/src/main.rs.
 # The contrasting stroke is on the boundary, not sampled in the interior.
 SIDEBAR = (20, 25, 34)
-CONTENT = (23, 24, 29)
+# Native center panel fill; boundary stroke is deliberately excluded.
+CONTENT = (23, 27, 35)
 
 
 def sidebar_edge(image):
