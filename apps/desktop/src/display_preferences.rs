@@ -9,6 +9,7 @@ use std::path::Path;
 pub struct DisplayPreferences {
     pub show_transport_trace: bool,
     pub show_delivery_history: bool,
+    pub render_markdown: bool,
 }
 
 impl Default for DisplayPreferences {
@@ -16,6 +17,7 @@ impl Default for DisplayPreferences {
         Self {
             show_transport_trace: false,
             show_delivery_history: false,
+            render_markdown: true,
         }
     }
 }
@@ -45,6 +47,11 @@ impl DisplayPreferences {
                 .get("show_delivery_history")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            // Missing in older preferences means the new renderer is enabled.
+            render_markdown: data
+                .get("render_markdown")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
         }
     }
 
@@ -57,6 +64,7 @@ impl DisplayPreferences {
             "version": 1,
             "show_transport_trace": self.show_transport_trace,
             "show_delivery_history": self.show_delivery_history,
+            "render_markdown": self.render_markdown,
         }))
         .map_err(|error| error.to_string())?;
         let temporary = path.with_extension("json.tmp");
@@ -85,9 +93,20 @@ mod tests {
         let shown = DisplayPreferences {
             show_transport_trace: true,
             show_delivery_history: true,
+            render_markdown: false,
         };
         shown.save(&path).unwrap();
         assert_eq!(DisplayPreferences::load(&path), shown);
+        // A previously saved v1 file without this key must default to
+        // Markdown on, while retaining the two existing debug preferences.
+        fs::write(
+            &path,
+            br#"{"schema":"chatarium-display-preferences","version":1,"show_transport_trace":true,"show_delivery_history":false}"#,
+        ).unwrap();
+        let migrated = DisplayPreferences::load(&path);
+        assert!(migrated.render_markdown);
+        assert!(migrated.show_transport_trace);
+        assert!(!migrated.show_delivery_history);
         fs::write(&path, b"{\"schema\":\"broken\"}").unwrap();
         assert_eq!(
             DisplayPreferences::load(&path),
