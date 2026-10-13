@@ -98,6 +98,34 @@ Retry notices are credential-free `read_retry_scheduled` bridge events carrying
 request ID, operation, failure category, status, attempt, next attempt, and
 scheduled delay. They are diagnostic events, not proof of server receipt.
 
+For more granular control, the bridge accepts an optional
+`CHATARIUM_READ_RETRY_POLICY_JSON` environment value, validated before
+issuing a model-discovery read. For example:
+
+```json
+{
+  "maxAttempts": 3,
+  "initialDelayMs": 300,
+  "maxDelayMs": 3000,
+  "maxTotalDelayMs": 6000,
+  "jitterRatio": 0.2,
+  "categories": {
+    "rate_limit": { "enabled": true, "maxAttempts": 3 },
+    "http_transient": { "enabled": true, "maxAttempts": 2 },
+    "network_transient": { "enabled": false }
+  }
+}
+```
+
+Only these explicit categories are recognized. Unknown keys, invalid types,
+oversized JSON, and unsafe limits fail closed; the maximum configurable
+attempt count is five and the total delay budget cannot exceed 90 seconds.
+A disabled category is never retried, and both the total and category caps
+apply. This is an advanced operator setting, **not yet an in-app editor**,
+and it controls only the read-only `models` operation. Retry notices identify
+`stage: model_discovery`; the Rust side logs a sanitized classification
+without treating it as transcript content.
+
 **This helper is never applied to ordinary `stream_response` inference POSTs
 or to MCP/tool execution.** A network reset without a response after a POST
 may leave remote delivery unknowable; it must not cause a blind resend.
