@@ -139,6 +139,31 @@ network drop after attempted dispatch and asserts exactly one attempted
 request and no read-only retry; unit tests cover failure classification,
 cooldowns, and attempt limits. Both test suites are in Windows and Linux CI.
 
+## Live inference activity evidence (bridge substrate)
+
+Ordinary `stream_response` turns now emit separate
+`agent_activity` NDJSON observations with a bounded request identity,
+source label, per-turn sequence, source UTC timestamp, and elapsed monotonic
+milliseconds. Events cover request start, attempted HTTP delivery, observed
+HTTP acceptance, first and subsequent received text chunks, completion,
+and failure. Terminal events distinguish `not_dispatched`,
+`wire_unconfirmed`, `http_acknowledged` and
+`assistant_delta_seen`; cancellation is separately flagged.
+
+These events contain no prompt bodies, delta text, credentials, fabricated
+reasoning transcripts, or invented tool actions. The original `delta`,
+`transport_progress`, and `result` frames remain compatible. The native
+side currently accepts and validates the activity metadata into **debug
+diagnostics** (`CHATARIUM_LOG=debug`). It is not yet a persisted in-chat
+activity timeline. Durable journal projection, per-event UI controls,
+and any genuine reasoning-summary or action streams exposed by a future
+eligible model/DevKit surface remain separate future work.
+
+The offline bridge integration tests assert that an actual synthetic streamed
+turn emits ordered activity events, and that a disconnected inference POST is
+marked `wire_unconfirmed` without retrying. Separate deterministic tests
+verify stage order, monotonic timing, cancellation, provenance, and privacy.
+
 ## Offline alpha transport contract
 
 Run `node --test tools/siwc-bridge/test/alpha-protocol.test.mjs` to
