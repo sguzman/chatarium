@@ -628,7 +628,7 @@ mod tests {
         assert!(
             replay_tool_call_audit(decided.events())
                 .unwrap_err()
-                .contains("pending explicit approval")
+                .contains("must be unconsumed and at its initial gate")
         );
     }
 

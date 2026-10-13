@@ -473,7 +473,7 @@ mod tests {
         assert!(
             preview_stdio_tool_invocation(not_approved.events(), CALL)
                 .unwrap_err()
-                .contains("user-approved")
+                .contains("lacks unconsumed exact user or policy authorization")
         );
         let excluded = configured_call("read", "hello", "{}", true);
         assert!(
@@ -543,7 +543,7 @@ mod tests {
         assert!(
             preview_stdio_tool_invocation(dispatched.events(), CALL)
                 .unwrap_err()
-                .contains("undispatched")
+                .contains("lacks unconsumed exact user or policy authorization")
         );
     }
 
@@ -626,7 +626,7 @@ mod tests {
         assert!(
             preview_activated_stdio_tool_invocation(store.events(), CALL)
                 .unwrap_err()
-                .contains("user-approved")
+                .contains("lacks unconsumed exact user or policy authorization")
         );
     }
 

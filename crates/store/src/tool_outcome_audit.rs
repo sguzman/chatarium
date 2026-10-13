@@ -495,7 +495,7 @@ mod tests {
         assert!(
             replay_tool_call_outcome_audit(store.events())
                 .unwrap_err()
-                .contains("before explicitly approved dispatch")
+                .contains("without matching dispatch authority")
         );
 
         let mut store = MemoryEventStore::default();
@@ -512,7 +512,7 @@ mod tests {
         assert!(
             replay_tool_call_outcome_audit(store.events())
                 .unwrap_err()
-                .contains("before explicitly approved dispatch")
+                .contains("without matching dispatch authority")
         );
     }
 
@@ -571,7 +571,7 @@ mod tests {
                 "too soon",
             )
             .unwrap_err()
-            .contains("before explicitly approved dispatch")
+            .contains("without matching dispatch authority")
         );
         assert_eq!(store.events().len(), before_approval);
 
