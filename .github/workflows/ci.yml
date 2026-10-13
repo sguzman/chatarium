@@ -128,6 +128,13 @@ jobs:
           # host-wide AppArmor restriction or expose host networking.
           sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+      - name: Smoke three demo tools through the production isolated MCP runner
+        env:
+          CHATARIUM_TEST_LINUX_MCP_DEMO: "1"
+        run: |
+          cargo build -p chatarium-desktop --bin chatarium-mcp-demo
+          sudo install -o root -g root -m 0755 target/debug/chatarium-mcp-demo /usr/bin/chatarium-mcp-demo
+          cargo test -p chatarium-desktop --bin chatarium-desktop live_demo_mcp_provider_end_to_end -- --nocapture
       - name: Verify actual Linux sandbox readiness without consuming a tool route
         env:
           CHATARIUM_TEST_LINUX_MCP_SANDBOX: "1"
