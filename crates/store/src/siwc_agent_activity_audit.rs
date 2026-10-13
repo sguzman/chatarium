@@ -58,8 +58,17 @@ pub fn append_siwc_agent_activity_checked(
     })
     .to_string();
     let scope = activity_scope(conversation_id, turn_id);
-    let mut prospective = store.events().to_vec();
-    let sequence = prospective.last().map_or(1, |last| last.sequence + 1);
+    // Streaming emits many small activity frames. Do not clone the entire
+    // native archive (potentially gigabytes of transcripts) on every delta.
+    // Replay only the activity records; all other EventKinds are ignored by
+    // this validator. Full archive integrity still replays every record.
+    let mut prospective = store
+        .events()
+        .iter()
+        .filter(|event| event.kind == EventKind::SiwcAgentActivityObserved)
+        .cloned()
+        .collect::<Vec<_>>();
+    let sequence = store.events().last().map_or(1, |last| last.sequence + 1);
     prospective.push(EventEnvelope {
         sequence,
         at_unix_ms: 0,
@@ -135,6 +144,18 @@ pub fn replay_siwc_agent_activity_audit(
         let record = parse_observation(observation, conversation_id, turn_id, event.sequence)?;
         let key = (conversation_id, turn_id, record.request_id.clone());
         let track = tracks.entry(key).or_default();
+        // A definite rejected 429 can be retried by the native delivery
+        // controller using the same Responses request identity. The bridge
+        // produces a new attempt with source sequence 1 and fresh elapsed
+        // time. Accept that reset ONLY after a durably terminal attempt,
+        // while retaining the earlier attempt in the immutable journal.
+        if track.last().is_some_and(|previous| {
+            matches!(previous.stage.as_str(), "completed" | "failed")
+                && record.stage == "started"
+                && record.source_sequence == 1
+        }) {
+            track.clear();
+        }
         validate_transition(track, &record)?;
         track.push(record.clone());
         all.push(record);
@@ -581,6 +602,61 @@ mod tests {
             Some("http_rejected")
         );
         assert_eq!(rows.last().unwrap().http_status, Some(429));
+    }
+
+    #[test]
+    fn retry_after_observed_http_429_keeps_two_attempts_under_one_request_id() {
+        let c = LocalConversationId::new();
+        let t = LocalTurnId::new();
+        let mut store = MemoryEventStore::default();
+        for (seq, stage, extra) in [
+            (1, "started", json!({})),
+            (2, "wire_attempted", json!({})),
+            (3, "http_rejected", json!({"http_status": 429})),
+            (4, "failed", json!({
+                "http_status": 429,
+                "cancelled": false,
+                "delivery_evidence": "http_rejected"
+            })),
+            // Same request ID, but a new genuine inference attempt.
+            (1, "started", json!({})),
+            (2, "wire_attempted", json!({})),
+            (3, "acknowledged", json!({})),
+            (4, "first_text_delta", json!({"delta_chars": 5})),
+            (5, "completed", json!({
+                "delivery_evidence": "assistant_delta_seen"
+            })),
+        ] {
+            let event = frame("same-request", seq, stage, extra);
+            append_siwc_agent_activity_checked(&mut store, c, t, &event).unwrap();
+        }
+        let records = replay_siwc_agent_activity_audit(store.events()).unwrap();
+        assert_eq!(records.len(), 9);
+        assert_eq!(
+            records.iter().filter(|row| row.stage == "started").count(), 2
+        );
+        assert_eq!(records[3].delivery_evidence.as_deref(), Some("http_rejected"));
+        assert_eq!(
+            records.last().unwrap().delivery_evidence.as_deref(),
+            Some("assistant_delta_seen")
+        );
+        assert!(records.windows(2).all(|pair| {
+            pair[0].recorded_sequence < pair[1].recorded_sequence
+        }));
+    }
+
+    #[test]
+    fn new_attempt_cannot_reset_a_nonterminal_inference() {
+        let mut store = MemoryEventStore::default();
+        let c = LocalConversationId::new();
+        let t = LocalTurnId::new();
+        append_siwc_agent_activity_checked(
+            &mut store, c, t, &frame("r", 1, "started", json!({}))
+        ).unwrap();
+        assert!(append_siwc_agent_activity_checked(
+            &mut store, c, t, &frame("r", 1, "started", json!({}))
+        ).is_err());
+        assert_eq!(store.events().len(), 1);
     }
 
     #[test]
