@@ -2,8 +2,8 @@
 // This records only events the bridge actually sees. It never invents
 // reasoning summaries or upstream tool activity that the DevKit does not emit.
 const STAGES = new Set([
-  "started", "wire_attempted", "acknowledged", "first_text_delta",
-  "text_delta", "completed", "failed",
+  "started", "wire_attempted", "acknowledged", "http_rejected",
+  "first_text_delta", "text_delta", "completed", "failed",
 ]);
 const TERMINAL = new Set(["completed", "failed"]);
 
@@ -22,7 +22,15 @@ export function createAgentActivityRecorder({
   let terminal = false;
   let wireAttempted = false;
   let acknowledged = false;
+  let rejectedStatus = null;
   let textDeltaSeen = false;
+  function deliveryEvidence() {
+    return textDeltaSeen ? "assistant_delta_seen"
+      : acknowledged ? "http_acknowledged"
+      : rejectedStatus !== null ? "http_rejected"
+      : wireAttempted ? "wire_unconfirmed"
+      : "not_dispatched";
+  }
   const events = [];
   function write(stage, extra = {}) {
     if (!STAGES.has(stage) || terminal) {
@@ -55,13 +63,26 @@ export function createAgentActivityRecorder({
         return write(stage);
       }
       if (stage === "acknowledged") {
-        if (!wireAttempted || acknowledged) throw new Error("invalid acknowledgment");
+        if (!wireAttempted || acknowledged || rejectedStatus !== null) {
+          throw new Error("invalid acknowledgment");
+        }
         acknowledged = true;
         return write(stage);
       }
       throw new Error("invalid transport progress");
     },
+    rejected(status) {
+      if (!wireAttempted || acknowledged || rejectedStatus !== null ||
+          !Number.isInteger(status) || status < 400 || status > 599) {
+        throw new Error("invalid HTTP rejection observation");
+      }
+      rejectedStatus = status;
+      return write("http_rejected", { http_status: status });
+    },
     delta(text) {
+      if (rejectedStatus !== null) {
+        throw new Error("rejected HTTP response cannot generate text");
+      }
       if (typeof text !== "string") throw new TypeError("text delta must be a string");
       if (!textDeltaSeen) {
         textDeltaSeen = true;
@@ -70,28 +91,18 @@ export function createAgentActivityRecorder({
       return write("text_delta", { delta_chars: text.length });
     },
     completed() {
-      return write("completed", {
-        delivery_evidence: textDeltaSeen
-          ? "assistant_delta_seen"
-          : acknowledged
-            ? "http_acknowledged"
-            : wireAttempted
-              ? "wire_unconfirmed"
-              : "not_dispatched",
-      });
+      if (rejectedStatus !== null) {
+        throw new Error("rejected HTTP response cannot complete");
+      }
+      return write("completed", { delivery_evidence: deliveryEvidence() });
     },
     failed(error) {
       // Error bodies may contain private prompt text or credentials. Only
       // transport evidence is recorded; the existing error channel remains
       // responsible for sanitized error reporting.
       return write("failed", {
-        delivery_evidence: textDeltaSeen
-          ? "assistant_delta_seen"
-          : acknowledged
-            ? "http_acknowledged"
-            : wireAttempted
-              ? "wire_unconfirmed"
-              : "not_dispatched",
+        delivery_evidence: deliveryEvidence(),
+        ...(rejectedStatus === null ? {} : { http_status: rejectedStatus }),
         cancelled: error?.code === "aborted" || error?.name === "AbortError",
       });
     },
