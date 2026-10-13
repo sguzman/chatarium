@@ -67,6 +67,11 @@ export function createChatGPT(config) {
           store: input === "verify-store-override",
         }),
       });
+      if (!response.ok) {
+        const error = new Error("synthetic upstream HTTP rejection");
+        error.status = response.status;
+        throw error;
+      }
       const wire = await response.json();
       if (input === "simulate-devkit-repost") {
         // A second upstream POST must be rejected before the network stub.
