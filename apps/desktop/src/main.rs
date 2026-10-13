@@ -23233,6 +23233,22 @@ fn projected_display_messages(events: &[EventEnvelope]) -> Vec<DisplayMessage> {
     projected_display_messages_iter(events.iter())
 }
 
+/// Metadata-only native reader provenance for a durably committed file.
+/// The complete base64 payload stays in the journal, never in the transcript.
+fn authored_attachment_provenance(event: &EventEnvelope) -> Option<String> {
+    if event.kind != EventKind::UserMessageCommitted {
+        return None;
+    }
+    let attachment = decode_user_message_attachment(event).ok()??;
+    let filename = attachment.get("filename")?.as_str()?;
+    let bytes = attachment.get("byte_len")?.as_u64()?;
+    let read_ms = attachment.get("read_elapsed_ms")?.as_f64()?;
+    let encode_ms = attachment.get("encoding_elapsed_ms")?.as_f64()?;
+    Some(format!(
+        "local journal · authored · attached {filename} ({bytes} bytes; read {read_ms:.1} ms, encode {encode_ms:.1} ms)"
+    ))
+}
+
 fn projected_display_messages_iter<'a>(
     events: impl IntoIterator<Item = &'a EventEnvelope>,
 ) -> Vec<DisplayMessage> {
@@ -23272,7 +23288,8 @@ fn projected_display_messages_iter<'a>(
             sequence: event.sequence,
             timestamp: Some(event.at_unix_ms as f64 / 1000.0),
             provenance_label: Some(match role {
-                DisplayRole::User => "local journal · authored".to_owned(),
+                DisplayRole::User => authored_attachment_provenance(event)
+                    .unwrap_or_else(|| "local journal · authored".to_owned()),
                 DisplayRole::Assistant => "ChatGPT Responses · remote assistant".to_owned(),
                 DisplayRole::Mcp => "verified local MCP audit".to_owned(),
                 DisplayRole::Activity => "verified SIWC lifecycle observation".to_owned(),
@@ -26812,6 +26829,52 @@ mod tests {
         assert!(status.contains("Edge extension"));
         assert!(status.contains("typed roundtrip"));
         assert!(!status.contains("Tampermonkey"));
+    }
+
+    #[test]
+    fn attachment_reader_shows_only_verified_metadata_and_never_encoded_bytes() {
+        let mut store = chatarium_store::MemoryEventStore::default();
+        let message = AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "Please read this file.",
+        );
+        let attachment = serde_json::json!({
+            "filename": "memo.txt",
+            "mime": "text/plain",
+            "byte_len": 3,
+            "prepared_at_unix_ms": 10,
+            "read_elapsed_ms": 1.25,
+            "encoding_elapsed_ms": 0.2,
+            "content": {
+                "type": "input_file",
+                "filename": "memo.txt",
+                "file_data": "data:text/plain;base64,YWJj"
+            }
+        });
+        chatarium_store::authored::commit_user_message_with_attachment(
+            &mut store,
+            &message,
+            Some(&attachment),
+        )
+        .unwrap();
+        let projected = projected_local_display_messages(store.events(), message.conversation_id);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].text, "Please read this file.");
+        let origin = projected[0].provenance_label.as_ref().unwrap();
+        assert!(origin.contains("memo.txt"));
+        assert!(origin.contains("3 bytes"));
+        assert!(origin.contains("read 1.2 ms") || origin.contains("read 1.3 ms"));
+        assert!(!origin.contains("YWJj"));
+        assert!(!projected[0].text.contains("YWJj"));
+        let cached = native_conversation_search::NativeConversationSearchIndex::build(
+            store.events(),
+        );
+        assert_eq!(
+            cached.messages(message.conversation_id)[0].provenance_label,
+            projected[0].provenance_label
+        );
     }
 
     #[test]
