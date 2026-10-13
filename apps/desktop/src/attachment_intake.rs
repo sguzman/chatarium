@@ -68,10 +68,7 @@ fn file_type(path: &Path) -> Result<(String, AttachmentKind, &'static str), Stri
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| "attachment name is not valid UTF-8".to_owned())?;
-    if filename.is_empty()
-        || filename.len() > 128
-        || filename.chars().any(char::is_control)
-    {
+    if filename.is_empty() || filename.len() > 128 || filename.chars().any(char::is_control) {
         return Err("attachment filename is invalid".to_owned());
     }
     let extension = path
@@ -137,8 +134,7 @@ pub fn prepare(path: &Path) -> Result<PreparedAttachment, String> {
 }
 
 fn encode_base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let a = chunk[0];
