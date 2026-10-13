@@ -9996,19 +9996,37 @@ impl eframe::App for ChatariumApp {
                         ui.collapsing("Tools / MCP · restricted local adapter", |ui| {
                             ui.label(
                                 egui::RichText::new(
-                                    "Durable provider/call identities, explicit approval, and the recovered legacy tool envelope. The builtin hello adapter and explicitly approved, sandboxed Linux MCP stdio calls can execute; unrestricted host processes, browser, filesystem, automatic tools, and network access remain disabled.",
+                                    "MCP agent calls run through exact saved tool policies and durable execution audits. Built-in read-only discovery and hello can run automatically. External providers require registration and Linux sandbox activation; unsupported host, browser, filesystem and network access remain disabled.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
 
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.checkbox(&mut self.conversation_mcp_enabled, "Enable MCP tools in this conversation").changed() {
+                                    if self.conversation_mcp_enabled {
+                                        let bootstrap = self.mcp_agent_defaults.bootstrap.clone();
+                                        if !self.conversation_developer_context.contains(&bootstrap) {
+                                            if !self.conversation_developer_context.is_empty() {
+                                                self.conversation_developer_context.push_str("\n\n");
+                                            }
+                                            self.conversation_developer_context.push_str(&bootstrap);
+                                        }
+                                    }
+                                    self.persist_current_inference_settings();
+                                }
+                            });
+                            ui.label(if self.conversation_mcp_enabled {
+                                "MCP ON · this conversation has the agent tool-call protocol."
+                            } else {
+                                "MCP OFF · enable above to allow model-proposed tool calls."
+                            });
                             ui.collapsing("Agent defaults · bootstrap / tool policies", |ui| {
-                                ui.label("Global, locally saved draft for future automatic MCP turns.");
-                                ui.label("These settings do NOT yet enable automatic model-to-tool execution.");
+                                ui.label("Saved MCP bootstrap and exact per-tool execution permissions.");
                                 ui.checkbox(
                                     &mut self.mcp_agent_defaults.seed_new_conversations,
-                                    "Seed newly created local chats with MCP proposal instructions",
-                                ).on_hover_text("Opt-in only: new chats receive a snapshot of this template as developer context. Tool proposals still require separate Allow and Run.");
+                                    "Enable MCP automatically in new local conversations",
+                                ).on_hover_text("New local conversations inherit this saved developer bootstrap and enable MCP. Exact automatic-policy tools run; ask-mode tools require user approval.");
                                 ui.label("Model-facing MCP instructions (editable):");
                                 ui.add(
                                     egui::TextEdit::multiline(&mut self.mcp_agent_defaults.bootstrap)
@@ -10033,7 +10051,7 @@ impl eframe::App for ChatariumApp {
                                     if ui.button("Copy bootstrap").clicked() {
                                         ctx.copy_text(self.mcp_agent_defaults.bootstrap.clone());
                                     }
-                                    if ui.button("Use in this chat · proposals only").clicked() {
+                                    if ui.button("Enable MCP in this chat").clicked() {
                                         let bootstrap = self.mcp_agent_defaults.bootstrap.clone();
                                         if !self.conversation_developer_context.contains(&bootstrap) {
                                             if !self.conversation_developer_context.is_empty() {
@@ -10047,7 +10065,7 @@ impl eframe::App for ChatariumApp {
                                         self.status = "MCP proposal protocol enabled for this chat. Exact standing tool policies may execute automatically; ask-mode tools pause for approval.".to_owned();
                                     }
                                 });
-                                ui.label("Policies are saved as drafts, not dispatch grants. Proposals can now be recorded automatically; execution and agent continuation still require a future durable loop.");
+                                ui.label("Automatic execution requires a saved exact provider::tool rule. Unmatched tools ask for approval. The agent resumes after a durable result.");
                             });
 
                             if ui.add_enabled(
@@ -10146,7 +10164,7 @@ impl eframe::App for ChatariumApp {
                                     if providers.is_empty() {
                                         ui.label(
                                             egui::RichText::new(
-                                                "no local tool providers registered",
+                                                "No external MCP providers registered. Built-in tools are available to MCP-enabled conversations.",
                                             )
                                             .size(9.0)
                                             .color(egui::Color32::from_rgb(139, 143, 153)),

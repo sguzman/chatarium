@@ -32,8 +32,8 @@ impl Default for ConversationInferenceSettings {
         Self {
             model: None,
             instructions: String::new(),
-            developer_context: String::new(),
-            mcp_enabled: false,
+            developer_context: crate::mcp_agent_defaults::AgentDefaults::default().bootstrap,
+            mcp_enabled: true,
             slow_warning_seconds: DEFAULT_SLOW_WARNING_SECONDS,
         }
     }
@@ -211,6 +211,18 @@ mod tests {
             "chatarium-local-inference-settings-{}-{nonce}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn new_local_conversations_have_discoverable_mcp_enabled_by_default() {
+        let defaults = ConversationInferenceSettings::default();
+        assert!(defaults.mcp_enabled);
+        assert!(defaults.developer_context.contains("chatarium.builtin::tools.list"));
+        let settings = InferenceSettingsStore::default();
+        assert_eq!(
+            settings.for_conversation(LocalConversationId::new()),
+            defaults,
+        );
     }
 
     #[test]

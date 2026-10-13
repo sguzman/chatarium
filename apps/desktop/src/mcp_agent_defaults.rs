@@ -1,5 +1,5 @@
-//! User-owned MCP bootstrap and policy drafts. These settings never grant
-//! execution rights: the current MCP runner still requires explicit Allow+Run.
+//! User-owned MCP bootstrap and policy settings. Automatic execution is
+//! restricted to exactly persisted authorizations and audited one-shot routes.
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -29,11 +29,14 @@ impl Default for AgentDefaults {
                 "Use chatarium.builtin::tools.list to discover available tools. ",
                 "Do not invent provider names or execute tools yourself. ",
                 "Chatarium makes all approval decisions and returns exact tool results. ",
-                "When the current runtime does not support automatic continuation, wait for explicit user review before assuming the tool has completed."
+                "When a tool is permitted and executed, Chatarium appends the exact audited result ",
+                "to this same conversation turn and resumes you automatically. ",
+                "Never claim to have called a tool unless its actual result appears in context. ",
+                "If execution requires approval, wait for the user to approve it."
             ).to_owned(),
             policy_rules: "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask".to_owned(),
             max_calls: 8,
-            seed_new_conversations: false,
+            seed_new_conversations: true,
         }
     }
 }
@@ -120,7 +123,12 @@ impl AgentDefaults {
 
     pub fn load(path: &Path) -> Result<Self, String> {
         if !path.exists() {
-            return Ok(Self::default());
+            // A fresh installation must have the exact built-in permissions on
+            // disk before the persistence worker can authorize any automatic
+            // MCP call. Never synthesize a grant for an existing settings file.
+            let defaults = Self::default();
+            defaults.save_atomic(path)?;
+            return Ok(defaults);
         }
         let bytes = fs::read(path).map_err(|e| format!("cannot read MCP defaults: {e}"))?;
         if bytes.len() > MAX_PROMPT + 65536 {
@@ -262,6 +270,25 @@ mod tests {
             .is_err()
         );
         assert!(parse_model_tool_request(r#"{"chatarium_mcp_call":{"provider":"x","tool":"y","arguments":{}},"approval":true}"#).is_err());
+    }
+
+    #[test]
+    fn first_load_persists_exact_default_permissions_for_worker_replay() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-default-mcp-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        assert!(!path.exists());
+        let loaded = AgentDefaults::load(&path).unwrap();
+        assert!(loaded.seed_new_conversations);
+        assert_eq!(tool_policy(&loaded.policy_rules, "chatarium.builtin", "tools.list"), Ok(ToolPolicy::Automatic));
+        assert!(path.is_file());
+        assert_eq!(loaded, AgentDefaults::load(&path).unwrap());
+        let _ = fs::remove_file(path);
     }
 
     #[test]
