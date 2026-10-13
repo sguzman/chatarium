@@ -285,7 +285,10 @@ mod tests {
         assert!(!path.exists());
         let loaded = AgentDefaults::load(&path).unwrap();
         assert!(loaded.seed_new_conversations);
-        assert_eq!(tool_policy(&loaded.policy_rules, "chatarium.builtin", "tools.list"), Ok(ToolPolicy::Automatic));
+        assert_eq!(
+            tool_policy(&loaded.policy_rules, "chatarium.builtin", "tools.list"),
+            Ok(ToolPolicy::Automatic)
+        );
         assert!(path.is_file());
         assert_eq!(loaded, AgentDefaults::load(&path).unwrap());
         let _ = fs::remove_file(path);

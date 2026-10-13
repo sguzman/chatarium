@@ -32,8 +32,8 @@ impl Default for ConversationInferenceSettings {
         Self {
             model: None,
             instructions: String::new(),
-            developer_context: crate::mcp_agent_defaults::AgentDefaults::default().bootstrap,
-            mcp_enabled: true,
+            developer_context: String::new(),
+            mcp_enabled: false,
             slow_warning_seconds: DEFAULT_SLOW_WARNING_SECONDS,
         }
     }
@@ -130,6 +130,26 @@ impl InferenceSettingsStore {
             .unwrap_or_default()
     }
 
+    /// Use the saved global new-chat preference only when a conversation has
+    /// no explicit inference settings. Existing per-chat MCP opt-outs survive.
+    pub fn for_conversation_with_mcp_defaults(
+        &self,
+        conversation_id: LocalConversationId,
+        agent_defaults: &crate::mcp_agent_defaults::AgentDefaults,
+    ) -> ConversationInferenceSettings {
+        self.entries
+            .get(&conversation_id.to_string())
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut settings = ConversationInferenceSettings::default();
+                if agent_defaults.seed_new_conversations {
+                    settings.mcp_enabled = true;
+                    settings.developer_context = agent_defaults.bootstrap.clone();
+                }
+                settings
+            })
+    }
+
     pub fn set(
         &mut self,
         conversation_id: LocalConversationId,
@@ -214,14 +234,30 @@ mod tests {
     }
 
     #[test]
-    fn new_local_conversations_have_discoverable_mcp_enabled_by_default() {
-        let defaults = ConversationInferenceSettings::default();
-        assert!(defaults.mcp_enabled);
-        assert!(defaults.developer_context.contains("chatarium.builtin::tools.list"));
-        let settings = InferenceSettingsStore::default();
+    fn new_local_conversations_follow_saved_mcp_defaults_without_overriding_opt_outs() {
+        let conversation = LocalConversationId::new();
+        let mut settings = InferenceSettingsStore::default();
+        let defaults = crate::mcp_agent_defaults::AgentDefaults::default();
+        let enabled = settings.for_conversation_with_mcp_defaults(conversation, &defaults);
+        assert!(enabled.mcp_enabled);
+        assert!(
+            enabled
+                .developer_context
+                .contains("chatarium.builtin::tools.list")
+        );
+
+        let mut disabled_global = defaults.clone();
+        disabled_global.seed_new_conversations = false;
+        let disabled = settings.for_conversation_with_mcp_defaults(conversation, &disabled_global);
+        assert!(!disabled.mcp_enabled);
+        assert!(disabled.developer_context.is_empty());
+
+        let mut explicit_off = ConversationInferenceSettings::default();
+        explicit_off.developer_context = "deliberately no MCP".to_owned();
+        settings.set(conversation, explicit_off.clone()).unwrap();
         assert_eq!(
-            settings.for_conversation(LocalConversationId::new()),
-            defaults,
+            settings.for_conversation_with_mcp_defaults(conversation, &defaults),
+            explicit_off,
         );
     }
 

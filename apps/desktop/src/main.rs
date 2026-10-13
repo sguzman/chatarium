@@ -1255,12 +1255,12 @@ impl ChatariumApp {
                             local_inference_settings::InferenceSettingsStore::default()
                         }
                     };
-                let active_inference_settings =
-                    inference_settings.for_conversation(local_conversation_id);
                 let mcp_agent_defaults = mcp_agent_defaults::AgentDefaults::load(
                     &data_dir.join(mcp_agent_defaults::FILE_NAME),
                 )
                 .unwrap_or_default();
+                let active_inference_settings = inference_settings
+                    .for_conversation_with_mcp_defaults(local_conversation_id, &mcp_agent_defaults);
                 let behavior_profile_path = local_behavior_profile_path(&journal_path);
                 let behavior_profiles =
                     match behavior_profile::BehaviorProfileStore::load(&behavior_profile_path) {
@@ -1492,7 +1492,6 @@ impl ChatariumApp {
         let inference_settings =
             local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
                 .unwrap_or_default();
-        let active_inference_settings = inference_settings.for_conversation(local_conversation_id);
         let mcp_agent_defaults = mcp_agent_defaults::AgentDefaults::load(
             &journal_path
                 .parent()
@@ -1500,6 +1499,8 @@ impl ChatariumApp {
                 .join(mcp_agent_defaults::FILE_NAME),
         )
         .unwrap_or_default();
+        let active_inference_settings = inference_settings
+            .for_conversation_with_mcp_defaults(local_conversation_id, &mcp_agent_defaults);
         let behavior_profiles = behavior_profile::BehaviorProfileStore::load(
             &local_behavior_profile_path(&journal_path),
         )
@@ -1669,7 +1670,9 @@ impl ChatariumApp {
         self.saved_revision = 0;
         self.evidence = TurnEvidence::default();
 
-        let settings = self.inference_settings.for_conversation(conversation_id);
+        let settings = self
+            .inference_settings
+            .for_conversation_with_mcp_defaults(conversation_id, &self.mcp_agent_defaults);
         self.slow_warning_seconds = settings.slow_warning_seconds;
         self.selected_model = settings.model;
         self.conversation_instructions = settings.instructions;
