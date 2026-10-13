@@ -215,15 +215,50 @@ fn validate_attachment(attachment: &Value) -> Result<(), String> {
     {
         return Err("attachment filename mismatch".to_owned());
     }
+    let expected_mime = match filename.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()) {
+        Some(ext) => match ext.as_str() {
+            "txt" | "md" => "text/plain",
+            "csv" => "text/csv",
+            "json" => "application/json",
+            "pdf" => "application/pdf",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            _ => return Err("attachment filename extension not allowed".to_owned()),
+        },
+        None => return Err("attachment requires a file extension".to_owned()),
+    };
+    if mime != expected_mime {
+        return Err("attachment extension and MIME disagree".to_owned());
+    }
     let payload = content
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| "attachment base64 source missing".to_owned())?;
+    let prefix = format!("data:{mime};base64,");
+    let encoded = payload
+        .strip_prefix(&prefix)
+        .ok_or_else(|| "attachment data URL MIME disagrees".to_owned())?;
     if payload.len() > 180_000
-        || !payload.starts_with(&format!("data:{mime};base64,"))
-        || payload.bytes().any(|byte| !byte.is_ascii())
+        || encoded.len() != (byte_len as usize).div_ceil(3) * 4
     {
-        return Err("attachment data URL invalid or oversized".to_owned());
+        return Err("attachment encoded byte length invalid or oversized".to_owned());
+    }
+    let padding = if encoded.ends_with("==") {
+        2
+    } else if encoded.ends_with('=') {
+        1
+    } else {
+        0
+    };
+    if encoded.len() / 4 * 3 - padding != byte_len as usize
+        || !encoded
+            .bytes()
+            .take(encoded.len() - padding)
+            .all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/'))
+        || !encoded.bytes().skip(encoded.len() - padding).all(|byte| byte == b'=')
+    {
+        return Err("attachment base64 payload malformed or length disagrees".to_owned());
     }
     Ok(())
 }
@@ -409,6 +444,42 @@ mod tests {
         });
         assert!(commit_user_message_with_attachment(&mut store, &message, Some(&bad)).is_err());
         assert!(store.events().is_empty());
+    }
+
+    #[test]
+    fn forged_attachment_byte_lengths_and_mime_fail_closed() {
+        let message = authored();
+        let base = json!({
+            "filename": "notes.txt",
+            "mime": "text/plain",
+            "byte_len": 3,
+            "prepared_at_unix_ms": 1000,
+            "read_elapsed_ms": 0.1,
+            "encoding_elapsed_ms": 0.1,
+            "content": {
+                "type": "input_file",
+                "filename": "notes.txt",
+                "file_data": "data:text/plain;base64,YWJj"
+            }
+        });
+        for changed in [
+            ("byte_len", json!(2)),
+            ("byte_len", json!(4)),
+            ("mime", json!("application/pdf")),
+        ] {
+            let mut forged = base.clone();
+            forged[changed.0] = changed.1;
+            let mut store = MemoryEventStore::default();
+            assert!(commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err());
+            assert!(store.events().is_empty());
+        }
+        for corrupted in ["YWJ!", "YW=J", "YWJj="] {
+            let mut forged = base.clone();
+            forged["content"]["file_data"] = format!("data:text/plain;base64,{corrupted}");
+            let mut store = MemoryEventStore::default();
+            assert!(commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err());
+            assert!(store.events().is_empty());
+        }
     }
 
     #[test]
