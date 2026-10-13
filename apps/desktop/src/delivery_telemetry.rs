@@ -34,11 +34,15 @@ pub struct Attempt {
 
 impl Attempt {
     pub fn seconds(&self) -> f64 {
-        self.finished_at.unwrap_or_else(Instant::now).duration_since(self.started_at).as_secs_f64()
+        self.finished_at
+            .unwrap_or_else(Instant::now)
+            .duration_since(self.started_at)
+            .as_secs_f64()
     }
 
     pub fn time_to_first_output(&self) -> Option<f64> {
-        self.first_output_at.map(|t| t.duration_since(self.started_at).as_secs_f64())
+        self.first_output_at
+            .map(|t| t.duration_since(self.started_at).as_secs_f64())
     }
 
     pub fn label(&self) -> &'static str {
@@ -91,7 +95,12 @@ impl Timeline {
     }
 
     pub fn set(&mut self, request_id: &str, phase: Phase) {
-        if let Some(attempt) = self.attempts.iter_mut().rev().find(|a| a.request_id == request_id) {
+        if let Some(attempt) = self
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|a| a.request_id == request_id)
+        {
             attempt.phase = phase;
             let now = Instant::now();
             match phase {
@@ -112,7 +121,12 @@ impl Timeline {
     }
 
     pub fn retry(&mut self, request_id: &str, backoff: Duration, error: String) {
-        if let Some(a) = self.attempts.iter_mut().rev().find(|a| a.request_id == request_id) {
+        if let Some(a) = self
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|a| a.request_id == request_id)
+        {
             a.retries += 1;
             a.phase = Phase::RetryScheduled;
             a.retry_at = Some(Instant::now() + backoff);
@@ -122,20 +136,32 @@ impl Timeline {
 
     pub fn error(&mut self, request_id: &str, phase: Phase, detail: String) {
         self.set(request_id, phase);
-        if let Some(a) = self.attempts.iter_mut().rev().find(|a| a.request_id == request_id) {
+        if let Some(a) = self
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|a| a.request_id == request_id)
+        {
             a.error = Some(detail);
         }
     }
 
-    pub fn for_conversation<'a>(&'a self, conversation_id: &'a str) -> impl Iterator<Item = &'a Attempt> {
-        self.attempts.iter().filter(move |a| a.conversation_id == conversation_id)
+    pub fn for_conversation<'a>(
+        &'a self,
+        conversation_id: &'a str,
+    ) -> impl Iterator<Item = &'a Attempt> {
+        self.attempts
+            .iter()
+            .filter(move |a| a.conversation_id == conversation_id)
     }
 
     pub fn mean_response_seconds(&self, conversation_id: &str) -> Option<f64> {
-        let completed = self.for_conversation(conversation_id)
+        let completed = self
+            .for_conversation(conversation_id)
             .filter(|a| a.phase == Phase::Complete)
             .collect::<Vec<_>>();
-        (!completed.is_empty()).then(|| completed.iter().map(|a| a.seconds()).sum::<f64>() / completed.len() as f64)
+        (!completed.is_empty())
+            .then(|| completed.iter().map(|a| a.seconds()).sum::<f64>() / completed.len() as f64)
     }
 }
 
