@@ -15564,7 +15564,12 @@ fn transcript_bubble(
                             ui.add_space(6.0);
                         }
                     } else {
-                        render_reader_lines(ui, &message.text, search_query, false, active_hit);
+                        // Literal mode must keep Markdown markers, including
+                        // inline backticks, exactly as they were authored.
+                        ui.label(
+                            egui::RichText::new(&message.text)
+                                .color(egui::Color32::from_rgb(232, 234, 239)),
+                        );
                     }
                 }
                 ui.add_space(5.0);
