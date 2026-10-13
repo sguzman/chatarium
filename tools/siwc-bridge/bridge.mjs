@@ -470,7 +470,11 @@ async function runWithStreamResponsePatch(patch, operation, onTransportProgress 
     });
     // An HTTP success is the earliest proof that the server accepted this
     // request. No response at all must stay marked as delivery-unknown.
-    if (response.ok) onTransportProgress("acknowledged");
+    if (response.ok) {
+      onTransportProgress("acknowledged");
+    } else if (response.status >= 400 && response.status <= 599) {
+      onTransportProgress("http_rejected", response.status);
+    }
     return response;
   };
 
@@ -696,9 +700,14 @@ async function handle(command) {
                 });
               },
             });
-          const result = await runWithStreamResponsePatch(patch, operation, (stage) => {
-            activity.transport(stage);
-            emit({ type: "transport_progress", request_id: requestId, stage });
+          const result = await runWithStreamResponsePatch(patch, operation, (stage, status) => {
+            if (stage === "http_rejected") {
+              // A concrete HTTP rejection is not an ambiguous lost reply.
+              activity.rejected(status);
+            } else {
+              activity.transport(stage);
+              emit({ type: "transport_progress", request_id: requestId, stage });
+            }
           });
           activity.completed();
           emit({
