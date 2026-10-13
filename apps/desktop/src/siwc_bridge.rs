@@ -1,3 +1,4 @@
+use crate::diagnostics;
 use eframe::egui;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -366,6 +367,11 @@ fn forward_bridge_output(
                     if terminal {
                         return;
                     }
+                } else if let Some(notice) = read_retry_diagnostic(&line) {
+                    // The desktop does not yet have a durable read-retry audit
+                    // event. Preserve a safe local operational diagnostic rather
+                    // than silently dropping the bridge's retry notice.
+                    diagnostics::info("siwc-retry", notice);
                 }
             }
             Err(error) => {
@@ -533,6 +539,36 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
         }
         _ => None,
     }
+}
+
+fn read_retry_diagnostic(line: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    if contains_credential_field(&value)
+        || value.get("type")?.as_str()? != "read_retry_scheduled"
+        || value.get("operation")?.as_str()? != "models"
+    {
+        return None;
+    }
+    let category = value.get("category")?.as_str()?;
+    if !matches!(category, "rate_limit" | "http_transient" | "network_transient") {
+        return None;
+    }
+    let attempt = value.get("attempt")?.as_u64()?;
+    let next_attempt = value.get("next_attempt")?.as_u64()?;
+    let delay_ms = value.get("delay_ms")?.as_u64()?;
+    if attempt == 0 || attempt >= 3 || next_attempt != attempt + 1 || delay_ms > 3_000 {
+        return None;
+    }
+    let status = value
+        .get("status")
+        .and_then(Value::as_u64)
+        .filter(|status| (100..=599).contains(status))
+        .map(|status| format!(" HTTP {status}"))
+        .unwrap_or_default();
+    let request_id = diagnostics::short_id(value.get("request_id")?.as_str()?);
+    Some(format!(
+        "read-only models request={request_id} {category}{status} attempt={attempt}->{next_attempt} delay={delay_ms}ms"
+    ))
 }
 
 fn contains_credential_field(value: &Value) -> bool {
@@ -898,6 +934,24 @@ mod tests {
                 "Sign in with ChatGPT bridge output violated the credential boundary".to_owned()
             )
         );
+    }
+
+    #[test]
+    fn only_sanitized_model_read_retries_are_diagnostic() {
+        let message = r#"{"type":"read_retry_scheduled","request_id":"an-account-local-request-id","operation":"models","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":350}"#;
+        let notice = read_retry_diagnostic(message).unwrap();
+        assert!(notice.contains("read-only models"));
+        assert!(notice.contains("HTTP 429"));
+        assert!(notice.contains("delay=350ms"));
+        assert!(!notice.contains("an-account-local-request-id"));
+        for invalid in [
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1,"access_token":"secret"}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"stream_response","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"arbitrary","attempt":1,"next_attempt":2,"delay_ms":1}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":100000}"#,
+        ] {
+            assert!(read_retry_diagnostic(invalid).is_none());
+        }
     }
 
     #[test]
