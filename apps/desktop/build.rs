@@ -7,7 +7,10 @@ fn main() {
     // not notice a fast-forward pull, so a rebuilt binary can falsely claim
     // to be an older revision. Track the real branch ref as well.
     println!("cargo:rerun-if-changed=../../.git/HEAD");
-    if let Ok(symbolic) = Command::new("git").args(["symbolic-ref", "-q", "HEAD"]).output() {
+    if let Ok(symbolic) = Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .output()
+    {
         if symbolic.status.success() {
             let branch_ref = String::from_utf8_lossy(&symbolic.stdout);
             let branch_ref = branch_ref.trim();
