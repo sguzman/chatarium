@@ -14206,8 +14206,9 @@ impl eframe::App for ChatariumApp {
                                     },
                                 ) {
                                     Ok(()) => {
+                                        self.agent_mcp_flow = None;
                                         self.status =
-                                            "cancelling active ChatGPT response…".to_owned();
+                                            "cancelling active ChatGPT response and MCP continuation…".to_owned();
                                     }
                                     Err(error) => {
                                         self.status =
@@ -14217,6 +14218,14 @@ impl eframe::App for ChatariumApp {
                             }
                         }
 
+                        if self.agent_mcp_flow.is_some()
+                            && ui.button("Stop MCP continuation")
+                                .on_hover_text("Stop requesting new model/tool steps. A subprocess whose one-shot permit was already consumed cannot be undone; its eventual outcome remains audited.")
+                                .clicked()
+                        {
+                            self.agent_mcp_flow = None;
+                            self.status = "MCP continuation stopped. Dispatched tools remain subject to their durable one-shot outcome.".to_owned();
+                        }
                         if self.commit_in_flight.is_some() {
                             ui.spinner();
                         }
