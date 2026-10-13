@@ -181,6 +181,51 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
   assert.equal(enforcedWire.store, false);
   assert.equal(enforcedWire.stream, true);
 
+  // Unlike read-only model discovery, an inference POST with unknown
+  // delivery MUST NOT automatically retry after a network disconnect.
+  const beforeAmbiguous = seen.length;
+  send("stream_response", "offline-ambiguous", {
+    model: "offline-alpha-model",
+    input: "simulate-ambiguous-network-loss",
+    request_patch: {},
+  });
+  const attempted = await until(
+    (event) => event.type === "transport_progress" &&
+      event.request_id === "offline-ambiguous" &&
+      event.stage === "wire_attempted",
+    beforeAmbiguous,
+  );
+  assert.ok(attempted);
+  const ambiguousError = await until(
+    (event) => event.type === "error" &&
+      event.request_id === "offline-ambiguous",
+    beforeAmbiguous,
+  );
+  assert.equal(ambiguousError.error.code, "ECONNRESET");
+  assert.equal(
+    seen.filter((event) => event.type === "transport_progress" &&
+      event.request_id === "offline-ambiguous" &&
+      event.stage === "wire_attempted").length,
+    1,
+  );
+  assert.equal(
+    seen.filter((event) => event.type === "read_retry_scheduled" &&
+      event.request_id === "offline-ambiguous").length,
+    0,
+  );
+
+  // A different subsequent user turn remains possible after that uncertainty.
+  send("stream_response", "offline-after-uncertain", {
+    model: "offline-alpha-model",
+    input: "new-independent-turn",
+    request_patch: {},
+  });
+  const afterUncertain = await until(
+    (event) => event.type === "result" &&
+      event.request_id === "offline-after-uncertain",
+  );
+  assert.ok(afterUncertain.result.text.includes("new-independent-turn"));
+
   send("disconnect", "offline-disconnect");
   await until((event) => event.type === "result" &&
     event.request_id === "offline-disconnect");
