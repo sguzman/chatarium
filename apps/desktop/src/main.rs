@@ -1131,32 +1131,45 @@ impl ChatariumApp {
                             format!("{startup_status}; remote-turn recovery warning: {error}");
                     }
                 }
-                let historical_catalog = match latest_historical_conversation_catalog(&events) {
-                    Ok(catalog) => catalog,
-                    Err(error) => {
-                        startup_status =
-                            format!("{startup_status}; historical archive replay warning: {error}");
-                        Vec::new()
+                let historical_catalog = if ACCOUNT_MIRRORING_ENABLED {
+                    match latest_historical_conversation_catalog(&events) {
+                        Ok(catalog) => catalog,
+                        Err(error) => {
+                            startup_status = format!(
+                                "{startup_status}; historical archive replay warning: {error}"
+                            );
+                            Vec::new()
+                        }
                     }
+                } else {
+                    Vec::new()
                 };
-                let live_mirror_catalog = match latest_live_mirror_catalog(&events) {
-                    Ok(catalog) => catalog,
-                    Err(error) => {
-                        startup_status =
-                            format!("{startup_status}; live mirror replay warning: {error}");
-                        Vec::new()
+                let live_mirror_catalog = if ACCOUNT_MIRRORING_ENABLED {
+                    match latest_live_mirror_catalog(&events) {
+                        Ok(catalog) => catalog,
+                        Err(error) => {
+                            startup_status =
+                                format!("{startup_status}; live mirror replay warning: {error}");
+                            Vec::new()
+                        }
                     }
+                } else {
+                    Vec::new()
                 };
-                let remote_history_cache = remote_history_cache_path(&journal_path);
-                let remote_conversation_catalog =
-                    match load_remote_history_cache(&remote_history_cache) {
+                // Preserve cached account history on disk but never read or
+                // index it in the native-only workspace.
+                let remote_conversation_catalog = if ACCOUNT_MIRRORING_ENABLED {
+                    match load_remote_history_cache(&remote_history_cache_path(&journal_path)) {
                         Ok(catalog) => catalog,
                         Err(error) => {
                             startup_status =
                                 format!("{startup_status}; remote history cache warning: {error}");
                             Vec::new()
                         }
-                    };
+                    }
+                } else {
+                    Vec::new()
+                };
                 let remote_catalog_view = match build_remote_catalog_view(
                     &remote_conversation_catalog,
                     &events,
@@ -1393,7 +1406,11 @@ impl ChatariumApp {
         events: Vec<EventEnvelope>,
         status: String,
     ) -> Self {
-        let live_mirror_catalog = latest_live_mirror_catalog(&events).unwrap_or_default();
+        let live_mirror_catalog = if ACCOUNT_MIRRORING_ENABLED {
+            latest_live_mirror_catalog(&events).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let live_mirrored_conversations = live_mirror_catalog
             .iter()
             .map(|entry| entry.local_conversation_id)
@@ -1401,9 +1418,12 @@ impl ChatariumApp {
         let (account_bridge, account_bridge_provider, account_bridge_status) =
             start_account_bridge();
         let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
-        let remote_conversation_catalog =
+        let remote_conversation_catalog = if ACCOUNT_MIRRORING_ENABLED {
             load_remote_history_cache(&remote_history_cache_path(&journal_path))
-                .unwrap_or_default();
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let remote_catalog_view =
             build_remote_catalog_view(&remote_conversation_catalog, &events, &live_mirror_catalog)
                 .unwrap_or_default();
@@ -1455,7 +1475,11 @@ impl ChatariumApp {
             show_archived_local_conversations: false,
             local_conversation_search_query: String::new(),
             local_conversation_search_selection: None,
-            historical_catalog: latest_historical_conversation_catalog(&events).unwrap_or_default(),
+            historical_catalog: if ACCOUNT_MIRRORING_ENABLED {
+                latest_historical_conversation_catalog(&events).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
             events: events.clone(),
             selected_historical_conversation: None,
             loaded_historical_conversation: None,
