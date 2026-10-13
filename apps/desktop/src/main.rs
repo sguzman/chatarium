@@ -15886,7 +15886,11 @@ fn append_tool_call_proposal_checked(
     provider_id: ToolProviderId,
     operation: ToolOperationName,
     arguments_text: String,
+    policy: RoutePolicy,
 ) -> Result<Vec<EventEnvelope>, String> {
+    if policy == RoutePolicy::Deny {
+        return Err("disabled tool cannot be proposed for execution".to_owned());
+    }
     if arguments_text.trim_start().starts_with("<tool_call") {
         let parsed = parse_legacy_tool_call(&arguments_text)
             .map_err(|error| format!("invalid legacy tool envelope: {error:?}"))?;
@@ -15956,7 +15960,7 @@ fn append_tool_call_proposal_checked(
         destination: provider_endpoint.endpoint_id(),
         class: RouteClass::ToolCall,
     };
-    record_route_proposed(store, request, RoutePolicy::RequireApproval)
+    record_route_proposed(store, request, policy)
         .map_err(|error| error.to_string())?;
     record_tool_call_route_bound(store, call_id, route_id).map_err(|error| error.to_string())?;
 
@@ -15977,11 +15981,18 @@ fn append_tool_call_proposal_checked(
         .into_iter()
         .find(|route| route.request.id == route_id)
         .ok_or_else(|| "tool call route proposal did not replay".to_owned())?;
+    let expected_gate = match policy {
+        RoutePolicy::Allow => RouteGateState::Allowed {
+            by: DecisionAuthority::Policy,
+        },
+        RoutePolicy::RequireApproval => RouteGateState::PendingApproval,
+        RoutePolicy::Deny => unreachable!(),
+    };
     if route.request != request
-        || route.initial_policy != RoutePolicy::RequireApproval
-        || route.gate_state != RouteGateState::PendingApproval
+        || route.initial_policy != policy
+        || route.gate_state != expected_gate
     {
-        return Err("tool call route replay disagrees with explicit-approval policy".to_owned());
+        return Err("tool call route replay disagrees with recorded policy".to_owned());
     }
 
     Ok(store.events()[before..].to_vec())
@@ -19035,6 +19046,7 @@ fn persistence_worker(
                     provider_id,
                     operation,
                     arguments_text,
+                    RoutePolicy::RequireApproval,
                 ) {
                     Ok(appended_events) => {
                         let _ = notices.send(PersistNotice::ToolCallProposed {
@@ -23034,6 +23046,7 @@ mod tests {
             provider,
             ToolOperationName::new("fixture.echo").unwrap(),
             "{}".to_owned(),
+            RoutePolicy::RequireApproval,
         )
         .unwrap();
 
@@ -23144,6 +23157,7 @@ mod tests {
             ToolProviderId::new(1),
             ToolOperationName::new("hello").unwrap(),
             "<tool_call id=\"legacy-test\" name=\"hello\">{}\n</tool_call>".to_owned(),
+            RoutePolicy::RequireApproval,
         )
         .unwrap();
 
