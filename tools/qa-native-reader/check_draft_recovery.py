@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 from PIL import Image, ImageChops
+from panel_geometry import sidebar_edge
 
 
 def events(path):
@@ -63,6 +64,14 @@ def verify_images(out):
     labels = ("empty", "alpha", "second-empty", "bravo", "alpha-return",
               "bravo-return", "bravo-restarted", "alpha-restarted")
     images = {label: region_image(out / (label + ".png")) for label in labels}
+    # A restored draft with correct text must not move the central editor.
+    # The previous pixel check confused an expanding sidebar with lost drafts.
+    with_edges = {}
+    for label in labels:
+        with Image.open(out / (label + ".png")) as source:
+            with_edges[label] = sidebar_edge(source.convert("RGB"))
+    if max(with_edges.values()) - min(with_edges.values()) > 6:
+        raise AssertionError(f"sidebar grew without a drag during draft/restart QA: {with_edges}")
     a = images["alpha"]
     b = images["bravo"]
     gap = changed_count(a, b)
