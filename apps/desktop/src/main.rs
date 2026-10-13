@@ -6705,11 +6705,17 @@ fn local_storage_bytes_cached(ctx: &egui::Context, journal_path: &std::path::Pat
             if depth > 8 || scanned >= 20_000 {
                 break;
             }
-            let Ok(entries) = std::fs::read_dir(folder) else { continue; };
+            let Ok(entries) = std::fs::read_dir(folder) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 scanned += 1;
-                if scanned >= 20_000 { break; }
-                let Ok(metadata) = entry.path().symlink_metadata() else { continue; };
+                if scanned >= 20_000 {
+                    break;
+                }
+                let Ok(metadata) = entry.path().symlink_metadata() else {
+                    continue;
+                };
                 if metadata.is_file() {
                     total = total.saturating_add(metadata.len());
                 } else if metadata.is_dir() {
@@ -6751,7 +6757,9 @@ impl eframe::App for ChatariumApp {
         let display_preferences_id = egui::Id::new("chatarium-display-preferences");
         let mut display_preferences = ctx.data_mut(|data| {
             data.get_temp::<display_preferences::DisplayPreferences>(display_preferences_id)
-                .unwrap_or_else(|| display_preferences::DisplayPreferences::load(&display_preferences_path))
+                .unwrap_or_else(|| {
+                    display_preferences::DisplayPreferences::load(&display_preferences_path)
+                })
         });
 
         // Consume global native chat navigation before resolving conversation
@@ -14654,19 +14662,28 @@ impl eframe::App for ChatariumApp {
             self.sync_historical_conversation(local_conversation_id, ctx);
         }
 
-        let filtered_messages = if !historical_mode && !display_preferences.show_transport_trace
-            && local_display_messages.iter().any(|m| m.role == DisplayRole::Activity)
+        let filtered_messages = if !historical_mode
+            && !display_preferences.show_transport_trace
+            && local_display_messages
+                .iter()
+                .any(|m| m.role == DisplayRole::Activity)
         {
-            Some(local_display_messages.iter()
-                .filter(|m| m.role != DisplayRole::Activity)
-                .cloned().collect::<Vec<_>>())
+            Some(
+                local_display_messages
+                    .iter()
+                    .filter(|m| m.role != DisplayRole::Activity)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
         } else {
             None
         };
         let display_messages: &[DisplayMessage] = if historical_mode {
             &self.historical_messages
         } else {
-            filtered_messages.as_deref().unwrap_or(local_display_messages)
+            filtered_messages
+                .as_deref()
+                .unwrap_or(local_display_messages)
         };
 
         let reader_key = self.reader_conversation_key();
