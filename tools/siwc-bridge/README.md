@@ -147,8 +147,10 @@ source label, per-turn sequence, source UTC timestamp, and elapsed monotonic
 milliseconds. Events cover request start, attempted HTTP delivery, observed
 HTTP acceptance, first and subsequent received text chunks, completion,
 and failure. Terminal events distinguish `not_dispatched`,
-`wire_unconfirmed`, `http_acknowledged` and
-`assistant_delta_seen`; cancellation is separately flagged.
+`wire_unconfirmed`, `http_rejected` (explicit HTTP 4xx/5xx),
+`http_acknowledged` and `assistant_delta_seen`; cancellation is separately
+flagged. The activity stream records the numeric status for explicit HTTP
+rejections rather than reporting a known HTTP 429 as an ambiguous lost reply.
 
 These events contain no prompt bodies, delta text, credentials, fabricated
 reasoning transcripts, or invented tool actions. The original `delta`,
