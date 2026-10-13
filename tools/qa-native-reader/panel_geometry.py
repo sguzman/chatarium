@@ -8,7 +8,9 @@ from pathlib import Path
 import sys
 from PIL import Image
 
-SIDEBAR = (18, 19, 23)
+# Must match the native sidebar frame fill in apps/desktop/src/main.rs.
+# The contrasting stroke is on the boundary, not sampled in the interior.
+SIDEBAR = (20, 25, 34)
 CONTENT = (23, 24, 29)
 
 
