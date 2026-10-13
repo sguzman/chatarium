@@ -80,7 +80,8 @@ use chatarium_store::archive_maintenance::{
     check_archive, create_backup, restore_backup, verify_backup,
 };
 use chatarium_store::authored::{
-    DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
+    DecodedUserMessageCommit, commit_user_message, commit_user_message_with_attachment,
+    decode_user_message_attachment, decode_user_message_commit, local_turn_scope,
 };
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
@@ -496,6 +497,7 @@ enum PersistCommand {
     CommitMessage {
         request_id: u64,
         message: AuthoredUserMessage,
+        attachment: Option<Value>,
         one_shot_memory_ids: Vec<LocalMemoryId>,
         one_shot_memory_snapshot_after_sequence: Option<u64>,
     },
@@ -931,6 +933,7 @@ struct PendingInferenceIntent {
     controller_result_context: Vec<context_composer::TranscriptMessage>,
     controller_coordination_result_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
+    attachment: Option<attachment_intake::PreparedAttachment>,
 }
 
 #[derive(Debug, Clone)]
@@ -999,6 +1002,8 @@ struct PendingHistoryFetchProof {
 
 struct ChatariumApp {
     draft: String,
+    attachment_path_draft: String,
+    staged_attachment: Option<attachment_intake::PreparedAttachment>,
     draft_revision: u64,
     saved_revision: u64,
     next_commit_request: u64,
@@ -1310,6 +1315,8 @@ impl ChatariumApp {
                 match worker {
                     Ok(worker) => Self {
                         draft,
+                        attachment_path_draft: String::new(),
+                        staged_attachment: None,
                         draft_revision: 0,
                         saved_revision: 0,
                         next_commit_request: 1,
@@ -1529,6 +1536,8 @@ impl ChatariumApp {
 
         Self {
             draft,
+            attachment_path_draft: String::new(),
+            staged_attachment: None,
             draft_revision: 0,
             saved_revision: 0,
             next_commit_request: 1,
@@ -1685,6 +1694,8 @@ impl ChatariumApp {
 
     fn apply_local_conversation(&mut self, conversation_id: LocalConversationId) {
         self.local_conversation_id = conversation_id;
+        self.staged_attachment = None;
+        self.attachment_path_draft.clear();
         self.draft = projected_working_draft(&self.events, conversation_id);
         self.draft_revision = 0;
         self.saved_revision = 0;
@@ -2883,8 +2894,31 @@ impl ChatariumApp {
         }
     }
 
+    fn stage_attachment(&mut self, path: &std::path::Path) {
+        if self.commit_in_flight.is_some() {
+            self.status = "cannot change attachment during durable commit".to_owned();
+            return;
+        }
+        match attachment_intake::prepare(path) {
+            Ok(attachment) => {
+                self.status = format!(
+                    "staged {} ({} bytes); content is not durable until Send",
+                    attachment.filename, attachment.byte_len
+                );
+                self.staged_attachment = Some(attachment);
+            }
+            Err(error) => {
+                self.status = format!("attachment not staged: {error}");
+            }
+        }
+    }
+
     fn commit_current_message(&mut self) {
         if self.draft.trim().is_empty() || self.commit_in_flight.is_some() {
+            return;
+        }
+        if self.staged_attachment.is_some() && !self.remote_connected() {
+            self.status = "attachment send requires an active ChatGPT connection".to_owned();
             return;
         }
         let Some(sender) = &self.persist_tx else {
@@ -3000,6 +3034,7 @@ impl ChatariumApp {
                         controller_result_context,
                         controller_coordination_result_context,
                         request_patch,
+                        attachment: self.staged_attachment.clone(),
                     },
                 );
             }
@@ -3007,6 +3042,9 @@ impl ChatariumApp {
         match sender.send(PersistCommand::CommitMessage {
             request_id,
             message,
+            attachment: self.staged_attachment.as_ref().map(
+                attachment_intake::PreparedAttachment::durable_record,
+            ),
             one_shot_memory_ids,
             one_shot_memory_snapshot_after_sequence,
         }) {
@@ -3069,6 +3107,7 @@ impl ChatariumApp {
                     one_shot_memory_event,
                 } => {
                     let sequence = event.sequence;
+                    let committed_attachment = decode_user_message_attachment(&event);
                     let one_shot_selection_sequence =
                         one_shot_memory_event.as_ref().map(|event| event.sequence);
                     self.events.push(event);
@@ -3081,8 +3120,17 @@ impl ChatariumApp {
                         self.commit_in_flight = None;
                         self.evidence.commit_local_message();
                         self.draft.clear();
+                        self.staged_attachment = None;
 
                         if let Some(intent) = self.commit_remote_intents.remove(&request_id) {
+                            let expected_attachment = intent
+                                .attachment
+                                .as_ref()
+                                .map(attachment_intake::PreparedAttachment::durable_record);
+                            if committed_attachment.as_ref().ok() != Some(&expected_attachment) {
+                                self.status = "durable attachment evidence does not match frozen send; remote dispatch blocked".to_owned();
+                                continue;
+                            }
                             let remote_request_id = message.turn_id.to_string();
                             let mut transcript =
                                 context_transcript(&projected_local_display_messages(
@@ -3154,6 +3202,32 @@ impl ChatariumApp {
                                     continue;
                                 }
                             };
+                            let mut input = context_plan.input_json();
+                            if let Some(attachment) = intent.attachment.as_ref() {
+                                input = match attachment_intake::attach_to_authored_input(
+                                    input,
+                                    &message.text,
+                                    attachment.response_content(),
+                                ) {
+                                    Ok(input) => input,
+                                    Err(error) => {
+                                        self.status = format!(
+                                            "durable attachment input cannot be composed: {error}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                            }
+                            let payload = if let Some(attachment) = intent.attachment.as_ref() {
+                                let mut evidence: Value = serde_json::from_str(&payload)
+                                    .expect("validated dispatch observation JSON");
+                                evidence["details"]["attachment_intake"] =
+                                    attachment.timing_metadata();
+                                serde_json::to_string(&evidence)
+                                    .expect("bounded attachment metadata serializes")
+                            } else {
+                                payload
+                            };
                             self.delivery.begin(
                                 message.conversation_id.to_string(),
                                 remote_request_id.clone(),
@@ -3163,7 +3237,7 @@ impl ChatariumApp {
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
                                 model: intent.model.clone(),
-                                input: context_plan.input_json(),
+                                input,
                                 instructions: context_plan.instructions.clone(),
                                 request_patch: intent.request_patch,
                             });
@@ -6697,6 +6771,19 @@ impl eframe::App for ChatariumApp {
         let remote_catalog_selected = self.selected_remote_catalog_id.is_some();
         let historical_mode =
             self.selected_historical_conversation.is_some() || remote_catalog_selected;
+        if !historical_mode && self.commit_in_flight.is_none() {
+            let dropped = ctx.input(|input| {
+                input.raw.dropped_files
+                    .iter()
+                    .filter_map(|file| file.path.clone())
+                    .collect::<Vec<_>>()
+            });
+            if dropped.len() > 1 {
+                self.status = "only one attachment per turn; select one file".to_owned();
+            } else if let Some(path) = dropped.first() {
+                self.stage_attachment(path);
+            }
+        }
         let selected_historical_id = self.selected_historical_conversation;
         let selected_live_mirror = selected_historical_id
             .is_some_and(|selected| self.live_mirrored_conversations.contains(&selected));
@@ -14278,6 +14365,53 @@ impl eframe::App for ChatariumApp {
                 }
 
                 ui.add_space(8.0);
+                if let Some(attached) = self.staged_attachment.as_ref() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Attachment: {} · {} bytes (pending durable commit)",
+                                attached.filename, attached.byte_len,
+                            ))
+                            .size(10.0),
+                        );
+                        if ui
+                            .add_enabled(
+                                self.commit_in_flight.is_none(),
+                                egui::Button::new("Remove attachment"),
+                            )
+                            .clicked()
+                        {
+                            self.staged_attachment = None;
+                        }
+                    });
+                }
+                ui.collapsing("Attach local file", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.attachment_path_draft)
+                                .hint_text("Local path, or drop a file into Chatarium")
+                                .desired_width(350.0),
+                        );
+                        if ui
+                            .add_enabled(
+                                self.commit_in_flight.is_none(),
+                                egui::Button::new("Stage file"),
+                            )
+                            .clicked()
+                        {
+                            let path = std::path::PathBuf::from(
+                                self.attachment_path_draft.trim(),
+                            );
+                            self.stage_attachment(&path);
+                        }
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "One file per turn, up to 128 KiB. Contents become part of the local journal when sent."
+                        )
+                        .size(10.0),
+                    );
+                });
                 let response = egui::Frame::default()
                     .fill(composer_fill)
                     .stroke(egui::Stroke::new(
@@ -14311,6 +14445,7 @@ impl eframe::App for ChatariumApp {
                         && !self.capability_probe.running()
                         && behavior_ready_for_send);
                 let can_commit = self.persist_tx.is_some()
+                    && (self.staged_attachment.is_none() || self.remote_connected())
                     && self.commit_in_flight.is_none()
                     && remote_ready_for_send
                     && !self.draft.trim().is_empty();
@@ -16762,6 +16897,22 @@ fn commit_message_with_one_shot_memory_checked(
     one_shot_memory_ids: &[LocalMemoryId],
     one_shot_memory_snapshot_after_sequence: Option<u64>,
 ) -> Result<(EventEnvelope, Option<EventEnvelope>), String> {
+    commit_message_with_attachment_and_one_shot_memory_checked(
+        store,
+        message,
+        None,
+        one_shot_memory_ids,
+        one_shot_memory_snapshot_after_sequence,
+    )
+}
+
+fn commit_message_with_attachment_and_one_shot_memory_checked(
+    store: &mut impl EventStore,
+    message: &AuthoredUserMessage,
+    attachment: Option<&Value>,
+    one_shot_memory_ids: &[LocalMemoryId],
+    one_shot_memory_snapshot_after_sequence: Option<u64>,
+) -> Result<(EventEnvelope, Option<EventEnvelope>), String> {
     match (
         one_shot_memory_ids.is_empty(),
         one_shot_memory_snapshot_after_sequence,
@@ -16787,7 +16938,8 @@ fn commit_message_with_one_shot_memory_checked(
         }
     }
 
-    commit_user_message(store, message).map_err(|error| error.to_string())?;
+    commit_user_message_with_attachment(store, message, attachment)
+        .map_err(|error| error.to_string())?;
     let commit_event = store
         .events()
         .last()
@@ -20580,11 +20732,13 @@ fn persistence_worker(
             PersistCommand::CommitMessage {
                 request_id,
                 message,
+                attachment,
                 one_shot_memory_ids,
                 one_shot_memory_snapshot_after_sequence,
-            } => match commit_message_with_one_shot_memory_checked(
+            } => match commit_message_with_attachment_and_one_shot_memory_checked(
                 &mut store,
                 &message,
+                attachment.as_ref(),
                 &one_shot_memory_ids,
                 one_shot_memory_snapshot_after_sequence,
             ) {
@@ -27191,6 +27345,7 @@ mod tests {
             .send(PersistCommand::CommitMessage {
                 request_id: 1,
                 message: message.clone(),
+                attachment: None,
                 one_shot_memory_ids: Vec::new(),
                 one_shot_memory_snapshot_after_sequence: None,
             })
