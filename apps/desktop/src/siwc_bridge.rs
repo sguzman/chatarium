@@ -372,6 +372,10 @@ fn forward_bridge_output(
                     // event. Preserve a safe local operational diagnostic rather
                     // than silently dropping the bridge's retry notice.
                     diagnostics::info("siwc-retry", notice);
+                } else if let Some(notice) = agent_activity_diagnostic(&line) {
+                    // Read-only diagnostic until the durable native activity
+                    // projection is ready; never claim this is journaled.
+                    diagnostics::debug("siwc-agent", notice);
                 }
             }
             Err(error) => {
@@ -539,6 +543,78 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
         }
         _ => None,
     }
+}
+
+fn agent_activity_diagnostic(line: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    if contains_credential_field(&value)
+        || value.get("type")?.as_str()? != "agent_activity"
+        || value.get("source")?.as_str()? != "siwc_bridge_observation"
+    {
+        return None;
+    }
+    let stage = value.get("stage")?.as_str()?;
+    if !matches!(
+        stage,
+        "started"
+            | "wire_attempted"
+            | "acknowledged"
+            | "first_text_delta"
+            | "text_delta"
+            | "completed"
+            | "failed"
+    ) {
+        return None;
+    }
+    let request_id = value.get("request_id")?.as_str()?;
+    if request_id.is_empty()
+        || request_id.len() > 256
+        || !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
+    {
+        return None;
+    }
+    let sequence = value.get("sequence")?.as_u64()?;
+    let elapsed_ms = value.get("elapsed_ms")?.as_f64()?;
+    if sequence == 0 || sequence > 100_000 || !elapsed_ms.is_finite()
+        || !(0.0..=86_400_000.0).contains(&elapsed_ms)
+    {
+        return None;
+    }
+    let observed_at = value.get("observed_at_utc")?.as_str()?;
+    // The source timestamp is retained on the wire; log only validated
+    // metadata and never echo arbitrary upstream strings or delta content.
+    if observed_at.len() != 24 || !observed_at.ends_with('Z')
+        || !observed_at.is_ascii() || observed_at.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return None;
+    }
+    let detail = if matches!(stage, "first_text_delta" | "text_delta") {
+        let chars = value.get("delta_chars")?.as_u64()?;
+        if chars > 1_000_000 {
+            return None;
+        }
+        format!(" chars={chars}")
+    } else if matches!(stage, "completed" | "failed") {
+        let evidence = value.get("delivery_evidence")?.as_str()?;
+        if !matches!(
+            evidence,
+            "not_dispatched"
+                | "wire_unconfirmed"
+                | "http_acknowledged"
+                | "assistant_delta_seen"
+        ) {
+            return None;
+        }
+        format!(" evidence={evidence}")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "response={} seq={sequence} stage={stage} elapsed={elapsed_ms:.3}ms{detail}",
+        diagnostics::short_id(request_id)
+    ))
 }
 
 fn read_retry_diagnostic(line: &str) -> Option<String> {
@@ -947,6 +1023,25 @@ mod tests {
                 "Sign in with ChatGPT bridge output violated the credential boundary".to_owned()
             )
         );
+    }
+
+    #[test]
+    fn source_observed_activity_is_sanitized_before_terminal_logging() {
+        let valid = r#"{"type":"agent_activity","request_id":"long-request-activity-id","source":"siwc_bridge_observation","sequence":3,"stage":"first_text_delta","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":123.456,"delta_chars":12}"#;
+        let notice = agent_activity_diagnostic(valid).unwrap();
+        assert!(notice.contains("stage=first_text_delta"));
+        assert!(notice.contains("seq=3"));
+        assert!(notice.contains("elapsed=123.456ms"));
+        assert!(!notice.contains("long-request-activity-id"));
+        for invalid in [
+            r#"{"type":"agent_activity","request_id":"bad\\nline","source":"siwc_bridge_observation","sequence":1,"stage":"started","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0}"#,
+            r#"{"type":"agent_activity","request_id":"a","source":"fake_source","sequence":1,"stage":"started","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0}"#,
+            r#"{"type":"agent_activity","request_id":"a","source":"siwc_bridge_observation","sequence":1,"stage":"reasoning_summary","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0}"#,
+            r#"{"type":"agent_activity","request_id":"a","source":"siwc_bridge_observation","sequence":1,"stage":"started","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0,"access_token":"secret"}"#,
+            r#"{"type":"agent_activity","request_id":"a","source":"siwc_bridge_observation","sequence":1,"stage":"completed","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":0,"delivery_evidence":"magical_success"}"#,
+        ] {
+            assert!(agent_activity_diagnostic(invalid).is_none());
+        }
     }
 
     #[test]
