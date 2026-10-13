@@ -82,6 +82,10 @@ pub enum BridgeEvent {
         request_id: String,
         delta: String,
     },
+    TransportProgress {
+        request_id: String,
+        stage: String,
+    },
     ResponseCompleted {
         request_id: String,
         text: String,
@@ -477,6 +481,17 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
     match value.get("type")?.as_str()? {
         "ready" => Some(BridgeEvent::Ready),
         "session" => parse_session(value.get("session")?).map(BridgeEvent::Session),
+        "transport_progress" => {
+            let request_id = value.get("request_id")?.as_str()?.to_owned();
+            let stage = value.get("stage")?.as_str()?;
+            if !matches!(stage, "wire_attempted" | "acknowledged") {
+                return None;
+            }
+            Some(BridgeEvent::TransportProgress {
+                request_id,
+                stage: stage.to_owned(),
+            })
+        }
         "delta" => Some(BridgeEvent::Delta {
             request_id: value.get("request_id")?.as_str()?.to_owned(),
             delta: value.get("delta")?.as_str()?.to_owned(),
