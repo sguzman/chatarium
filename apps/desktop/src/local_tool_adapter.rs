@@ -57,7 +57,7 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             "name": name,
             "description": description,
             "available": true,
-            "execution_permission": "separate durable approval required"
+            "execution_permission": "exact standing policy or per-call user approval"
         }));
     }
     for provider in providers {
@@ -94,7 +94,7 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
                 "name": op.as_str(),
                 "description": description,
                 "available": active,
-                "execution_permission": "separate durable approval required"
+                "execution_permission": "exact standing policy or per-call user approval"
             }));
         }
     }
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(parsed.payload["tools"][1]["name"], "tools.list");
         assert_eq!(
             parsed.payload["tools"][1]["execution_permission"],
-            "separate durable approval required"
+            "exact standing policy or per-call user approval"
         );
         assert_eq!(
             parsed.payload["authority"],
