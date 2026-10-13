@@ -23346,6 +23346,7 @@ mod tests {
                 "local_route_context_decision_updated"
             }
             PersistNotice::ToolProviderUpdated { .. } => "tool_provider_updated",
+            PersistNotice::AgentMcpCallProposed { .. } => "agent_mcp_call_proposed",
             PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
             PersistNotice::ToolCallRoutePolicyUpdated { .. } => "tool_call_route_policy_updated",
             PersistNotice::BuiltinHelloDispatched { .. } => "builtin_hello_dispatched",
