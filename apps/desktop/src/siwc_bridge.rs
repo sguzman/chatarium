@@ -13,7 +13,9 @@ pub enum BridgeCommand {
     RefreshSession,
     SignIn,
     CancelSignIn,
-    ListModels { max_attempts: u8 },
+    ListModels {
+        max_attempts: u8,
+    },
     StreamResponse {
         request_id: String,
         model: String,
@@ -793,6 +795,21 @@ fn parse_error(value: &Value) -> Option<BridgeError> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn only_read_only_model_discovery_receives_retry_override() {
+        let read = command_json(BridgeCommand::ListModels { max_attempts: 1 });
+        assert_eq!(read["type"], "models");
+        assert_eq!(read["read_retry_policy"]["maxAttempts"], 1);
+        let inference = command_json(BridgeCommand::StreamResponse {
+            request_id: "turn".to_owned(),
+            model: "test-model".to_owned(),
+            input: json!("hello"),
+            instructions: None,
+            request_patch: json!({}),
+        });
+        assert!(inference.get("read_retry_policy").is_none());
+    }
 
     #[test]
     fn exited_sidecar_drops_even_queued_commands_while_sender_is_open() {
