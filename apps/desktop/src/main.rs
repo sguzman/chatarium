@@ -6493,6 +6493,15 @@ impl eframe::App for ChatariumApp {
                             let entry = &native_entries[row.catalog_index];
                             let messages = native_search_index.messages(entry.id);
                             let title = row.title.as_str();
+                            // A 42-character unbroken title must not force the
+                            // entire resizable sidebar to its maximum width.
+                            // Keep the original title as a hover explanation.
+                            let title_preview = title.chars().take(24).collect::<String>();
+                            let title_preview = if title.chars().count() > 24 {
+                                format!("{title_preview}…")
+                            } else {
+                                title_preview
+                            };
                             let match_kind = row.kind;
                             let hit_choice_id =
                                 egui::Id::new(("chatarium-native-hit-choice", entry.id));
@@ -6535,8 +6544,9 @@ impl eframe::App for ChatariumApp {
                                     if ui
                                         .selectable_label(
                                             selected || keyboard_selected,
-                                            egui::RichText::new(title).strong(),
+                                            egui::RichText::new(&title_preview).strong(),
                                         )
+                                        .on_hover_text(title)
                                         .clicked()
                                     {
                                         select_local_requested = Some(entry.id);
@@ -6701,7 +6711,8 @@ impl eframe::App for ChatariumApp {
                                     egui::TextEdit::singleline(
                                         &mut self.local_conversation_rename,
                                     )
-                                    .hint_text("Conversation title"),
+                                    .hint_text("Conversation title")
+                                    .desired_width((sidebar_control_width - 90.0).max(100.0)),
                                 );
                                 if ui.button("Save").clicked() {
                                     rename_local_requested = true;
