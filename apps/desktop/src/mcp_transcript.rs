@@ -235,6 +235,11 @@ mod tests {
         )
         .unwrap();
         super::super::append_builtin_hello_checked(&mut store, route_id).unwrap();
+        let reader = super::super::native_conversation_search::NativeConversationSearchIndex::build(
+            store.events(),
+        );
+        assert_eq!(reader.messages(owner).len(), 2);
+        assert!(reader.messages(other).is_empty());
         let projected = verified_activity(store.events());
         assert!(!projected.contains_key(&other));
         let rows = projected.get(&owner).unwrap();
