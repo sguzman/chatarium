@@ -1187,8 +1187,11 @@ impl ChatariumApp {
                 let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
                 let (persist_tx, persist_rx) = mpsc::channel();
                 let (notice_tx, notice_rx) = mpsc::channel();
-                let local_archive_search_index =
-                    build_local_archive_search_index(&remote_catalog_view, &events);
+                let local_archive_search_index = if ACCOUNT_MIRRORING_ENABLED {
+                    build_local_archive_search_index(&remote_catalog_view, &events)
+                } else {
+                    local_archive_search::LocalArchiveSearchIndex::new(Vec::new())
+                };
                 let reader_state_path = local_reader_state_path(&journal_path);
                 let reader_positions =
                     offline_reader::ReaderPositionStore::load(&reader_state_path);
@@ -1404,8 +1407,11 @@ impl ChatariumApp {
         let remote_catalog_view =
             build_remote_catalog_view(&remote_conversation_catalog, &events, &live_mirror_catalog)
                 .unwrap_or_default();
-        let local_archive_search_index =
-            build_local_archive_search_index(&remote_catalog_view, &events);
+        let local_archive_search_index = if ACCOUNT_MIRRORING_ENABLED {
+            build_local_archive_search_index(&remote_catalog_view, &events)
+        } else {
+            local_archive_search::LocalArchiveSearchIndex::new(Vec::new())
+        };
         let reader_state_path = local_reader_state_path(&journal_path);
         let reader_positions = offline_reader::ReaderPositionStore::load(&reader_state_path);
         let local_conversation_catalog_path = local_conversation_catalog_path(&journal_path);
@@ -6255,11 +6261,17 @@ impl eframe::App for ChatariumApp {
         let mut mirror_pause_requested = false;
         let mut mirror_resume_requested = false;
         let mut refresh_history_requested = false;
-        let archive_results = self.local_archive_search_index.search(
-            &self.archive_search_query,
-            self.archive_search_mode,
-            self.archive_state_filter,
-        );
+        // Account-history catalog entries are not native Chatarium chats. Do
+        // not even query their index while the mirroring surface is paused.
+        let archive_results = if ACCOUNT_MIRRORING_ENABLED {
+            self.local_archive_search_index.search(
+                &self.archive_search_query,
+                self.archive_search_mode,
+                self.archive_state_filter,
+            )
+        } else {
+            Vec::new()
+        };
         if self
             .archive_search_selection
             .is_some_and(|selection| selection >= archive_results.len())
@@ -6275,12 +6287,10 @@ impl eframe::App for ChatariumApp {
         let mut open_reader_from_transcript_search = false;
         let mut focus_archive_search = false;
         let mut clear_archive_search_focus = false;
+        // Ctrl+K always searches authored local conversations now.
+        // The old account-catalog search remains parked with mirroring.
         if ctx.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::K)) {
-            if ctx.input(|input| input.modifiers.shift) {
-                focus_native_search = true;
-            } else {
-                focus_archive_search = true;
-            }
+            focus_native_search = true;
         }
 
         // Ctrl+L moves focus to the native composer without changing or
@@ -6327,6 +6337,7 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
 
+                        if ACCOUNT_MIRRORING_ENABLED {
                         ui.add_space(18.0);
                         ui.label(
                             egui::RichText::new("LOCAL ARCHIVE SEARCH")
@@ -6436,9 +6447,10 @@ impl eframe::App for ChatariumApp {
                             }
                         }
 
-                        ui.add_space(26.0);
+                        }
+                        ui.add_space(18.0);
                         ui.label(
-                            egui::RichText::new("CONVERSATIONS")
+                            egui::RichText::new("LOCAL CONVERSATIONS")
                                 .size(10.0)
                                 .strong()
                                 .color(egui::Color32::from_rgb(112, 116, 126)),
@@ -6463,7 +6475,7 @@ impl eframe::App for ChatariumApp {
                                     &mut self.local_conversation_search_query,
                                 )
                                 .id(native_search_id)
-                                .hint_text("Find a local chat by title or text…")
+                                .hint_text("Search your local conversations…")
                                 .desired_width(input_width),
                             );
                             native_search_has_focus = native_search_response.has_focus();
@@ -6483,7 +6495,7 @@ impl eframe::App for ChatariumApp {
                         });
                         ui.label(
                             egui::RichText::new(
-                                "Native chats · Ctrl+Shift+K search · Ctrl+Tab / Ctrl+Shift+Tab switch · Ctrl+Shift+N new",
+                                "Only Chatarium conversations · Ctrl+K search · Ctrl+Tab switch · Ctrl+Shift+N new",
                             )
                             .size(9.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6888,7 +6900,7 @@ impl eframe::App for ChatariumApp {
                             }
                         }
 
-                        if !self.historical_catalog.is_empty() {
+                        if ACCOUNT_MIRRORING_ENABLED && !self.historical_catalog.is_empty() {
                             ui.add_space(16.0);
                             ui.label(
                                 egui::RichText::new(format!(
@@ -7088,7 +7100,7 @@ impl eframe::App for ChatariumApp {
                         });
 
                         ui.add_space(8.0);
-                        if self.account_bridge_provider.is_some() {
+                        if ACCOUNT_MIRRORING_ENABLED && self.account_bridge_provider.is_some() {
                             if ui
                                 .add_enabled(
                                     !self.history_list_pending,
@@ -7874,7 +7886,9 @@ impl eframe::App for ChatariumApp {
                         }
                     });
                     let label = last.map(|a| {
-                        if a.slow(Duration::from_secs(u64::from(self.slow_warning_seconds))) {
+                        if a.phase == delivery_telemetry::Phase::Complete {
+                            format!("● Ready for your message · previous reply {:.1}s", a.seconds())
+                        } else if a.slow(Duration::from_secs(u64::from(self.slow_warning_seconds))) {
                             format!("● SLOW · {} · {:.1}s", a.label(), a.seconds())
                         } else {
                             format!("● {} · {:.1}s", a.label(), a.seconds())
@@ -14295,12 +14309,17 @@ fn draw_delivery_timeline(
     ui.label(egui::RichText::new(
         "Receipt only after HTTP success. Timings in this display reset on app restart; journaled turns remain durable.",
     ).size(9.0).color(egui::Color32::from_rgb(125, 129, 139)));
-    for attempt in attempts.iter().rev().take(8).rev() {
+    // Completed rows are individual requests, not repeated copies of the
+    // current green "ready for input" status shown in the header.
+    for (index, attempt) in attempts.iter().rev().take(8).rev().enumerate() {
+        let response_number = attempts.len().saturating_sub(8) + index + 1;
         let color = delivery_status_color(attempt, slow_warning_seconds);
         let label = if attempt.slow(Duration::from_secs(u64::from(slow_warning_seconds))) {
-            "SLOW · waiting for first response"
+            "SLOW · waiting for first response".to_owned()
+        } else if attempt.phase == delivery_telemetry::Phase::Complete {
+            format!("Response #{response_number} · complete")
         } else {
-            attempt.label()
+            attempt.label().to_owned()
         };
         egui::Frame::default()
             .fill(egui::Color32::from_rgb(29, 31, 36))
