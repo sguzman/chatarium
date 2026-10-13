@@ -32,7 +32,10 @@ pub fn supports_hello(provider_name: &str, operation: &str) -> bool {
 #[must_use]
 pub fn supports_builtin(provider_name: &str, operation: &str) -> bool {
     provider_name == BUILTIN_PROVIDER_NAME
-        && matches!(operation, HELLO_OPERATION | TOOLS_LIST_OPERATION | TIME_NOW_OPERATION)
+        && matches!(
+            operation,
+            HELLO_OPERATION | TOOLS_LIST_OPERATION | TIME_NOW_OPERATION
+        )
 }
 
 /// Create a bounded local MCP directory from replayed provider configuration.
@@ -52,7 +55,10 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             TOOLS_LIST_OPERATION,
             "List locally registered MCP provider tools and their descriptions",
         ),
-        (TIME_NOW_OPERATION, "Read the actual current UTC time from the local system clock"),
+        (
+            TIME_NOW_OPERATION,
+            "Read the actual current UTC time from the local system clock",
+        ),
     ] {
         tools.push(json!({
             "provider": BUILTIN_PROVIDER_NAME,
@@ -138,7 +144,6 @@ pub fn prepare_builtin_response(
         .map_err(|error| format!("cannot format builtin directory result: {error:?}"))
 }
 
-
 /// Current UTC system time, captured at tool execution rather than fabricated
 /// by the model. Empty arguments only; execution is still policy-gated/audited.
 pub fn prepare_time_response(call: &ToolCallAuditRecord) -> Result<String, String> {
@@ -154,8 +159,11 @@ pub fn prepare_time_response(call: &ToolCallAuditRecord) -> Result<String, Strin
         }
         (parsed.id, parsed.arguments)
     } else {
-        (format!("call_{}", call.call_id.get()),
-            serde_json::from_str(input).map_err(|error| format!("invalid time arguments: {error}"))?)
+        (
+            format!("call_{}", call.call_id.get()),
+            serde_json::from_str(input)
+                .map_err(|error| format!("invalid time arguments: {error}"))?,
+        )
     };
     if args != json!({}) {
         return Err("time.now requires empty arguments".to_owned());
@@ -163,16 +171,20 @@ pub fn prepare_time_response(call: &ToolCallAuditRecord) -> Result<String, Strin
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| format!("system clock precedes Unix epoch: {error}"))?;
-    let unix_seconds = i64::try_from(elapsed.as_secs())
-        .map_err(|_| "system time exceeds i64 range".to_owned())?;
+    let unix_seconds =
+        i64::try_from(elapsed.as_secs()).map_err(|_| "system time exceeds i64 range".to_owned())?;
     let milliseconds = elapsed.subsec_millis();
     let date = utc_iso_timestamp(unix_seconds, milliseconds);
-    format_legacy_tool_success(&id, TIME_NOW_OPERATION, json!({
-        "utc": date,
-        "timezone": "UTC",
-        "unix_seconds": unix_seconds,
-        "unix_milliseconds": unix_seconds * 1000 + i64::from(milliseconds),
-    }))
+    format_legacy_tool_success(
+        &id,
+        TIME_NOW_OPERATION,
+        json!({
+            "utc": date,
+            "timezone": "UTC",
+            "unix_seconds": unix_seconds,
+            "unix_milliseconds": unix_seconds * 1000 + i64::from(milliseconds),
+        }),
+    )
     .map_err(|error| format!("cannot format time result: {error:?}"))
 }
 
@@ -309,10 +321,14 @@ mod tests {
     #[test]
     fn utc_clock_is_real_bounded_and_requires_no_arguments() {
         let before = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let response = prepare_time_response(&call("time.now", "{}")).unwrap();
         let after = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let result = parse_legacy_tool_result(&response).unwrap();
         assert_eq!(result.name, "time.now");
         assert_eq!(result.payload["timezone"], "UTC");
@@ -321,7 +337,10 @@ mod tests {
         assert!(result.payload["utc"].as_str().unwrap().ends_with('Z'));
         assert!(prepare_time_response(&call("time.now", r#"{"zone":"local"}"#)).is_err());
         assert_eq!(utc_iso_timestamp(0, 0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(utc_iso_timestamp(1_792_000_000, 125), "2026-10-14T17:46:40.125Z");
+        assert_eq!(
+            utc_iso_timestamp(1_792_000_000, 125),
+            "2026-10-14T17:46:40.125Z"
+        );
     }
 
     #[test]
