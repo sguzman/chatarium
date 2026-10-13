@@ -18,6 +18,7 @@ mod local_tool_adapter;
 mod local_tool_provider_control;
 #[cfg(test)]
 mod mcp_async_tests;
+mod mcp_agent_defaults;
 mod mcp_call_review;
 mod mcp_context_inventory;
 mod mcp_dispatch_manifest;
@@ -283,6 +284,9 @@ impl ControllerControlAction {
 }
 
 enum PersistCommand {
+    SaveMcpAgentDefaults {
+        defaults: mcp_agent_defaults::AgentDefaults,
+    },
     SaveInferenceSettings {
         store: local_inference_settings::InferenceSettingsStore,
     },
@@ -987,6 +991,7 @@ struct ChatariumApp {
     reader_search_query: String,
     reader_search_hit: Option<usize>,
     inference_settings: local_inference_settings::InferenceSettingsStore,
+    mcp_agent_defaults: mcp_agent_defaults::AgentDefaults,
     behavior_profiles: behavior_profile::BehaviorProfileStore,
     conversation_behavior_profile: behavior_profile::BehaviorProfile,
     topology_command_pending: bool,
@@ -1222,6 +1227,9 @@ impl ChatariumApp {
                     };
                 let active_inference_settings =
                     inference_settings.for_conversation(local_conversation_id);
+                let mcp_agent_defaults = mcp_agent_defaults::AgentDefaults::load(
+                    &data_dir.join(mcp_agent_defaults::FILE_NAME),
+                ).unwrap_or_default();
                 let behavior_profile_path = local_behavior_profile_path(&journal_path);
                 let behavior_profiles =
                     match behavior_profile::BehaviorProfileStore::load(&behavior_profile_path) {
@@ -1295,6 +1303,7 @@ impl ChatariumApp {
                         reader_search_query: String::new(),
                         reader_search_hit: None,
                         inference_settings,
+                        mcp_agent_defaults,
                         behavior_profiles,
                         conversation_behavior_profile: active_behavior_profile,
                         topology_command_pending: false,
@@ -1451,6 +1460,9 @@ impl ChatariumApp {
             local_inference_settings::InferenceSettingsStore::load(&inference_settings_path)
                 .unwrap_or_default();
         let active_inference_settings = inference_settings.for_conversation(local_conversation_id);
+        let mcp_agent_defaults = mcp_agent_defaults::AgentDefaults::load(
+            &journal_path.parent().unwrap_or_else(|| std::path::Path::new(".")).join(mcp_agent_defaults::FILE_NAME)
+        ).unwrap_or_default();
         let behavior_profiles = behavior_profile::BehaviorProfileStore::load(
             &local_behavior_profile_path(&journal_path),
         )
@@ -1507,6 +1519,7 @@ impl ChatariumApp {
             reader_search_query: String::new(),
             reader_search_hit: None,
             inference_settings,
+            mcp_agent_defaults,
             behavior_profiles,
             conversation_behavior_profile: active_behavior_profile,
             topology_command_pending: false,
@@ -4488,6 +4501,25 @@ impl ChatariumApp {
             store: self.inference_settings.clone(),
         }) {
             self.status = format!("failed to queue inference controls: {error}");
+        }
+    }
+
+    fn save_mcp_agent_defaults(&mut self) {
+        if let Err(error) = self.mcp_agent_defaults.validate() {
+            self.status = format!("MCP defaults not saved: {error}");
+            return;
+        }
+        let Some(tx) = &self.persist_tx else {
+            self.status = "MCP defaults not saved: persistence unavailable".to_owned();
+            return;
+        };
+        match tx.send(PersistCommand::SaveMcpAgentDefaults {
+            defaults: self.mcp_agent_defaults.clone(),
+        }) {
+            Ok(()) => {
+                self.status = "MCP bootstrap and policy draft queued for local save. Tool auto-execution is not yet enabled.".to_owned();
+            }
+            Err(error) => self.status = format!("MCP defaults could not be queued: {error}"),
         }
     }
 
@@ -8137,7 +8169,7 @@ impl eframe::App for ChatariumApp {
                         if !reasoning_available {
                             ui.label(
                                 egui::RichText::new(
-                                    "reasoning is blocked for the active profile/model contract",
+                                    "Low reasoning is not verified for the selected model/profile; controls remain unchanged.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(166, 139, 112)),
@@ -8165,7 +8197,7 @@ impl eframe::App for ChatariumApp {
                         if !verbosity_available {
                             ui.label(
                                 egui::RichText::new(
-                                    "verbosity is blocked for the active profile/model contract",
+                                    "Low verbosity is not verified for the selected model/profile; controls remain unchanged.",
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(166, 139, 112)),
@@ -8190,7 +8222,13 @@ impl eframe::App for ChatariumApp {
                         if !web_search_available {
                             ui.label(
                                 egui::RichText::new(
-                                    "web search is blocked for the active profile/model contract",
+                                    if self.selected_model.is_none() {
+                                        "Model discovery has not provided a selectable model; web-search capability is not verified. Retry model discovery."
+                                    } else if self.local_inference_contract.as_ref().is_none() {
+                                        "No validated capability report is loaded for this model; web search is not yet verified."
+                                    } else {
+                                        "Web search has not been verified for the selected model and signed-in profile; rerun capability checks."
+                                    },
                                 )
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(166, 139, 112)),
@@ -9603,6 +9641,37 @@ impl eframe::App for ChatariumApp {
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
+
+                            ui.collapsing("Agent defaults · bootstrap / tool policies", |ui| {
+                                ui.label("Global, locally saved draft for future automatic MCP turns.");
+                                ui.label("These settings do NOT yet enable automatic model-to-tool execution.");
+                                ui.label("Model-facing MCP instructions (editable):");
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.mcp_agent_defaults.bootstrap)
+                                        .desired_rows(5)
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.label("Requested policies · provider::operation = automatic|ask|manual|disabled");
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.mcp_agent_defaults.policy_rules)
+                                        .desired_rows(4)
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.horizontal(|ui| {
+                                    ui.label("Future per-turn tool-call limit");
+                                    ui.add(egui::DragValue::new(&mut self.mcp_agent_defaults.max_calls)
+                                        .range(1..=32));
+                                });
+                                ui.horizontal(|ui| {
+                                    if ui.button("Save MCP defaults").clicked() {
+                                        self.save_mcp_agent_defaults();
+                                    }
+                                    if ui.button("Copy bootstrap").clicked() {
+                                        ctx.copy_text(self.mcp_agent_defaults.bootstrap.clone());
+                                    }
+                                });
+                                ui.label("The configuration is inert until a durable automatic dispatch and continuation engine is implemented. Existing per-chat instructions remain unchanged.");
+                            });
 
                             if ui.add_enabled(
                                 cfg!(target_os = "linux")
@@ -18557,6 +18626,17 @@ fn persistence_worker(
     );
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::SaveMcpAgentDefaults { defaults } => {
+                if let Err(error) = defaults.save_atomic(&data_dir.join(mcp_agent_defaults::FILE_NAME)) {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "MCP agent defaults save",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            }
             PersistCommand::SaveInferenceSettings { store: settings } => {
                 if let Err(error) =
                     settings.save_atomic(&data_dir.join("local-inference-settings.json"))
