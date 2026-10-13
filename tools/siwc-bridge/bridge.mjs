@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { ResponsesLane } from "./response-lane.mjs";
+import { createAgentActivityRecorder } from "./agent-activity.mjs";
 import { parseReadRetryPolicy, retryReadOnly } from "./retry-policy.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -669,6 +670,11 @@ async function handle(command) {
         const releaseLane = responsesLane.acquire(requestId, "stream");
         const controller = new AbortController();
         if (requestId) responseControllers.set(requestId, controller);
+        const activity = createAgentActivityRecorder({
+          requestId,
+          emit,
+        });
+        activity.started();
         try {
           const operation = () =>
             chatgpt.streamResponse({
@@ -679,6 +685,7 @@ async function handle(command) {
                 : {}),
               signal: controller.signal,
               onDelta(delta) {
+                activity.delta(delta);
                 emit({
                   type: "delta",
                   request_id: requestId,
@@ -687,13 +694,18 @@ async function handle(command) {
               },
             });
           const result = await runWithStreamResponsePatch(patch, operation, (stage) => {
+            activity.transport(stage);
             emit({ type: "transport_progress", request_id: requestId, stage });
           });
+          activity.completed();
           emit({
             type: "result",
             request_id: requestId,
             result,
           });
+        } catch (error) {
+          activity.failed(error);
+          throw error;
         } finally {
           if (requestId && responseControllers.get(requestId) === controller) {
             responseControllers.delete(requestId);
