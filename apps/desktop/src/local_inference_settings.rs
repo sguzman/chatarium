@@ -299,18 +299,21 @@ mod tests {
     fn legacy_saved_mcp_off_migrates_but_explicit_off_survives_restart() {
         let path = temp_path();
         let conversation = LocalConversationId::new();
-        let legacy = json!({
-            "schema": SCHEMA, "version": VERSION,
-            "conversations": {
-                conversation.to_string(): {
-                    "model": "chosen-model",
-                    "instructions": "Be brief",
-                    "developer_context": "",
-                    "mcp_enabled": false,
-                    "slow_warning_seconds": 12,
-                }
-            }
+        let mut legacy = json!({
+            "schema": SCHEMA,
+            "version": VERSION,
+            "conversations": {},
         });
+        legacy["conversations"].as_object_mut().unwrap().insert(
+            conversation.to_string(),
+            json!({
+                "model": "chosen-model",
+                "instructions": "Be brief",
+                "developer_context": "",
+                "mcp_enabled": false,
+                "slow_warning_seconds": 12,
+            }),
+        );
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let defaults = crate::mcp_agent_defaults::AgentDefaults::default();
         let mut store = InferenceSettingsStore::load(&path).unwrap();
