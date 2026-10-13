@@ -559,6 +559,7 @@ fn agent_activity_diagnostic(line: &str) -> Option<String> {
         "started"
             | "wire_attempted"
             | "acknowledged"
+            | "http_rejected"
             | "first_text_delta"
             | "text_delta"
             | "completed"
@@ -600,15 +601,36 @@ fn agent_activity_diagnostic(line: &str) -> Option<String> {
             return None;
         }
         format!(" chars={chars}")
+    } else if stage == "http_rejected" {
+        let status = value.get("http_status")?.as_u64()?;
+        if !(400..=599).contains(&status) {
+            return None;
+        }
+        format!(" HTTP {status}")
     } else if matches!(stage, "completed" | "failed") {
         let evidence = value.get("delivery_evidence")?.as_str()?;
         if !matches!(
             evidence,
-            "not_dispatched" | "wire_unconfirmed" | "http_acknowledged" | "assistant_delta_seen"
+            "not_dispatched"
+                | "wire_unconfirmed"
+                | "http_acknowledged"
+                | "http_rejected"
+                | "assistant_delta_seen"
         ) {
             return None;
         }
-        format!(" evidence={evidence}")
+        if evidence == "http_rejected" {
+            let status = value.get("http_status")?.as_u64()?;
+            if !(400..=599).contains(&status) {
+                return None;
+            }
+            format!(" evidence={evidence} HTTP {status}")
+        } else {
+            if value.get("http_status").is_some() {
+                return None;
+            }
+            format!(" evidence={evidence}")
+        }
     } else {
         String::new()
     };
@@ -623,6 +645,7 @@ fn read_retry_diagnostic(line: &str) -> Option<String> {
     if contains_credential_field(&value)
         || value.get("type")?.as_str()? != "read_retry_scheduled"
         || value.get("operation")?.as_str()? != "models"
+        || value.get("stage")?.as_str()? != "model_discovery"
     {
         return None;
     }
@@ -636,7 +659,7 @@ fn read_retry_diagnostic(line: &str) -> Option<String> {
     let attempt = value.get("attempt")?.as_u64()?;
     let next_attempt = value.get("next_attempt")?.as_u64()?;
     let delay_ms = value.get("delay_ms")?.as_u64()?;
-    if attempt == 0 || attempt >= 3 || next_attempt != attempt + 1 || delay_ms > 3_000 {
+    if attempt == 0 || attempt >= 5 || next_attempt != attempt + 1 || delay_ms > 30_000 {
         return None;
     }
     let status = value
@@ -1024,6 +1047,16 @@ mod tests {
                 "Sign in with ChatGPT bridge output violated the credential boundary".to_owned()
             )
         );
+    }
+
+    #[test]
+    fn explicit_http_rejection_is_not_ambiguous_delivery() {
+        let rejection = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":3,"stage":"http_rejected","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":123.0,"http_status":429}"#;
+        assert!(agent_activity_diagnostic(rejection).unwrap().contains("HTTP 429"));
+        let terminal = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":4,"stage":"failed","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":130.0,"delivery_evidence":"http_rejected","http_status":429}"#;
+        assert!(agent_activity_diagnostic(terminal).unwrap().contains("evidence=http_rejected HTTP 429"));
+        let forged = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":4,"stage":"failed","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":130.0,"delivery_evidence":"wire_unconfirmed","http_status":429}"#;
+        assert!(agent_activity_diagnostic(forged).is_none());
     }
 
     #[test]
