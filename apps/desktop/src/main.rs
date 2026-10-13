@@ -14792,7 +14792,11 @@ impl eframe::App for ChatariumApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(23, 24, 29))
+                    .fill(egui::Color32::from_rgb(23, 27, 35))
+                    .stroke(egui::Stroke::new(
+                        1.5,
+                        egui::Color32::from_rgb(75, 91, 118),
+                    ))
                     .inner_margin(egui::Margin::symmetric(24, 18)),
             )
             .show(ctx, |ui| {
@@ -15215,7 +15219,10 @@ fn draw_delivery_timeline(
     // Never expand the native chat transcript just because another response
     // finished. The per-conversation fold state is controlled only by the user.
     let summary = if let Some(mean) = timeline.mean_response_seconds(conversation_id) {
-        format!("Delivery history · {} requests · avg {mean:.1}s", attempts.len())
+        format!(
+            "Delivery history · {} requests · avg {mean:.1}s",
+            attempts.len()
+        )
     } else {
         format!("Delivery history · {} requests", attempts.len())
     };
