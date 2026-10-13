@@ -577,7 +577,9 @@ fn agent_activity_diagnostic(line: &str) -> Option<String> {
     }
     let sequence = value.get("sequence")?.as_u64()?;
     let elapsed_ms = value.get("elapsed_ms")?.as_f64()?;
-    if sequence == 0 || sequence > 100_000 || !elapsed_ms.is_finite()
+    if sequence == 0
+        || sequence > 100_000
+        || !elapsed_ms.is_finite()
         || !(0.0..=86_400_000.0).contains(&elapsed_ms)
     {
         return None;
@@ -585,8 +587,10 @@ fn agent_activity_diagnostic(line: &str) -> Option<String> {
     let observed_at = value.get("observed_at_utc")?.as_str()?;
     // The source timestamp is retained on the wire; log only validated
     // metadata and never echo arbitrary upstream strings or delta content.
-    if observed_at.len() != 24 || !observed_at.ends_with('Z')
-        || !observed_at.is_ascii() || observed_at.bytes().any(|byte| byte.is_ascii_control())
+    if observed_at.len() != 24
+        || !observed_at.ends_with('Z')
+        || !observed_at.is_ascii()
+        || observed_at.bytes().any(|byte| byte.is_ascii_control())
     {
         return None;
     }
@@ -600,10 +604,7 @@ fn agent_activity_diagnostic(line: &str) -> Option<String> {
         let evidence = value.get("delivery_evidence")?.as_str()?;
         if !matches!(
             evidence,
-            "not_dispatched"
-                | "wire_unconfirmed"
-                | "http_acknowledged"
-                | "assistant_delta_seen"
+            "not_dispatched" | "wire_unconfirmed" | "http_acknowledged" | "assistant_delta_seen"
         ) {
             return None;
         }
