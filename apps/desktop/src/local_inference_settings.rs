@@ -259,13 +259,10 @@ mod tests {
             "version": VERSION,
             "conversations": {}
         });
-        legacy["conversations"]
-            .as_object_mut()
-            .unwrap()
-            .insert(
-                conversation.to_string(),
-                json!({"model": null, "instructions": "", "developer_context": ""}),
-            );
+        legacy["conversations"].as_object_mut().unwrap().insert(
+            conversation.to_string(),
+            json!({"model": null, "instructions": "", "developer_context": ""}),
+        );
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let loaded = InferenceSettingsStore::load(&path).unwrap();
         assert_eq!(

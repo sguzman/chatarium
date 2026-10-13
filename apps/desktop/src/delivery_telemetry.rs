@@ -164,9 +164,7 @@ impl Timeline {
             .for_conversation(conversation_id)
             .filter(|attempt| attempt.phase == Phase::Complete)
             .filter_map(Attempt::time_to_first_output)
-            .fold((0.0, 0), |(sum, count), seconds| {
-                (sum + seconds, count + 1)
-            });
+            .fold((0.0, 0), |(sum, count), seconds| (sum + seconds, count + 1));
         (count > 0).then(|| sum / f64::from(count))
     }
 
