@@ -41,11 +41,22 @@ pub fn verified_activity(
         };
         let sequence = first.recorded_sequence;
         let timestamp = timestamps.get(&sequence).map(|ms| *ms as f64 / 1_000.0);
+        let text_chunks = observations.iter().filter(|event| event.delta_chars.is_some()).count();
+        let text_characters = observations.iter().filter_map(|event| event.delta_chars).sum::<u64>();
+        let first_output_ms = observations.iter()
+            .find(|event| event.delta_chars.is_some())
+            .map(|event| event.elapsed_ms);
+        let latest_ms = observations.last().map_or(0.0, |event| event.elapsed_ms);
+        let first_output = first_output_ms.map_or_else(
+            || "no text output observed".to_owned(),
+            |ms| format!("first text +{:.1}s", ms / 1_000.0),
+        );
         let mut text = format!(
-            "Observed SIWC inference lifecycle · request {request}\n\
-             {} recorded event{}\n",
+            "Observed SIWC transport trace · request {request}\n\
+             {} events · {text_chunks} text chunks · {text_characters} characters · {first_output} · latest +{:.1}s\n\
+             Delivery/stream telemetry only; not private model thinking or reasoning.\n",
             observations.len(),
-            if observations.len() == 1 { "" } else { "s" },
+            latest_ms / 1_000.0,
         );
         for event in &observations {
             use std::fmt::Write;
@@ -139,8 +150,29 @@ mod tests {
                 .text
                 .contains("delivery evidence: wire_unconfirmed")
         );
+        assert!(map[&a][0].text.contains("3 events · 0 text chunks"));
+        assert!(map[&a][0].text.contains("not private model thinking"));
         assert!(!map[&b][0].text.contains("r1"));
         assert!(!map[&a][0].text.contains("r2"));
+    }
+
+    #[test]
+    fn streamed_chunk_summary_is_compact_and_exact() {
+        let owner = LocalConversationId::new();
+        let turn = LocalTurnId::new();
+        let mut store = MemoryEventStore::default();
+        for data in [
+            frame("r", 1, "started", json!({})),
+            frame("r", 2, "text_delta", json!({"delta_chars": 5})),
+            frame("r", 3, "text_delta", json!({"delta_chars": 7})),
+        ] {
+            append_siwc_agent_activity_checked(&mut store, owner, turn, &data).unwrap();
+        }
+        let text = &verified_activity(store.events())[&owner][0].text;
+        assert!(text.contains("3 events · 2 text chunks · 12 characters"));
+        assert!(text.contains("first text +0.0s"));
+        assert!(text.contains("not private model thinking"));
+        assert!(text.contains("received 7 text characters"));
     }
 
     #[test]
