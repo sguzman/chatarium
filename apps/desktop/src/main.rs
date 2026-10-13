@@ -284,6 +284,12 @@ impl ControllerControlAction {
 }
 
 enum PersistCommand {
+    ProposeAgentMcpCall {
+        turn_id: LocalTurnId,
+        source_conversation_id: LocalConversationId,
+        proposal: mcp_agent_defaults::ModelToolRequest,
+        policy: mcp_agent_defaults::ToolPolicy,
+    },
     SaveMcpAgentDefaults {
         defaults: mcp_agent_defaults::AgentDefaults,
     },
@@ -628,6 +634,13 @@ enum PersistNotice {
     ToolProviderUpdated {
         provider_id: ToolProviderId,
         event: EventEnvelope,
+    },
+    AgentMcpCallProposed {
+        turn_id: LocalTurnId,
+        call_id: ToolCallId,
+        route_id: RouteId,
+        policy: mcp_agent_defaults::ToolPolicy,
+        appended_events: Vec<EventEnvelope>,
     },
     ToolCallProposed {
         call_id: ToolCallId,
@@ -15998,6 +16011,107 @@ fn append_tool_call_proposal_checked(
     Ok(store.events()[before..].to_vec())
 }
 
+/// Prepare only addressable, checked, journaled routing identities for a
+/// model-authored MCP request. The model never chooses a provider ID, route
+/// ID, executable, policy authority or a dispatch permit.
+fn append_agent_mcp_call_checked(
+    store: &mut impl EventStore,
+    source_conversation_id: LocalConversationId,
+    proposal: &mcp_agent_defaults::ModelToolRequest,
+    policy: mcp_agent_defaults::ToolPolicy,
+) -> Result<(ToolCallId, RouteId, Vec<EventEnvelope>), String> {
+    if matches!(
+        policy,
+        mcp_agent_defaults::ToolPolicy::Disabled | mcp_agent_defaults::ToolPolicy::Manual
+    ) {
+        return Err("this MCP tool cannot be invoked automatically by the model".to_owned());
+    }
+    let starting = store.events().len();
+    if local_conversation_topology(store.events(), source_conversation_id)?.is_none() {
+        let (container, session) = next_available_local_orchestration_ids(store.events())?;
+        append_local_orchestration_topology_checked(
+            store,
+            source_conversation_id,
+            container,
+            session,
+        )?;
+    }
+    let topology = local_conversation_topology(store.events(), source_conversation_id)?
+        .ok_or("agent MCP source has no local topology")?;
+    if session_endpoint_binding(store.events(), topology.current_session_id)?.is_none() {
+        let endpoint = next_available_route_endpoint_id(store.events())?;
+        append_current_session_route_endpoint_checked(
+            store,
+            source_conversation_id,
+            topology.current_session_id,
+            endpoint,
+        )?;
+    }
+
+    let provider_name = ToolProviderName::new(proposal.provider.clone())
+        .map_err(|error| format!("agent MCP provider name: {error:?}"))?;
+    let mut registered = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|record| record.name == provider_name);
+    if registered.is_none()
+        && proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME
+    {
+        let provider_id = next_available_tool_provider_id(store.events())?;
+        append_tool_provider_registration_checked(store, provider_id, provider_name.clone())?;
+        let endpoint = next_available_route_endpoint_id(store.events())?;
+        append_tool_provider_endpoint_checked(store, provider_id, endpoint)?;
+        registered = replay_tool_provider_audit(store.events())?
+            .into_iter()
+            .find(|record| record.provider_id == provider_id);
+    }
+    let provider = registered.ok_or("agent requested an unregistered MCP provider")?;
+    if provider.endpoint_binding.is_none() {
+        return Err("agent MCP provider has no bound routing endpoint".to_owned());
+    }
+    if proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
+        if !local_tool_adapter::supports_builtin(&proposal.provider, &proposal.tool) {
+            return Err("unrecognized builtin MCP operation".to_owned());
+        }
+    } else {
+        let config = replay_tool_transport_config_audit(store.events())?
+            .into_iter()
+            .find(|record| record.provider_id == provider.provider_id)
+            .ok_or("agent MCP external provider has no immutable stdio configuration")?;
+        if !config.config.allowed_operations().iter()
+            .any(|op| op.as_str() == proposal.tool)
+        {
+            return Err("agent MCP operation is outside the provider allowlist".to_owned());
+        }
+        if policy == mcp_agent_defaults::ToolPolicy::Automatic
+            && !replay_tool_provider_activation_audit(store.events())?
+                .into_iter()
+                .any(|record| record.provider_id == provider.provider_id && record.active)
+        {
+            return Err("agent cannot automatically call an inactive MCP provider".to_owned());
+        }
+    }
+    let call_id = next_available_tool_call_id(store.events())?;
+    let route_id = next_available_route_id(store.events())?;
+    let operation = ToolOperationName::new(proposal.tool.clone())
+        .map_err(|error| format!("agent MCP tool name: {error:?}"))?;
+    let route_policy = match policy {
+        mcp_agent_defaults::ToolPolicy::Automatic => RoutePolicy::Allow,
+        mcp_agent_defaults::ToolPolicy::Ask => RoutePolicy::RequireApproval,
+        _ => unreachable!(),
+    };
+    append_tool_call_proposal_checked(
+        store,
+        call_id,
+        route_id,
+        source_conversation_id,
+        provider.provider_id,
+        operation,
+        proposal.arguments.to_string(),
+        route_policy,
+    )?;
+    Ok((call_id, route_id, store.events()[starting..].to_vec()))
+}
+
 fn append_tool_call_route_user_decision_checked(
     store: &mut impl EventStore,
     route_id: RouteId,
@@ -19028,6 +19142,56 @@ fn persistence_worker(
                             revision: None,
                             request_id: None,
                             turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::ProposeAgentMcpCall {
+                turn_id,
+                source_conversation_id,
+                proposal,
+                policy,
+            } => {
+                // A standing authorization comes ONLY from persisted user
+                // settings; do not trust a transient UI field or model text.
+                let checked = if policy == mcp_agent_defaults::ToolPolicy::Automatic {
+                    let saved = mcp_agent_defaults::AgentDefaults::load(
+                        &data_dir.join(mcp_agent_defaults::FILE_NAME),
+                    );
+                    match saved {
+                        Ok(config) if mcp_agent_defaults::tool_policy(
+                            &config.policy_rules,
+                            &proposal.provider,
+                            &proposal.tool,
+                        ) == Ok(mcp_agent_defaults::ToolPolicy::Automatic) => {
+                            append_agent_mcp_call_checked(
+                                &mut store, source_conversation_id, &proposal, policy
+                            )
+                        }
+                        _ => Err("no persisted user authorization for automatic MCP tool".to_owned()),
+                    }
+                } else {
+                    append_agent_mcp_call_checked(
+                        &mut store, source_conversation_id, &proposal, policy
+                    )
+                };
+                match checked {
+                    Ok((call_id, route_id, appended_events)) => {
+                        let _ = notices.send(PersistNotice::AgentMcpCallProposed {
+                            turn_id,
+                            call_id,
+                            route_id,
+                            policy,
+                            appended_events,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "agent MCP call proposal",
+                            revision: None,
+                            request_id: None,
+                            turn_id: Some(turn_id),
                             error,
                         });
                     }
