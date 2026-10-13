@@ -16099,15 +16099,18 @@ fn append_builtin_hello_checked(
         .into_iter()
         .find(|route| route.request.id == route_id)
         .ok_or_else(|| format!("tool route {} does not exist", route_id.get()))?;
-    if route.request.class != RouteClass::ToolCall
-        || route.initial_policy != RoutePolicy::RequireApproval
-        || route.gate_state
-            != (RouteGateState::Allowed {
-                by: DecisionAuthority::User,
-            })
-    {
+    let allowed = match route.initial_policy {
+        RoutePolicy::Allow => route.gate_state == (RouteGateState::Allowed {
+            by: DecisionAuthority::Policy,
+        }) && route.latest_user_decision.is_none(),
+        RoutePolicy::RequireApproval => route.gate_state == (RouteGateState::Allowed {
+            by: DecisionAuthority::User,
+        }) && route.latest_user_decision == Some(RouteUserDecision::Allow),
+        RoutePolicy::Deny => false,
+    };
+    if route.request.class != RouteClass::ToolCall || !allowed {
         return Err(format!(
-            "tool route {} requires a fresh explicit user Allow before builtin execution",
+            "tool route {} requires a fresh explicit user Allow or saved exact policy before builtin execution",
             route_id.get()
         ));
     }
