@@ -9678,6 +9678,25 @@ impl eframe::App for ChatariumApp {
                                         }
                                     });
 
+                                    if ui
+                                        .button("Fill hello / time / shell MCP demo")
+                                        .on_hover_text(
+                                            "Prefills local drafts only. Does not install a server, register, activate, approve, or run anything.",
+                                        )
+                                        .clicked()
+                                    {
+                                        self.tool_provider_name_draft = "chatarium.demo".to_owned();
+                                        self.tool_stdio_executable_draft =
+                                            "/usr/bin/chatarium-mcp-demo".to_owned();
+                                        self.tool_stdio_argv_draft.clear();
+                                        self.tool_stdio_operations_draft =
+                                            "hello\ntime.now\nshell.command\nchatarium.internal.tools-list"
+                                                .to_owned();
+                                        self.tool_operation_draft = "hello".to_owned();
+                                        self.tool_arguments_draft = "{}".to_owned();
+                                        self.status = "MCP demo fields prepared. Register a provider, bind its endpoint, configure and activate it, then manually Record / Allow / Run. The trusted /usr/bin demo binary must be installed separately.".to_owned();
+                                    }
+
                                     if providers.is_empty() {
                                         ui.label(
                                             egui::RichText::new(
