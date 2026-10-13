@@ -711,21 +711,29 @@ impl NativeConversationSearchIndex {
             messages.insert(owner, Arc::new(visible));
         }
         if activity_changed {
-            // Replay the trusted activity audit, not raw sidecar JSON.
-            // If any record is malformed, the verifier yields no activity:
-            // remove previously cached cards rather than showing stale or
-            // cross-conversation observations.
+            // Replay every observation for integrity, but copy/update only
+            // conversations named by the newly appended journal suffix.
+            // A streaming delta must not reallocate other chats' cards.
             let mut verified = super::siwc_activity_transcript::verified_activity(events);
-            let mut affected = messages
-                .iter()
-                .filter(|(_, entries)| {
+            if verified.is_empty()
+                && messages.values().any(|entries| {
                     entries
                         .iter()
                         .any(|entry| entry.role == super::DisplayRole::Activity)
                 })
-                .map(|(owner, _)| *owner)
+            {
+                // Malformed evidence invalidates the entire activity audit:
+                // only a full verified rebuild may clear all cached cards.
+                return None;
+            }
+            let affected = events[first_new_position..]
+                .iter()
+                .filter(|event| event.kind == EventKind::SiwcAgentActivityObserved)
+                .filter_map(|event| event.scope.as_deref())
+                .filter_map(|scope| scope.strip_prefix("siwc-activity:"))
+                .filter_map(|scoped| scoped.split_once(':'))
+                .filter_map(|(owner, _turn)| owner.parse::<LocalConversationId>().ok())
                 .collect::<BTreeSet<_>>();
-            affected.extend(verified.keys().copied());
             for owner in affected {
                 let entries = messages
                     .entry(owner)
@@ -1037,6 +1045,53 @@ mod tests {
             &original_other,
             &index.message_projection(other).unwrap()
         ));
+    }
+
+    #[test]
+    fn activity_delta_in_one_chat_does_not_clone_unrelated_activity_cards() {
+        use chatarium_store::siwc_agent_activity_audit::append_siwc_agent_activity_checked;
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let first = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let first_turn = author(&mut store, first, "First");
+        let other_turn = author(&mut store, other, "Other");
+        let make_frame = |request: &str, sequence: u64, stage: &str| {
+            serde_json::json!({
+                "type": "agent_activity",
+                "source": "siwc_bridge_observation",
+                "request_id": request,
+                "sequence": sequence,
+                "stage": stage,
+                "observed_at_utc": "2026-10-13T19:00:00.000Z",
+                "elapsed_ms": sequence as f64
+            })
+            .to_string()
+        };
+        append_siwc_agent_activity_checked(
+            &mut store, first, first_turn, &make_frame("first", 1, "started")
+        ).unwrap();
+        append_siwc_agent_activity_checked(
+            &mut store, other, other_turn, &make_frame("other", 1, "started")
+        ).unwrap();
+        let before = NativeConversationSearchIndex::build(store.events());
+        let original_other = before.message_projection(other).unwrap();
+        assert!(original_other.iter().any(|entry|
+            entry.role == super::super::DisplayRole::Activity
+        ));
+        let previous_count = store.events().len();
+        append_siwc_agent_activity_checked(
+            &mut store, first, first_turn, &make_frame("first", 2, "wire_attempted")
+        ).unwrap();
+        let after = before.extend_native_appends(store.events(), previous_count).unwrap();
+        assert!(after.messages(first).iter().any(|entry|
+            entry.role == super::super::DisplayRole::Activity
+                && entry.text.contains("wire_attempted")
+        ));
+        assert!(
+            Arc::ptr_eq(&original_other, &after.message_projection(other).unwrap()),
+            "untouched activity-bearing conversation must remain shared"
+        );
     }
 
     #[test]
