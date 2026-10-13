@@ -15100,6 +15100,43 @@ fn draw_delivery_timeline(
     }
     ui.add_space(8.0);
     ui.separator();
+
+    // Never expand the native chat transcript just because another response
+    // finished. The per-conversation fold state is controlled only by the user.
+    let summary = if let Some(mean) = timeline.mean_response_seconds(conversation_id) {
+        format!("Delivery history · {} requests · avg {mean:.1}s", attempts.len())
+    } else {
+        format!("Delivery history · {} requests", attempts.len())
+    };
+    egui::CollapsingHeader::new(summary)
+        .id_salt(("delivery-history", conversation_id))
+        .default_open(false)
+        .show(ui, |ui| {
+            // Explicit expansion still cannot grow without bound. Preserve the
+            // eight most recent exact per-response records inside this viewport.
+            egui::ScrollArea::vertical()
+                .id_salt(("delivery-history-scroll", conversation_id))
+                .max_height(240.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    draw_delivery_timeline_details(
+                        ui,
+                        timeline,
+                        conversation_id,
+                        slow_warning_seconds,
+                        &attempts,
+                    );
+                });
+        });
+}
+
+fn draw_delivery_timeline_details(
+    ui: &mut egui::Ui,
+    timeline: &delivery_telemetry::Timeline,
+    conversation_id: &str,
+    slow_warning_seconds: u32,
+    attempts: &[&delivery_telemetry::Attempt],
+) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new("DELIVERY HISTORY · ChatGPT Responses")
