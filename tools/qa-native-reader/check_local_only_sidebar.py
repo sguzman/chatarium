@@ -13,27 +13,33 @@ from PIL import Image
 def assert_native_only_sidebar(image):
     if image.width != 1180 or image.height != 760:
         raise AssertionError(f"unexpected production QA geometry: {image.size}")
-    # Pixel samples inside the real, production-styled New local button.
-    # Account-catalog UI instead paints an almost-black search box here.
-    button_points = ((30, 148), (50, 166), (88, 148))
-    button_brightness = [
-        sum(image.getpixel(point)[:3]) / 3
-        for point in button_points
-    ]
-    # The native +New button is narrow and has dark sidebar immediately to
-    # its right. The legacy account archive put a wide search-mode combo here.
-    sidebar_brightness = sum(image.getpixel((120, 145))[:3]) / 3
-    if min(button_brightness) < 38 or sidebar_brightness > 35:
-        raise AssertionError(
-            "native New local button missing or replaced by legacy account catalog: "
-            f"button={button_brightness}, sidebar={sidebar_brightness}"
-        )
+    # Display/advanced controls now live above CHATS. Search a bounded
+    # sidebar band for the unchanged, narrow native New-chat button instead
+    # of depending on its former fixed Y coordinate.
+    # Require eight consecutive rows, distinguishing it from isolated text.
+    consecutive = 0
+    for y in range(120, min(460, image.height - 280)):
+        button = [
+            sum(image.getpixel((x, y))[:3]) / 3
+            for x in (30, 50, 88)
+        ]
+        sidebar = sum(image.getpixel((120, y))[:3]) / 3
+        if min(button) >= 38 and sidebar <= 35:
+            consecutive += 1
+            if consecutive >= 8:
+                return
+        else:
+            consecutive = 0
+    raise AssertionError(
+        "native New local button not found within the bounded sidebar header band"
+    )
 
 
 def self_test():
     clean = Image.new("RGB", (1180, 760), (18, 19, 23))
-    for x, y in ((30, 148), (50, 166), (88, 148)):
-        clean.putpixel((x, y), (60, 60, 60))
+    for y in range(270, 285):
+        for x in range(20, 100):
+            clean.putpixel((x, y), (60, 60, 60))
     assert_native_only_sidebar(clean)
     broken = Image.new("RGB", (1180, 760), (18, 19, 23))
     try:
