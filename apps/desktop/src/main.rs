@@ -3923,8 +3923,11 @@ impl ChatariumApp {
                     } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
                     }
-                    if operation.starts_with("tool ") {
+                    if operation.starts_with("tool ") || operation.starts_with("agent MCP") {
                         self.tool_command_pending = false;
+                    }
+                    if (operation.starts_with("tool ") || operation.starts_with("agent MCP")) && self.agent_mcp_flow.is_some() {
+                        self.agent_mcp_flow = None;
                     }
                     if operation.starts_with("local memory ") {
                         self.local_memory_command_pending = false;
@@ -4178,7 +4181,7 @@ impl ChatariumApp {
                     self.delivery
                         .set(&request_id, delivery_telemetry::Phase::Complete);
                     let final_text = if text.is_empty() {
-                        active.cumulative_text
+                        active.cumulative_text.clone()
                     } else {
                         text
                     };
@@ -4225,65 +4228,24 @@ impl ChatariumApp {
                         completed,
                     );
 
-                    // An exact assistant-authored JSON proposal is *intent*,
-                    // never authority. Record it only through the existing
-                    // immutable ToolCall + pending RequireApproval route.
-                    // Do not consume a permit or start a provider here.
+                    let opt_in = !self.mcp_agent_defaults.bootstrap.trim().is_empty()
+                        && self.conversation_developer_context
+                            .contains(self.mcp_agent_defaults.bootstrap.as_str());
                     match mcp_agent_defaults::parse_model_tool_request(&final_text) {
-                        Ok(Some(proposal)) if !self.tool_command_pending => {
-                            let provider = replay_tool_provider_audit(&self.events).ok().and_then(
-                                |providers| {
-                                    providers
-                                        .into_iter()
-                                        .find(|p| p.name.as_str() == proposal.provider)
-                                },
-                            );
-                            if let Some(provider) = provider {
-                                let allowed = if provider.name.as_str()
-                                    == local_tool_adapter::BUILTIN_PROVIDER_NAME
-                                {
-                                    local_tool_adapter::supports_builtin(
-                                        provider.name.as_str(),
-                                        &proposal.tool,
-                                    )
-                                } else {
-                                    replay_tool_transport_config_audit(&self.events)
-                                        .ok()
-                                        .and_then(|configs| {
-                                            configs.into_iter().find(|config| {
-                                                config.provider_id == provider.provider_id
-                                            })
-                                        })
-                                        .is_some_and(|config| {
-                                            config
-                                                .config
-                                                .allowed_operations()
-                                                .iter()
-                                                .any(|op| op.as_str() == proposal.tool)
-                                        })
-                                };
-                                if allowed {
-                                    self.tool_selected_provider = Some(provider.provider_id);
-                                    self.tool_operation_draft = proposal.tool;
-                                    self.tool_arguments_draft = proposal.arguments.to_string();
-                                    self.propose_tool_call();
-                                } else {
-                                    self.status = "Assistant proposed an MCP operation not in the configured allowlist. No tool ran.".to_owned();
-                                }
-                            } else {
-                                self.status =
-                                    "Assistant proposed an unregistered MCP provider. No tool ran."
-                                        .to_owned();
-                            }
+                        Ok(Some(proposal)) if opt_in || self.agent_mcp_flow.is_some() => {
+                            self.propose_agent_mcp_call(&active, &final_text, proposal);
                         }
                         Ok(Some(_)) => {
-                            self.status = "Assistant proposed a tool, but another tool action is pending. Nothing executed.".to_owned();
+                            self.status = "Assistant produced an MCP proposal, but tool execution is not enabled for this conversation. No tool was dispatched.".to_owned();
+                        }
+                        Ok(None) => {
+                            // Ordinary final assistant message ends this chain.
+                            self.agent_mcp_flow = None;
                         }
                         Err(error) => {
-                            self.status =
-                                format!("Malformed model tool proposal was ignored: {error}");
+                            self.agent_mcp_flow = None;
+                            self.status = format!("Malformed agent MCP proposal rejected: {error}");
                         }
-                        Ok(None) => {}
                     }
                 }
                 siwc_bridge::BridgeEvent::Failed { request_id, error } => {
@@ -4396,6 +4358,7 @@ impl ChatariumApp {
                     }
                     self.remote_status = format!("{}: {}", error.code, error.message);
                     if handled_turn {
+                        self.agent_mcp_flow = None;
                         self.status = "remote turn ended without automatic retry".to_owned();
                     }
                 }
