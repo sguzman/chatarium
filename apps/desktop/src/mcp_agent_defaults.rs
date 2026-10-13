@@ -28,7 +28,7 @@ impl Default for AgentDefaults {
                 "Use chatarium.builtin::tools.list to discover available tools. ",
                 "Do not invent provider names or execute tools yourself. ",
                 "Chatarium makes all approval decisions and returns exact tool results. ",
-                "Continue working within the same user turn after receiving a result."
+                "When the current runtime does not support automatic continuation, wait for explicit user review before assuming the tool has completed."
             ).to_owned(),
             policy_rules: "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask".to_owned(),
             max_calls: 8,
