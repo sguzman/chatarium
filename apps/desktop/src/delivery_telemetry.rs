@@ -302,5 +302,4 @@ mod tests {
         first.acknowledged_at = Some(first.started_at + Duration::from_secs(2));
         assert_eq!(first.network_ack_seconds(), None);
     }
-
 }
