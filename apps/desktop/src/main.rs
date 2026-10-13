@@ -31,6 +31,7 @@ mod native_transcript_export;
 mod offline_reader;
 mod reader_visual_qa;
 mod siwc_bridge;
+mod siwc_activity_transcript;
 mod system_fonts;
 mod timestamp_display;
 mod virtual_reader;
@@ -79,6 +80,7 @@ use chatarium_store::archive_maintenance::{
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
+use chatarium_store::siwc_agent_activity_audit::append_siwc_agent_activity_checked;
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
 };
@@ -500,6 +502,11 @@ enum PersistCommand {
         kind: EventKind,
         payload: String,
     },
+    AppendAgentActivity {
+        conversation_id: LocalConversationId,
+        turn_id: LocalTurnId,
+        frame: String,
+    },
     LoadHistoricalConversation {
         local_conversation_id: LocalConversationId,
     },
@@ -558,6 +565,9 @@ enum PersistNotice {
     TurnEventAppended {
         turn_id: LocalTurnId,
         kind: EventKind,
+        event: EventEnvelope,
+    },
+    AgentActivityAppended {
         event: EventEnvelope,
     },
     HistoricalConversationLoaded {
@@ -887,6 +897,8 @@ enum DisplayRole {
     Assistant,
     /// Audited local tool activity; never user-authored or assistant-authored.
     Mcp,
+    /// Source-observed inference lifecycle, not assistant-authored content.
+    Activity,
 }
 
 #[derive(Debug, Clone)]
@@ -921,6 +933,7 @@ struct PendingInferenceIntent {
 
 #[derive(Debug, Clone)]
 struct PendingRemoteTurn {
+    conversation_id: LocalConversationId,
     turn_id: LocalTurnId,
     request_id: String,
     model: String,
@@ -946,6 +959,7 @@ struct AgentMcpFlow {
 
 #[derive(Debug, Clone)]
 struct ActiveRemoteTurn {
+    conversation_id: LocalConversationId,
     turn_id: LocalTurnId,
     request_id: String,
     cumulative_text: String,
@@ -3142,6 +3156,7 @@ impl ChatariumApp {
                                 remote_request_id.clone(),
                             );
                             self.pending_remote_turn = Some(PendingRemoteTurn {
+                                conversation_id: message.conversation_id,
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
                                 model: intent.model.clone(),
@@ -3167,6 +3182,9 @@ impl ChatariumApp {
 
                         self.queue_draft_snapshot();
                     }
+                }
+                PersistNotice::AgentActivityAppended { event } => {
+                    self.events.push(event);
                 }
                 PersistNotice::TurnEventAppended {
                     turn_id,
@@ -3199,6 +3217,7 @@ impl ChatariumApp {
                                     delivery_telemetry::Phase::BridgeQueued,
                                 );
                                 self.active_remote_turn = Some(ActiveRemoteTurn {
+                                    conversation_id: pending.conversation_id,
                                     turn_id,
                                     request_id: pending.request_id,
                                     cumulative_text: String::new(),
@@ -4099,6 +4118,29 @@ impl ChatariumApp {
                     } else {
                         format!("connected · {} models", self.remote_models.len())
                     };
+                }
+                siwc_bridge::BridgeEvent::AgentActivity { request_id, frame } => {
+                    // Attribute only an active turn; never accept a sidecar's
+                    // claimed conversation identity or stale request frame.
+                    if let Some(active) = self
+                        .active_remote_turn
+                        .as_ref()
+                        .filter(|active| active.request_id == request_id)
+                    {
+                        if let Some(sender) = &self.persist_tx {
+                            if let Err(error) = sender.send(PersistCommand::AppendAgentActivity {
+                                conversation_id: active.conversation_id,
+                                turn_id: active.turn_id,
+                                frame,
+                            }) {
+                                self.status = format!(
+                                    "failed to queue agent activity: {error}"
+                                );
+                            }
+                        } else {
+                            self.status = "agent activity journal unavailable".to_owned();
+                        }
+                    }
                 }
                 siwc_bridge::BridgeEvent::TransportProgress { request_id, stage } => {
                     if self
@@ -5290,6 +5332,7 @@ impl ChatariumApp {
         self.delivery
             .begin(flow.conversation_id.to_string(), request_id.clone());
         let pending = PendingRemoteTurn {
+            conversation_id: flow.conversation_id,
             turn_id: flow.turn_id,
             request_id: request_id.clone(),
             model,
@@ -6126,6 +6169,7 @@ impl ChatariumApp {
         };
         let request_id = coordination.coordination_turn_id.to_string();
         self.pending_remote_turn = Some(PendingRemoteTurn {
+            conversation_id: self.local_conversation_id,
             turn_id: coordination.coordination_turn_id,
             request_id: request_id.clone(),
             model: model.clone(),
@@ -6392,6 +6436,7 @@ impl ChatariumApp {
         };
         let request_id = execution.execution_turn_id.to_string();
         self.pending_remote_turn = Some(PendingRemoteTurn {
+            conversation_id: self.local_conversation_id,
             turn_id: execution.execution_turn_id,
             request_id: request_id.clone(),
             model: model.clone(),
@@ -14980,6 +15025,20 @@ fn draw_reader_bubble(
             })
             .inner
         }
+        DisplayRole::Activity => {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                transcript_bubble(
+                    ui,
+                    message,
+                    egui::Color32::from_rgb(50, 39, 26),
+                    "Agent activity",
+                    search_query,
+                    active_hit,
+                    ctx,
+                )
+            })
+            .inner
+        }
     }
 }
 
@@ -15009,6 +15068,8 @@ fn transcript_bubble(
                 egui::Color32::from_rgb(66, 139, 228)
             } else if label == "Agent" {
                 egui::Color32::from_rgb(65, 166, 108)
+            } else if label == "Agent activity" {
+                egui::Color32::from_rgb(213, 154, 73)
             } else {
                 egui::Color32::from_rgb(155, 109, 215)
             },
@@ -15024,6 +15085,8 @@ fn transcript_bubble(
                             egui::Color32::from_rgb(147, 191, 238)
                         } else if label == "Agent" {
                             egui::Color32::from_rgb(163, 221, 178)
+                        } else if label == "Agent activity" {
+                            egui::Color32::from_rgb(239, 199, 133)
                         } else {
                             egui::Color32::from_rgb(203, 166, 247)
                         },
@@ -15035,11 +15098,16 @@ fn transcript_bubble(
                     });
                 });
                 ui.add_space(4.0);
-                if message.role == DisplayRole::Mcp {
-                    // Keep tool-supplied bytes verbatim and non-executable: no
-                    // Markdown role spoofing, embedded images or active links.
-                    egui::CollapsingHeader::new("Exact tool activity · expand to inspect")
-                        .id_salt(("mcp-activity", message.sequence))
+                if matches!(message.role, DisplayRole::Mcp | DisplayRole::Activity) {
+                    // Keep tool bytes and activity metadata non-executable.
+                    // Neither surface may inject author-role markdown.
+                    let activity = message.role == DisplayRole::Activity;
+                    egui::CollapsingHeader::new(if activity {
+                        "Observed lifecycle · expand to inspect"
+                    } else {
+                        "Exact tool activity · expand to inspect"
+                    })
+                        .id_salt(("non-authored-activity", message.sequence))
                         .default_open(message.text.len() < 720)
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
@@ -20470,6 +20538,29 @@ fn persistence_worker(
                     });
                 }
             },
+            PersistCommand::AppendAgentActivity {
+                conversation_id,
+                turn_id,
+                frame,
+            } => match append_siwc_agent_activity_checked(
+                &mut store,
+                conversation_id,
+                turn_id,
+                &frame,
+            ) {
+                Ok(event) => {
+                    let _ = notices.send(PersistNotice::AgentActivityAppended { event });
+                }
+                Err(error) => {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "agent activity journal",
+                        revision: None,
+                        request_id: None,
+                        turn_id: Some(turn_id),
+                        error,
+                    });
+                }
+            },
             PersistCommand::AppendTurnEvent {
                 turn_id,
                 kind,
@@ -22052,7 +22143,7 @@ fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::Tran
             let role = match message.role {
                 DisplayRole::User => context_composer::TranscriptRole::User,
                 DisplayRole::Assistant => context_composer::TranscriptRole::Assistant,
-                DisplayRole::Mcp => return None,
+                DisplayRole::Mcp | DisplayRole::Activity => return None,
             };
             Some(context_composer::TranscriptMessage::durable(
                 role,
@@ -22955,6 +23046,7 @@ fn projected_display_messages_iter<'a>(
                 DisplayRole::User => "local journal · authored".to_owned(),
                 DisplayRole::Assistant => "ChatGPT Responses · remote assistant".to_owned(),
                 DisplayRole::Mcp => "verified local MCP audit".to_owned(),
+                DisplayRole::Activity => "verified SIWC lifecycle observation".to_owned(),
             }),
         });
     }
@@ -23009,7 +23101,7 @@ fn payload_message_identity(payload: &str, role: DisplayRole) -> Option<String> 
     let paths: &[&str] = match role {
         DisplayRole::User => &["/details/observed_message_id", "/details/observed_id"],
         DisplayRole::Assistant => &["/details/local_turn_id", "/details/observed_id"],
-        DisplayRole::Mcp => return None,
+        DisplayRole::Mcp | DisplayRole::Activity => return None,
     };
 
     paths
@@ -27161,6 +27253,7 @@ mod tests {
     fn sidecar_failure_clears_awaiting_dispatch_without_retry_or_losing_turn_identity() {
         let turn_id = LocalTurnId::new();
         let mut pending = Some(PendingRemoteTurn {
+            conversation_id: LocalConversationId::new(),
             turn_id,
             request_id: "synthetic-request".to_owned(),
             model: "synthetic-model".to_owned(),
