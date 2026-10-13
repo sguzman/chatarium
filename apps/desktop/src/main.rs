@@ -7,6 +7,7 @@ mod conversation_keybindings;
 mod conversation_navigation;
 mod delivery_telemetry;
 mod diagnostics;
+mod display_preferences;
 #[cfg(test)]
 mod integration_journey;
 mod local_archive_search;
@@ -6687,6 +6688,50 @@ impl ChatariumApp {
     }
 }
 
+/// Count persisted Chatarium data files, without following directory symlinks.
+/// Cached for a few seconds so UI frames do not traverse storage repeatedly.
+fn local_storage_bytes_cached(ctx: &egui::Context, journal_path: &std::path::Path) -> u64 {
+    let id = egui::Id::new("chatarium-local-data-usage");
+    if let Some((last, bytes)) = ctx.data_mut(|data| data.get_temp::<(Instant, u64)>(id)) {
+        if last.elapsed() < Duration::from_secs(8) {
+            return bytes;
+        }
+    }
+    let mut total = 0_u64;
+    let mut scanned = 0_usize;
+    if let Some(root) = journal_path.parent() {
+        let mut folders = vec![(root.to_path_buf(), 0_usize)];
+        while let Some((folder, depth)) = folders.pop() {
+            if depth > 8 || scanned >= 20_000 {
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(folder) else { continue; };
+            for entry in entries.flatten() {
+                scanned += 1;
+                if scanned >= 20_000 { break; }
+                let Ok(metadata) = entry.path().symlink_metadata() else { continue; };
+                if metadata.is_file() {
+                    total = total.saturating_add(metadata.len());
+                } else if metadata.is_dir() {
+                    folders.push((entry.path(), depth + 1));
+                }
+            }
+        }
+    }
+    ctx.data_mut(|data| data.insert_temp(id, (Instant::now(), total)));
+    total
+}
+
+fn readable_byte_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 impl eframe::App for ChatariumApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         egui::Color32::from_rgb(23, 24, 29).to_normalized_gamma_f32()
@@ -6700,6 +6745,14 @@ impl eframe::App for ChatariumApp {
         }
         self.process_remote_notices();
         self.process_due_delivery_retry();
+        // Visibility preferences are local-only and never mutate the durable
+        // audit. Cache them in egui state to avoid disk reads each frame.
+        let display_preferences_path = self.journal_path.with_file_name("display-preferences.json");
+        let display_preferences_id = egui::Id::new("chatarium-display-preferences");
+        let mut display_preferences = ctx.data_mut(|data| {
+            data.get_temp::<display_preferences::DisplayPreferences>(display_preferences_id)
+                .unwrap_or_else(|| display_preferences::DisplayPreferences::load(&display_preferences_path))
+        });
 
         // Consume global native chat navigation before resolving conversation
         // title, visible transcript, search projection or reader state. Doing
@@ -7043,6 +7096,15 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(112, 116, 126)),
                         );
                         ui.add_space(6.0);
+                        let data_usage = local_storage_bytes_cached(ctx, &self.journal_path);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Local Chatarium data: {} on disk",
+                                readable_byte_size(data_usage),
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(173, 189, 208)),
+                        );
 
                         ui.horizontal(|ui| {
                             if ui.button("+ New chat").clicked() {
@@ -7177,6 +7239,9 @@ impl eframe::App for ChatariumApp {
                                 .corner_radius(egui::CornerRadius::same(8))
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
+                                    // Egui Frames normally shrink to their text content.
+                                    // Fill every sidebar row to the same usable width.
+                                    ui.set_min_width((sidebar_control_width - 20.0).max(120.0));
                                     if ui
                                         .selectable_label(
                                             selected || keyboard_selected,
@@ -7249,6 +7314,19 @@ impl eframe::App for ChatariumApp {
                                             .truncate(),
                                         );
                                     }
+                                    let authored = messages.iter().filter(|m| {
+                                        matches!(m.role, DisplayRole::User | DisplayRole::Assistant)
+                                    });
+                                    let (words, bytes) = authored.fold((0_usize, 0_usize), |(words, bytes), message| {
+                                        (words + message.text.split_whitespace().count(), bytes + message.text.len())
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{words} words · {} chat text", readable_byte_size(bytes as u64)
+                                        ))
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(142, 167, 194)),
+                                    );
                                     if row.matching_message_indices.len() > 1 {
                                         ui.horizontal(|ui| {
                                             if ui.small_button("Prev hit").clicked() {
@@ -8660,6 +8738,30 @@ impl eframe::App for ChatariumApp {
 
                 let mut inference_controls_changed = false;
                 let mut behavior_profile_changed = false;
+                egui::CollapsingHeader::new("Diagnostics · display")
+                    .id_salt("chatarium-diagnostics-display")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let mut changed = false;
+                        changed |= ui.checkbox(
+                            &mut display_preferences.show_transport_trace,
+                            "Show transport traces in chat",
+                        ).changed();
+                        changed |= ui.checkbox(
+                            &mut display_preferences.show_delivery_history,
+                            "Show delivery history below chat",
+                        ).changed();
+                        ui.label("Both views are debugging diagnostics. Hiding them does not discard their underlying audit events.");
+                        if changed {
+                            if let Err(error) = display_preferences.save(&display_preferences_path) {
+                                self.status = format!("Cannot save display settings: {error}");
+                            }
+                            ctx.data_mut(|data| {
+                                data.insert_temp(display_preferences_id, display_preferences.clone())
+                            });
+                            ctx.request_repaint();
+                        }
+                    });
                 // Context tools can be much taller than the window. Bound them to
                 // their own scroll viewport so the transcript and composer stay usable.
                 egui::ScrollArea::vertical()
@@ -14552,10 +14654,19 @@ impl eframe::App for ChatariumApp {
             self.sync_historical_conversation(local_conversation_id, ctx);
         }
 
+        let filtered_messages = if !historical_mode && !display_preferences.show_transport_trace
+            && local_display_messages.iter().any(|m| m.role == DisplayRole::Activity)
+        {
+            Some(local_display_messages.iter()
+                .filter(|m| m.role != DisplayRole::Activity)
+                .cloned().collect::<Vec<_>>())
+        } else {
+            None
+        };
         let display_messages: &[DisplayMessage] = if historical_mode {
             &self.historical_messages
         } else {
-            &local_display_messages
+            filtered_messages.as_deref().unwrap_or(local_display_messages)
         };
 
         let reader_key = self.reader_conversation_key();
@@ -14565,7 +14676,7 @@ impl eframe::App for ChatariumApp {
         } else {
             None
         };
-        let reader_hit_targets = if historical_mode {
+        let reader_hit_targets = if historical_mode || filtered_messages.is_some() {
             std::sync::Arc::new(
                 display_messages
                     .iter()
@@ -14883,7 +14994,7 @@ impl eframe::App for ChatariumApp {
                             });
                         } else {
                             ui.add_space(8.0);
-                            if reader_window.virtualized && !historical_mode {
+                            if reader_window.virtualized && !historical_mode && filtered_messages.is_none() {
                                 let source = native_search_index
                                     .message_projection(self.local_conversation_id);
                                 virtual_layout.sync(source, ui.available_width());
@@ -15005,7 +15116,7 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                         }
-                        if !historical_mode {
+                        if !historical_mode && display_preferences.show_delivery_history {
                             let conversation_id = self.local_conversation_id.to_string();
                             draw_delivery_timeline(
                                 ui,
@@ -15319,7 +15430,9 @@ fn transcript_bubble(
     //
     // Recompute the width from the current parent allocation every frame so a
     // maximized/restored window immediately reflows the transcript.
-    let content_width = (ui.available_width() * 0.72).clamp(320.0, 900.0);
+    // A single width rule shared by all roles; preserve contrasting side
+    // alignment, but avoid different card widths based on short message text.
+    let content_width = (ui.available_width() * 0.80).clamp(280.0, 950.0);
 
     egui::Frame::default()
         .fill(fill)
