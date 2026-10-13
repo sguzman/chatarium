@@ -285,6 +285,15 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_mcp_results_have_bounded_virtual_heights() {
+        let mut tool = message(17, &"x".repeat(250_000));
+        tool.role = DisplayRole::Mcp;
+        assert_eq!(estimated_height(&tool, 640.0), 125.0);
+        let authored = message(18, &"x".repeat(250_000));
+        assert!(estimated_height(&authored, 640.0) > 125.0);
+    }
+
+    #[test]
     fn variable_heights_map_viewports_to_source_message_indices() {
         let source = Arc::new(vec![
             message(1, "short"),

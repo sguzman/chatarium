@@ -23,6 +23,24 @@ See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product in
 
 A browser may be used for protocol observation or occasional authentication bootstrap, but **Chromium-per-request is not an acceptable end state**. Ordinary conversation listing, retrieval, creation, continuation, send, and response streaming must ultimately be native Chatarium operations. Hiding or backgrounding Chromium does not satisfy this requirement.
 
+## Native MCP activity visibility
+
+The local desktop reader distinguishes **user (blue)**, **agent (green)** and
+**MCP tool activity (violet)**. Tool calls and terminal outcomes are displayed as
+separate, expandable chat entries, with original journal sequence, UTC timestamp,
+provider and operation, call/route identity, exact adapter bytes, and the
+reconstructed model-continuation envelope when that result is admitted.
+
+These entries replay from the existing append-only journal; they are **not**
+authored user messages. The standard user/assistant transcript sent to the model
+excludes displayed tool rows. Only the separately audited admission path may
+supply a tool result to an agent. A recorded tool call with no terminal outcome
+remains distinguishable from a completed call, and historical activity belongs
+only to its verified local conversation.
+
+Browser/network delivery failure recovery remains separate work; MCP visibility
+must not be confused with guaranteed retriability of ambiguous remote requests.
+
 ## Core invariants
 
 - **User-authored text must never exist only in transient UI state.**
