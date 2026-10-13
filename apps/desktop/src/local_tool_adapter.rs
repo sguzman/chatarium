@@ -321,7 +321,7 @@ mod tests {
         assert!(result.payload["utc"].as_str().unwrap().ends_with('Z'));
         assert!(prepare_time_response(&call("time.now", r#"{"zone":"local"}"#)).is_err());
         assert_eq!(utc_iso_timestamp(0, 0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(utc_iso_timestamp(1_792_000_000, 125), "2026-10-14T01:46:40.125Z");
+        assert_eq!(utc_iso_timestamp(1_792_000_000, 125), "2026-10-14T17:46:40.125Z");
     }
 
     #[test]
