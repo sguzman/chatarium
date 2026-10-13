@@ -7,11 +7,11 @@
 use chatarium_protocol::tool_envelope::{
     MAX_ENVELOPE_BYTES, format_legacy_tool_success, parse_legacy_tool_call,
 };
+use chatarium_store::EventEnvelope;
 use chatarium_store::tool_call_audit::ToolCallAuditRecord;
+use chatarium_store::tool_provider_activation_audit::replay_tool_provider_activation_audit;
 use chatarium_store::tool_provider_audit::replay_tool_provider_audit;
 use chatarium_store::tool_transport_config_audit::replay_tool_transport_config_audit;
-use chatarium_store::tool_provider_activation_audit::replay_tool_provider_activation_audit;
-use chatarium_store::EventEnvelope;
 use serde_json::{Value, json};
 
 pub const BUILTIN_PROVIDER_NAME: &str = "chatarium.builtin";
@@ -47,7 +47,10 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
     let mut tools = Vec::new();
     for (name, description) in [
         (HELLO_OPERATION, "Return a deterministic greeting"),
-        (TOOLS_LIST_OPERATION, "List locally registered MCP provider tools and their descriptions"),
+        (
+            TOOLS_LIST_OPERATION,
+            "List locally registered MCP provider tools and their descriptions",
+        ),
     ] {
         tools.push(json!({
             "provider": BUILTIN_PROVIDER_NAME,
@@ -61,10 +64,14 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
         if provider.name.as_str() == BUILTIN_PROVIDER_NAME {
             continue;
         }
-        let Some(config) = configs.iter().find(|c| c.provider_id == provider.provider_id) else {
+        let Some(config) = configs
+            .iter()
+            .find(|c| c.provider_id == provider.provider_id)
+        else {
             continue;
         };
-        let active = activation.iter()
+        let active = activation
+            .iter()
             .find(|state| state.provider_id == provider.provider_id)
             .is_some_and(|state| state.active);
         for op in config.config.allowed_operations() {
@@ -74,8 +81,12 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             let description = match (provider.name.as_str(), op.as_str()) {
                 ("chatarium.demo", "hello") => "Return a deterministic greeting",
                 ("chatarium.demo", "time.now") => "Read the current UTC time",
-                ("chatarium.demo", "shell.command") => "Run one restricted sandbox demonstration command",
-                (_, "chatarium.internal.tools-list") => "Inspect this provider's actual tools/list catalog",
+                ("chatarium.demo", "shell.command") => {
+                    "Run one restricted sandbox demonstration command"
+                }
+                (_, "chatarium.internal.tools-list") => {
+                    "Inspect this provider's actual tools/list catalog"
+                }
                 _ => "Description not yet verified; inspect this provider's tools/list catalog",
             };
             tools.push(json!({
@@ -231,8 +242,8 @@ mod tests {
     }
     #[test]
     fn tools_list_is_bounded_and_does_not_infer_execution_permission() {
-        use chatarium_store::MemoryEventStore;
         use chatarium_store::EventStore;
+        use chatarium_store::MemoryEventStore;
         let store = MemoryEventStore::default();
         let response = prepare_builtin_response(&call("tools.list", "{}"), store.events()).unwrap();
         let parsed = parse_legacy_tool_result(&response).unwrap();
@@ -244,9 +255,13 @@ mod tests {
             parsed.payload["tools"][1]["execution_permission"],
             "separate durable approval required"
         );
-        assert_eq!(parsed.payload["authority"], "discovery only, not permission to run");
-        assert!(prepare_builtin_response(&call("tools.list", r#"{"x":1}"#), store.events()).is_err());
+        assert_eq!(
+            parsed.payload["authority"],
+            "discovery only, not permission to run"
+        );
+        assert!(
+            prepare_builtin_response(&call("tools.list", r#"{"x":1}"#), store.events()).is_err()
+        );
         assert!(!supports_builtin("chatarium.demo", "tools.list"));
     }
-
 }
