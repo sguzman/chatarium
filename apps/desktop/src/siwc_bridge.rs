@@ -565,7 +565,17 @@ fn read_retry_diagnostic(line: &str) -> Option<String> {
         .filter(|status| (100..=599).contains(status))
         .map(|status| format!(" HTTP {status}"))
         .unwrap_or_default();
-    let request_id = diagnostics::short_id(value.get("request_id")?.as_str()?);
+    let raw_id = value.get("request_id")?.as_str()?;
+    if raw_id.is_empty()
+        || raw_id.len() > 256
+        || !raw_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
+    {
+        // Nothing untrusted may inject newlines or terminal escapes into logs.
+        return None;
+    }
+    let request_id = diagnostics::short_id(raw_id);
     Some(format!(
         "read-only models request={request_id} {category}{status} attempt={attempt}->{next_attempt} delay={delay_ms}ms"
     ))
@@ -949,6 +959,7 @@ mod tests {
             r#"{"type":"read_retry_scheduled","request_id":"a","operation":"stream_response","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1}"#,
             r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"arbitrary","attempt":1,"next_attempt":2,"delay_ms":1}"#,
             r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":100000}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"injected\\nline","operation":"models","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":1}"#,
         ] {
             assert!(read_retry_diagnostic(invalid).is_none());
         }
