@@ -1069,25 +1069,44 @@ mod tests {
             .to_string()
         };
         append_siwc_agent_activity_checked(
-            &mut store, first, first_turn, &make_frame("first", 1, "started")
-        ).unwrap();
+            &mut store,
+            first,
+            first_turn,
+            &make_frame("first", 1, "started"),
+        )
+        .unwrap();
         append_siwc_agent_activity_checked(
-            &mut store, other, other_turn, &make_frame("other", 1, "started")
-        ).unwrap();
+            &mut store,
+            other,
+            other_turn,
+            &make_frame("other", 1, "started"),
+        )
+        .unwrap();
         let before = NativeConversationSearchIndex::build(store.events());
         let original_other = before.message_projection(other).unwrap();
-        assert!(original_other.iter().any(|entry|
-            entry.role == super::super::DisplayRole::Activity
-        ));
+        assert!(
+            original_other
+                .iter()
+                .any(|entry| entry.role == super::super::DisplayRole::Activity)
+        );
         let previous_count = store.events().len();
         append_siwc_agent_activity_checked(
-            &mut store, first, first_turn, &make_frame("first", 2, "wire_attempted")
-        ).unwrap();
-        let after = before.extend_native_appends(store.events(), previous_count).unwrap();
-        assert!(after.messages(first).iter().any(|entry|
-            entry.role == super::super::DisplayRole::Activity
-                && entry.text.contains("wire_attempted")
-        ));
+            &mut store,
+            first,
+            first_turn,
+            &make_frame("first", 2, "wire_attempted"),
+        )
+        .unwrap();
+        let after = before
+            .extend_native_appends(store.events(), previous_count)
+            .unwrap();
+        assert!(
+            after
+                .messages(first)
+                .iter()
+                .any(|entry| entry.role == super::super::DisplayRole::Activity
+                    && entry.text.contains("wire_attempted"))
+        );
         assert!(
             Arc::ptr_eq(&original_other, &after.message_projection(other).unwrap()),
             "untouched activity-bearing conversation must remain shared"
