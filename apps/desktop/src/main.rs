@@ -1,4 +1,5 @@
 mod account_bridge;
+mod attachment_intake;
 mod behavior_profile;
 mod capability_probes;
 mod context_composer;
@@ -4272,7 +4273,9 @@ impl ChatariumApp {
                         );
                     }
                     if !active.source_suspect_logged {
-                        if let Some(marker) = response_text_provenance::suspect_in_stream_tail(&text) {
+                        if let Some(marker) =
+                            response_text_provenance::suspect_in_stream_tail(&text)
+                        {
                             diagnostics::info(
                                 "siwc-text-provenance",
                                 format!(

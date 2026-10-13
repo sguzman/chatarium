@@ -104,7 +104,10 @@ mod tests {
 
     #[test]
     fn adjacent_channel_markers_are_suspicious_but_ordinary_words_are_not() {
-        assert_eq!(suspect_in_stream_tail("system commentary was discussed"), None);
+        assert_eq!(
+            suspect_in_stream_tail("system commentary was discussed"),
+            None
+        );
         assert_eq!(
             suspect_in_stream_tail("text system::commentary token"),
             Some(SuspectedTextMarker::AdjacentRoleChannel)
@@ -114,10 +117,22 @@ mod tests {
 
     #[test]
     fn final_source_relation_preserves_uncertainty() {
-        assert_eq!(final_source_relation("abc", "abc"), FinalSourceRelation::FinalMatchesStream);
-        assert_eq!(final_source_relation("abc", ""), FinalSourceRelation::FinalEmptyUsesStream);
-        assert_eq!(final_source_relation("abc", "abd"), FinalSourceRelation::FinalDiffersFromStream);
-        assert_eq!(final_source_relation("", "server"), FinalSourceRelation::NoStream);
+        assert_eq!(
+            final_source_relation("abc", "abc"),
+            FinalSourceRelation::FinalMatchesStream
+        );
+        assert_eq!(
+            final_source_relation("abc", ""),
+            FinalSourceRelation::FinalEmptyUsesStream
+        );
+        assert_eq!(
+            final_source_relation("abc", "abd"),
+            FinalSourceRelation::FinalDiffersFromStream
+        );
+        assert_eq!(
+            final_source_relation("", "server"),
+            FinalSourceRelation::NoStream
+        );
     }
 
     #[test]
