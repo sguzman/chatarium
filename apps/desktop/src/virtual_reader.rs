@@ -260,6 +260,9 @@ fn message_signature(message: &DisplayMessage) -> u64 {
 }
 
 fn estimated_height(message: &DisplayMessage, width: f32) -> f32 {
+    if message.role == DisplayRole::Mcp && message.text.len() >= 720 {
+        return 125.0;
+    }
     let content_width = (width * 0.72).clamp(320.0, 900.0);
     let approximate_characters_per_line = (content_width / 8.0).max(24.0);
     let hard_lines = message.text.lines().count().max(1) as f32;
