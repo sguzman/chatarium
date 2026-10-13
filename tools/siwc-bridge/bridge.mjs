@@ -450,7 +450,10 @@ async function runWithStreamResponsePatch(patch, operation, onTransportProgress 
     }
 
     patched = true;
-    if (globalThis.fetch === streamFetch) globalThis.fetch = originalFetch;
+    // Keep the interceptor until the entire DevKit operation settles.
+    // Otherwise a DevKit-internal retry could escape both the store:false
+    // override and the at-most-one Responses POST invariant. The Responses
+    // lane separately prevents concurrent inference/probe ownership.
     // Local transport attempt is not evidence that the server received it.
     onTransportProgress("wire_attempted");
     const response = await originalFetch(input, {
