@@ -3042,9 +3042,10 @@ impl ChatariumApp {
         match sender.send(PersistCommand::CommitMessage {
             request_id,
             message,
-            attachment: self.staged_attachment.as_ref().map(
-                attachment_intake::PreparedAttachment::durable_record,
-            ),
+            attachment: self
+                .staged_attachment
+                .as_ref()
+                .map(attachment_intake::PreparedAttachment::durable_record),
             one_shot_memory_ids,
             one_shot_memory_snapshot_after_sequence,
         }) {
@@ -6773,7 +6774,9 @@ impl eframe::App for ChatariumApp {
             self.selected_historical_conversation.is_some() || remote_catalog_selected;
         if !historical_mode && self.commit_in_flight.is_none() {
             let dropped = ctx.input(|input| {
-                input.raw.dropped_files
+                input
+                    .raw
+                    .dropped_files
                     .iter()
                     .filter_map(|file| file.path.clone())
                     .collect::<Vec<_>>()
@@ -14365,12 +14368,16 @@ impl eframe::App for ChatariumApp {
                 }
 
                 ui.add_space(8.0);
-                if let Some(attached) = self.staged_attachment.as_ref() {
+                if let Some((filename, byte_len)) = self
+                    .staged_attachment
+                    .as_ref()
+                    .map(|attached| (attached.filename.clone(), attached.byte_len))
+                {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!(
                                 "Attachment: {} · {} bytes (pending durable commit)",
-                                attached.filename, attached.byte_len,
+                                filename, byte_len,
                             ))
                             .size(10.0),
                         );

@@ -169,7 +169,11 @@ fn validate_attachment(attachment: &Value) -> Result<(), String> {
     if byte_len == 0 || byte_len > 128 * 1024 {
         return Err("attachment byte length outside local bounds".to_owned());
     }
-    for field in ["prepared_at_unix_ms", "read_elapsed_ms", "encoding_elapsed_ms"] {
+    for field in [
+        "prepared_at_unix_ms",
+        "read_elapsed_ms",
+        "encoding_elapsed_ms",
+    ] {
         let numeric = object
             .get(field)
             .and_then(Value::as_f64)
@@ -184,8 +188,13 @@ fn validate_attachment(attachment: &Value) -> Result<(), String> {
         .ok_or_else(|| "attachment mime missing".to_owned())?;
     if !matches!(
         mime,
-        "text/plain" | "text/csv" | "application/json" | "application/pdf"
-            | "image/png" | "image/jpeg" | "image/webp"
+        "text/plain"
+            | "text/csv"
+            | "application/json"
+            | "application/pdf"
+            | "image/png"
+            | "image/jpeg"
+            | "image/webp"
     ) {
         return Err("attachment mime not allowed".to_owned());
     }
@@ -370,8 +379,14 @@ mod tests {
         }
         let store = JsonlEventStore::open(&path).unwrap();
         let event = &store.events()[0];
-        assert_eq!(decode_user_message_commit(event).unwrap(), Some(DecodedUserMessageCommit::Typed(message)));
-        assert_eq!(decode_user_message_attachment(event).unwrap(), Some(attachment));
+        assert_eq!(
+            decode_user_message_commit(event).unwrap(),
+            Some(DecodedUserMessageCommit::Typed(message))
+        );
+        assert_eq!(
+            decode_user_message_attachment(event).unwrap(),
+            Some(attachment)
+        );
         fs::remove_file(path).unwrap();
     }
 

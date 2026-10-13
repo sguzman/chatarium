@@ -262,12 +262,14 @@ mod tests {
 
     #[test]
     fn missing_authored_turn_fails_closed_without_fallback() {
-        assert!(attach_to_authored_input(
-            json!([{"role": "user", "content": "other"}]),
-            "wanted",
-            json!({"type": "input_image", "image_url": "x"})
-        )
-        .is_err());
+        assert!(
+            attach_to_authored_input(
+                json!([{"role": "user", "content": "other"}]),
+                "wanted",
+                json!({"type": "input_image", "image_url": "x"})
+            )
+            .is_err()
+        );
     }
 
     #[test]
