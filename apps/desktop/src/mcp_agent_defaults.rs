@@ -14,6 +14,7 @@ pub struct AgentDefaults {
     pub bootstrap: String,
     pub policy_rules: String,
     pub max_calls: u32,
+    pub seed_new_conversations: bool,
 }
 
 impl Default for AgentDefaults {
@@ -32,6 +33,7 @@ impl Default for AgentDefaults {
             ).to_owned(),
             policy_rules: "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask".to_owned(),
             max_calls: 8,
+            seed_new_conversations: false,
         }
     }
 }
@@ -111,6 +113,7 @@ impl AgentDefaults {
             bootstrap,
             policy_rules,
             max_calls,
+            seed_new_conversations: value.get("seed_new_conversations").and_then(Value::as_bool).unwrap_or(false),
         };
         settings.validate()?;
         Ok(settings)
@@ -125,7 +128,8 @@ impl AgentDefaults {
             "schema": SCHEMA, "version": 1,
             "bootstrap": self.bootstrap,
             "policy_rules": self.policy_rules,
-            "max_calls": self.max_calls
+            "max_calls": self.max_calls,
+            "seed_new_conversations": self.seed_new_conversations
         }))
         .map_err(|e| e.to_string())?;
         let temporary = path.with_extension("json.tmp");
@@ -218,7 +222,8 @@ mod tests {
 
     #[test]
     fn persisted_template_and_policy_are_validated() {
-        let settings = AgentDefaults::default();
+        let mut settings = AgentDefaults::default();
+        settings.seed_new_conversations = true;
         assert!(settings.validate().is_ok());
         let mut bad = settings.clone();
         bad.policy_rules
