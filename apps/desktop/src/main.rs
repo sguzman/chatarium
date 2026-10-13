@@ -1419,8 +1419,7 @@ impl ChatariumApp {
             start_account_bridge();
         let (live_mirror_fetch_tx, live_mirror_fetch_rx) = mpsc::channel();
         let remote_conversation_catalog = if ACCOUNT_MIRRORING_ENABLED {
-            load_remote_history_cache(&remote_history_cache_path(&journal_path))
-                .unwrap_or_default()
+            load_remote_history_cache(&remote_history_cache_path(&journal_path)).unwrap_or_default()
         } else {
             Vec::new()
         };

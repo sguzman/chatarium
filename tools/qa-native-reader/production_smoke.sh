@@ -16,6 +16,27 @@ mkdir -p "$OUT"/{home,config,data,cache,runtime}
 chmod 700 "$OUT/runtime"
 LOG="$OUT/production.log"
 
+# Reproduce the legacy account-catalog contamination from an old local cache.
+# The native-only HUD must show the local New button at the top, even with
+# dozens of historical account records present on disk. Disposable fixture only.
+python3 - "$OUT/data/remote-history-cache.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+fixture = {
+    "schema": "chatarium-remote-history-cache",
+    "version": 1,
+    "items": [
+        {"id": f"disposable-remote-catalog-{i:03d}",
+         "title": f"DO_NOT_SHOW_ACCOUNT_CATALOG_{i:03d}",
+         "create_time": None, "update_time": None}
+        for i in range(85)
+    ],
+}
+Path(sys.argv[1]).write_text(json.dumps(fixture) + "\n")
+PY
+legacy_cache_sha="$(sha256sum "$OUT/data/remote-history-cache.json" | cut -d ' ' -f 1)"
+
 
 # xvfb-run can expose DISPLAY slightly before the X server accepts clients.
 # Do not launch openbox or winit until a real X11 query succeeds.
@@ -90,6 +111,8 @@ fi
 activate_window "$window"
 sleep 1
 import -window "$window" "$OUT/production-initial.png"
+python3 tools/qa-native-reader/check_local_only_sidebar.py --self-test
+python3 tools/qa-native-reader/check_local_only_sidebar.py "$OUT/production-initial.png"
 
 # An actual user-authored local turn through the production composer and
 # persistence worker. Wait for the durable UserMessageCommitted event rather
@@ -384,6 +407,8 @@ test -s "$OUT/production-resized.png"
 test -s "$OUT/production-restarted.png"
 test -s "$OUT/production-restarted-switched.png"
 test -s "$OUT/production-restarted-returned.png"
+test "$(sha256sum "$OUT/data/remote-history-cache.json" | cut -d ' ' -f 1)" = "$legacy_cache_sha"
+echo "CHATARIUM_LEGACY_ACCOUNT_CACHE_UNTOUCHED PASS"
 
 # Regression: the sidebar must not merely stay narrow; the real egui splitter
 # must respond to an X11 pointer drag in BOTH directions.
