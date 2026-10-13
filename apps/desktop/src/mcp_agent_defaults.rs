@@ -362,7 +362,10 @@ mod tests {
             tool_policy(&loaded.policy_rules, "chatarium.builtin", "tools.list"),
             Ok(ToolPolicy::Automatic)
         );
-        assert_eq!(tool_policy(&loaded.policy_rules, "chatarium.builtin", "time.now"), Ok(ToolPolicy::Automatic));
+        assert_eq!(
+            tool_policy(&loaded.policy_rules, "chatarium.builtin", "time.now"),
+            Ok(ToolPolicy::Automatic)
+        );
         assert!(path.is_file());
         assert_eq!(loaded, AgentDefaults::load(&path).unwrap());
         let _ = fs::remove_file(path);
@@ -421,21 +424,31 @@ mod tests {
     #[test]
     fn clock_policy_migrates_only_the_exact_previous_default() {
         let path = std::env::temp_dir().join(format!(
-            "chatarium-clock-migration-{}-{}.json", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            "chatarium-clock-migration-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
         let mut current = AgentDefaults::default();
         current.policy_rules = PRIOR_DEFAULT_POLICY.to_owned();
         current.save_atomic(&path).unwrap();
         let migrated = AgentDefaults::load(&path).unwrap();
-        assert_eq!(tool_policy(&migrated.policy_rules, "chatarium.builtin", "time.now"),
-            Ok(ToolPolicy::Automatic));
-        current.policy_rules.push_str("\nchatarium.demo::other = ask");
+        assert_eq!(
+            tool_policy(&migrated.policy_rules, "chatarium.builtin", "time.now"),
+            Ok(ToolPolicy::Automatic)
+        );
+        current
+            .policy_rules
+            .push_str("\nchatarium.demo::other = ask");
         current.save_atomic(&path).unwrap();
         let unchanged = AgentDefaults::load(&path).unwrap();
         assert_eq!(unchanged.policy_rules, current.policy_rules);
-        assert_eq!(tool_policy(&unchanged.policy_rules, "chatarium.builtin", "time.now"),
-            Ok(ToolPolicy::Ask));
+        assert_eq!(
+            tool_policy(&unchanged.policy_rules, "chatarium.builtin", "time.now"),
+            Ok(ToolPolicy::Ask)
+        );
         let _ = fs::remove_file(path);
     }
 
