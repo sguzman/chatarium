@@ -22,8 +22,12 @@ impl Default for DisplayPreferences {
 
 impl DisplayPreferences {
     pub fn load(path: &Path) -> Self {
-        let Ok(content) = fs::read(path) else { return Self::default(); };
-        if content.len() > 4096 { return Self::default(); }
+        let Ok(content) = fs::read(path) else {
+            return Self::default();
+        };
+        if content.len() > 4096 {
+            return Self::default();
+        }
         let Ok(data) = serde_json::from_slice::<Value>(&content) else {
             return Self::default();
         };
@@ -33,10 +37,14 @@ impl DisplayPreferences {
             return Self::default();
         }
         Self {
-            show_transport_trace: data.get("show_transport_trace")
-                .and_then(Value::as_bool).unwrap_or(false),
-            show_delivery_history: data.get("show_delivery_history")
-                .and_then(Value::as_bool).unwrap_or(false),
+            show_transport_trace: data
+                .get("show_transport_trace")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            show_delivery_history: data
+                .get("show_delivery_history")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }
     }
 
@@ -49,7 +57,8 @@ impl DisplayPreferences {
             "version": 1,
             "show_transport_trace": self.show_transport_trace,
             "show_delivery_history": self.show_delivery_history,
-        })).map_err(|error| error.to_string())?;
+        }))
+        .map_err(|error| error.to_string())?;
         let temporary = path.with_extension("json.tmp");
         fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
         fs::rename(temporary, path).map_err(|error| error.to_string())
@@ -62,10 +71,17 @@ mod tests {
     #[test]
     fn defaults_hide_both_debug_surfaces_and_roundtrip() {
         let path = std::env::temp_dir().join(format!(
-            "chatarium-display-{}-{}.json", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            "chatarium-display-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
-        assert_eq!(DisplayPreferences::load(&path), DisplayPreferences::default());
+        assert_eq!(
+            DisplayPreferences::load(&path),
+            DisplayPreferences::default()
+        );
         let shown = DisplayPreferences {
             show_transport_trace: true,
             show_delivery_history: true,
@@ -73,7 +89,10 @@ mod tests {
         shown.save(&path).unwrap();
         assert_eq!(DisplayPreferences::load(&path), shown);
         fs::write(&path, b"{\"schema\":\"broken\"}").unwrap();
-        assert_eq!(DisplayPreferences::load(&path), DisplayPreferences::default());
+        assert_eq!(
+            DisplayPreferences::load(&path),
+            DisplayPreferences::default()
+        );
         let _ = fs::remove_file(path);
     }
 }
