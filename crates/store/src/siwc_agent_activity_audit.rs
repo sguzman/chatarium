@@ -636,19 +636,27 @@ mod tests {
             (1, "started", json!({})),
             (2, "wire_attempted", json!({})),
             (3, "http_rejected", json!({"http_status": 429})),
-            (4, "failed", json!({
-                "http_status": 429,
-                "cancelled": false,
-                "delivery_evidence": "http_rejected"
-            })),
+            (
+                4,
+                "failed",
+                json!({
+                    "http_status": 429,
+                    "cancelled": false,
+                    "delivery_evidence": "http_rejected"
+                }),
+            ),
             // Same request ID, but a new genuine inference attempt.
             (1, "started", json!({})),
             (2, "wire_attempted", json!({})),
             (3, "acknowledged", json!({})),
             (4, "first_text_delta", json!({"delta_chars": 5})),
-            (5, "completed", json!({
-                "delivery_evidence": "assistant_delta_seen"
-            })),
+            (
+                5,
+                "completed",
+                json!({
+                    "delivery_evidence": "assistant_delta_seen"
+                }),
+            ),
         ] {
             let event = frame("same-request", seq, stage, extra);
             append_siwc_agent_activity_checked(&mut store, c, t, &event).unwrap();
@@ -656,16 +664,22 @@ mod tests {
         let records = replay_siwc_agent_activity_audit(store.events()).unwrap();
         assert_eq!(records.len(), 9);
         assert_eq!(
-            records.iter().filter(|row| row.stage == "started").count(), 2
+            records.iter().filter(|row| row.stage == "started").count(),
+            2
         );
-        assert_eq!(records[3].delivery_evidence.as_deref(), Some("http_rejected"));
+        assert_eq!(
+            records[3].delivery_evidence.as_deref(),
+            Some("http_rejected")
+        );
         assert_eq!(
             records.last().unwrap().delivery_evidence.as_deref(),
             Some("assistant_delta_seen")
         );
-        assert!(records.windows(2).all(|pair| {
-            pair[0].recorded_sequence < pair[1].recorded_sequence
-        }));
+        assert!(
+            records
+                .windows(2)
+                .all(|pair| { pair[0].recorded_sequence < pair[1].recorded_sequence })
+        );
     }
 
     #[test]
@@ -673,12 +687,17 @@ mod tests {
         let mut store = MemoryEventStore::default();
         let c = LocalConversationId::new();
         let t = LocalTurnId::new();
-        append_siwc_agent_activity_checked(
-            &mut store, c, t, &frame("r", 1, "started", json!({}))
-        ).unwrap();
-        assert!(append_siwc_agent_activity_checked(
-            &mut store, c, t, &frame("r", 1, "started", json!({}))
-        ).is_err());
+        append_siwc_agent_activity_checked(&mut store, c, t, &frame("r", 1, "started", json!({})))
+            .unwrap();
+        assert!(
+            append_siwc_agent_activity_checked(
+                &mut store,
+                c,
+                t,
+                &frame("r", 1, "started", json!({}))
+            )
+            .is_err()
+        );
         assert_eq!(store.events().len(), 1);
     }
 

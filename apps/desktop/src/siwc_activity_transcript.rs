@@ -22,11 +22,16 @@ pub fn verified_activity(
     let mut groups = BTreeMap::<ActivityKey, Vec<SiwcAgentActivityRecord>>::new();
     for record in records {
         groups
-            .entry((record.conversation_id, record.turn_id, record.request_id.clone()))
+            .entry((
+                record.conversation_id,
+                record.turn_id,
+                record.request_id.clone(),
+            ))
             .or_default()
             .push(record);
     }
-    let timestamps = events.iter()
+    let timestamps = events
+        .iter()
         .map(|event| (event.sequence, event.at_unix_ms))
         .collect::<BTreeMap<_, _>>();
     let mut by_owner = BTreeMap::<LocalConversationId, Vec<DisplayMessage>>::new();
@@ -47,10 +52,7 @@ pub fn verified_activity(
             let _ = write!(
                 text,
                 "\n#{}  {}  +{:.3} ms  {}\n",
-                event.source_sequence,
-                event.stage,
-                event.elapsed_ms,
-                event.observed_at_utc,
+                event.source_sequence, event.stage, event.elapsed_ms, event.observed_at_utc,
             );
             if let Some(chars) = event.delta_chars {
                 let _ = writeln!(text, "  received {chars} text characters");
@@ -112,9 +114,18 @@ mod tests {
         for (owner, turn, frame) in [
             (a, first, frame("r1", 1, "started", json!({}))),
             (a, first, frame("r1", 2, "wire_attempted", json!({}))),
-            (a, first, frame("r1", 3, "failed", json!({
-                "delivery_evidence": "wire_unconfirmed", "cancelled": false
-            }))),
+            (
+                a,
+                first,
+                frame(
+                    "r1",
+                    3,
+                    "failed",
+                    json!({
+                        "delivery_evidence": "wire_unconfirmed", "cancelled": false
+                    }),
+                ),
+            ),
             (b, second, frame("r2", 1, "started", json!({}))),
         ] {
             append_siwc_agent_activity_checked(&mut store, owner, turn, &frame).unwrap();
@@ -123,7 +134,11 @@ mod tests {
         assert_eq!(map[&a].len(), 1);
         assert_eq!(map[&b].len(), 1);
         assert_eq!(map[&a][0].role, DisplayRole::Activity);
-        assert!(map[&a][0].text.contains("delivery evidence: wire_unconfirmed"));
+        assert!(
+            map[&a][0]
+                .text
+                .contains("delivery evidence: wire_unconfirmed")
+        );
         assert!(!map[&b][0].text.contains("r1"));
         assert!(!map[&a][0].text.contains("r2"));
     }
@@ -138,13 +153,16 @@ mod tests {
             a,
             turn,
             &frame("r", 1, "started", json!({})),
-        ).unwrap();
+        )
+        .unwrap();
         let scope = store.events()[0].scope.clone();
-        store.append_scoped(
-            scope,
-            chatarium_core::EventKind::SiwcAgentActivityObserved,
-            "{malformed".to_owned(),
-        ).unwrap();
+        store
+            .append_scoped(
+                scope,
+                chatarium_core::EventKind::SiwcAgentActivityObserved,
+                "{malformed".to_owned(),
+            )
+            .unwrap();
         assert!(verified_activity(store.events()).is_empty());
     }
 }

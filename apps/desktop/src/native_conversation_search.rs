@@ -622,13 +622,10 @@ impl NativeConversationSearchIndex {
         // A new tool outcome or admission can change a historical tool row.
         // Recompute verified correlation rather than trying to splice
         // unverified tool payloads into the incremental user/assistant path.
-        if events[first_new_position..]
-            .iter()
-            .any(|event| {
-                super::mcp_transcript::changes_activity(event.kind)
-                    || event.kind == EventKind::SiwcAgentActivityObserved
-            })
-        {
+        if events[first_new_position..].iter().any(|event| {
+            super::mcp_transcript::changes_activity(event.kind)
+                || event.kind == EventKind::SiwcAgentActivityObserved
+        }) {
             return None;
         }
         let mut owners = Arc::clone(&self.owners);

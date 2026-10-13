@@ -261,8 +261,7 @@ fn message_signature(message: &DisplayMessage) -> u64 {
 }
 
 fn estimated_height(message: &DisplayMessage, width: f32) -> f32 {
-    if matches!(message.role, DisplayRole::Mcp | DisplayRole::Activity)
-        && message.text.len() >= 720
+    if matches!(message.role, DisplayRole::Mcp | DisplayRole::Activity) && message.text.len() >= 720
     {
         return 125.0;
     }

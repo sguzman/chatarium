@@ -30,8 +30,8 @@ mod native_conversation_search;
 mod native_transcript_export;
 mod offline_reader;
 mod reader_visual_qa;
-mod siwc_bridge;
 mod siwc_activity_transcript;
+mod siwc_bridge;
 mod system_fonts;
 mod timestamp_display;
 mod virtual_reader;
@@ -80,7 +80,6 @@ use chatarium_store::archive_maintenance::{
 use chatarium_store::authored::{
     DecodedUserMessageCommit, commit_user_message, decode_user_message_commit, local_turn_scope,
 };
-use chatarium_store::siwc_agent_activity_audit::append_siwc_agent_activity_checked;
 use chatarium_store::chat_container_audit::{
     record_chat_container_created, replay_chat_container_audit,
 };
@@ -216,6 +215,7 @@ use chatarium_store::session_audit::{
     active_worker_session, record_local_session_registered, record_session_endpoint_bound,
     record_worker_session_bound, record_worker_session_successor_bound, replay_session_audit,
 };
+use chatarium_store::siwc_agent_activity_audit::append_siwc_agent_activity_checked;
 use chatarium_store::supervision_audit::{
     record_controller_session_designated, record_controller_worker_bound, replay_supervision_audit,
 };
@@ -4133,9 +4133,7 @@ impl ChatariumApp {
                                 turn_id: active.turn_id,
                                 frame,
                             }) {
-                                self.status = format!(
-                                    "failed to queue agent activity: {error}"
-                                );
+                                self.status = format!("failed to queue agent activity: {error}");
                             }
                         } else {
                             self.status = "agent activity journal unavailable".to_owned();
@@ -15107,18 +15105,16 @@ fn transcript_bubble(
                     } else {
                         "Exact tool activity · expand to inspect"
                     })
-                        .id_salt(("non-authored-activity", message.sequence))
-                        .default_open(message.text.len() < 720)
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(320.0)
-                                .auto_shrink([false, true])
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(&message.text).monospace().size(11.0),
-                                    );
-                                });
-                        });
+                    .id_salt(("non-authored-activity", message.sequence))
+                    .default_open(message.text.len() < 720)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(&message.text).monospace().size(11.0));
+                            });
+                    });
                 } else {
                     for block in offline_reader::parse_markdown(&message.text) {
                         render_markdown_block(ui, &block, search_query, active_hit, ctx);
