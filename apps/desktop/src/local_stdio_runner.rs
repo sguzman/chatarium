@@ -738,8 +738,8 @@ mod tests {
                 serde_json::json!({"command":"sh","args":["-c","cat /home/private"]}),
             ),
         ] {
-            let frame = encode_stdio_frame(&tools_call_request(id, tool_name, &args).unwrap())
-                .unwrap();
+            let frame =
+                encode_stdio_frame(&tools_call_request(id, tool_name, &args).unwrap()).unwrap();
             let raw = run_one_shot(executable, &[], &frame, id).unwrap();
             let reply: serde_json::Value = serde_json::from_str(&raw).unwrap();
             assert_eq!(reply["id"], id);
@@ -750,10 +750,12 @@ mod tests {
                     assert_eq!(reply["result"]["isError"], false);
                 }
                 98 => {
-                    assert!(reply["result"]["structuredContent"]["utc"]
-                        .as_str()
-                        .unwrap()
-                        .ends_with('Z'));
+                    assert!(
+                        reply["result"]["structuredContent"]["utc"]
+                            .as_str()
+                            .unwrap()
+                            .ends_with('Z')
+                    );
                 }
                 99 => {
                     assert_eq!(
@@ -767,5 +769,4 @@ mod tests {
             }
         }
     }
-
 }
