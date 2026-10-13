@@ -22332,7 +22332,14 @@ fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize
             .filter(|event| event.scope.as_deref() == Some(scope.as_str()))
             .map(|event| event.kind)
             .collect::<Vec<_>>();
-        let already_interrupted = kinds.contains(&EventKind::TransportInterrupted);
+        // Only the most recent dispatch step determines recovery. An earlier
+        // failed/completed model attempt cannot mask an interrupted MCP
+        // continuation under the same user-authored turn.
+        let latest_dispatch = kinds.iter()
+            .rposition(|kind| *kind == EventKind::DispatchAttempted)
+            .unwrap_or(kinds.len());
+        let already_interrupted = kinds[latest_dispatch..]
+            .contains(&EventKind::TransportInterrupted);
         let evidence = TurnEvidence::replay_event_kinds(kinds)
             .map_err(|error| format!("turn {turn_id} replay failed: {error}"))?;
 
