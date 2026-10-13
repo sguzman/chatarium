@@ -282,6 +282,7 @@ impl TurnEvidence {
             | EventKind::ToolCallRecorded
             | EventKind::ToolCallRouteBound
             | EventKind::ToolCallOutcomeObserved
+            | EventKind::SiwcAgentActivityObserved
             | EventKind::ToolResultContextDecisionRecorded
             | EventKind::RouteResultObserved
             | EventKind::LocalConversationWorkerBound
@@ -418,6 +419,8 @@ pub enum EventKind {
     ToolCallRouteBound,
     /// An adapter-observed terminal result/error for one dispatched tool call.
     ToolCallOutcomeObserved,
+    /// A sanitized, locally scoped SIWC activity event was observed and durably recorded.
+    SiwcAgentActivityObserved,
     /// An explicit include/exclude decision for a completed tool result was recorded.
     ToolResultContextDecisionRecorded,
     /// A generic routing-layer result or error observation was recorded.
@@ -552,6 +555,7 @@ impl EventKind {
             Self::ToolCallRecorded => "tool_call_recorded",
             Self::ToolCallRouteBound => "tool_call_route_bound",
             Self::ToolCallOutcomeObserved => "tool_call_outcome_observed",
+            Self::SiwcAgentActivityObserved => "siwc_agent_activity_observed",
             Self::ToolResultContextDecisionRecorded => "tool_result_context_decision_recorded",
             Self::RouteResultObserved => "route_result_observed",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
@@ -661,6 +665,7 @@ impl EventKind {
             "tool_call_recorded" => Some(Self::ToolCallRecorded),
             "tool_call_route_bound" => Some(Self::ToolCallRouteBound),
             "tool_call_outcome_observed" => Some(Self::ToolCallOutcomeObserved),
+            "siwc_agent_activity_observed" => Some(Self::SiwcAgentActivityObserved),
             "tool_result_context_decision_recorded" => {
                 Some(Self::ToolResultContextDecisionRecorded)
             }

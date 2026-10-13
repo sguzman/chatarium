@@ -54,6 +54,7 @@ pub mod remote_mirror_transcript;
 pub mod remote_read_audit;
 pub mod routing_audit;
 pub mod session_audit;
+pub mod siwc_agent_activity_audit;
 pub mod supervision_audit;
 pub mod tool_call_audit;
 pub mod tool_outcome_audit;
