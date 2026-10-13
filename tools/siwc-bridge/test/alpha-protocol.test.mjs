@@ -120,6 +120,25 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
       event.request_id === "offline-patched").length,
     2,
   );
+  // Activity event provenance is a real, ordered companion stream, not a
+  // fabricated reasoning or tool transcript.
+  const activity = seen.filter((event) =>
+    event.type === "agent_activity" &&
+    event.request_id === "offline-patched",
+  );
+  assert.deepEqual(activity.map((event) => event.stage), [
+    "started", "wire_attempted", "acknowledged",
+    "first_text_delta", "text_delta", "completed",
+  ]);
+  assert.deepEqual(activity.map((event) => event.sequence), [1, 2, 3, 4, 5, 6]);
+  assert.ok(activity.every((event) =>
+    event.source === "siwc_bridge_observation" &&
+    typeof event.elapsed_ms === "number" &&
+    event.elapsed_ms >= 0 &&
+    /^\\d{4}-\\d\\d-\\d\\dT/.test(event.observed_at_utc),
+  ));
+  assert.equal(activity.at(-1).delivery_evidence, "assistant_delta_seen");
+  assert.ok(!JSON.stringify(activity).includes("reasoning_summary"));
 
   // The first stream remains in flight after its opening delta.
   const initial = seen.length;
@@ -153,6 +172,13 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
   const aborted = await until((event) => event.type === "error" &&
     event.request_id === "offline-hold");
   assert.equal(aborted.error.code, "aborted");
+  const cancelledActivity = seen.filter((event) =>
+    event.type === "agent_activity" &&
+    event.request_id === "offline-hold",
+  );
+  assert.equal(cancelledActivity.at(-1).stage, "failed");
+  assert.equal(cancelledActivity.at(-1).cancelled, true);
+  assert.equal(cancelledActivity.at(-1).delivery_evidence, "assistant_delta_seen");
 
   // No stale patch from the cancelled stream may affect the recovered turn.
   send("stream_response", "offline-recovered", {
@@ -202,6 +228,14 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
     beforeAmbiguous,
   );
   assert.equal(ambiguousError.error.code, "ECONNRESET");
+  const ambiguousActivity = seen.filter((event) =>
+    event.type === "agent_activity" &&
+    event.request_id === "offline-ambiguous",
+  );
+  assert.deepEqual(ambiguousActivity.map((event) => event.stage), [
+    "started", "wire_attempted", "failed",
+  ]);
+  assert.equal(ambiguousActivity.at(-1).delivery_evidence, "wire_unconfirmed");
   assert.equal(
     seen.filter((event) => event.type === "transport_progress" &&
       event.request_id === "offline-ambiguous" &&
