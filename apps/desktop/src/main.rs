@@ -4,8 +4,8 @@ mod capability_probes;
 mod context_composer;
 mod conversation_keybindings;
 mod conversation_navigation;
-mod diagnostics;
 mod delivery_telemetry;
+mod diagnostics;
 #[cfg(test)]
 mod integration_journey;
 mod local_archive_search;
@@ -1360,7 +1360,7 @@ impl ChatariumApp {
                         pending_remote_turn: None,
                         active_remote_turn: None,
                         commit_remote_intents: BTreeMap::new(),
-            delivery: delivery_telemetry::Timeline::default(),
+                        delivery: delivery_telemetry::Timeline::default(),
                     },
                     Err(error) => Self::without_persistence(
                         repaint,
@@ -3910,16 +3910,18 @@ impl ChatariumApp {
                     };
                 }
                 siwc_bridge::BridgeEvent::TransportProgress { request_id, stage } => {
-                    if self.active_remote_turn.as_ref().is_some_and(|active| active.request_id == request_id) {
+                    if self
+                        .active_remote_turn
+                        .as_ref()
+                        .is_some_and(|active| active.request_id == request_id)
+                    {
                         match stage.as_str() {
-                            "wire_attempted" => self.delivery.set(
-                                &request_id,
-                                delivery_telemetry::Phase::WireAttempted,
-                            ),
-                            "acknowledged" => self.delivery.set(
-                                &request_id,
-                                delivery_telemetry::Phase::Acknowledged,
-                            ),
+                            "wire_attempted" => self
+                                .delivery
+                                .set(&request_id, delivery_telemetry::Phase::WireAttempted),
+                            "acknowledged" => self
+                                .delivery
+                                .set(&request_id, delivery_telemetry::Phase::Acknowledged),
                             _ => {}
                         }
                     }
@@ -3943,7 +3945,8 @@ impl ChatariumApp {
                     let cumulative_text = active.cumulative_text.clone();
 
                     if first_output {
-                        self.delivery.set(&request_id, delivery_telemetry::Phase::Streaming);
+                        self.delivery
+                            .set(&request_id, delivery_telemetry::Phase::Streaming);
                         let acceptance = remote_turn_payload(
                             turn_id,
                             &request_id,
@@ -4004,7 +4007,8 @@ impl ChatariumApp {
                         .active_remote_turn
                         .take()
                         .expect("matched active remote turn");
-                    self.delivery.set(&request_id, delivery_telemetry::Phase::Complete);
+                    self.delivery
+                        .set(&request_id, delivery_telemetry::Phase::Complete);
                     let final_text = if text.is_empty() {
                         active.cumulative_text
                     } else {
@@ -4222,7 +4226,9 @@ impl ChatariumApp {
 
     fn process_due_delivery_retry(&mut self) {
         let Some((request_id, command)) = self.active_remote_turn.as_ref().and_then(|active| {
-            active.retry_at.filter(|at| Instant::now() >= *at)
+            active
+                .retry_at
+                .filter(|at| Instant::now() >= *at)
                 .map(|_| (active.request_id.clone(), active.command.clone()))
         }) else {
             return;
@@ -4234,11 +4240,17 @@ impl ChatariumApp {
         }
         match self.remote.send(command) {
             Ok(()) => {
-                self.delivery.set(&request_id, delivery_telemetry::Phase::BridgeQueued);
-                self.remote_status = "retry submitted to the local bridge · awaiting network".to_owned();
+                self.delivery
+                    .set(&request_id, delivery_telemetry::Phase::BridgeQueued);
+                self.remote_status =
+                    "retry submitted to the local bridge · awaiting network".to_owned();
             }
             Err(error) => {
-                self.delivery.error(&request_id, delivery_telemetry::Phase::Unconfirmed, error.clone());
+                self.delivery.error(
+                    &request_id,
+                    delivery_telemetry::Phase::Unconfirmed,
+                    error.clone(),
+                );
                 self.remote_status = error;
                 self.active_remote_turn = None;
             }
@@ -14198,17 +14210,26 @@ fn draw_delivery_timeline(
     timeline: &delivery_telemetry::Timeline,
     conversation_id: &str,
 ) {
-    let attempts = timeline.for_conversation(conversation_id).collect::<Vec<_>>();
+    let attempts = timeline
+        .for_conversation(conversation_id)
+        .collect::<Vec<_>>();
     if attempts.is_empty() {
         return;
     }
     ui.add_space(8.0);
     ui.separator();
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("DELIVERY HISTORY · ChatGPT Responses").size(11.0).strong());
+        ui.label(
+            egui::RichText::new("DELIVERY HISTORY · ChatGPT Responses")
+                .size(11.0)
+                .strong(),
+        );
         if let Some(mean) = timeline.mean_response_seconds(conversation_id) {
-            ui.label(egui::RichText::new(format!("session average {:.1}s", mean))
-                .size(10.0).color(egui::Color32::from_rgb(151, 154, 163)));
+            ui.label(
+                egui::RichText::new(format!("session average {:.1}s", mean))
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(151, 154, 163)),
+            );
         }
     });
     ui.label(egui::RichText::new(
@@ -14216,33 +14237,59 @@ fn draw_delivery_timeline(
     ).size(9.0).color(egui::Color32::from_rgb(125, 129, 139)));
     for attempt in attempts.iter().rev().take(8).rev() {
         let color = delivery_status_color(attempt);
-        let label = if attempt.slow() { "SLOW · waiting for first response" } else { attempt.label() };
+        let label = if attempt.slow() {
+            "SLOW · waiting for first response"
+        } else {
+            attempt.label()
+        };
         egui::Frame::default()
             .fill(egui::Color32::from_rgb(29, 31, 36))
             .corner_radius(egui::CornerRadius::same(7))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("● {label}")).strong().size(10.0).color(color));
-                    ui.label(egui::RichText::new(format!("elapsed {:.1}s", attempt.seconds()))
-                        .size(10.0).color(egui::Color32::from_rgb(195, 198, 205)));
+                    ui.label(
+                        egui::RichText::new(format!("● {label}"))
+                            .strong()
+                            .size(10.0)
+                            .color(color),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("elapsed {:.1}s", attempt.seconds()))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(195, 198, 205)),
+                    );
                     if let Some(first) = attempt.time_to_first_output() {
-                        ui.label(egui::RichText::new(format!("first response {:.1}s", first))
-                            .size(10.0).color(egui::Color32::from_rgb(151, 154, 163)));
+                        ui.label(
+                            egui::RichText::new(format!("first response {:.1}s", first))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(151, 154, 163)),
+                        );
                     }
                     if attempt.retries > 0 {
-                        ui.label(egui::RichText::new(format!("retry {}", attempt.retries))
-                            .size(10.0).color(egui::Color32::from_rgb(242, 167, 79)));
+                        ui.label(
+                            egui::RichText::new(format!("retry {}", attempt.retries))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(242, 167, 79)),
+                        );
                     }
                     if let Some(at) = attempt.retry_at {
-                        ui.label(egui::RichText::new(format!(
-                            "next attempt in {:.1}s", at.saturating_duration_since(Instant::now()).as_secs_f32()))
-                            .size(10.0).color(color));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "next attempt in {:.1}s",
+                                at.saturating_duration_since(Instant::now()).as_secs_f32()
+                            ))
+                            .size(10.0)
+                            .color(color),
+                        );
                     }
                 });
                 if let Some(error) = &attempt.error {
-                    ui.label(egui::RichText::new(error).size(9.0)
-                        .color(egui::Color32::from_rgb(170, 173, 183)));
+                    ui.label(
+                        egui::RichText::new(error)
+                            .size(9.0)
+                            .color(egui::Color32::from_rgb(170, 173, 183)),
+                    );
                 }
             });
         ui.add_space(4.0);
@@ -20379,7 +20426,11 @@ fn start_account_bridge() -> (
     String,
 ) {
     if !ACCOUNT_MIRRORING_ENABLED {
-        return (None, None, "ChatGPT history mirroring paused (local-only)".to_owned());
+        return (
+            None,
+            None,
+            "ChatGPT history mirroring paused (local-only)".to_owned(),
+        );
     }
     match account_bridge::AccountBridgeRuntime::start() {
         Ok(runtime) => {
