@@ -12,6 +12,7 @@ use std::str::FromStr;
 
 const USER_MESSAGE_COMMIT_SCHEMA: &str = "chatarium-user-message-commit";
 const USER_MESSAGE_COMMIT_VERSION: u64 = 1;
+const ATTACHED_MESSAGE_COMMIT_VERSION: u64 = 2;
 
 /// Successful durable local commit of one authored user message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,15 +41,32 @@ pub fn commit_user_message(
     store: &mut impl EventStore,
     message: &AuthoredUserMessage,
 ) -> std::io::Result<UserMessageCommitReceipt> {
-    let payload = serde_json::to_string(&json!({
+    commit_user_message_with_attachment(store, message, None)
+}
+
+/// Commit optional, exact, bounded attachment bytes atomically with the authored text.
+/// The v2 envelope is used only when a file is present; old text-only v1 readers
+/// keep their existing representation and event identity.
+pub fn commit_user_message_with_attachment(
+    store: &mut impl EventStore,
+    message: &AuthoredUserMessage,
+    attachment: Option<&Value>,
+) -> std::io::Result<UserMessageCommitReceipt> {
+    if let Some(value) = attachment {
+        validate_attachment(value).map_err(invalid_data)?;
+    }
+    let mut envelope = json!({
         "schema": USER_MESSAGE_COMMIT_SCHEMA,
-        "version": USER_MESSAGE_COMMIT_VERSION,
+        "version": if attachment.is_some() { ATTACHED_MESSAGE_COMMIT_VERSION } else { USER_MESSAGE_COMMIT_VERSION },
         "conversation_id": message.conversation_id.to_string(),
         "turn_id": message.turn_id.to_string(),
         "message_id": message.message_id.to_string(),
         "text": message.text,
-    }))
-    .map_err(invalid_data)?;
+    });
+    if let Some(attachment) = attachment {
+        envelope["attachment"] = attachment.clone();
+    }
+    let payload = serde_json::to_string(&envelope).map_err(invalid_data)?;
 
     let sequence = store.append_scoped(
         Some(local_turn_scope(message.turn_id)),
@@ -88,8 +106,18 @@ pub fn decode_user_message_commit(
         .get("version")
         .and_then(Value::as_u64)
         .ok_or_else(|| "typed user-message commit is missing integer field 'version'".to_owned())?;
-    if version != USER_MESSAGE_COMMIT_VERSION {
+    if version != USER_MESSAGE_COMMIT_VERSION && version != ATTACHED_MESSAGE_COMMIT_VERSION {
         return Err(format!("unsupported user-message commit version {version}"));
+    }
+    match (version, value.get("attachment")) {
+        (ATTACHED_MESSAGE_COMMIT_VERSION, Some(attachment)) => validate_attachment(attachment)?,
+        (ATTACHED_MESSAGE_COMMIT_VERSION, None) => {
+            return Err("attached user-message commit has no attachment".to_owned());
+        }
+        (USER_MESSAGE_COMMIT_VERSION, Some(_)) => {
+            return Err("text-only v1 commit unexpectedly includes attachment".to_owned());
+        }
+        _ => {}
     }
 
     let conversation_id = parse_id::<LocalConversationId>(&value, "conversation_id")?;
@@ -104,6 +132,91 @@ pub fn decode_user_message_commit(
     Ok(Some(DecodedUserMessageCommit::Typed(
         AuthoredUserMessage::new(conversation_id, turn_id, message_id, text),
     )))
+}
+
+/// Decode exact attachment bytes from an authored commit for verification or replay.
+/// Do not include this value in diagnostics, search indexes, or display strings.
+pub fn decode_user_message_attachment(event: &EventEnvelope) -> Result<Option<Value>, String> {
+    if event.kind != EventKind::UserMessageCommitted {
+        return Ok(None);
+    }
+    if !matches!(
+        decode_user_message_commit(event)?,
+        Some(DecodedUserMessageCommit::Typed(_))
+    ) {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(&event.payload)
+        .map_err(|error| format!("cannot parse typed authored commit: {error}"))?;
+    Ok(value.get("attachment").cloned())
+}
+
+fn validate_attachment(attachment: &Value) -> Result<(), String> {
+    let object = attachment
+        .as_object()
+        .ok_or_else(|| "attachment record must be an object".to_owned())?;
+    let filename = object
+        .get("filename")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "attachment filename missing".to_owned())?;
+    if filename.is_empty() || filename.len() > 128 || filename.chars().any(char::is_control) {
+        return Err("attachment filename invalid".to_owned());
+    }
+    let byte_len = object
+        .get("byte_len")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "attachment byte length missing".to_owned())?;
+    if byte_len == 0 || byte_len > 128 * 1024 {
+        return Err("attachment byte length outside local bounds".to_owned());
+    }
+    for field in ["prepared_at_unix_ms", "read_elapsed_ms", "encoding_elapsed_ms"] {
+        let numeric = object
+            .get(field)
+            .and_then(Value::as_f64)
+            .ok_or_else(|| format!("attachment {field} missing"))?;
+        if !numeric.is_finite() || numeric < 0.0 {
+            return Err(format!("attachment {field} invalid"));
+        }
+    }
+    let mime = object
+        .get("mime")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "attachment mime missing".to_owned())?;
+    if !matches!(
+        mime,
+        "text/plain" | "text/csv" | "application/json" | "application/pdf"
+            | "image/png" | "image/jpeg" | "image/webp"
+    ) {
+        return Err("attachment mime not allowed".to_owned());
+    }
+    let content = object
+        .get("content")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "attachment content missing".to_owned())?;
+    let (field, expected_kind) = if mime.starts_with("image/") {
+        ("image_url", "input_image")
+    } else {
+        ("file_data", "input_file")
+    };
+    if content.get("type").and_then(Value::as_str) != Some(expected_kind) {
+        return Err("attachment content kind mismatch".to_owned());
+    }
+    if expected_kind == "input_file"
+        && content.get("filename").and_then(Value::as_str) != Some(filename)
+    {
+        return Err("attachment filename mismatch".to_owned());
+    }
+    let payload = content
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| "attachment base64 source missing".to_owned())?;
+    if payload.len() > 180_000
+        || !payload.starts_with(&format!("data:{mime};base64,"))
+        || payload.bytes().any(|byte| !byte.is_ascii())
+    {
+        return Err("attachment data URL invalid or oversized".to_owned());
+    }
+    Ok(())
 }
 
 /// Stable local turn scope used to group durable events for one locally authored turn.
@@ -232,6 +345,55 @@ mod tests {
         let error =
             decode_user_message_commit(&store.events()[0]).expect_err("typed corruption must fail");
         assert!(error.contains("conversation_id"));
+    }
+
+    #[test]
+    fn attached_commit_reopens_with_verified_bytes_and_exact_text() {
+        let path = temp_path("attachment");
+        let message = authored();
+        let attachment = json!({
+            "filename": "notes.txt",
+            "mime": "text/plain",
+            "byte_len": 3,
+            "prepared_at_unix_ms": 123,
+            "read_elapsed_ms": 0.2,
+            "encoding_elapsed_ms": 0.1,
+            "content": {
+                "type": "input_file",
+                "filename": "notes.txt",
+                "file_data": "data:text/plain;base64,YWJj",
+            },
+        });
+        {
+            let mut store = JsonlEventStore::open(&path).unwrap();
+            commit_user_message_with_attachment(&mut store, &message, Some(&attachment)).unwrap();
+        }
+        let store = JsonlEventStore::open(&path).unwrap();
+        let event = &store.events()[0];
+        assert_eq!(decode_user_message_commit(event).unwrap(), Some(DecodedUserMessageCommit::Typed(message)));
+        assert_eq!(decode_user_message_attachment(event).unwrap(), Some(attachment));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn malformed_or_unbounded_attachment_never_enters_journal() {
+        let mut store = MemoryEventStore::default();
+        let message = authored();
+        let bad = json!({
+            "filename": "bad.txt",
+            "mime": "text/plain",
+            "byte_len": 200_000,
+            "prepared_at_unix_ms": 1,
+            "read_elapsed_ms": 0.1,
+            "encoding_elapsed_ms": 0.1,
+            "content": {
+                "type": "input_file",
+                "filename": "bad.txt",
+                "file_data": "data:text/plain;base64,YWJj",
+            },
+        });
+        assert!(commit_user_message_with_attachment(&mut store, &message, Some(&bad)).is_err());
+        assert!(store.events().is_empty());
     }
 
     #[test]
