@@ -68,6 +68,7 @@ fn live_stdio_dispatch_worker_contract_keeps_journal_responsive() {
         provider,
         ToolOperationName::new("fixture.slow").unwrap(),
         "{}".to_owned(),
+        RoutePolicy::RequireApproval,
     )
     .unwrap();
     append_tool_call_route_user_decision_checked(&mut store, route, RouteUserDecision::Allow)
