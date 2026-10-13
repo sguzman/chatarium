@@ -16,6 +16,9 @@ const MAX_MODEL_BYTES: usize = 512;
 pub const DEFAULT_SLOW_WARNING_SECONDS: u32 = 12;
 pub const MIN_SLOW_WARNING_SECONDS: u32 = 3;
 pub const MAX_SLOW_WARNING_SECONDS: u32 = 120;
+pub const DEFAULT_READ_RETRY_ATTEMPTS: u8 = 3;
+pub const MIN_READ_RETRY_ATTEMPTS: u8 = 1;
+pub const MAX_READ_RETRY_ATTEMPTS: u8 = 3;
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,10 +42,21 @@ impl Default for ConversationInferenceSettings {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InferenceSettingsStore {
     entries: BTreeMap<String, ConversationInferenceSettings>,
     explicit_mcp_preferences: BTreeSet<String>,
+    read_retry_attempts: u8,
+}
+
+impl Default for InferenceSettingsStore {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            explicit_mcp_preferences: BTreeSet::new(),
+            read_retry_attempts: DEFAULT_READ_RETRY_ATTEMPTS,
+        }
+    }
 }
 
 impl InferenceSettingsStore {
@@ -63,6 +77,16 @@ impl InferenceSettingsStore {
         {
             return Err("unsupported local inference settings schema".to_owned());
         }
+        let read_retry_attempts = match value.get("read_retry_attempts") {
+            None => DEFAULT_READ_RETRY_ATTEMPTS,
+            Some(value) => value
+                .as_u64()
+                .and_then(|attempts| u8::try_from(attempts).ok())
+                .filter(|attempts| {
+                    (MIN_READ_RETRY_ATTEMPTS..=MAX_READ_RETRY_ATTEMPTS).contains(attempts)
+                })
+                .ok_or_else(|| "invalid read-only model retry attempt limit".to_owned())?,
+        };
         let conversations = value
             .get("conversations")
             .and_then(Value::as_object)
@@ -128,7 +152,22 @@ impl InferenceSettingsStore {
         Ok(Self {
             entries,
             explicit_mcp_preferences,
+            read_retry_attempts,
         })
+    }
+
+    /// Global read-only model discovery retry bound. One attempt disables retries.
+    #[must_use]
+    pub fn read_retry_attempts(&self) -> u8 {
+        self.read_retry_attempts
+    }
+
+    pub fn set_read_retry_attempts(&mut self, attempts: u8) -> Result<(), String> {
+        if !(MIN_READ_RETRY_ATTEMPTS..=MAX_READ_RETRY_ATTEMPTS).contains(&attempts) {
+            return Err("read-only model retry attempts must be between 1 and 3".to_owned());
+        }
+        self.read_retry_attempts = attempts;
+        Ok(())
     }
 
     #[must_use]
@@ -214,6 +253,7 @@ impl InferenceSettingsStore {
         let bytes = serde_json::to_vec_pretty(&json!({
             "schema": SCHEMA,
             "version": VERSION,
+            "read_retry_attempts": self.read_retry_attempts,
             "conversations": conversations,
         }))
         .map_err(|error| format!("failed to encode inference settings: {error}"))?;
@@ -261,6 +301,24 @@ mod tests {
             "chatarium-local-inference-settings-{}-{nonce}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn global_read_retry_limit_round_trips_and_rejects_invalid_values() {
+        let path = temp_path();
+        let mut store = InferenceSettingsStore::default();
+        assert_eq!(store.read_retry_attempts(), 3);
+        assert!(store.set_read_retry_attempts(0).is_err());
+        assert!(store.set_read_retry_attempts(4).is_err());
+        store.set_read_retry_attempts(1).unwrap();
+        store.save_atomic(&path).unwrap();
+        let reloaded = InferenceSettingsStore::load(&path).unwrap();
+        assert_eq!(reloaded.read_retry_attempts(), 1);
+        let mut invalid = serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+        invalid["read_retry_attempts"] = json!(4);
+        fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(InferenceSettingsStore::load(&path).is_err());
+        let _ = fs::remove_file(path);
     }
 
     #[test]

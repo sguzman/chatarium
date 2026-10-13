@@ -4557,7 +4557,9 @@ impl ChatariumApp {
     }
 
     fn request_chatgpt_models(&mut self) {
-        match self.remote.send(siwc_bridge::BridgeCommand::ListModels) {
+        match self.remote.send(siwc_bridge::BridgeCommand::ListModels {
+            max_attempts: self.inference_settings.read_retry_attempts(),
+        }) {
             Ok(()) => {
                 self.model_list_pending = true;
                 self.remote_status = "loading ChatGPT models…".to_owned();
@@ -7582,6 +7584,28 @@ impl eframe::App for ChatariumApp {
                                 .changed()
                             {
                                 self.persist_current_inference_settings();
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Read-only model attempts");
+                            let mut attempts = self.inference_settings.read_retry_attempts();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut attempts).range(
+                                        local_inference_settings::MIN_READ_RETRY_ATTEMPTS
+                                            ..=local_inference_settings::MAX_READ_RETRY_ATTEMPTS,
+                                    ),
+                                )
+                                .on_hover_text(
+                                    "1 disables automatic retries. Applies to subsequent read-only model discovery, never to inference POSTs.",
+                                )
+                                .changed()
+                            {
+                                match self.inference_settings.set_read_retry_attempts(attempts) {
+                                    Ok(()) => self.persist_current_inference_settings(),
+                                    Err(error) => self.status = error,
+                                }
                             }
                         });
 

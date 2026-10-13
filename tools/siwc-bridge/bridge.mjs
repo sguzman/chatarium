@@ -642,7 +642,9 @@ async function handle(command) {
           {
             // Optional deployment/operator knob; strictly bounded to read-only
             // discovery. Invalid settings fail before dispatching a request.
-            policy: parseReadRetryPolicy(process.env.CHATARIUM_READ_RETRY_POLICY_JSON),
+            policy: parseReadRetryPolicy(
+              command.read_retry_policy ?? process.env.CHATARIUM_READ_RETRY_POLICY_JSON,
+            ),
             onRetry: (retry) => emit({
               type: "read_retry_scheduled",
               request_id: requestId,

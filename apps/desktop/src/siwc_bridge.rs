@@ -13,7 +13,7 @@ pub enum BridgeCommand {
     RefreshSession,
     SignIn,
     CancelSignIn,
-    ListModels,
+    ListModels { max_attempts: u8 },
     StreamResponse {
         request_id: String,
         model: String,
@@ -442,9 +442,10 @@ fn command_json(command: BridgeCommand) -> Value {
             "type": "cancel_sign_in",
             "request_id": "cancel-sign-in"
         }),
-        BridgeCommand::ListModels => json!({
+        BridgeCommand::ListModels { max_attempts } => json!({
             "type": "models",
-            "request_id": "models"
+            "request_id": "models",
+            "read_retry_policy": { "maxAttempts": max_attempts }
         }),
         BridgeCommand::StreamResponse {
             request_id,
