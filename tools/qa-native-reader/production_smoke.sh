@@ -384,3 +384,40 @@ test -s "$OUT/production-resized.png"
 test -s "$OUT/production-restarted.png"
 test -s "$OUT/production-restarted-switched.png"
 test -s "$OUT/production-restarted-returned.png"
+
+# Regression: the sidebar must not merely stay narrow; the real egui splitter
+# must respond to an X11 pointer drag in BOTH directions.
+# This runs after all journal/restart checks so the drag cannot mask them.
+import -window "$window" "$OUT/production-sidebar-before-drag.png"
+sidebar_before="$(python3 tools/qa-native-reader/panel_geometry.py "$OUT/production-sidebar-before-drag.png")"
+xdotool mousemove --window "$window" "$((sidebar_before - 1))" 180
+sleep 0.2
+xdotool mousedown 1
+sleep 0.2
+xdotool mousemove --window "$window" "$((sidebar_before + 105))" 180
+sleep 0.35
+xdotool mouseup 1
+sleep 0.65
+import -window "$window" "$OUT/production-sidebar-expanded.png"
+sidebar_expanded="$(python3 tools/qa-native-reader/panel_geometry.py "$OUT/production-sidebar-expanded.png")"
+if (( sidebar_expanded < sidebar_before + 35 )); then
+    echo "CHATARIUM_SIDEBAR_DRAG_RIGHT_FAILED before=$sidebar_before after=$sidebar_expanded" >&2
+    exit 1
+fi
+
+xdotool mousemove --window "$window" "$((sidebar_expanded - 1))" 180
+sleep 0.2
+xdotool mousedown 1
+sleep 0.2
+xdotool mousemove --window "$window" "$((sidebar_before + 3))" 180
+sleep 0.35
+xdotool mouseup 1
+sleep 0.65
+import -window "$window" "$OUT/production-sidebar-restored.png"
+sidebar_restored="$(python3 tools/qa-native-reader/panel_geometry.py "$OUT/production-sidebar-restored.png")"
+if (( sidebar_restored > sidebar_expanded - 35 )); then
+    echo "CHATARIUM_SIDEBAR_DRAG_LEFT_FAILED expanded=$sidebar_expanded restored=$sidebar_restored" >&2
+    exit 1
+fi
+echo "CHATARIUM_SIDEBAR_DRAG_BOTH_DIRECTIONS PASS before=$sidebar_before expanded=$sidebar_expanded restored=$sidebar_restored"
+
