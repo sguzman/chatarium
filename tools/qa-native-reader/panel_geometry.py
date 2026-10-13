@@ -18,7 +18,7 @@ CONTENT = (23, 27, 35)
 def sidebar_edge(image):
     if image.width < 850 or image.height < 600:
         raise AssertionError(f"unsupported native QA screenshot size: {image.size}")
-    y = 70  # Between header label rows; no transient mouse/caret pixels here.
+    y = 110  # Below the conversation header, inside the outlined central reader fill.
     # The grey grab handle may sit immediately after the sidebar. Look beyond it
     # for the main-panel fill and require an uninterrupted sidebar run before it.
     for x in range(260, min(650, image.width - 260)):
