@@ -6359,6 +6359,14 @@ impl eframe::App for ChatariumApp {
                                 .size(12.0)
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Build {} · native conversations only",
+                                env!("CHATARIUM_BUILD_REVISION"),
+                            ))
+                            .size(9.0)
+                            .color(egui::Color32::from_rgb(112, 176, 137)),
+                        );
 
                         if ACCOUNT_MIRRORING_ENABLED {
                         ui.add_space(18.0);
@@ -6523,7 +6531,30 @@ impl eframe::App for ChatariumApp {
                             .size(9.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "SELECTED · {}",
+                                local_conversation_title
+                            ))
+                            .size(10.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(126, 210, 156)),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.local_conversation_rename)
+                                    .hint_text("Rename selected chat…")
+                                    .desired_width((sidebar_control_width - 90.0).max(100.0)),
+                            );
+                            if ui.button("Save").clicked() {
+                                rename_local_requested = true;
+                            }
+                        });
+                        if ui.button("Archive selected chat").clicked() {
+                            archive_local_requested = true;
+                        }
+                        ui.add_space(8.0);
 
                         let native_entries = self.local_conversation_catalog.entries();
                         let native_rows = native_conversation_search::cached_rows(
@@ -6533,6 +6564,21 @@ impl eframe::App for ChatariumApp {
                             self.show_archived_local_conversations,
                             &self.local_conversation_search_query,
                         );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} matching local chat{} · {} stored",
+                                native_rows.len(),
+                                if native_rows.len() == 1 { "" } else { "s" },
+                                native_entries.len(),
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        if native_rows.is_empty() {
+                            ui.label(
+                                "No local chats match. Clear the search or enable Show archived.",
+                            );
+                        }
                         for row in native_rows.iter() {
                             let entry = &native_entries[row.catalog_index];
                             let messages = native_search_index.messages(entry.id);
@@ -6745,26 +6791,11 @@ impl eframe::App for ChatariumApp {
                         if !historical_mode {
                             ui.add_space(8.0);
                             ui.label(
-                                egui::RichText::new("LOCAL CONVERSATION")
+                                egui::RichText::new("EXPORT SELECTED CHAT")
                                     .size(9.0)
                                     .strong()
                                     .color(egui::Color32::from_rgb(112, 116, 126)),
                             );
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.local_conversation_rename,
-                                    )
-                                    .hint_text("Conversation title")
-                                    .desired_width((sidebar_control_width - 90.0).max(100.0)),
-                                );
-                                if ui.button("Save").clicked() {
-                                    rename_local_requested = true;
-                                }
-                            });
-                            if ui.button("Archive local conversation").clicked() {
-                                archive_local_requested = true;
-                            }
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
                                 if ui.button("Copy Markdown").clicked() {
