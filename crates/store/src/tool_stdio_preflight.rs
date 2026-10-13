@@ -68,29 +68,34 @@ pub fn preview_stdio_tool_invocation(
         .into_iter()
         .find(|record| record.request.id == route_id)
         .ok_or_else(|| format!("missing tool route {}", route_id.get()))?;
+    let authorized = match route.initial_policy {
+        RoutePolicy::RequireApproval => {
+            route.latest_user_decision == Some(RouteUserDecision::Allow)
+                && route.gate_state == RouteGateState::Allowed {
+                    by: DecisionAuthority::User,
+                }
+                && call.route_bound_sequence.is_some_and(|sequence| {
+                    sequence < route.last_sequence
+                })
+        }
+        RoutePolicy::Allow => {
+            route.latest_user_decision.is_none()
+                && route.gate_state == RouteGateState::Allowed {
+                    by: DecisionAuthority::Policy,
+                }
+                && call.route_bound_sequence.is_some_and(|sequence| {
+                    sequence > route.proposed_sequence
+                })
+        }
+        RoutePolicy::Deny => false,
+    };
     if route.request.class != RouteClass::ToolCall
-        || route.initial_policy != RoutePolicy::RequireApproval
-        || route.latest_user_decision != Some(RouteUserDecision::Allow)
-        || route.gate_state
-            != (RouteGateState::Allowed {
-                by: DecisionAuthority::User,
-            })
+        || !authorized
         || route.dispatch_sequence.is_some()
     {
         return Err(format!(
-            "tool route {} is not explicitly user-approved and undispatched",
+            "tool route {} lacks unconsumed exact user or policy authorization",
             route_id.get()
-        ));
-    }
-
-    let approved_sequence = route.last_sequence;
-    if call
-        .route_bound_sequence
-        .is_none_or(|sequence| sequence >= approved_sequence)
-    {
-        return Err(format!(
-            "tool call {} route correlation does not predate approval",
-            call_id.get()
         ));
     }
 
