@@ -142,7 +142,9 @@ fn tool_call(name: &str, args: &Value) -> Value {
     let result = match name {
         "hello" => empty_arguments(args).map(|()| json!({"message": "hello"})),
         "time.now" => empty_arguments(args).map(|()| {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default();
             json!({
                 "utc": utc_timestamp(now.as_secs() as i64),
                 "unix_epoch_ms": now.as_millis().min(u128::from(u64::MAX)) as u64
@@ -249,7 +251,10 @@ mod tests {
         let reply = call("hello", json!({}));
         assert_eq!(reply["result"]["structuredContent"]["message"], "hello");
         assert_eq!(reply["result"]["isError"], false);
-        assert_eq!(call("hello", json!({"extra": 1}))["result"]["isError"], true);
+        assert_eq!(
+            call("hello", json!({"extra": 1}))["result"]["isError"],
+            true
+        );
     }
 
     #[test]
@@ -263,8 +268,18 @@ mod tests {
     fn clock_result_is_utc_and_nonempty() {
         let reply = call("time.now", json!({}));
         assert_eq!(reply["result"]["isError"], false);
-        assert!(reply["result"]["structuredContent"]["utc"].as_str().unwrap().ends_with('Z'));
-        assert!(reply["result"]["structuredContent"]["unix_epoch_ms"].as_u64().unwrap() > 0);
+        assert!(
+            reply["result"]["structuredContent"]["utc"]
+                .as_str()
+                .unwrap()
+                .ends_with('Z')
+        );
+        assert!(
+            reply["result"]["structuredContent"]["unix_epoch_ms"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
     }
 
     #[test]
@@ -286,9 +301,15 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn safe_shell_echo_command_executes_without_a_shell() {
-        let reply = call("shell.command", json!({"command": "echo", "args": ["hello", "mcp"]}));
+        let reply = call(
+            "shell.command",
+            json!({"command": "echo", "args": ["hello", "mcp"]}),
+        );
         assert_eq!(reply["result"]["isError"], false);
-        assert_eq!(reply["result"]["structuredContent"]["stdout"], "hello mcp\n");
+        assert_eq!(
+            reply["result"]["structuredContent"]["stdout"],
+            "hello mcp\n"
+        );
     }
 
     #[test]
