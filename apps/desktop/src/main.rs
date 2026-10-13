@@ -5081,6 +5081,173 @@ impl ChatariumApp {
         }
     }
 
+    /// Exact model output becomes a durable proposal, never a process launch.
+    fn propose_agent_mcp_call(
+        &mut self,
+        active: &ActiveRemoteTurn,
+        final_text: &str,
+        proposal: mcp_agent_defaults::ModelToolRequest,
+    ) {
+        if self.tool_command_pending {
+            self.agent_mcp_flow = None;
+            self.status = "MCP call stopped: another tool action is pending".to_owned();
+            return;
+        }
+        let count = self.agent_mcp_flow.as_ref()
+            .map(|flow| flow.call_count)
+            .unwrap_or(0)
+            .saturating_add(1);
+        if count > self.mcp_agent_defaults.max_calls {
+            self.agent_mcp_flow = None;
+            self.status = format!(
+                "MCP agent stopped at configured {}-call limit",
+                self.mcp_agent_defaults.max_calls
+            );
+            return;
+        }
+        let policy = match mcp_agent_defaults::tool_policy(
+            &self.mcp_agent_defaults.policy_rules,
+            &proposal.provider,
+            &proposal.tool,
+        ) {
+            Ok(policy) => policy,
+            Err(error) => {
+                self.agent_mcp_flow = None;
+                self.status = format!("MCP policy invalid: {error}");
+                return;
+            }
+        };
+        if matches!(
+            policy,
+            mcp_agent_defaults::ToolPolicy::Disabled | mcp_agent_defaults::ToolPolicy::Manual
+        ) {
+            self.agent_mcp_flow = None;
+            self.status = format!(
+                "MCP call not authorized for model invocation: {}::{} is {}",
+                proposal.provider,
+                proposal.tool,
+                policy.name(),
+            );
+            return;
+        }
+        let Some(tx) = &self.persist_tx else {
+            self.agent_mcp_flow = None;
+            self.status = "MCP call cannot proceed without durable journal".to_owned();
+            return;
+        };
+        let turn_id = active.turn_id;
+        let result = tx.send(PersistCommand::ProposeAgentMcpCall {
+            turn_id,
+            source_conversation_id: self.local_conversation_id,
+            proposal,
+            policy,
+        });
+        if let Err(error) = result {
+            self.agent_mcp_flow = None;
+            self.status = format!("MCP proposal couldn't enter durable queue: {error}");
+            return;
+        }
+        self.agent_mcp_flow = Some(AgentMcpFlow {
+            turn_id,
+            conversation_id: self.local_conversation_id,
+            command: active.command.clone(),
+            proposal_text: final_text.to_owned(),
+            call_count: count,
+            pending_call: None,
+            pending_route: None,
+            policy,
+        });
+        self.tool_command_pending = true;
+        self.status = "MCP tool proposal queued for durable policy validation".to_owned();
+    }
+
+    /// Exactly the admitted result from the durable journal is returned to the
+    /// model; no manual or model-authored result string can be substituted.
+    fn continue_agent_after_admitted_result(&mut self, call_id: ToolCallId) {
+        let Some(mut flow) = self.agent_mcp_flow.take() else { return; };
+        if flow.pending_call != Some(call_id)
+            || flow.conversation_id != self.local_conversation_id
+        {
+            self.agent_mcp_flow = Some(flow);
+            return;
+        }
+        let admitted = match replay_admitted_tool_results(
+            &self.events,
+            flow.conversation_id,
+        ) {
+            Ok(results) => results,
+            Err(error) => {
+                self.status = format!("MCP continuation blocked by result audit: {error}");
+                return;
+            }
+        };
+        let Some(outcome) = admitted.into_iter()
+            .find(|result| result.record.call_id == call_id) else
+        {
+            self.status = "MCP continuation stopped: no exact admitted tool result".to_owned();
+            return;
+        };
+        let record = outcome.record;
+        let tool_context = context_composer::TranscriptMessage::tool_result(
+            &outcome.text,
+            record.call_id.get(),
+            record.route_id.get(),
+            record.provider_id.get(),
+            record.source_session_id.get(),
+            record.outcome_sequence,
+            record.last_decision_sequence,
+            record.outcome_kind.stable_name(),
+        );
+        let siwc_bridge::BridgeCommand::StreamResponse {
+            model,
+            mut input,
+            instructions,
+            request_patch,
+            ..
+        } = flow.command.clone() else {
+            self.status = "MCP continuation requires a Responses stream command".to_owned();
+            return;
+        };
+        let Some(messages) = input.as_array_mut() else {
+            self.status = "MCP continuation requires a typed input-message array".to_owned();
+            return;
+        };
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": flow.proposal_text,
+        }));
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": tool_context.text,
+        }));
+        let request_id = format!("{}-mcp-{}", flow.turn_id, flow.call_count);
+        self.delivery.begin(flow.conversation_id.to_string(), request_id.clone());
+        let pending = PendingRemoteTurn {
+            turn_id: flow.turn_id,
+            request_id: request_id.clone(),
+            model,
+            input,
+            instructions,
+            request_patch,
+        };
+        let journal_entry = remote_turn_payload(
+            flow.turn_id,
+            &request_id,
+            Some(&pending.model),
+            None,
+            Some("same user turn resumed after exact journaled MCP outcome admission"),
+        );
+        if !self.queue_turn_event(flow.turn_id, EventKind::DispatchAttempted, journal_entry) {
+            self.status = "MCP continuation blocked: could not journal dispatch".to_owned();
+            return;
+        }
+        flow.pending_call = None;
+        flow.pending_route = None;
+        self.pending_remote_turn = Some(pending);
+        self.agent_mcp_flow = Some(flow);
+        self.status = "MCP result admitted; resuming assistant without a new user message".to_owned();
+    }
+
     fn check_sandbox_host_readiness(&mut self) {
         if self.tool_command_pending {
             return;
