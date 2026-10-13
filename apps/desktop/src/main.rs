@@ -6481,7 +6481,7 @@ impl eframe::App for ChatariumApp {
                         }
                         ui.add_space(18.0);
                         ui.label(
-                            egui::RichText::new("LOCAL CONVERSATIONS")
+                            egui::RichText::new("CHATS")
                                 .size(10.0)
                                 .strong()
                                 .color(egui::Color32::from_rgb(112, 116, 126)),
@@ -6489,7 +6489,7 @@ impl eframe::App for ChatariumApp {
                         ui.add_space(6.0);
 
                         ui.horizontal(|ui| {
-                            if ui.button("+ New local").clicked() {
+                            if ui.button("+ New chat").clicked() {
                                 create_local_requested = true;
                             }
                             ui.checkbox(
@@ -6506,7 +6506,7 @@ impl eframe::App for ChatariumApp {
                                     &mut self.local_conversation_search_query,
                                 )
                                 .id(native_search_id)
-                                .hint_text("Search your local conversations…")
+                                .hint_text("Search chats…")
                                 .desired_width(input_width),
                             );
                             native_search_has_focus = native_search_response.has_focus();
@@ -6524,37 +6524,8 @@ impl eframe::App for ChatariumApp {
                                 self.local_conversation_search_selection = None;
                             }
                         });
-                        ui.label(
-                            egui::RichText::new(
-                                "Only Chatarium conversations · Ctrl+K search · Ctrl+Tab switch · Ctrl+Shift+N new",
-                            )
-                            .size(9.0)
-                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                        );
                         ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "SELECTED · {}",
-                                local_conversation_title
-                            ))
-                            .size(10.0)
-                            .strong()
-                            .color(egui::Color32::from_rgb(126, 210, 156)),
-                        );
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.local_conversation_rename)
-                                    .hint_text("Rename selected chat…")
-                                    .desired_width((sidebar_control_width - 90.0).max(100.0)),
-                            );
-                            if ui.button("Save").clicked() {
-                                rename_local_requested = true;
-                            }
-                        });
-                        if ui.button("Archive selected chat").clicked() {
-                            archive_local_requested = true;
-                        }
-                        ui.add_space(8.0);
+                        ui.add_space(4.0);
 
                         let native_entries = self.local_conversation_catalog.entries();
                         let native_rows = native_conversation_search::cached_rows(
@@ -6566,10 +6537,14 @@ impl eframe::App for ChatariumApp {
                         );
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} matching local chat{} · {} stored",
+                                "{} chat{}{}",
                                 native_rows.len(),
                                 if native_rows.len() == 1 { "" } else { "s" },
-                                native_entries.len(),
+                                if self.local_conversation_search_query.trim().is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" found · {} total", native_entries.len())
+                                },
                             ))
                             .size(10.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -6624,17 +6599,22 @@ impl eframe::App for ChatariumApp {
                                 !historical_mode && entry.id == self.local_conversation_id;
                             egui::Frame::default()
                                 .fill(if selected || keyboard_selected {
-                                    egui::Color32::from_rgb(31, 33, 39)
+                                    egui::Color32::from_rgb(30, 39, 48)
                                 } else {
-                                    egui::Color32::from_rgb(26, 28, 33)
+                                    egui::Color32::TRANSPARENT
                                 })
-                                .corner_radius(egui::CornerRadius::same(8))
-                                .inner_margin(egui::Margin::symmetric(10, 9))
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(8, 5))
                                 .show(ui, |ui| {
                                     if ui
                                         .selectable_label(
                                             selected || keyboard_selected,
-                                            egui::RichText::new(&title_preview).strong(),
+                                            egui::RichText::new(format!(
+                                                "{}{}",
+                                                if selected { "● " } else { "" },
+                                                title_preview,
+                                            ))
+                                            .strong(),
                                         )
                                         .on_hover_text(title)
                                         .clicked()
@@ -6790,55 +6770,66 @@ impl eframe::App for ChatariumApp {
 
                         if !historical_mode {
                             ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new("EXPORT SELECTED CHAT")
-                                    .size(9.0)
-                                    .strong()
-                                    .color(egui::Color32::from_rgb(112, 116, 126)),
-                            );
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                if ui.button("Copy Markdown").clicked() {
-                                    ctx.copy_text(native_transcript_export::markdown(
-                                        self.local_conversation_id,
-                                        &local_conversation_title,
-                                        &local_display_messages,
-                                    ));
-                                    self.status = format!(
-                                        "copied {} visible native messages as Markdown",
-                                        local_display_messages.len(),
-                                    );
-                                }
-                                if ui.button("Copy JSON").clicked() {
-                                    match serde_json::to_string_pretty(
-                                        &native_transcript_export::json_value(
-                                            self.local_conversation_id,
-                                            &local_conversation_title,
-                                            &local_display_messages,
-                                        ),
-                                    ) {
-                                        Ok(export) => {
-                                            ctx.copy_text(export);
+                            egui::CollapsingHeader::new("Manage selected chat")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    ui.label(format!("Selected: {local_conversation_title}"));
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.local_conversation_rename)
+                                                .hint_text("Rename selected chat…")
+                                                .desired_width((sidebar_control_width - 90.0).max(100.0)),
+                                        );
+                                        if ui.button("Save").clicked() {
+                                            rename_local_requested = true;
+                                        }
+                                    });
+                                    if ui.button("Archive selected chat").clicked() {
+                                        archive_local_requested = true;
+                                    }
+                                    ui.separator();
+                                    ui.label("Export visible messages");
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Copy Markdown").clicked() {
+                                            ctx.copy_text(native_transcript_export::markdown(
+                                                self.local_conversation_id,
+                                                &local_conversation_title,
+                                                &local_display_messages,
+                                            ));
                                             self.status = format!(
-                                                "copied {} visible native messages as JSON",
+                                                "copied {} visible native messages as Markdown",
                                                 local_display_messages.len(),
                                             );
                                         }
-                                        Err(error) => {
-                                            self.status = format!(
-                                                "cannot format visible transcript export: {error}",
-                                            );
+                                        if ui.button("Copy JSON").clicked() {
+                                            match serde_json::to_string_pretty(
+                                                &native_transcript_export::json_value(
+                                                    self.local_conversation_id,
+                                                    &local_conversation_title,
+                                                    &local_display_messages,
+                                                ),
+                                            ) {
+                                                Ok(export) => {
+                                                    ctx.copy_text(export);
+                                                    self.status = format!(
+                                                        "copied {} visible native messages as JSON",
+                                                        local_display_messages.len(),
+                                                    );
+                                                }
+                                                Err(error) => {
+                                                    self.status = format!(
+                                                        "cannot format visible transcript export: {error}"
+                                                    );
+                                                }
+                                            }
                                         }
-                                    }
-                                }
-                            });
-                            ui.label(
-                                egui::RichText::new(
-                                    "Explicit clipboard export · visible chat only, not an archive backup.",
-                                )
-                                .size(9.0)
-                                .color(egui::Color32::from_rgb(139, 143, 153)),
-                            );
+                                    });
+                                    ui.label(
+                                        egui::RichText::new("Clipboard export is not an archive backup.")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                });
                         }
 
                         if ACCOUNT_MIRRORING_ENABLED && !self.remote_conversation_catalog.is_empty() {
