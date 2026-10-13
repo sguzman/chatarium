@@ -481,7 +481,7 @@ mod tests {
         }
         for corrupted in ["YWJ!", "YW=J", "YWJj="] {
             let mut forged = base.clone();
-            forged["content"]["file_data"] = format!("data:text/plain;base64,{corrupted}");
+            forged["content"]["file_data"] = json!(format!("data:text/plain;base64,{corrupted}"));
             let mut store = MemoryEventStore::default();
             assert!(
                 commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err()
