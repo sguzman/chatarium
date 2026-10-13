@@ -54,8 +54,9 @@ but the content is never inserted into model context.
 Only events actually observed by the SIWC bridge are represented. Private
 reasoning, unexposed action streams and model-internal thinking are **not**
 invented. Read-only model discovery has configurable bounded retry classes;
-unknown-delivery inference POSTs cannot be blindly replayed. Native settings
-controls for the read-only retry policy, attachment telemetry and genuine
+unknown-delivery inference POSTs cannot be blindly replayed. Native settings now persist a global 1–3 attempt limit for read-only model
+discovery (1 disables automatic retry). The separate bridge-only category and
+delay controls remain bounded. Attachment intake/timing telemetry and genuine
 upstream reasoning summaries remain unfinished.
 
 ## Core invariants
