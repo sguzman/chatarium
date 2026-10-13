@@ -7,6 +7,9 @@ use std::path::Path;
 
 pub const FILE_NAME: &str = "mcp-agent-defaults.json";
 const SCHEMA: &str = "chatarium-mcp-agent-defaults";
+// Old saved files recorded the former default-off state without distinguishing
+// explicit user intent. Migrate once; subsequent saves preserve a real opt-out.
+const ACTIVATION_DEFAULT_VERSION: u64 = 2;
 const MAX_PROMPT: usize = 32 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,7 +161,7 @@ impl AgentDefaults {
                 .ok_or("MCP call limit missing")?,
         )
         .map_err(|e| e.to_string())?;
-        let settings = Self {
+        let mut settings = Self {
             bootstrap,
             policy_rules,
             max_calls,
@@ -168,6 +171,24 @@ impl AgentDefaults {
                 .unwrap_or(false),
         };
         settings.validate()?;
+        if value
+            .get("activation_default_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            < ACTIVATION_DEFAULT_VERSION
+        {
+            // Version 1 saved the old default "off" even when nobody had
+            // chosen an opt-out. Migrate that implicit state to a usable MCP
+            // setup. Later explicit off choices survive via the version stamp.
+            settings.seed_new_conversations = true;
+            if settings
+                .bootstrap
+                .contains("When the current runtime does not support automatic continuation")
+            {
+                settings.bootstrap = Self::default().bootstrap;
+            }
+            settings.save_atomic(path)?;
+        }
         Ok(settings)
     }
 
@@ -181,7 +202,8 @@ impl AgentDefaults {
             "bootstrap": self.bootstrap,
             "policy_rules": self.policy_rules,
             "max_calls": self.max_calls,
-            "seed_new_conversations": self.seed_new_conversations
+            "seed_new_conversations": self.seed_new_conversations,
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION
         }))
         .map_err(|e| e.to_string())?;
         let temporary = path.with_extension("json.tmp");
@@ -291,6 +313,42 @@ mod tests {
         );
         assert!(path.is_file());
         assert_eq!(loaded, AgentDefaults::load(&path).unwrap());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_saved_default_off_is_upgraded_and_user_opt_out_after_upgrade_survives() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-legacy-mcp-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let old = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "bootstrap": "Use chatarium.builtin::tools.list. When the current runtime does not support automatic continuation, wait for explicit user review before assuming the tool has completed.",
+            "policy_rules": AgentDefaults::default().policy_rules,
+            "max_calls": 8,
+            "seed_new_conversations": false,
+        });
+        fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        let migrated = AgentDefaults::load(&path).unwrap();
+        assert!(migrated.seed_new_conversations);
+        assert!(migrated.bootstrap.contains("resumes you automatically"));
+        assert_eq!(
+            tool_policy(&migrated.policy_rules, "chatarium.builtin", "tools.list"),
+            Ok(ToolPolicy::Automatic)
+        );
+        let on_disk: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["activation_default_version"], 2);
+
+        let mut opted_out = migrated.clone();
+        opted_out.seed_new_conversations = false;
+        opted_out.save_atomic(&path).unwrap();
+        assert!(!AgentDefaults::load(&path).unwrap().seed_new_conversations);
         let _ = fs::remove_file(path);
     }
 

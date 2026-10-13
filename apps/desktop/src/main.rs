@@ -4679,7 +4679,7 @@ impl ChatariumApp {
             defaults: self.mcp_agent_defaults.clone(),
         }) {
             Ok(()) => {
-                self.status = "MCP bootstrap and policy draft queued for local save. Tool auto-execution is not yet enabled.".to_owned();
+                self.status = "MCP bootstrap and exact tool policies queued for local save.".to_owned();
             }
             Err(error) => self.status = format!("MCP defaults could not be queued: {error}"),
         }
@@ -10007,6 +10007,7 @@ impl eframe::App for ChatariumApp {
 
                             ui.horizontal_wrapped(|ui| {
                                 if ui.checkbox(&mut self.conversation_mcp_enabled, "Enable MCP tools in this conversation").changed() {
+                                    self.inference_settings.mark_mcp_activation_explicit(self.local_conversation_id);
                                     if self.conversation_mcp_enabled {
                                         let bootstrap = self.mcp_agent_defaults.bootstrap.clone();
                                         if !self.conversation_developer_context.contains(&bootstrap) {
@@ -10055,6 +10056,7 @@ impl eframe::App for ChatariumApp {
                                         ctx.copy_text(self.mcp_agent_defaults.bootstrap.clone());
                                     }
                                     if ui.button("Enable MCP in this chat").clicked() {
+                                        self.inference_settings.mark_mcp_activation_explicit(self.local_conversation_id);
                                         let bootstrap = self.mcp_agent_defaults.bootstrap.clone();
                                         if !self.conversation_developer_context.contains(&bootstrap) {
                                             if !self.conversation_developer_context.is_empty() {

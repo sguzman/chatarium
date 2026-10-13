@@ -6,7 +6,7 @@
 
 use chatarium_core::LocalConversationId;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -42,6 +42,7 @@ impl Default for ConversationInferenceSettings {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InferenceSettingsStore {
     entries: BTreeMap<String, ConversationInferenceSettings>,
+    explicit_mcp_preferences: BTreeSet<String>,
 }
 
 impl InferenceSettingsStore {
@@ -67,6 +68,7 @@ impl InferenceSettingsStore {
             .and_then(Value::as_object)
             .ok_or_else(|| "local inference settings conversations missing".to_owned())?;
         let mut entries = BTreeMap::new();
+        let mut explicit_mcp_preferences = BTreeSet::new();
         for (conversation_id, raw) in conversations {
             let object = raw
                 .as_object()
@@ -85,7 +87,14 @@ impl InferenceSettingsStore {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            // Previous local settings did not contain MCP activation state.
+            if object
+                .get("mcp_activation_explicit")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                explicit_mcp_preferences.insert(conversation_id.clone());
+            }
+            // Earlier releases persisted an implicit default-off value.
             let mcp_enabled = object
                 .get("mcp_enabled")
                 .and_then(Value::as_bool)
@@ -116,7 +125,10 @@ impl InferenceSettingsStore {
                 },
             );
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            explicit_mcp_preferences,
+        })
     }
 
     #[must_use]
@@ -130,24 +142,35 @@ impl InferenceSettingsStore {
             .unwrap_or_default()
     }
 
-    /// Use the saved global new-chat preference only when a conversation has
-    /// no explicit inference settings. Existing per-chat MCP opt-outs survive.
+    /// Upgrade pre-activation local conversations using the saved global
+    /// preference; explicit user toggles always win, including persisted OFF.
     pub fn for_conversation_with_mcp_defaults(
         &self,
         conversation_id: LocalConversationId,
         agent_defaults: &crate::mcp_agent_defaults::AgentDefaults,
     ) -> ConversationInferenceSettings {
-        self.entries
-            .get(&conversation_id.to_string())
-            .cloned()
-            .unwrap_or_else(|| {
-                let mut settings = ConversationInferenceSettings::default();
-                if agent_defaults.seed_new_conversations {
-                    settings.mcp_enabled = true;
-                    settings.developer_context = agent_defaults.bootstrap.clone();
+        let mut settings = self.for_conversation(conversation_id);
+        if agent_defaults.seed_new_conversations
+            && !self.explicit_mcp_preferences.contains(&conversation_id.to_string())
+        {
+            settings.mcp_enabled = true;
+            if !agent_defaults.bootstrap.is_empty()
+                && !settings.developer_context.contains(&agent_defaults.bootstrap)
+            {
+                if !settings.developer_context.is_empty() {
+                    settings.developer_context.push_str("\n\n");
                 }
-                settings
-            })
+                settings.developer_context.push_str(&agent_defaults.bootstrap);
+            }
+        }
+        settings
+    }
+
+    /// Mark an intentional toggle separately from legacy/default inference
+    /// writes, so a user's OFF survives restart and future migrations.
+    pub fn mark_mcp_activation_explicit(&mut self, conversation_id: LocalConversationId) {
+        self.explicit_mcp_preferences
+            .insert(conversation_id.to_string());
     }
 
     pub fn set(
@@ -176,6 +199,7 @@ impl InferenceSettingsStore {
                         "instructions": settings.instructions,
                         "developer_context": settings.developer_context,
                         "mcp_enabled": settings.mcp_enabled,
+                        "mcp_activation_explicit": self.explicit_mcp_preferences.contains(conversation_id),
                         "slow_warning_seconds": settings.slow_warning_seconds,
                     }),
                 )
@@ -252,13 +276,61 @@ mod tests {
         assert!(!disabled.mcp_enabled);
         assert!(disabled.developer_context.is_empty());
 
-        let mut explicit_off = ConversationInferenceSettings::default();
-        explicit_off.developer_context = "deliberately no MCP".to_owned();
+        let mut old_settings = ConversationInferenceSettings::default();
+        old_settings.model = Some("chosen-model".to_owned());
+        old_settings.developer_context = "Keep responses brief.".to_owned();
+        settings.set(conversation, old_settings).unwrap();
+        let migrated = settings.for_conversation_with_mcp_defaults(conversation, &defaults);
+        assert!(migrated.mcp_enabled);
+        assert!(migrated.developer_context.starts_with("Keep responses brief."));
+        assert!(migrated.developer_context.contains("chatarium.builtin::tools.list"));
+
+        let mut explicit_off = migrated;
+        explicit_off.mcp_enabled = false;
+        settings.mark_mcp_activation_explicit(conversation);
         settings.set(conversation, explicit_off.clone()).unwrap();
         assert_eq!(
             settings.for_conversation_with_mcp_defaults(conversation, &defaults),
             explicit_off,
         );
+    }
+
+    #[test]
+    fn legacy_saved_mcp_off_migrates_but_explicit_off_survives_restart() {
+        let path = temp_path();
+        let conversation = LocalConversationId::new();
+        let legacy = json!({
+            "schema": SCHEMA, "version": VERSION,
+            "conversations": {
+                conversation.to_string(): {
+                    "model": "chosen-model",
+                    "instructions": "Be brief",
+                    "developer_context": "",
+                    "mcp_enabled": false,
+                    "slow_warning_seconds": 12,
+                }
+            }
+        });
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let defaults = crate::mcp_agent_defaults::AgentDefaults::default();
+        let mut store = InferenceSettingsStore::load(&path).unwrap();
+        let migrated = store.for_conversation_with_mcp_defaults(conversation, &defaults);
+        assert!(migrated.mcp_enabled);
+        assert!(migrated.developer_context.contains("chatarium.builtin::tools.list"));
+        assert_eq!(migrated.instructions, "Be brief");
+        store.set(conversation, migrated.clone()).unwrap();
+        store.save_atomic(&path).unwrap();
+        let mut restored = InferenceSettingsStore::load(&path).unwrap();
+        assert!(restored.for_conversation_with_mcp_defaults(conversation, &defaults).mcp_enabled);
+
+        let mut off = migrated;
+        off.mcp_enabled = false;
+        restored.mark_mcp_activation_explicit(conversation);
+        restored.set(conversation, off.clone()).unwrap();
+        restored.save_atomic(&path).unwrap();
+        let reloaded = InferenceSettingsStore::load(&path).unwrap();
+        assert_eq!(reloaded.for_conversation_with_mcp_defaults(conversation, &defaults), off);
+        let _ = fs::remove_file(path);
     }
 
     #[test]
