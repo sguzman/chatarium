@@ -17,7 +17,6 @@ mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
 mod mcp_agent_defaults;
-mod mcp_transcript;
 #[cfg(test)]
 mod mcp_async_tests;
 mod mcp_call_review;
@@ -26,6 +25,7 @@ mod mcp_dispatch_manifest;
 mod mcp_output_audit;
 mod mcp_provider_workflow;
 mod mcp_result_review;
+mod mcp_transcript;
 mod native_conversation_search;
 mod native_transcript_export;
 mod offline_reader;
@@ -15004,7 +15004,7 @@ fn transcript_bubble(
     egui::Frame::default()
         .fill(fill)
         .stroke(egui::Stroke::new(
-            1.3,
+            1.3_f32,
             if label == "You" {
                 egui::Color32::from_rgb(66, 139, 228)
             } else if label == "Agent" {
@@ -15047,9 +15047,7 @@ fn transcript_bubble(
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
                                     ui.label(
-                                        egui::RichText::new(&message.text)
-                                            .monospace()
-                                            .size(11.0),
+                                        egui::RichText::new(&message.text).monospace().size(11.0),
                                     );
                                 });
                         });

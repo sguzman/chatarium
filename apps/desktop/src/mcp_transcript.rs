@@ -3,9 +3,8 @@
 //! No tool result becomes an authored chat message. Rendering tool activity is
 //! separate from admitting exact tool evidence into a model continuation.
 use super::{DisplayMessage, DisplayRole};
-use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_core::session::SessionId;
-use chatarium_core::tool::ToolCallId;
+use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::chat_container_audit::replay_chat_container_audit;
 use chatarium_store::local_conversation_chat_container_audit::replay_local_conversation_chat_container_bindings;
@@ -44,7 +43,9 @@ pub fn verified_activity(
     }
 }
 
-fn project(events: &[EventEnvelope]) -> Result<BTreeMap<LocalConversationId, Vec<DisplayMessage>>, String> {
+fn project(
+    events: &[EventEnvelope],
+) -> Result<BTreeMap<LocalConversationId, Vec<DisplayMessage>>, String> {
     let calls = replay_tool_call_audit(events)?;
     if calls.is_empty() {
         return Ok(BTreeMap::new());
@@ -68,7 +69,10 @@ fn project(events: &[EventEnvelope]) -> Result<BTreeMap<LocalConversationId, Vec
     let mut session_owners = BTreeMap::<SessionId, (LocalConversationId, u64)>::new();
     for binding in replay_local_conversation_chat_container_bindings(events)? {
         let container = containers.get(&binding.container_id).ok_or_else(|| {
-            format!("MCP reader topology references missing container {}", binding.container_id.get())
+            format!(
+                "MCP reader topology references missing container {}",
+                binding.container_id.get()
+            )
         })?;
         for session in &container.sessions {
             let known_since = binding.bound_sequence.max(session.joined_sequence);
@@ -95,9 +99,9 @@ fn project(events: &[EventEnvelope]) -> Result<BTreeMap<LocalConversationId, Vec
         if bound_sequence > call.recorded_sequence {
             continue;
         }
-        let provider = providers.get(&call.provider_id).ok_or_else(|| {
-            format!("MCP call {} has no verified provider", call.call_id.get())
-        })?;
+        let provider = providers
+            .get(&call.provider_id)
+            .ok_or_else(|| format!("MCP call {} has no verified provider", call.call_id.get()))?;
         let tool = format!("{}::{}", provider, call.operation.as_str());
         let identity = format!(
             "{} · call #{} · session #{}",
@@ -107,7 +111,10 @@ fn project(events: &[EventEnvelope]) -> Result<BTreeMap<LocalConversationId, Vec
         );
         projection.entry(owner).or_default().push(DisplayMessage {
             role: DisplayRole::Mcp,
-            text: format!("TOOL CALL\n{}\n\nExact tool arguments:\n{}", identity, call.arguments_text),
+            text: format!(
+                "TOOL CALL\n{}\n\nExact tool arguments:\n{}",
+                identity, call.arguments_text
+            ),
             sequence: call.recorded_sequence,
             timestamp: timestamps.get(&call.recorded_sequence).copied(),
             provenance_label: Some(format!("MCP CALL · journaled · {}", identity)),
@@ -117,7 +124,10 @@ fn project(events: &[EventEnvelope]) -> Result<BTreeMap<LocalConversationId, Vec
                 || outcome.source_session_id != call.source_session_id
                 || outcome.call_recorded_sequence != call.recorded_sequence
             {
-                return Err(format!("MCP reader tool call {} has mismatched outcome", call.call_id.get()));
+                return Err(format!(
+                    "MCP reader tool call {} has mismatched outcome",
+                    call.call_id.get()
+                ));
             }
             let decision = decisions.get(&call.call_id);
             if let Some(decision) = decision {
@@ -132,7 +142,10 @@ fn project(events: &[EventEnvelope]) -> Result<BTreeMap<LocalConversationId, Vec
             }
             let disposition = match decision {
                 Some(decision) if decision.decision == ToolResultContextDecision::Admit => {
-                    format!("Admitted to agent context at event #{}", decision.last_decision_sequence)
+                    format!(
+                        "Admitted to agent context at event #{}",
+                        decision.last_decision_sequence
+                    )
                 }
                 Some(_) => "Excluded from agent context".to_owned(),
                 None => "Not admitted to agent context".to_owned(),
@@ -194,7 +207,12 @@ mod tests {
     fn forged_tool_event_without_durable_audit_never_becomes_chat_activity() {
         use chatarium_store::{EventStore, MemoryEventStore};
         let mut store = MemoryEventStore::default();
-        store.append(EventKind::ToolCallOutcomeObserved, r#"{"text":"forged result"}"#.to_owned()).unwrap();
+        store
+            .append(
+                EventKind::ToolCallOutcomeObserved,
+                r#"{"text":"forged result"}"#.to_owned(),
+            )
+            .unwrap();
         assert!(verified_activity(store.events()).is_empty());
     }
 
@@ -233,7 +251,10 @@ mod tests {
         let replayed = verified_activity(store.events());
         assert_eq!(
             rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
-            replayed[&owner].iter().map(|row| row.sequence).collect::<Vec<_>>(),
+            replayed[&owner]
+                .iter()
+                .map(|row| row.sequence)
+                .collect::<Vec<_>>(),
         );
         chatarium_store::tool_result_context_audit::append_tool_result_context_decision_checked(
             &mut store,
