@@ -19,10 +19,14 @@ struct Style {
 }
 
 fn push(out: &mut Vec<Span>, text: &str, style: Style) {
-    if text.is_empty() { return; }
+    if text.is_empty() {
+        return;
+    }
     if let Some(last) = out.last_mut() {
-        if last.bold == style.bold && last.italic == style.italic
-            && last.strike == style.strike && last.code == style.code
+        if last.bold == style.bold
+            && last.italic == style.italic
+            && last.strike == style.strike
+            && last.code == style.code
         {
             last.text.push_str(text);
             return;
@@ -84,8 +88,11 @@ fn append(input: &str, style: Style, depth: usize, out: &mut Vec<Span>) {
                         "code" => changed.code = true,
                         _ => {}
                     }
-                    if kind == "code" { push(out, inner, changed); }
-                    else { append(inner, changed, depth + 1, out); }
+                    if kind == "code" {
+                        push(out, inner, changed);
+                    } else {
+                        append(inner, changed, depth + 1, out);
+                    }
                     index += delimiter.len() * 2 + close;
                     continue;
                 }
@@ -111,19 +118,29 @@ mod tests {
     #[test]
     fn strips_valid_markers_and_preserves_literal_unmatched_text() {
         let spans = parse("Two **tools** and *more*, ~~old~~ plus \u{60}code\u{60}");
-        let plain = spans.iter().map(|span| span.text.as_str()).collect::<String>();
+        let plain = spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>();
         assert_eq!(plain, "Two tools and more, old plus code");
         assert!(spans.iter().any(|s| s.text == "tools" && s.bold));
         assert!(spans.iter().any(|s| s.text == "more" && s.italic));
         assert!(spans.iter().any(|s| s.text == "old" && s.strike));
         assert!(spans.iter().any(|s| s.text == "code" && s.code));
-        assert_eq!(parse("literal **never closed")[0].text, "literal **never closed");
+        assert_eq!(
+            parse("literal **never closed")[0].text,
+            "literal **never closed"
+        );
     }
 
     #[test]
     fn unicode_nested_emphasis_and_escaping_are_safe() {
         let spans = parse("🪐 **bold *italic* 中文** \\*literal\\*");
-        assert!(spans.iter().any(|s| s.text == "italic" && s.bold && s.italic));
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.text == "italic" && s.bold && s.italic)
+        );
         let plain = spans.into_iter().map(|span| span.text).collect::<String>();
         assert_eq!(plain, "🪐 bold italic 中文 *literal*");
         assert_eq!(parse(""), Vec::<Span>::new());
