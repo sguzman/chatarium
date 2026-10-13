@@ -926,6 +926,21 @@ struct PendingRemoteTurn {
     request_patch: Value,
 }
 
+/// One user-authored turn may contain several remote response steps and MCP
+/// calls. All remote steps remain correlated to the ORIGINAL local turn ID.
+/// Tool dispatches are independently journaled before side effects.
+#[derive(Debug, Clone)]
+struct AgentMcpFlow {
+    turn_id: LocalTurnId,
+    conversation_id: LocalConversationId,
+    command: siwc_bridge::BridgeCommand,
+    proposal_text: String,
+    call_count: u32,
+    pending_call: Option<ToolCallId>,
+    pending_route: Option<RouteId>,
+    policy: mcp_agent_defaults::ToolPolicy,
+}
+
 #[derive(Debug, Clone)]
 struct ActiveRemoteTurn {
     turn_id: LocalTurnId,
@@ -1087,6 +1102,7 @@ struct ChatariumApp {
     sign_in_pending: bool,
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
+    agent_mcp_flow: Option<AgentMcpFlow>,
     commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
     delivery: delivery_telemetry::Timeline,
 }
@@ -1400,6 +1416,7 @@ impl ChatariumApp {
                         sign_in_pending: false,
                         pending_remote_turn: None,
                         active_remote_turn: None,
+                        agent_mcp_flow: None,
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
                     },
@@ -1618,6 +1635,7 @@ impl ChatariumApp {
             sign_in_pending: false,
             pending_remote_turn: None,
             active_remote_turn: None,
+            agent_mcp_flow: None,
             commit_remote_intents: BTreeMap::new(),
             delivery: delivery_telemetry::Timeline::default(),
         }
@@ -1638,6 +1656,7 @@ impl ChatariumApp {
             || self.commit_in_flight.is_some()
             || self.pending_remote_turn.is_some()
             || self.active_remote_turn.is_some()
+            || self.agent_mcp_flow.is_some()
     }
 
     fn apply_local_conversation(&mut self, conversation_id: LocalConversationId) {
