@@ -41,9 +41,16 @@ pub fn verified_activity(
         };
         let sequence = first.recorded_sequence;
         let timestamp = timestamps.get(&sequence).map(|ms| *ms as f64 / 1_000.0);
-        let text_chunks = observations.iter().filter(|event| event.delta_chars.is_some()).count();
-        let text_characters = observations.iter().filter_map(|event| event.delta_chars).sum::<u64>();
-        let first_output_ms = observations.iter()
+        let text_chunks = observations
+            .iter()
+            .filter(|event| event.delta_chars.is_some())
+            .count();
+        let text_characters = observations
+            .iter()
+            .filter_map(|event| event.delta_chars)
+            .sum::<u64>();
+        let first_output_ms = observations
+            .iter()
             .find(|event| event.delta_chars.is_some())
             .map(|event| event.elapsed_ms);
         let latest_ms = observations.last().map_or(0.0, |event| event.elapsed_ms);
