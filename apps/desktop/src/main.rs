@@ -14527,33 +14527,6 @@ impl eframe::App for ChatariumApp {
                         }
                     });
                 }
-                ui.collapsing("Attach local file", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.attachment_path_draft)
-                                .hint_text("Local path, or drop a file into Chatarium")
-                                .desired_width(350.0),
-                        );
-                        if ui
-                            .add_enabled(
-                                self.commit_in_flight.is_none(),
-                                egui::Button::new("Stage file"),
-                            )
-                            .clicked()
-                        {
-                            let path = std::path::PathBuf::from(
-                                self.attachment_path_draft.trim(),
-                            );
-                            self.stage_attachment(&path);
-                        }
-                    });
-                    ui.label(
-                        egui::RichText::new(
-                            "One file per turn, up to 128 KiB. Contents become part of the local journal when sent."
-                        )
-                        .size(10.0),
-                    );
-                });
                 let response = egui::Frame::default()
                     .fill(composer_fill)
                     .stroke(egui::Stroke::new(
@@ -14631,6 +14604,39 @@ impl eframe::App for ChatariumApp {
                         if clicked || (can_commit && commit_shortcut) {
                             self.commit_current_message();
                         }
+                        // right_to_left lays out Send first (rightmost), then
+                        // the attach menu immediately to its left.
+                        ui.menu_button(egui::RichText::new("+").size(20.0).strong(), |ui| {
+                            ui.set_min_width(250.0);
+                            ui.label(egui::RichText::new("Attach a local file").strong());
+                            ui.label("Drop a file into Chatarium, or enter its path:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.attachment_path_draft)
+                                    .hint_text("Absolute file path")
+                                    .desired_width(260.0),
+                            );
+                            if ui
+                                .add_enabled(
+                                    self.commit_in_flight.is_none()
+                                        && !self.attachment_path_draft.trim().is_empty(),
+                                    egui::Button::new("Stage attachment"),
+                                )
+                                .clicked()
+                            {
+                                let path = std::path::PathBuf::from(
+                                    self.attachment_path_draft.trim(),
+                                );
+                                self.stage_attachment(&path);
+                                ui.close();
+                            }
+                            if self.staged_attachment.is_some()
+                                && ui.button("Remove staged attachment").clicked()
+                            {
+                                self.staged_attachment = None;
+                                ui.close();
+                            }
+                            ui.label("One file per turn, up to 128 KiB.");
+                        });
 
                         if let Some(target_request_id) = self
                             .active_remote_turn
