@@ -550,7 +550,10 @@ fn read_retry_diagnostic(line: &str) -> Option<String> {
         return None;
     }
     let category = value.get("category")?.as_str()?;
-    if !matches!(category, "rate_limit" | "http_transient" | "network_transient") {
+    if !matches!(
+        category,
+        "rate_limit" | "http_transient" | "network_transient"
+    ) {
         return None;
     }
     let attempt = value.get("attempt")?.as_u64()?;
