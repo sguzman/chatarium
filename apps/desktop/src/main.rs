@@ -6161,9 +6161,9 @@ impl eframe::App for ChatariumApp {
                 && ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::L));
 
         egui::SidePanel::left("sidebar")
-            .default_width(320.0)
-            .min_width(260.0)
-            .max_width(440.0)
+            .default_width(290.0)
+            .min_width(220.0)
+            .max_width(580.0)
             .resizable(true)
             .frame(
                 egui::Frame::default()
@@ -6171,10 +6171,8 @@ impl eframe::App for ChatariumApp {
                     .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
-                // SidePanel reserves its configured width independently of the custom
-                // frame's content-driven minimum size. Force the inner frame to own the
-                // full reserved width so HiDPI/Wayland never exposes an unpainted gutter.
-                ui.set_min_width(ui.max_rect().width());
+                // Do not lock the inner UI's minimum width to the previous frame.
+                // That turns the resizable sidebar into a one-way grow-only panel.
 
                 egui::ScrollArea::vertical()
                     .id_salt("sidebar-scroll")
@@ -7794,9 +7792,16 @@ impl eframe::App for ChatariumApp {
 
                 let mut inference_controls_changed = false;
                 let mut behavior_profile_changed = false;
-                egui::CollapsingHeader::new("Context & inference controls")
-                    .default_open(false)
+                // Context tools can be much taller than the window. Bound them to
+                // their own scroll viewport so the transcript and composer stay usable.
+                egui::ScrollArea::vertical()
+                    .id_salt("inference-controls-scroll")
+                    .max_height((ctx.content_rect().height() * 0.42).clamp(180.0, 450.0))
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        egui::CollapsingHeader::new("Context & inference controls")
+                            .default_open(false)
+                            .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(
                                 "These controls belong to this local conversation. Chatarium assembles the request context locally.",
@@ -13403,6 +13408,7 @@ impl eframe::App for ChatariumApp {
                                     );
                                 });
                         });
+                    });
                     });
                 if inference_controls_changed {
                     self.persist_current_inference_settings();
