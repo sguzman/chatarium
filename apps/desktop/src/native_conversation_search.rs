@@ -715,16 +715,20 @@ impl NativeConversationSearchIndex {
             // conversations named by the newly appended journal suffix.
             // A streaming delta must not reallocate other chats' cards.
             let mut verified = super::siwc_activity_transcript::verified_activity(events);
-            if verified.is_empty()
-                && messages.values().any(|entries| {
-                    entries
+            if verified.is_empty() {
+                // A failed audit replay invalidates every previously cached
+                // activity card, including cards outside the appended suffix.
+                // Remove only those cards so unrelated authored conversations
+                // keep their shared projection and are not needlessly rebuilt.
+                for entries in messages.values_mut() {
+                    if entries
                         .iter()
                         .any(|entry| entry.role == super::DisplayRole::Activity)
-                })
-            {
-                // Malformed evidence invalidates the entire activity audit:
-                // only a full verified rebuild may clear all cached cards.
-                return None;
+                    {
+                        Arc::make_mut(entries)
+                            .retain(|entry| entry.role != super::DisplayRole::Activity);
+                    }
+                }
             }
             let affected = events[first_new_position..]
                 .iter()
