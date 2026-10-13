@@ -30,6 +30,7 @@ mod native_conversation_search;
 mod native_transcript_export;
 mod offline_reader;
 mod reader_visual_qa;
+mod response_text_provenance;
 mod siwc_activity_transcript;
 mod siwc_bridge;
 mod system_fonts;
@@ -964,6 +965,7 @@ struct ActiveRemoteTurn {
     request_id: String,
     cumulative_text: String,
     observed_output: bool,
+    source_suspect_logged: bool,
     command: siwc_bridge::BridgeCommand,
     retries: u32,
     retry_at: Option<Instant>,
@@ -3222,6 +3224,7 @@ impl ChatariumApp {
                                     request_id: pending.request_id,
                                     cumulative_text: String::new(),
                                     observed_output: false,
+                                    source_suspect_logged: false,
                                     command: retry_command,
                                     retries: 0,
                                     retry_at: None,
@@ -4172,6 +4175,21 @@ impl ChatariumApp {
                     let first_output = !active.observed_output;
                     active.observed_output = true;
                     active.cumulative_text.push_str(&delta);
+                    if !active.source_suspect_logged {
+                        if let Some(marker) = response_text_provenance::suspect_in_stream_tail(
+                            &active.cumulative_text,
+                        ) {
+                            diagnostics::info(
+                                "siwc-text-provenance",
+                                format!(
+                                    "bridge delta request={} suspect={} source=stream; assistant text retained verbatim",
+                                    diagnostics::short_id(&request_id),
+                                    marker.label(),
+                                ),
+                            );
+                            active.source_suspect_logged = true;
+                        }
+                    }
                     let turn_id = active.turn_id;
                     let cumulative_text = active.cumulative_text.clone();
 
@@ -4238,6 +4256,33 @@ impl ChatariumApp {
                         .active_remote_turn
                         .take()
                         .expect("matched active remote turn");
+                    let relation = response_text_provenance::final_source_relation(
+                        &active.cumulative_text,
+                        &text,
+                    );
+                    if relation
+                        == response_text_provenance::FinalSourceRelation::FinalDiffersFromStream
+                    {
+                        diagnostics::info(
+                            "siwc-text-provenance",
+                            format!(
+                                "bridge completion request={} final_differs_from_stream=true; content kept unmodified",
+                                diagnostics::short_id(&request_id),
+                            ),
+                        );
+                    }
+                    if !active.source_suspect_logged {
+                        if let Some(marker) = response_text_provenance::suspect_in_stream_tail(&text) {
+                            diagnostics::info(
+                                "siwc-text-provenance",
+                                format!(
+                                    "bridge completion request={} suspect={} source=final; assistant text retained verbatim",
+                                    diagnostics::short_id(&request_id),
+                                    marker.label(),
+                                ),
+                            );
+                        }
+                    }
                     self.delivery
                         .set(&request_id, delivery_telemetry::Phase::Complete);
                     let final_text = if text.is_empty() {
