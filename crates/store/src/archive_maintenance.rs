@@ -64,6 +64,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CACHE_FILE: &str = "remote-history-cache.json";
 const INFERENCE_SETTINGS_FILE: &str = "local-inference-settings.json";
 const BEHAVIOR_PROFILES_FILE: &str = "behavior-profiles.json";
+const MCP_AGENT_DEFAULTS_FILE: &str = "mcp-agent-defaults.json";
 const LOCAL_CONVERSATION_CATALOG_FILE: &str = "local-conversations.json";
 const CAPABILITY_PROBE_REPORT_FILE: &str = "siwc-capability-probes.json";
 const LOCAL_INFERENCE_CONTRACT_FILE: &str = "local-inference-contract.json";
@@ -326,6 +327,7 @@ pub fn create_backup(
         CACHE_FILE,
         INFERENCE_SETTINGS_FILE,
         BEHAVIOR_PROFILES_FILE,
+        MCP_AGENT_DEFAULTS_FILE,
         LOCAL_CONVERSATION_CATALOG_FILE,
         CAPABILITY_PROBE_REPORT_FILE,
         LOCAL_INFERENCE_CONTRACT_FILE,
@@ -461,6 +463,7 @@ pub fn restore_backup(
         CACHE_FILE,
         INFERENCE_SETTINGS_FILE,
         BEHAVIOR_PROFILES_FILE,
+        MCP_AGENT_DEFAULTS_FILE,
         LOCAL_CONVERSATION_CATALOG_FILE,
         CAPABILITY_PROBE_REPORT_FILE,
         LOCAL_INFERENCE_CONTRACT_FILE,
@@ -534,6 +537,25 @@ mod tests {
             fs::read(source.join(INFERENCE_SETTINGS_FILE)).unwrap(),
             fs::read(target.join(INFERENCE_SETTINGS_FILE)).unwrap()
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backup_and_restore_preserve_global_mcp_agent_defaults() {
+        let root = temp("mcp-agent-defaults");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let backup = root.join("backup");
+        let target = root.join("restored");
+        fs::create_dir_all(&source).unwrap();
+        let _store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        let original = br#"{"schema":"chatarium-mcp-agent-defaults","version":1,"bootstrap":"local tools","policy_rules":"chatarium.builtin::hello = ask","max_calls":8,"seed_new_conversations":true}"#;
+        fs::write(source.join(MCP_AGENT_DEFAULTS_FILE), original).unwrap();
+
+        let created = create_backup(&source, &backup).unwrap();
+        assert_eq!(created.manifest_files, 2);
+        restore_backup(&backup, &target).unwrap();
+        assert_eq!(fs::read(target.join(MCP_AGENT_DEFAULTS_FILE)).unwrap(), original);
         let _ = fs::remove_dir_all(root);
     }
 
