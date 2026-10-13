@@ -5,6 +5,7 @@ mod context_composer;
 mod conversation_keybindings;
 mod conversation_navigation;
 mod diagnostics;
+mod delivery_telemetry;
 #[cfg(test)]
 mod integration_journey;
 mod local_archive_search;
@@ -31,6 +32,10 @@ mod siwc_bridge;
 mod system_fonts;
 mod timestamp_display;
 mod virtual_reader;
+
+// History mirroring is parked. Local archives remain readable and the code is retained.
+// This never disables the separate ChatGPT inference/sign-in runtime.
+const ACCOUNT_MIRRORING_ENABLED: bool = false;
 
 use chatarium_core::chat_container::{ChatContainerId, SessionLifecyclePhase};
 use chatarium_core::control::{
@@ -910,6 +915,9 @@ struct ActiveRemoteTurn {
     request_id: String,
     cumulative_text: String,
     observed_output: bool,
+    command: siwc_bridge::BridgeCommand,
+    retries: u32,
+    retry_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -1061,6 +1069,7 @@ struct ChatariumApp {
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
     commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
+    delivery: delivery_telemetry::Timeline,
 }
 
 impl ChatariumApp {
@@ -1351,6 +1360,7 @@ impl ChatariumApp {
                         pending_remote_turn: None,
                         active_remote_turn: None,
                         commit_remote_intents: BTreeMap::new(),
+            delivery: delivery_telemetry::Timeline::default(),
                     },
                     Err(error) => Self::without_persistence(
                         repaint,
@@ -1546,6 +1556,7 @@ impl ChatariumApp {
             pending_remote_turn: None,
             active_remote_turn: None,
             commit_remote_intents: BTreeMap::new(),
+            delivery: delivery_telemetry::Timeline::default(),
         }
     }
 
@@ -6002,9 +6013,12 @@ impl eframe::App for ChatariumApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
-        self.process_mirror_controller_notices();
-        self.process_live_mirror_fetch_notices();
+        if ACCOUNT_MIRRORING_ENABLED {
+            self.process_mirror_controller_notices();
+            self.process_live_mirror_fetch_notices();
+        }
         self.process_remote_notices();
+        self.process_due_delivery_retry();
 
         // Consume global native chat navigation before resolving conversation
         // title, visible transcript, search projection or reader state. Doing
@@ -6628,7 +6642,7 @@ impl eframe::App for ChatariumApp {
                             );
                         }
 
-                        if !self.remote_conversation_catalog.is_empty() {
+                        if ACCOUNT_MIRRORING_ENABLED && !self.remote_conversation_catalog.is_empty() {
                             ui.add_space(16.0);
                             ui.label(
                                 egui::RichText::new(history_observed_label(
@@ -6708,7 +6722,7 @@ impl eframe::App for ChatariumApp {
                             }
                         }
 
-                        if !self.live_mirror_catalog.is_empty() {
+                        if ACCOUNT_MIRRORING_ENABLED && !self.live_mirror_catalog.is_empty() {
                             ui.add_space(16.0);
                             ui.label(
                                 egui::RichText::new(format!(
@@ -6799,6 +6813,7 @@ impl eframe::App for ChatariumApp {
                         );
                         ui.add_space(7.0);
                         status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
+                        if ACCOUNT_MIRRORING_ENABLED {
                         status_row(
                             ui,
                             "History discovery",
@@ -6900,6 +6915,7 @@ impl eframe::App for ChatariumApp {
                                 mirror_recheck_requested = true;
                             }
                         });
+                        }
                         status_row(
                             ui,
                             "ChatGPT",
@@ -7738,6 +7754,7 @@ impl eframe::App for ChatariumApp {
                                 .color(egui::Color32::from_rgb(139, 143, 153)),
                             );
                             ui.add_space(8.0);
+                            if ACCOUNT_MIRRORING_ENABLED {
                             ui.horizontal(|ui| {
                                 let pending = self.live_mirror_pending == selected_historical_id;
                                 let can_sync = (selected_historical_id.is_some()
@@ -7779,6 +7796,9 @@ impl eframe::App for ChatariumApp {
                                         .size(10.0)
                                         .color(egui::Color32::from_rgb(166, 139, 112)),
                                 );
+                            }
+                            } else {
+                                ui.label("ChatGPT history mirroring is paused; saved snapshots remain read-only.");
                             }
                         });
                     return;
@@ -20170,6 +20190,9 @@ fn start_account_bridge() -> (
     Option<account_bridge::BrowserBridgeProvider>,
     String,
 ) {
+    if !ACCOUNT_MIRRORING_ENABLED {
+        return (None, None, "ChatGPT history mirroring paused (local-only)".to_owned());
+    }
     match account_bridge::AccountBridgeRuntime::start() {
         Ok(runtime) => {
             let provider = runtime.provider();
