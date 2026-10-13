@@ -1052,9 +1052,17 @@ mod tests {
     #[test]
     fn explicit_http_rejection_is_not_ambiguous_delivery() {
         let rejection = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":3,"stage":"http_rejected","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":123.0,"http_status":429}"#;
-        assert!(agent_activity_diagnostic(rejection).unwrap().contains("HTTP 429"));
+        assert!(
+            agent_activity_diagnostic(rejection)
+                .unwrap()
+                .contains("HTTP 429")
+        );
         let terminal = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":4,"stage":"failed","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":130.0,"delivery_evidence":"http_rejected","http_status":429}"#;
-        assert!(agent_activity_diagnostic(terminal).unwrap().contains("evidence=http_rejected HTTP 429"));
+        assert!(
+            agent_activity_diagnostic(terminal)
+                .unwrap()
+                .contains("evidence=http_rejected HTTP 429")
+        );
         let forged = r#"{"type":"agent_activity","request_id":"test-request","source":"siwc_bridge_observation","sequence":4,"stage":"failed","observed_at_utc":"2026-10-13T18:30:00.000Z","elapsed_ms":130.0,"delivery_evidence":"wire_unconfirmed","http_status":429}"#;
         assert!(agent_activity_diagnostic(forged).is_none());
     }
@@ -1087,7 +1095,11 @@ mod tests {
         assert!(notice.contains("delay=350ms"));
         assert!(!notice.contains("an-account-local-request-id"));
         let configured = r#"{"type":"read_retry_scheduled","request_id":"request-4","operation":"models","stage":"model_discovery","category":"http_transient","status":503,"attempt":4,"next_attempt":5,"delay_ms":20000}"#;
-        assert!(read_retry_diagnostic(configured).unwrap().contains("delay=20000ms"));
+        assert!(
+            read_retry_diagnostic(configured)
+                .unwrap()
+                .contains("delay=20000ms")
+        );
         for invalid in [
             r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","stage":"model_discovery","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1,"access_token":"secret"}"#,
             r#"{"type":"read_retry_scheduled","request_id":"a","operation":"stream_response","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1}"#,
