@@ -44,7 +44,7 @@ globalThis.fetch = async (input, init) => {
     stream: body.stream,
   };
   return new Response(JSON.stringify(summary), {
-    status: 200,
+    status: body.input === "simulate-http-429" ? 429 : 200,
     headers: { "content-type": "application/json" },
   });
 };
