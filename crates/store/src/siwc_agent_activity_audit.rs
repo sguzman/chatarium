@@ -150,7 +150,9 @@ pub fn replay_siwc_agent_activity_audit(
         // time. Accept that reset ONLY after a durably terminal attempt,
         // while retaining the earlier attempt in the immutable journal.
         if track.last().is_some_and(|previous| {
-            matches!(previous.stage.as_str(), "completed" | "failed")
+            previous.stage == "failed"
+                && previous.delivery_evidence.as_deref() == Some("http_rejected")
+                && previous.http_status == Some(429)
                 && record.stage == "started"
                 && record.source_sequence == 1
         }) {
