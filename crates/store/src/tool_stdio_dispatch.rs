@@ -65,14 +65,21 @@ pub fn reserve_activated_stdio_tool_dispatch(
         .into_iter()
         .find(|record| record.request.id == route_id)
         .ok_or_else(|| "approved external tool route disappeared".to_owned())?;
-    if route.initial_policy != RoutePolicy::RequireApproval
-        || route.latest_user_decision != Some(RouteUserDecision::Allow)
-        || route.gate_state
-            != (RouteGateState::Allowed {
-                by: DecisionAuthority::User,
-            })
-    {
-        return Err("tool route no longer has unconsumed user approval".to_owned());
+    let authorized = match route.initial_policy {
+        RoutePolicy::Allow => route.latest_user_decision.is_none()
+            && route.gate_state == (RouteGateState::Allowed {
+                by: DecisionAuthority::Policy,
+            }),
+        RoutePolicy::RequireApproval => {
+            route.latest_user_decision == Some(RouteUserDecision::Allow)
+                && route.gate_state == (RouteGateState::Allowed {
+                    by: DecisionAuthority::User,
+                })
+        }
+        RoutePolicy::Deny => false,
+    };
+    if !authorized {
+        return Err("tool route no longer has valid exact policy or user authorization".to_owned());
     }
     if replay_tool_call_outcome_audit(store.events())?
         .iter()
@@ -82,8 +89,10 @@ pub fn reserve_activated_stdio_tool_dispatch(
     }
 
     let mut gate = RouteGate::new(route.request, route.initial_policy);
-    gate.user_allow()
-        .map_err(|error| format!("cannot reconstruct approved tool route: {error:?}"))?;
+    if route.initial_policy == RoutePolicy::RequireApproval {
+        gate.user_allow()
+            .map_err(|error| format!("cannot reconstruct approved tool route: {error:?}"))?;
+    }
     let permit = gate
         .authorize_dispatch(route_id)
         .map_err(|error| format!("cannot consume approved tool route: {error:?}"))?;
