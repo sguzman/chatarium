@@ -14352,7 +14352,7 @@ fn draw_delivery_timeline(
         }
     });
     ui.label(egui::RichText::new(
-        "Receipt only after HTTP success. Timings in this display reset on app restart; journaled turns remain durable.",
+        "Timings: local queue → HTTP ack → waiting for first output → streaming. HTTP ack is transport evidence, not proof of model activity. Timing history resets on restart; turns remain durable.",
     ).size(9.0).color(egui::Color32::from_rgb(125, 129, 139)));
     // Completed rows are individual requests, not repeated copies of the
     // current green "ready for input" status shown in the header.
@@ -14383,19 +14383,21 @@ fn draw_delivery_timeline(
                             .size(10.0)
                             .color(egui::Color32::from_rgb(195, 198, 205)),
                     );
-                    if let Some(acknowledged) = attempt.time_to_acknowledgment() {
-                        ui.label(
-                            egui::RichText::new(format!("server ack {:.1}s", acknowledged))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(151, 154, 163)),
-                        );
-                    }
-                    if let Some(first) = attempt.time_to_first_output() {
-                        ui.label(
-                            egui::RichText::new(format!("first response {:.1}s", first))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(151, 154, 163)),
-                        );
+                    // Show disjoint phases; cumulative ack/first-output times
+                    // obscured whether delay was local, network, or remote.
+                    for (name, duration) in [
+                        ("queue", attempt.queued_seconds()),
+                        ("HTTP ack", attempt.network_ack_seconds()),
+                        ("reply startup", attempt.post_ack_wait_seconds()),
+                        ("stream", attempt.streaming_seconds()),
+                    ] {
+                        if let Some(seconds) = duration {
+                            ui.label(
+                                egui::RichText::new(format!("{name} {seconds:.1}s"))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(151, 154, 163)),
+                            );
+                        }
                     }
                     if attempt.retries > 0 {
                         ui.label(
