@@ -8,6 +8,7 @@ Compare those two regions *independently* with bounded horizontal alignment.
 """
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
+from panel_geometry import sidebar_edge
 import sys
 
 if len(sys.argv) != 3:
@@ -15,6 +16,14 @@ if len(sys.argv) != 3:
 before, after = [Image.open(Path(name)).convert("RGB") for name in sys.argv[1:]]
 if before.size != after.size or before.width < 1100 or before.height < 700:
     raise AssertionError("production empty conversation reference size mismatch")
+
+# Creating a conversation must not silently drag the user-resizable splitter.
+# This used to grow by 172 pixels simply because the previous title got longer.
+before_edge, after_edge = sidebar_edge(before), sidebar_edge(after)
+if abs(after_edge - before_edge) > 6:
+    raise AssertionError(
+        f"native sidebar changed width without a drag: {before_edge} -> {after_edge}"
+    )
 
 
 def best_horizontal_alignment(box):
