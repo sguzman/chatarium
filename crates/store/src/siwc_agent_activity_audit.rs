@@ -43,8 +43,8 @@ pub fn append_siwc_agent_activity_checked(
     if frame.len() > MAX_FRAME_BYTES {
         return Err("SIWC activity frame is oversized".to_owned());
     }
-    let observation: Value = serde_json::from_str(frame)
-        .map_err(|_| "SIWC activity frame is not JSON".to_owned())?;
+    let observation: Value =
+        serde_json::from_str(frame).map_err(|_| "SIWC activity frame is not JSON".to_owned())?;
     // Parse first, then serialize *only* validated metadata. The untrusted
     // original frame is never persisted, even on a malformed-frame failure.
     let parsed = parse_observation(&observation, conversation_id, turn_id, 0)?;
@@ -94,8 +94,12 @@ pub fn replay_siwc_agent_activity_audit(
         if event.kind != EventKind::SiwcAgentActivityObserved {
             continue;
         }
-        let payload: Value = serde_json::from_str(&event.payload)
-            .map_err(|_| format!("SIWC activity at journal {} has malformed JSON", event.sequence))?;
+        let payload: Value = serde_json::from_str(&event.payload).map_err(|_| {
+            format!(
+                "SIWC activity at journal {} has malformed JSON",
+                event.sequence
+            )
+        })?;
         let object = payload
             .as_object()
             .ok_or_else(|| "SIWC activity payload must be an object".to_owned())?;
@@ -103,16 +107,27 @@ pub fn replay_siwc_agent_activity_audit(
             || payload.get("schema").and_then(Value::as_str) != Some(SCHEMA)
             || payload.get("version").and_then(Value::as_u64) != Some(VERSION)
         {
-            return Err(format!("SIWC activity at journal {} has unknown schema/fields", event.sequence));
+            return Err(format!(
+                "SIWC activity at journal {} has unknown schema/fields",
+                event.sequence
+            ));
         }
         let conversation_id = parse_id::<LocalConversationId>(&payload, "conversation_id")?;
         let turn_id = parse_id::<LocalTurnId>(&payload, "turn_id")?;
         let expected_scope = activity_scope(conversation_id, turn_id);
         if event.scope.as_deref() != Some(expected_scope.as_str()) {
-            return Err(format!("SIWC activity at journal {} has mismatched scope", event.sequence));
+            return Err(format!(
+                "SIWC activity at journal {} has mismatched scope",
+                event.sequence
+            ));
         }
-        if turn_owners.insert(turn_id, conversation_id).is_some_and(|owner| owner != conversation_id) {
-            return Err("SIWC activity local turn was assigned to multiple conversations".to_owned());
+        if turn_owners
+            .insert(turn_id, conversation_id)
+            .is_some_and(|owner| owner != conversation_id)
+        {
+            return Err(
+                "SIWC activity local turn was assigned to multiple conversations".to_owned(),
+            );
         }
         let observation = payload
             .get("observation")
@@ -167,8 +182,17 @@ fn parse_observation(
         .as_object()
         .ok_or_else(|| "SIWC observation must be an object".to_owned())?;
     const FIELDS: &[&str] = &[
-        "type", "source", "request_id", "sequence", "stage", "observed_at_utc",
-        "elapsed_ms", "delta_chars", "http_status", "delivery_evidence", "cancelled",
+        "type",
+        "source",
+        "request_id",
+        "sequence",
+        "stage",
+        "observed_at_utc",
+        "elapsed_ms",
+        "delta_chars",
+        "http_status",
+        "delivery_evidence",
+        "cancelled",
     ];
     if object.keys().any(|key| !FIELDS.contains(&key.as_str()))
         || raw.get("type").and_then(Value::as_str) != Some("agent_activity")
@@ -176,77 +200,144 @@ fn parse_observation(
     {
         return Err("SIWC activity has unsupported or untrusted fields".to_owned());
     }
-    let request_id = raw.get("request_id").and_then(Value::as_str)
+    let request_id = raw
+        .get("request_id")
+        .and_then(Value::as_str)
         .ok_or_else(|| "SIWC activity has no request identity".to_owned())?;
-    if request_id.is_empty() || request_id.len() > 256
-        || !request_id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    if request_id.is_empty()
+        || request_id.len() > 256
+        || !request_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
     {
         return Err("SIWC activity request identity is invalid".to_owned());
     }
-    let source_sequence = raw.get("sequence").and_then(Value::as_u64)
+    let source_sequence = raw
+        .get("sequence")
+        .and_then(Value::as_u64)
         .ok_or_else(|| "SIWC activity has no source sequence".to_owned())?;
     if !(1..=100_000).contains(&source_sequence) {
         return Err("SIWC activity sequence is out of bounds".to_owned());
     }
-    let stage = raw.get("stage").and_then(Value::as_str)
+    let stage = raw
+        .get("stage")
+        .and_then(Value::as_str)
         .ok_or_else(|| "SIWC activity stage is absent".to_owned())?;
     if !matches!(
         stage,
-        "started" | "wire_attempted" | "acknowledged" | "http_rejected"
-            | "first_text_delta" | "text_delta" | "completed" | "failed"
+        "started"
+            | "wire_attempted"
+            | "acknowledged"
+            | "http_rejected"
+            | "first_text_delta"
+            | "text_delta"
+            | "completed"
+            | "failed"
     ) {
         return Err("SIWC activity stage is unknown".to_owned());
     }
-    let observed_at_utc = raw.get("observed_at_utc").and_then(Value::as_str)
+    let observed_at_utc = raw
+        .get("observed_at_utc")
+        .and_then(Value::as_str)
         .ok_or_else(|| "SIWC activity timestamp is absent".to_owned())?;
     let bytes = observed_at_utc.as_bytes();
-    if bytes.len() != 24 || bytes[4] != b'-' || bytes[7] != b'-'
-        || bytes[10] != b'T' || bytes[13] != b':' || bytes[16] != b':'
-        || bytes[19] != b'.' || bytes[23] != b'Z'
-        || bytes.iter().enumerate().any(|(i, b)| {
-            !matches!(i, 4 | 7 | 10 | 13 | 16 | 19 | 23) && !b.is_ascii_digit()
-        })
+    if bytes.len() != 24
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'.'
+        || bytes[23] != b'Z'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(i, b)| !matches!(i, 4 | 7 | 10 | 13 | 16 | 19 | 23) && !b.is_ascii_digit())
     {
         return Err("SIWC activity timestamp format is invalid".to_owned());
     }
-    let elapsed_ms = raw.get("elapsed_ms").and_then(Value::as_f64)
+    let elapsed_ms = raw
+        .get("elapsed_ms")
+        .and_then(Value::as_f64)
         .ok_or_else(|| "SIWC activity duration is absent".to_owned())?;
     if !elapsed_ms.is_finite() || !(0.0..=86_400_000.0).contains(&elapsed_ms) {
         return Err("SIWC activity duration is invalid".to_owned());
     }
-    let delta_chars = raw.get("delta_chars").map(|value| value.as_u64()
-        .ok_or_else(|| "SIWC activity delta count is invalid".to_owned())).transpose()?;
-    let http_status = raw.get("http_status").map(|value| value.as_u64()
-        .and_then(|number| u16::try_from(number).ok())
-        .filter(|status| (400..=599).contains(status))
-        .ok_or_else(|| "SIWC activity HTTP status is invalid".to_owned())).transpose()?;
-    let delivery_evidence = raw.get("delivery_evidence").map(|value| value.as_str()
-        .filter(|value| matches!(*value,
-            "not_dispatched" | "wire_unconfirmed" | "http_rejected"
-                | "http_acknowledged" | "assistant_delta_seen"))
-        .map(str::to_owned)
-        .ok_or_else(|| "SIWC activity delivery evidence is invalid".to_owned())).transpose()?;
-    let cancelled = raw.get("cancelled").map(|value| value.as_bool()
-        .ok_or_else(|| "SIWC activity cancellation evidence is invalid".to_owned())).transpose()?;
+    let delta_chars = raw
+        .get("delta_chars")
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| "SIWC activity delta count is invalid".to_owned())
+        })
+        .transpose()?;
+    let http_status = raw
+        .get("http_status")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|number| u16::try_from(number).ok())
+                .filter(|status| (400..=599).contains(status))
+                .ok_or_else(|| "SIWC activity HTTP status is invalid".to_owned())
+        })
+        .transpose()?;
+    let delivery_evidence = raw
+        .get("delivery_evidence")
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "not_dispatched"
+                            | "wire_unconfirmed"
+                            | "http_rejected"
+                            | "http_acknowledged"
+                            | "assistant_delta_seen"
+                    )
+                })
+                .map(str::to_owned)
+                .ok_or_else(|| "SIWC activity delivery evidence is invalid".to_owned())
+        })
+        .transpose()?;
+    let cancelled = raw
+        .get("cancelled")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| "SIWC activity cancellation evidence is invalid".to_owned())
+        })
+        .transpose()?;
     if matches!(stage, "first_text_delta" | "text_delta") {
         if !delta_chars.is_some_and(|n| n <= 1_000_000)
-            || http_status.is_some() || delivery_evidence.is_some() || cancelled.is_some()
+            || http_status.is_some()
+            || delivery_evidence.is_some()
+            || cancelled.is_some()
         {
             return Err("SIWC activity text delta fields are invalid".to_owned());
         }
     } else if stage == "http_rejected" {
-        if http_status.is_none() || delta_chars.is_some() || delivery_evidence.is_some() || cancelled.is_some() {
+        if http_status.is_none()
+            || delta_chars.is_some()
+            || delivery_evidence.is_some()
+            || cancelled.is_some()
+        {
             return Err("SIWC activity rejection fields are invalid".to_owned());
         }
     } else if matches!(stage, "completed" | "failed") {
-        if delivery_evidence.is_none() || delta_chars.is_some()
+        if delivery_evidence.is_none()
+            || delta_chars.is_some()
             || (stage == "completed" && (cancelled.is_some() || http_status.is_some()))
-            || (stage == "failed" && (cancelled.is_none()
-                || (delivery_evidence.as_deref() == Some("http_rejected")) != http_status.is_some()))
+            || (stage == "failed"
+                && (cancelled.is_none()
+                    || (delivery_evidence.as_deref() == Some("http_rejected"))
+                        != http_status.is_some()))
         {
             return Err("SIWC activity terminal fields are invalid".to_owned());
         }
-    } else if delta_chars.is_some() || http_status.is_some() || delivery_evidence.is_some()
+    } else if delta_chars.is_some()
+        || http_status.is_some()
+        || delivery_evidence.is_some()
         || cancelled.is_some()
     {
         return Err("SIWC activity nonterminal fields are invalid".to_owned());
@@ -343,10 +434,15 @@ fn validate_transition(
         };
         if record.delivery_evidence.as_deref() != Some(expected)
             || (rejected
-                && record.http_status != previous.iter()
-                    .find(|row| row.stage == "http_rejected").and_then(|row| row.http_status))
+                && record.http_status
+                    != previous
+                        .iter()
+                        .find(|row| row.stage == "http_rejected")
+                        .and_then(|row| row.http_status))
         {
-            return Err("SIWC activity terminal claim exceeds observed transport evidence".to_owned());
+            return Err(
+                "SIWC activity terminal claim exceeds observed transport evidence".to_owned(),
+            );
         }
     }
     Ok(())
@@ -369,7 +465,10 @@ mod tests {
             "elapsed_ms": sequence as f64 * 10.0,
         });
         for (key, value_extra) in extra.as_object().expect("test extra object") {
-            value.as_object_mut().unwrap().insert(key.clone(), value_extra.clone());
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(key.clone(), value_extra.clone());
         }
         value.to_string()
     }
@@ -386,20 +485,37 @@ mod tests {
             frame("req-A", 2, "wire_attempted", json!({})),
             frame("req-A", 3, "acknowledged", json!({})),
             frame("req-A", 4, "first_text_delta", json!({"delta_chars": 17})),
-            frame("req-A", 5, "completed", json!({"delivery_evidence": "assistant_delta_seen"})),
+            frame(
+                "req-A",
+                5,
+                "completed",
+                json!({"delivery_evidence": "assistant_delta_seen"}),
+            ),
         ];
         for raw in &sequence {
             append_siwc_agent_activity_checked(&mut store, first, first_turn, raw).unwrap();
         }
         append_siwc_agent_activity_checked(
-            &mut store, second, second_turn, &frame("req-B", 1, "started", json!({})),
-        ).unwrap();
+            &mut store,
+            second,
+            second_turn,
+            &frame("req-B", 1, "started", json!({})),
+        )
+        .unwrap();
         let rows = replay_siwc_agent_activity_audit(store.events()).unwrap();
         assert_eq!(rows.len(), 6);
         assert_eq!(activity_for_conversation(&rows, first).len(), 5);
         assert_eq!(activity_for_conversation(&rows, second).len(), 1);
-        assert_eq!(rows[4].delivery_evidence.as_deref(), Some("assistant_delta_seen"));
-        assert!(!store.events().iter().any(|event| event.payload.contains("private body")));
+        assert_eq!(
+            rows[4].delivery_evidence.as_deref(),
+            Some("assistant_delta_seen")
+        );
+        assert!(
+            !store
+                .events()
+                .iter()
+                .any(|event| event.payload.contains("private body"))
+        );
     }
 
     #[test]
@@ -410,15 +526,31 @@ mod tests {
         let start = frame("req-A", 1, "started", json!({}));
         append_siwc_agent_activity_checked(&mut store, conversation_id, turn_id, &start).unwrap();
         for malformed in [
-            frame("req-A", 2, "wire_attempted", json!({"access_token":"private"})),
-            frame("req-A", 2, "completed", json!({"delivery_evidence":"http_acknowledged"})),
+            frame(
+                "req-A",
+                2,
+                "wire_attempted",
+                json!({"access_token":"private"}),
+            ),
+            frame(
+                "req-A",
+                2,
+                "completed",
+                json!({"delivery_evidence":"http_acknowledged"}),
+            ),
             frame("req-A", 5, "wire_attempted", json!({})),
             frame("req-A", 2, "text_delta", json!({"delta_chars":1})),
             frame("req-A", 2, "http_rejected", json!({"http_status":200})),
         ] {
-            assert!(append_siwc_agent_activity_checked(
-                &mut store, conversation_id, turn_id, &malformed
-            ).is_err());
+            assert!(
+                append_siwc_agent_activity_checked(
+                    &mut store,
+                    conversation_id,
+                    turn_id,
+                    &malformed
+                )
+                .is_err()
+            );
         }
         assert_eq!(store.events().len(), 1);
     }
@@ -432,14 +564,22 @@ mod tests {
             frame("r", 1, "started", json!({})),
             frame("r", 2, "wire_attempted", json!({})),
             frame("r", 3, "http_rejected", json!({"http_status":429})),
-            frame("r", 4, "failed", json!({
-                "http_status":429, "cancelled":false, "delivery_evidence":"http_rejected"
-            })),
+            frame(
+                "r",
+                4,
+                "failed",
+                json!({
+                    "http_status":429, "cancelled":false, "delivery_evidence":"http_rejected"
+                }),
+            ),
         ] {
             append_siwc_agent_activity_checked(&mut store, c, t, &frame).unwrap();
         }
         let rows = replay_siwc_agent_activity_audit(store.events()).unwrap();
-        assert_eq!(rows.last().unwrap().delivery_evidence.as_deref(), Some("http_rejected"));
+        assert_eq!(
+            rows.last().unwrap().delivery_evidence.as_deref(),
+            Some("http_rejected")
+        );
         assert_eq!(rows.last().unwrap().http_status, Some(429));
     }
 
@@ -451,11 +591,19 @@ mod tests {
         {
             let mut store = JsonlEventStore::open(&path).unwrap();
             append_siwc_agent_activity_checked(
-                &mut store, c, t, &frame("r", 1, "started", json!({}))
-            ).unwrap();
+                &mut store,
+                c,
+                t,
+                &frame("r", 1, "started", json!({})),
+            )
+            .unwrap();
             append_siwc_agent_activity_checked(
-                &mut store, c, t, &frame("r", 2, "wire_attempted", json!({}))
-            ).unwrap();
+                &mut store,
+                c,
+                t,
+                &frame("r", 2, "wire_attempted", json!({})),
+            )
+            .unwrap();
         }
         let reopened = JsonlEventStore::open(&path).unwrap();
         let rows = replay_siwc_agent_activity_audit(reopened.events()).unwrap();
