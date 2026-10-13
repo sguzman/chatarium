@@ -555,7 +555,10 @@ mod tests {
         let created = create_backup(&source, &backup).unwrap();
         assert_eq!(created.manifest_files, 2);
         restore_backup(&backup, &target).unwrap();
-        assert_eq!(fs::read(target.join(MCP_AGENT_DEFAULTS_FILE)).unwrap(), original);
+        assert_eq!(
+            fs::read(target.join(MCP_AGENT_DEFAULTS_FILE)).unwrap(),
+            original
+        );
         let _ = fs::remove_dir_all(root);
     }
 
