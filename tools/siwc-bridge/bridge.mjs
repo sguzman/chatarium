@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { ResponsesLane } from "./response-lane.mjs";
-import { retryReadOnly } from "./retry-policy.mjs";
+import { parseReadRetryPolicy, retryReadOnly } from "./retry-policy.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
@@ -632,10 +632,14 @@ async function handle(command) {
         const models = await retryReadOnly(
           () => chatgpt.listModels(),
           {
+            // Optional deployment/operator knob; strictly bounded to read-only
+            // discovery. Invalid settings fail before dispatching a request.
+            policy: parseReadRetryPolicy(process.env.CHATARIUM_READ_RETRY_POLICY_JSON),
             onRetry: (retry) => emit({
               type: "read_retry_scheduled",
               request_id: requestId,
               operation: "models",
+              stage: "model_discovery",
               ...retry,
             }),
           },
