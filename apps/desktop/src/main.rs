@@ -1061,6 +1061,7 @@ struct ChatariumApp {
     worker_control_command_pending: bool,
     conversation_instructions: String,
     conversation_developer_context: String,
+    conversation_mcp_enabled: bool,
     archive_backup_path: String,
     archive_maintenance_status: String,
     archive_restore_confirmation_pending: bool,
@@ -1372,6 +1373,7 @@ impl ChatariumApp {
                         worker_control_command_pending: false,
                         conversation_instructions: active_inference_settings.instructions,
                         conversation_developer_context: active_inference_settings.developer_context,
+                        conversation_mcp_enabled: active_inference_settings.mcp_enabled,
                         archive_backup_path: String::new(),
                         archive_maintenance_status: "archive maintenance idle".to_owned(),
                         archive_restore_confirmation_pending: false,
@@ -1593,6 +1595,7 @@ impl ChatariumApp {
             worker_control_command_pending: false,
             conversation_instructions: active_inference_settings.instructions,
             conversation_developer_context: active_inference_settings.developer_context,
+            conversation_mcp_enabled: active_inference_settings.mcp_enabled,
             archive_backup_path: String::new(),
             archive_maintenance_status: "archive maintenance idle".to_owned(),
             archive_restore_confirmation_pending: false,
@@ -1671,6 +1674,7 @@ impl ChatariumApp {
         self.selected_model = settings.model;
         self.conversation_instructions = settings.instructions;
         self.conversation_developer_context = settings.developer_context;
+        self.conversation_mcp_enabled = settings.mcp_enabled;
         self.conversation_behavior_profile =
             self.behavior_profiles.for_conversation(conversation_id);
         if !self.remote_models.is_empty()
@@ -1743,6 +1747,7 @@ impl ChatariumApp {
         self.apply_local_conversation(conversation_id);
         if self.mcp_agent_defaults.seed_new_conversations {
             self.conversation_developer_context = self.mcp_agent_defaults.bootstrap.clone();
+            self.conversation_mcp_enabled = true;
             self.persist_current_inference_settings();
         }
         self.status = "new isolated local conversation created".to_owned();
@@ -4228,9 +4233,7 @@ impl ChatariumApp {
                         completed,
                     );
 
-                    let opt_in = !self.mcp_agent_defaults.bootstrap.trim().is_empty()
-                        && self.conversation_developer_context
-                            .contains(self.mcp_agent_defaults.bootstrap.as_str());
+                    let opt_in = self.conversation_mcp_enabled;
                     match mcp_agent_defaults::parse_model_tool_request(&final_text) {
                         Ok(Some(proposal)) if opt_in || self.agent_mcp_flow.is_some() => {
                             self.propose_agent_mcp_call(&active, &final_text, proposal);
@@ -4630,6 +4633,7 @@ impl ChatariumApp {
             model: self.selected_model.clone(),
             instructions: self.conversation_instructions.clone(),
             developer_context: self.conversation_developer_context.clone(),
+            mcp_enabled: self.conversation_mcp_enabled,
             slow_warning_seconds: self.slow_warning_seconds,
         };
         if let Err(error) = self
@@ -10025,7 +10029,9 @@ impl eframe::App for ChatariumApp {
                                             self.conversation_developer_context.push_str(&bootstrap);
                                             self.persist_current_inference_settings();
                                         }
-                                        self.status = "MCP JSON proposal instructions added to this chat. The model may propose tools; execution still requires separate manual approval and Run.".to_owned();
+                                        self.conversation_mcp_enabled = true;
+                                        self.persist_current_inference_settings();
+                                        self.status = "MCP proposal protocol enabled for this chat. Exact standing tool policies may execute automatically; ask-mode tools pause for approval.".to_owned();
                                     }
                                 });
                                 ui.label("Policies are saved as drafts, not dispatch grants. Proposals can now be recorded automatically; execution and agent continuation still require a future durable loop.");
