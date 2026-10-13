@@ -321,9 +321,11 @@ mod tests {
         assert_eq!(proposal.arguments, json!({}));
         // Explanatory examples are not invocations, and inline garbage
         // cannot silently grant a tool proposal.
-        assert!(parse_model_tool_request(&format!("Example: {source}"))
-            .unwrap()
-            .is_none());
+        assert!(
+            parse_model_tool_request(&format!("Example: {source}"))
+                .unwrap()
+                .is_none()
+        );
         assert!(parse_model_tool_request(
             "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"hello\",\"arguments\":{}}} extra"
         ).unwrap().is_none());
