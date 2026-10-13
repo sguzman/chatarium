@@ -207,6 +207,50 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
   assert.equal(enforcedWire.store, false);
   assert.equal(enforcedWire.stream, true);
 
+  // Even if the upstream DevKit internally attempts to re-POST after an
+  // accepted request, Chatarium's one-shot interceptor rejects the second
+  // attempt before it reaches the offline network stub.
+  const beforeRepost = seen.length;
+  send("stream_response", "offline-duplicate-post", {
+    model: "offline-alpha-model",
+    input: "simulate-devkit-repost",
+    request_patch: {},
+  });
+  const blockedRepost = await until((event) =>
+    event.type === "error" &&
+    event.request_id === "offline-duplicate-post",
+  beforeRepost);
+  assert.equal(blockedRepost.error.code, "stream_request_count");
+  assert.equal(
+    seen.filter((event) => event.type === "transport_progress" &&
+      event.request_id === "offline-duplicate-post" &&
+      event.stage === "wire_attempted").length,
+    1,
+  );
+  const repostActivity = seen.filter((event) =>
+    event.type === "agent_activity" &&
+    event.request_id === "offline-duplicate-post",
+  );
+  assert.deepEqual(repostActivity.map((event) => event.stage), [
+    "started", "wire_attempted", "acknowledged", "failed",
+  ]);
+  assert.equal(repostActivity.at(-1).delivery_evidence, "http_acknowledged");
+  assert.equal(
+    seen.filter((event) => event.type === "delta" &&
+      event.request_id === "offline-duplicate-post").length,
+    0,
+  );
+  send("stream_response", "offline-after-duplicate", {
+    model: "offline-alpha-model",
+    input: "new-independent-after-blocked-duplicate",
+    request_patch: {},
+  });
+  const afterDuplicate = await until((event) =>
+    event.type === "result" &&
+    event.request_id === "offline-after-duplicate",
+  );
+  assert.ok(afterDuplicate.result.text.includes("new-independent-after-blocked-duplicate"));
+
   // Unlike read-only model discovery, an inference POST with unknown
   // delivery MUST NOT automatically retry after a network disconnect.
   const beforeAmbiguous = seen.length;
