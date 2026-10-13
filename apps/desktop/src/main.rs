@@ -6451,7 +6451,8 @@ impl eframe::App for ChatariumApp {
                         });
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            let input_width = (ui.available_width() - 50.0).max(90.0);
+                            // Reserve the button and item spacing even at the default 290px panel.
+                            let input_width = (ui.available_width() - 70.0).max(90.0);
                             let native_search_response = ui.add(
                                 egui::TextEdit::singleline(
                                     &mut self.local_conversation_search_query,
