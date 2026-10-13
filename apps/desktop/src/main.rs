@@ -4102,6 +4102,53 @@ impl ChatariumApp {
                         EventKind::AssistantCompletionObserved,
                         completed,
                     );
+
+                    // An exact assistant-authored JSON proposal is *intent*,
+                    // never authority. Record it only through the existing
+                    // immutable ToolCall + pending RequireApproval route.
+                    // Do not consume a permit or start a provider here.
+                    match mcp_agent_defaults::parse_model_tool_request(&final_text) {
+                        Ok(Some(proposal)) if !self.tool_command_pending => {
+                            let provider = replay_tool_provider_audit(&self.events)
+                                .ok()
+                                .and_then(|providers| providers.into_iter().find(|p| {
+                                    p.name.as_str() == proposal.provider
+                                }));
+                            if let Some(provider) = provider {
+                                let allowed = if provider.name.as_str()
+                                    == local_tool_adapter::BUILTIN_PROVIDER_NAME
+                                {
+                                    local_tool_adapter::supports_builtin(
+                                        provider.name.as_str(), &proposal.tool)
+                                } else {
+                                    replay_tool_transport_config_audit(&self.events)
+                                        .ok()
+                                        .and_then(|configs| configs.into_iter().find(|config| {
+                                            config.provider_id == provider.provider_id
+                                        }))
+                                        .is_some_and(|config| config.config.allowed_operations()
+                                            .iter().any(|op| op.as_str() == proposal.tool))
+                                };
+                                if allowed {
+                                    self.tool_selected_provider = Some(provider.provider_id);
+                                    self.tool_operation_draft = proposal.tool;
+                                    self.tool_arguments_draft = proposal.arguments.to_string();
+                                    self.propose_tool_call();
+                                } else {
+                                    self.status = "Assistant proposed an MCP operation not in the configured allowlist. No tool ran.".to_owned();
+                                }
+                            } else {
+                                self.status = "Assistant proposed an unregistered MCP provider. No tool ran.".to_owned();
+                            }
+                        }
+                        Ok(Some(_)) => {
+                            self.status = "Assistant proposed a tool, but another tool action is pending. Nothing executed.".to_owned();
+                        }
+                        Err(error) => {
+                            self.status = format!("Malformed model tool proposal was ignored: {error}");
+                        }
+                        Ok(None) => {}
+                    }
                 }
                 siwc_bridge::BridgeEvent::Failed { request_id, error } => {
                     if let Some(probe_name) = request_id
@@ -9678,8 +9725,19 @@ impl eframe::App for ChatariumApp {
                                     if ui.button("Copy bootstrap").clicked() {
                                         ctx.copy_text(self.mcp_agent_defaults.bootstrap.clone());
                                     }
+                                    if ui.button("Use in this chat · proposals only").clicked() {
+                                        let bootstrap = self.mcp_agent_defaults.bootstrap.clone();
+                                        if !self.conversation_developer_context.contains(&bootstrap) {
+                                            if !self.conversation_developer_context.is_empty() {
+                                                self.conversation_developer_context.push_str("\n\n");
+                                            }
+                                            self.conversation_developer_context.push_str(&bootstrap);
+                                            self.persist_current_inference_settings();
+                                        }
+                                        self.status = "MCP JSON proposal instructions added to this chat. The model may propose tools; execution still requires separate manual approval and Run.".to_owned();
+                                    }
                                 });
-                                ui.label("The configuration is inert until a durable automatic dispatch and continuation engine is implemented. Existing per-chat instructions remain unchanged.");
+                                ui.label("Policies are saved as drafts, not dispatch grants. Proposals can now be recorded automatically; execution and agent continuation still require a future durable loop.");
                             });
 
                             if ui.add_enabled(
