@@ -699,7 +699,10 @@ impl NativeConversationSearchIndex {
                     existing
                         .iter()
                         .filter(|entry| {
-                            matches!(entry.role, super::DisplayRole::Mcp | super::DisplayRole::Activity)
+                            matches!(
+                                entry.role,
+                                super::DisplayRole::Mcp | super::DisplayRole::Activity
+                            )
                         })
                         .cloned(),
                 );
@@ -724,7 +727,9 @@ impl NativeConversationSearchIndex {
                 .collect::<BTreeSet<_>>();
             affected.extend(verified.keys().copied());
             for owner in affected {
-                let entries = messages.entry(owner).or_insert_with(|| Arc::new(Vec::new()));
+                let entries = messages
+                    .entry(owner)
+                    .or_insert_with(|| Arc::new(Vec::new()));
                 let visible = Arc::make_mut(entries);
                 visible.retain(|entry| entry.role != super::DisplayRole::Activity);
                 visible.extend(verified.remove(&owner).unwrap_or_default());
@@ -962,14 +967,16 @@ mod tests {
                 "stage":stage,
                 "observed_at_utc":"2026-10-13T19:00:00.000Z",
                 "elapsed_ms":number as f64 * 10.0
-            }).to_string()
+            })
+            .to_string()
         };
         for (number, stage) in [(1, "started"), (2, "wire_attempted")] {
             let old_count = store.events().len();
-            append_siwc_agent_activity_checked(
-                &mut store, first, turn, &make_frame(number, stage)
-            ).unwrap();
-            index = index.extend_native_appends(store.events(), old_count).unwrap();
+            append_siwc_agent_activity_checked(&mut store, first, turn, &make_frame(number, stage))
+                .unwrap();
+            index = index
+                .extend_native_appends(store.events(), old_count)
+                .unwrap();
             let first_messages = index.messages(first);
             assert_eq!(first_messages.len(), 2);
             assert_eq!(first_messages[1].role, super::super::DisplayRole::Activity);
@@ -983,33 +990,53 @@ mod tests {
         // activity card when the incremental index refreshes its owner.
         let old_count = store.events().len();
         author(&mut store, first, "A second question");
-        index = index.extend_native_appends(store.events(), old_count).unwrap();
+        index = index
+            .extend_native_appends(store.events(), old_count)
+            .unwrap();
         assert_eq!(index.messages(first).len(), 3);
         assert_eq!(
-            index.messages(first).iter().filter(|entry|
-                entry.role == super::super::DisplayRole::Activity
-            ).count(),
+            index
+                .messages(first)
+                .iter()
+                .filter(|entry| entry.role == super::super::DisplayRole::Activity)
+                .count(),
             1
         );
         assert!(
-            index.messages(first).iter().any(|entry| entry.text == "A second question")
+            index
+                .messages(first)
+                .iter()
+                .any(|entry| entry.text == "A second question")
         );
-        assert!(Arc::ptr_eq(&original_other, &index.message_projection(other).unwrap()));
+        assert!(Arc::ptr_eq(
+            &original_other,
+            &index.message_projection(other).unwrap()
+        ));
 
         // A corrupt appended lifecycle must not leave cached cards visible.
         let old_count = store.events().len();
-        store.append_scoped(
-            Some(chatarium_store::siwc_agent_activity_audit::activity_scope(first, turn)),
-            EventKind::SiwcAgentActivityObserved,
-            "{not-valid-json".to_owned(),
-        ).unwrap();
-        index = index.extend_native_appends(store.events(), old_count).unwrap();
-        assert!(
-            index.messages(first).iter().all(|entry|
-                entry.role != super::super::DisplayRole::Activity
+        store
+            .append_scoped(
+                Some(chatarium_store::siwc_agent_activity_audit::activity_scope(
+                    first, turn,
+                )),
+                EventKind::SiwcAgentActivityObserved,
+                "{not-valid-json".to_owned(),
             )
+            .unwrap();
+        index = index
+            .extend_native_appends(store.events(), old_count)
+            .unwrap();
+        assert!(
+            index
+                .messages(first)
+                .iter()
+                .all(|entry| entry.role != super::super::DisplayRole::Activity)
         );
-        assert!(Arc::ptr_eq(&original_other, &index.message_projection(other).unwrap()));
+        assert!(Arc::ptr_eq(
+            &original_other,
+            &index.message_projection(other).unwrap()
+        ));
     }
 
     #[test]
