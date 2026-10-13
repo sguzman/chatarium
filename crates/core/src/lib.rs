@@ -197,6 +197,9 @@ impl TurnEvidence {
             return false;
         }
         self.remote = RemoteEvidence::Dispatching;
+        // A later response step (such as MCP continuation) has its own
+        // incomplete assistant output, even if an earlier step finished.
+        self.assistant = AssistantEvidence::None;
         true
     }
 
