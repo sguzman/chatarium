@@ -416,13 +416,34 @@ fn validate_transition(
         return Ok(());
     }
     let last = previous.last().expect("nonempty track");
+    // The local client can schedule another attempt only following an
+    // explicitly observed HTTP 429 rejection, never a timeout/unknown POST
+    // outcome. The bridge starts a fresh source sequence for that attempt.
+    if record.stage == "started" {
+        if record.source_sequence == 1
+            && last.stage == "failed"
+            && last.delivery_evidence.as_deref() == Some("http_rejected")
+            && last.http_status == Some(429)
+        {
+            return Ok(());
+        }
+        return Err("SIWC activity cannot restart after ambiguous or completed delivery".to_owned());
+    }
+    // Validate only the current attempt. An earlier rejected 429 is kept
+    // durably but must not make this attempt look already acknowledged.
+    let start = previous
+        .iter()
+        .rposition(|row| row.stage == "started")
+        .ok_or_else(|| "SIWC activity has no start event".to_owned())?;
+    let current = &previous[start..];
+    let last = current.last().expect("current attempt is nonempty");
     if record.source_sequence != last.source_sequence + 1
         || record.elapsed_ms < last.elapsed_ms
         || matches!(last.stage.as_str(), "completed" | "failed")
     {
         return Err("SIWC activity has nonmonotonic sequence, time, or terminal replay".to_owned());
     }
-    let observed = |stage: &str| previous.iter().any(|row| row.stage == stage);
+    let observed = |stage: &str| current.iter().any(|row| row.stage == stage);
     let wire = observed("wire_attempted");
     let ack = observed("acknowledged");
     let rejected = observed("http_rejected");
@@ -456,7 +477,7 @@ fn validate_transition(
         if record.delivery_evidence.as_deref() != Some(expected)
             || (rejected
                 && record.http_status
-                    != previous
+                    != current
                         .iter()
                         .find(|row| row.stage == "http_rejected")
                         .and_then(|row| row.http_status))
@@ -657,6 +678,50 @@ mod tests {
             &mut store, c, t, &frame("r", 1, "started", json!({}))
         ).is_err());
         assert_eq!(store.events().len(), 1);
+    }
+
+    #[test]
+    fn explicit_429_can_begin_a_second_attempt_but_unknown_delivery_cannot() {
+        let c = LocalConversationId::new();
+        let t = LocalTurnId::new();
+        let mut store = MemoryEventStore::default();
+        for frame in [
+            frame("same-request", 1, "started", json!({})),
+            frame("same-request", 2, "wire_attempted", json!({})),
+            frame("same-request", 3, "http_rejected", json!({"http_status":429})),
+            frame("same-request", 4, "failed", json!({
+                "http_status":429, "cancelled":false, "delivery_evidence":"http_rejected"
+            })),
+            frame("same-request", 1, "started", json!({})),
+            frame("same-request", 2, "wire_attempted", json!({})),
+            frame("same-request", 3, "acknowledged", json!({})),
+            frame("same-request", 4, "first_text_delta", json!({"delta_chars":5})),
+            frame("same-request", 5, "completed", json!({
+                "delivery_evidence":"assistant_delta_seen"
+            })),
+        ] {
+            append_siwc_agent_activity_checked(&mut store, c, t, &frame).unwrap();
+        }
+        assert_eq!(replay_siwc_agent_activity_audit(store.events()).unwrap().len(), 9);
+        assert!(append_siwc_agent_activity_checked(
+            &mut store, c, t, &frame("same-request", 1, "started", json!({}))
+        ).is_err());
+
+        let uncertain_turn = LocalTurnId::new();
+        for frame in [
+            frame("uncertain", 1, "started", json!({})),
+            frame("uncertain", 2, "wire_attempted", json!({})),
+            frame("uncertain", 3, "failed", json!({
+                "cancelled":false, "delivery_evidence":"wire_unconfirmed"
+            })),
+        ] {
+            append_siwc_agent_activity_checked(&mut store, c, uncertain_turn, &frame).unwrap();
+        }
+        let prior_len = store.events().len();
+        assert!(append_siwc_agent_activity_checked(
+            &mut store, c, uncertain_turn, &frame("uncertain", 1, "started", json!({}))
+        ).is_err());
+        assert_eq!(store.events().len(), prior_len);
     }
 
     #[test]
