@@ -6881,8 +6881,12 @@ impl eframe::App for ChatariumApp {
             .resizable(true)
             .frame(
                 egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(18, 19, 23))
-                    .inner_margin(egui::Margin::same(16)),
+                    .fill(egui::Color32::from_rgb(20, 25, 34))
+                    .stroke(egui::Stroke::new(
+                        1.5,
+                        egui::Color32::from_rgb(73, 91, 118),
+                    ))
+                    .inner_margin(egui::Margin::same(14)),
             )
             .show(ctx, |ui| {
                 // Give the scroll area's CONTENT a fixed width from this frame's
@@ -7158,12 +7162,20 @@ impl eframe::App for ChatariumApp {
                                 !historical_mode && entry.id == self.local_conversation_id;
                             egui::Frame::default()
                                 .fill(if selected || keyboard_selected {
-                                    egui::Color32::from_rgb(30, 39, 48)
+                                    egui::Color32::from_rgb(30, 48, 75)
                                 } else {
-                                    egui::Color32::TRANSPARENT
+                                    egui::Color32::from_rgb(27, 32, 42)
                                 })
-                                .corner_radius(egui::CornerRadius::same(4))
-                                .inner_margin(egui::Margin::symmetric(8, 5))
+                                .stroke(egui::Stroke::new(
+                                    if selected || keyboard_selected { 1.7 } else { 1.0 },
+                                    if selected || keyboard_selected {
+                                        egui::Color32::from_rgb(82, 151, 235)
+                                    } else {
+                                        egui::Color32::from_rgb(57, 72, 94)
+                                    },
+                                ))
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     if ui
                                         .selectable_label(
@@ -15243,7 +15255,7 @@ fn draw_reader_bubble(
                     ui,
                     message,
                     egui::Color32::from_rgb(50, 39, 26),
-                    "Agent activity",
+                    "Transport trace",
                     search_query,
                     active_hit,
                     ctx,
@@ -15280,7 +15292,7 @@ fn transcript_bubble(
                 egui::Color32::from_rgb(66, 139, 228)
             } else if label == "Agent" {
                 egui::Color32::from_rgb(65, 166, 108)
-            } else if label == "Agent activity" {
+            } else if label == "Transport trace" {
                 egui::Color32::from_rgb(213, 154, 73)
             } else {
                 egui::Color32::from_rgb(155, 109, 215)
@@ -15297,7 +15309,7 @@ fn transcript_bubble(
                             egui::Color32::from_rgb(147, 191, 238)
                         } else if label == "Agent" {
                             egui::Color32::from_rgb(163, 221, 178)
-                        } else if label == "Agent activity" {
+                        } else if label == "Transport trace" {
                             egui::Color32::from_rgb(239, 199, 133)
                         } else {
                             egui::Color32::from_rgb(203, 166, 247)
@@ -15314,13 +15326,27 @@ fn transcript_bubble(
                     // Keep tool bytes and activity metadata non-executable.
                     // Neither surface may inject author-role markdown.
                     let activity = message.role == DisplayRole::Activity;
+                    if activity {
+                        // Show useful timing, not a wall of individually journaled deltas.
+                        let summary = message.text.lines().nth(1).unwrap_or("No transport events");
+                        ui.label(
+                            egui::RichText::new(summary.trim())
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(231, 202, 159)),
+                        );
+                        ui.label(
+                            egui::RichText::new("Bridge timing only · not model thinking")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(178, 161, 139)),
+                        );
+                    }
                     egui::CollapsingHeader::new(if activity {
-                        "Observed lifecycle · expand to inspect"
+                        "Raw transport events · expand to inspect"
                     } else {
                         "Exact tool activity · expand to inspect"
                     })
                     .id_salt(("non-authored-activity", message.sequence))
-                    .default_open(message.text.len() < 720)
+                    .default_open(!activity && message.text.len() < 720)
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical()
                             .max_height(320.0)
