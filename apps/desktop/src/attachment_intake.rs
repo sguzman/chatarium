@@ -267,13 +267,15 @@ mod tests {
             {"role": "assistant", "content": "ok"},
             {"role": "user", "content": "newer"}
         ]);
-        assert!(attach_to_authored_input(
-            input,
-            "repeat",
-            json!({"type": "input_file", "filename": "file.txt", "file_data": "x"})
-        )
-        .unwrap_err()
-        .contains("last user turn"));
+        assert!(
+            attach_to_authored_input(
+                input,
+                "repeat",
+                json!({"type": "input_file", "filename": "file.txt", "file_data": "x"})
+            )
+            .unwrap_err()
+            .contains("last user turn")
+        );
     }
 
     #[test]
