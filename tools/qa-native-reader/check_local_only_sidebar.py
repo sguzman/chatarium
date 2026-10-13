@@ -15,20 +15,24 @@ def assert_native_only_sidebar(image):
         raise AssertionError(f"unexpected production QA geometry: {image.size}")
     # Pixel samples inside the real, production-styled New local button.
     # Account-catalog UI instead paints an almost-black search box here.
-    points = ((30, 132), (34, 143), (88, 143))
-    brightness = [
+    button_points = ((30, 148), (50, 166), (88, 148))
+    button_brightness = [
         sum(image.getpixel(point)[:3]) / 3
-        for point in points
+        for point in button_points
     ]
-    if min(brightness) < 38:
+    # The native +New button is narrow and has dark sidebar immediately to
+    # its right. The legacy account archive put a wide search-mode combo here.
+    sidebar_brightness = sum(image.getpixel((120, 145))[:3]) / 3
+    if min(button_brightness) < 38 or sidebar_brightness > 35:
         raise AssertionError(
-            f"native New local button hidden behind legacy account catalog: {brightness}"
+            "native New local button missing or replaced by legacy account catalog: "
+            f"button={button_brightness}, sidebar={sidebar_brightness}"
         )
 
 
 def self_test():
     clean = Image.new("RGB", (1180, 760), (18, 19, 23))
-    for x, y in ((30, 132), (34, 143), (88, 143)):
+    for x, y in ((30, 148), (50, 166), (88, 148)):
         clean.putpixel((x, y), (60, 60, 60))
     assert_native_only_sidebar(clean)
     broken = Image.new("RGB", (1180, 760), (18, 19, 23))
