@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyReadFailure,
+  parseReadRetryPolicy,
   retryReadOnly,
 } from "./retry-policy.mjs";
 
@@ -111,4 +112,81 @@ test("cooldown budget, attempt budget and invalid settings fail closed", async (
   }, { policy: invalid }), TypeError);
 
   await assert.rejects(retryReadOnly(null), TypeError);
+});
+
+test("opt-in granular retry controls refuse disabled classes without any resend", async () => {
+  const policy = parseReadRetryPolicy(JSON.stringify({
+    maxAttempts: 5,
+    categories: {
+      rate_limit: { enabled: false },
+      http_transient: { maxAttempts: 2 },
+      network_transient: { maxAttempts: 1 },
+    },
+  }));
+  assert.equal(policy.maxAttempts, 5);
+  assert.equal(policy.categories.rate_limit.enabled, false);
+  assert.equal(policy.categories.http_transient.maxAttempts, 2);
+  for (const failure of [
+    httpError(429),
+    Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+  ]) {
+    let calls = 0;
+    await assert.rejects(retryReadOnly(async () => {
+      calls++;
+      throw failure;
+    }, {
+      policy,
+      sleep: () => { throw new Error("no retry allowed"); },
+    }), (error) => error === failure);
+    assert.equal(calls, 1);
+  }
+  let serverCalls = 0;
+  const delays = [];
+  await assert.rejects(retryReadOnly(async () => {
+    serverCalls++;
+    throw httpError(503);
+  }, {
+    policy,
+    random: () => 0.5,
+    sleep: async (ms) => { delays.push(ms); },
+  }), (error) => error.status === 503);
+  assert.equal(serverCalls, 2);
+  assert.deepEqual(delays, [300]);
+});
+
+test("retry configuration requires bounded known settings and rejects extra authority", () => {
+  assert.equal(parseReadRetryPolicy().maxAttempts, 3);
+  assert.equal(parseReadRetryPolicy("").maxAttempts, 3);
+  for (const invalid of [
+    "not json", "[]", "null", "\\",
+    JSON.stringify({ maxAttempts: 100 }),
+    JSON.stringify({ jitterRatio: 1 }),
+    JSON.stringify({ maxTotalDelayMs: Infinity }),
+    JSON.stringify({ initialDelayMs: -1 }),
+    JSON.stringify({ maxDelayMs: 30_001 }),
+    JSON.stringify({ categories: { rate_limit: { enabled: "yes" } } }),
+    JSON.stringify({ categories: { rate_limit: { maxAttempts: 0 } } }),
+    JSON.stringify({ categories: { unsupported: { enabled: true } } }),
+    JSON.stringify({ enableInferenceResends: true }),
+    " ".repeat(2049),
+  ]) {
+    assert.throws(() => parseReadRetryPolicy(invalid), TypeError);
+  }
+  assert.throws(() => parseReadRetryPolicy({ categories: [] }), TypeError);
+  assert.throws(() => parseReadRetryPolicy({ categories: {
+    rate_limit: { enabled: true, arbitrary: "field" },
+  } }), TypeError);
+});
+
+test("per-failure controls do not enable inference retries or exceed total attempts", async () => {
+  const policy = parseReadRetryPolicy({
+    maxAttempts: 2,
+    categories: { rate_limit: { maxAttempts: 5 } },
+  });
+  let attempts = 0;
+  await assert.rejects(retryReadOnly(async () => {
+    attempts++;
+    throw httpError(429);
+  }, { policy, sleep: async () => {} }), (error) => error.status === 429);
+  assert.equal(attempts, 2);
 });
