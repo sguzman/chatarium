@@ -27,6 +27,13 @@ globalThis.fetch = async (input, init) => {
     throw new Error("Offline alpha fixture rejected an unexpected request shape");
   }
   const body = JSON.parse(init.body);
+  if (body.input === "simulate-ambiguous-network-loss") {
+    // The POST has been attempted but no HTTP response is observed.
+    // Retrying it would risk duplicating a generated turn.
+    const error = new Error("synthetic response lost after request dispatch");
+    error.code = "ECONNRESET";
+    throw error;
+  }
   const summary = {
     model: body.model,
     input: body.input,
