@@ -23539,6 +23539,73 @@ mod tests {
     }
 
     #[test]
+    fn automatic_builtin_mcp_cycle_is_policy_audited_and_result_is_durable() {
+        use chatarium_store::MemoryEventStore;
+        let source = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let proposal = mcp_agent_defaults::ModelToolRequest {
+            provider: local_tool_adapter::BUILTIN_PROVIDER_NAME.to_owned(),
+            tool: local_tool_adapter::TOOLS_LIST_OPERATION.to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let (call_id, route_id, created) = append_agent_mcp_call_checked(
+            &mut store,
+            source,
+            &proposal,
+            mcp_agent_defaults::ToolPolicy::Automatic,
+        ).unwrap();
+        assert!(created.len() >= 8); // topology + endpoint + provider + call + route
+        let routed = replay_routing_audit(store.events()).unwrap();
+        let agent_route = routed.iter().find(|r| r.request.id == route_id).unwrap();
+        assert_eq!(agent_route.initial_policy, RoutePolicy::Allow);
+        assert_eq!(
+            agent_route.gate_state,
+            RouteGateState::Allowed { by: DecisionAuthority::Policy }
+        );
+        let recorded = replay_tool_call_audit(store.events()).unwrap();
+        assert_eq!(recorded.iter().find(|r| r.call_id == call_id).unwrap().operation.as_str(), "tools.list");
+        let emitted = append_builtin_hello_checked(&mut store, route_id).unwrap();
+        assert_eq!(emitted.len(), 2);
+        let outcomes = replay_tool_call_outcome_audit(store.events()).unwrap();
+        let actual = outcomes.iter().find(|r| r.call_id == call_id).unwrap();
+        assert_eq!(actual.kind, ToolCallOutcomeKind::Result);
+        assert!(actual.text.contains("tools.list"));
+        assert_eq!(
+            replay_routing_audit(store.events()).unwrap().into_iter()
+                .find(|r| r.request.id == route_id).unwrap().gate_state,
+            RouteGateState::Dispatched { authorized_by: DecisionAuthority::Policy }
+        );
+        assert!(append_builtin_hello_checked(&mut store, route_id).is_err());
+    }
+
+    #[test]
+    fn ask_mode_mcp_call_stays_pending_and_never_executes_by_itself() {
+        use chatarium_store::MemoryEventStore;
+        let mut store = MemoryEventStore::default();
+        let proposal = mcp_agent_defaults::ModelToolRequest {
+            provider: local_tool_adapter::BUILTIN_PROVIDER_NAME.to_owned(),
+            tool: "hello".to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let (_call, route_id, _) = append_agent_mcp_call_checked(
+            &mut store, LocalConversationId::new(), &proposal,
+            mcp_agent_defaults::ToolPolicy::Ask,
+        ).unwrap();
+        assert_eq!(
+            replay_routing_audit(store.events()).unwrap()[0].gate_state,
+            RouteGateState::PendingApproval
+        );
+        assert!(append_builtin_hello_checked(&mut store, route_id).is_err());
+        assert!(replay_tool_call_outcome_audit(store.events()).unwrap().is_empty());
+        let count = store.events().len();
+        assert!(append_agent_mcp_call_checked(
+            &mut store, LocalConversationId::new(), &proposal,
+            mcp_agent_defaults::ToolPolicy::Disabled,
+        ).is_err());
+        assert_eq!(store.events().len(), count);
+    }
+
+    #[test]
     fn approved_builtin_hello_dispatch_is_durable_and_one_shot() {
         let source = LocalConversationId::new();
         let mut store = chatarium_store::MemoryEventStore::default();
