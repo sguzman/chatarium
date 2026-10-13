@@ -48,6 +48,15 @@ impl PreparedAttachment {
         }
     }
 
+    /// Atomically persisted with authored text; this intentionally includes
+    /// encoded bytes and must never be printed in logs.
+    #[must_use]
+    pub fn durable_record(&self) -> Value {
+        let mut record = self.timing_metadata();
+        record["content"] = self.response_content();
+        record
+    }
+
     /// Metadata-only envelope for future journal provenance. No source
     /// path or attachment bytes are included.
     #[must_use]
@@ -61,6 +70,31 @@ impl PreparedAttachment {
             "encoding_elapsed_ms": self.encoding_elapsed_ms,
         })
     }
+}
+
+/// Attach the staged source to the exact last matching authored user message.
+/// Does not alter other conversation turns, admitted tool results, or instructions.
+pub fn attach_to_authored_input(
+    mut input: Value,
+    authored_text: &str,
+    content: Value,
+) -> Result<Value, String> {
+    let rows = input
+        .as_array_mut()
+        .ok_or_else(|| "composed Responses input is not an array".to_owned())?;
+    let row = rows
+        .iter_mut()
+        .rev()
+        .find(|row| {
+            row.get("role").and_then(Value::as_str) == Some("user")
+                && row.get("content").and_then(Value::as_str) == Some(authored_text)
+        })
+        .ok_or_else(|| "exact authored user message not found in composed input".to_owned())?;
+    row["content"] = json!([
+        {"type": "input_text", "text": authored_text},
+        content
+    ]);
+    Ok(input)
 }
 
 fn file_type(path: &Path) -> Result<(String, AttachmentKind, &'static str), String> {
@@ -206,6 +240,34 @@ mod tests {
         assert!(meta.get("source_path").is_none());
         assert!(meta.get("prepared_at_unix_ms").is_some());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn attaches_only_to_latest_exact_authored_user_message() {
+        let input = json!([
+            {"role":"user", "content":"same"},
+            {"role":"assistant", "content":"the source"},
+            {"role":"user", "content":"same"},
+            {"role":"system", "content":"irrelevant"}
+        ]);
+        let file = json!({"type":"input_file","filename":"a.txt","file_data":"data:text/plain;base64,YQ=="});
+        let output = attach_to_authored_input(input, "same", file.clone()).unwrap();
+        assert_eq!(output[0]["content"], "same");
+        assert_eq!(output[1]["content"], "the source");
+        assert_eq!(output[2]["content"][0]["type"], "input_text");
+        assert_eq!(output[2]["content"][0]["text"], "same");
+        assert_eq!(output[2]["content"][1], file);
+        assert_eq!(output[3]["content"], "irrelevant");
+    }
+
+    #[test]
+    fn missing_authored_turn_fails_closed_without_fallback() {
+        assert!(attach_to_authored_input(
+            json!([{"role": "user", "content": "other"}]),
+            "wanted",
+            json!({"type": "input_image", "image_url": "x"})
+        )
+        .is_err());
     }
 
     #[test]
