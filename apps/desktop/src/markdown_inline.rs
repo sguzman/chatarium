@@ -137,11 +137,16 @@ mod tests {
     fn bold_timestamp_regression_from_live_agent_reply() {
         let input = "The reported time was **October 13, 2026, at 22:05:57.806 UTC**.";
         let spans = parse(input);
-        assert!(spans.iter().any(|span| {
-            span.text == "October 13, 2026, at 22:05:57.806 UTC" && span.bold
-        }));
+        assert!(
+            spans
+                .iter()
+                .any(|span| { span.text == "October 13, 2026, at 22:05:57.806 UTC" && span.bold })
+        );
         assert_eq!(
-            spans.iter().map(|span| span.text.as_str()).collect::<String>(),
+            spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
             "The reported time was October 13, 2026, at 22:05:57.806 UTC."
         );
     }

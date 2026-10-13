@@ -155,7 +155,9 @@ pub(super) fn loaded_names(ctx: &egui::Context) -> Vec<String> {
 
 /// Indicates whether the native UI has a genuine bold font family.
 pub(super) fn markdown_bold_available(ctx: &egui::Context) -> bool {
-    loaded_names(ctx).iter().any(|name| name == MARKDOWN_BOLD_FAMILY)
+    loaded_names(ctx)
+        .iter()
+        .any(|name| name == MARKDOWN_BOLD_FAMILY)
 }
 
 #[cfg(test)]
