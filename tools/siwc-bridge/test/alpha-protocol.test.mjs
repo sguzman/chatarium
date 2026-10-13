@@ -207,6 +207,32 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
   assert.equal(enforcedWire.store, false);
   assert.equal(enforcedWire.stream, true);
 
+  // A concrete HTTP rejection carries different evidence than a lost
+  // transport response: do not mark HTTP 429 as delivery-unknown.
+  const beforeHttpRejection = seen.length;
+  send("stream_response", "offline-http-429", {
+    model: "offline-alpha-model",
+    input: "simulate-http-429",
+    request_patch: {},
+  });
+  const rejectedHttp = await until((event) =>
+    event.type === "error" && event.request_id === "offline-http-429",
+  beforeHttpRejection);
+  assert.equal(rejectedHttp.error.status, 429);
+  const rejectionActivity = seen.filter((event) =>
+    event.type === "agent_activity" && event.request_id === "offline-http-429",
+  );
+  assert.deepEqual(rejectionActivity.map((event) => event.stage), [
+    "started", "wire_attempted", "http_rejected", "failed",
+  ]);
+  assert.equal(rejectionActivity.at(-1).delivery_evidence, "http_rejected");
+  assert.equal(rejectionActivity.at(-1).http_status, 429);
+  assert.equal(
+    seen.filter((event) => event.type === "read_retry_scheduled" &&
+      event.request_id === "offline-http-429").length,
+    0,
+  );
+
   // Even if the upstream DevKit internally attempts to re-POST after an
   // accepted request, Chatarium's one-shot interceptor rejects the second
   // attempt before it reaches the offline network stub.
