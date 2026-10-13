@@ -87,3 +87,25 @@ test("duplicate and invented transport events are refused", () => {
     TypeError,
   );
 });
+
+test("observed HTTP 429 is a confirmed rejection, not a lost response", () => {
+  const { activity, events } = fixture();
+  activity.started();
+  activity.transport("wire_attempted");
+  activity.rejected(429);
+  activity.failed(Object.assign(new Error("rate limited"), { status: 429 }));
+  assert.deepEqual(events.map((event) => event.stage), [
+    "started", "wire_attempted", "http_rejected", "failed",
+  ]);
+  assert.equal(events[2].http_status, 429);
+  assert.equal(events[3].http_status, 429);
+  assert.equal(events[3].delivery_evidence, "http_rejected");
+  assert.throws(() => activity.completed(), /terminal/);
+  const other = fixture();
+  other.activity.started();
+  assert.throws(() => other.activity.rejected(429), /invalid HTTP rejection/);
+  other.activity.transport("wire_attempted");
+  assert.throws(() => other.activity.rejected(200), /invalid HTTP rejection/);
+  other.activity.rejected(503);
+  assert.throws(() => other.activity.delta("invalid"), /rejected HTTP response/);
+});
