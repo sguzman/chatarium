@@ -224,10 +224,24 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
     if text.len() > 65536 || !text.trim_start().starts_with('{') {
         return Ok(None);
     }
-    let parsed: Value = match serde_json::from_str(text.trim()) {
-        Ok(parsed) => parsed,
-        Err(_) => return Ok(None),
+    // The model may place explanatory prose on the next line after a
+    // standalone tool envelope. Accept exactly one leading JSON value,
+    // preserving strict envelope validation and refusing embedded examples.
+    let candidate = text.trim_start();
+    let mut values = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
+    let parsed = match values.next() {
+        Some(Ok(parsed)) => parsed,
+        _ => return Ok(None),
     };
+    let suffix = candidate[values.byte_offset()..].trim_start_matches([' ', '\t']);
+    if !suffix.trim().is_empty() {
+        if !suffix.starts_with('\n') && !suffix.starts_with("\r\n") {
+            return Ok(None);
+        }
+        if suffix.trim_start().starts_with('{') {
+            return Err("MCP response may request only one tool".to_owned());
+        }
+    }
     let Some(top) = parsed.as_object() else {
         return Ok(None);
     };
@@ -292,6 +306,33 @@ mod tests {
             .is_err()
         );
         assert!(parse_model_tool_request(r#"{"chatarium_mcp_call":{"provider":"x","tool":"y","arguments":{}},"approval":true}"#).is_err());
+    }
+
+    #[test]
+    fn leading_mcp_envelope_with_following_explanation_is_a_tool_request() {
+        let source = concat!(
+            "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",",
+            "\"tool\":\"tools.list\",\"arguments\":{}}}\n",
+            "I have requested tools.list and am waiting for its actual result."
+        );
+        let proposal = parse_model_tool_request(source).unwrap().unwrap();
+        assert_eq!(proposal.provider, "chatarium.builtin");
+        assert_eq!(proposal.tool, "tools.list");
+        assert_eq!(proposal.arguments, json!({}));
+        // Explanatory examples are not invocations, and inline garbage
+        // cannot silently grant a tool proposal.
+        assert!(parse_model_tool_request(&format!("Example: {source}"))
+            .unwrap()
+            .is_none());
+        assert!(parse_model_tool_request(
+            "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"hello\",\"arguments\":{}}} extra"
+        ).unwrap().is_none());
+    }
+
+    #[test]
+    fn multiple_leading_envelopes_are_rejected_not_queued() {
+        let one = "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"tools.list\",\"arguments\":{}}}";
+        assert!(parse_model_tool_request(&format!("{one}\n{one}")).is_err());
     }
 
     #[test]
