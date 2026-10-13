@@ -3039,6 +3039,10 @@ impl ChatariumApp {
                                     continue;
                                 }
                             };
+                            self.delivery.begin(
+                                message.conversation_id.to_string(),
+                                remote_request_id.clone(),
+                            );
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 turn_id: message.turn_id,
                                 request_id: remote_request_id.clone(),
@@ -3089,16 +3093,29 @@ impl ChatariumApp {
                             instructions: pending.instructions,
                             request_patch: pending.request_patch,
                         };
+                        let retry_command = command.clone();
                         match self.remote.send(command) {
                             Ok(()) => {
+                                self.delivery.set(
+                                    &pending.request_id,
+                                    delivery_telemetry::Phase::BridgeQueued,
+                                );
                                 self.active_remote_turn = Some(ActiveRemoteTurn {
                                     turn_id,
                                     request_id: pending.request_id,
                                     cumulative_text: String::new(),
                                     observed_output: false,
+                                    command: retry_command,
+                                    retries: 0,
+                                    retry_at: None,
                                 });
                             }
                             Err(error) => {
+                                self.delivery.error(
+                                    &pending.request_id,
+                                    delivery_telemetry::Phase::Unconfirmed,
+                                    error.clone(),
+                                );
                                 let payload = remote_turn_payload(
                                     turn_id,
                                     &pending.request_id,
@@ -3892,6 +3909,21 @@ impl ChatariumApp {
                         format!("connected · {} models", self.remote_models.len())
                     };
                 }
+                siwc_bridge::BridgeEvent::TransportProgress { request_id, stage } => {
+                    if self.active_remote_turn.as_ref().is_some_and(|active| active.request_id == request_id) {
+                        match stage.as_str() {
+                            "wire_attempted" => self.delivery.set(
+                                &request_id,
+                                delivery_telemetry::Phase::WireAttempted,
+                            ),
+                            "acknowledged" => self.delivery.set(
+                                &request_id,
+                                delivery_telemetry::Phase::Acknowledged,
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
                 siwc_bridge::BridgeEvent::Delta { request_id, delta } => {
                     if capability_probes::probe_name_from_request_id(&request_id).is_some() {
                         continue;
@@ -3911,6 +3943,7 @@ impl ChatariumApp {
                     let cumulative_text = active.cumulative_text.clone();
 
                     if first_output {
+                        self.delivery.set(&request_id, delivery_telemetry::Phase::Streaming);
                         let acceptance = remote_turn_payload(
                             turn_id,
                             &request_id,
@@ -3971,6 +4004,7 @@ impl ChatariumApp {
                         .active_remote_turn
                         .take()
                         .expect("matched active remote turn");
+                    self.delivery.set(&request_id, delivery_telemetry::Phase::Complete);
                     let final_text = if text.is_empty() {
                         active.cumulative_text
                     } else {
@@ -4045,11 +4079,40 @@ impl ChatariumApp {
                             .as_ref()
                             .is_some_and(|active| active.request_id == request_id)
                         {
-                            let active = self
+                            let mut active = self
                                 .active_remote_turn
                                 .take()
                                 .expect("matched active remote turn");
                             let detail = format!("{}: {}", error.code, error.message);
+                            // A definite HTTP 429 rejection before any output is safe to
+                            // retry. A timeout, EOF or failed connection has an unknown
+                            // outcome and must NEVER be blindly resubmitted.
+                            if error.status == Some(429)
+                                && !active.observed_output
+                                && active.retries < delivery_telemetry::MAX_RATE_LIMIT_RETRIES
+                            {
+                                let backoff = Duration::from_secs(1_u64 << (active.retries + 1));
+                                active.retries += 1;
+                                active.retry_at = Some(Instant::now() + backoff);
+                                self.delivery.retry(&active.request_id, backoff, detail);
+                                self.remote_status = format!(
+                                    "HTTP 429 · retry {} of {} in {}s",
+                                    active.retries,
+                                    delivery_telemetry::MAX_RATE_LIMIT_RETRIES,
+                                    backoff.as_secs(),
+                                );
+                                self.active_remote_turn = Some(active);
+                                continue;
+                            }
+                            self.delivery.error(
+                                &active.request_id,
+                                if remote_error_is_observed_failure(&error) {
+                                    delivery_telemetry::Phase::Failed
+                                } else {
+                                    delivery_telemetry::Phase::Unconfirmed
+                                },
+                                detail.clone(),
+                            );
                             if remote_error_is_observed_failure(&error) {
                                 let failure = remote_turn_payload(
                                     active.turn_id,
@@ -4113,6 +4176,11 @@ impl ChatariumApp {
                     self.sign_in_requested = false;
                     self.sign_in_pending = false;
                     if let Some(active) = self.active_remote_turn.take() {
+                        self.delivery.error(
+                            &active.request_id,
+                            delivery_telemetry::Phase::Unconfirmed,
+                            detail.clone(),
+                        );
                         let payload = remote_turn_payload(
                             active.turn_id,
                             &active.request_id,
@@ -4134,6 +4202,11 @@ impl ChatariumApp {
                     if let Some((turn_id, payload)) =
                         interrupted_pending_remote_turn(&mut self.pending_remote_turn)
                     {
+                        self.delivery.error(
+                            &turn_id.to_string(),
+                            delivery_telemetry::Phase::Unconfirmed,
+                            detail.clone(),
+                        );
                         let _ = self.queue_turn_event(
                             turn_id,
                             EventKind::TransportInterrupted,
@@ -4143,6 +4216,31 @@ impl ChatariumApp {
                     self.remote_status = detail;
                 }
                 siwc_bridge::BridgeEvent::CommandSucceeded { .. } => {}
+            }
+        }
+    }
+
+    fn process_due_delivery_retry(&mut self) {
+        let Some((request_id, command)) = self.active_remote_turn.as_ref().and_then(|active| {
+            active.retry_at.filter(|at| Instant::now() >= *at)
+                .map(|_| (active.request_id.clone(), active.command.clone()))
+        }) else {
+            return;
+        };
+        if let Some(active) = self.active_remote_turn.as_mut() {
+            active.retry_at = None;
+            active.cumulative_text.clear();
+            active.observed_output = false;
+        }
+        match self.remote.send(command) {
+            Ok(()) => {
+                self.delivery.set(&request_id, delivery_telemetry::Phase::BridgeQueued);
+                self.remote_status = "retry submitted to the local bridge · awaiting network".to_owned();
+            }
+            Err(error) => {
+                self.delivery.error(&request_id, delivery_telemetry::Phase::Unconfirmed, error.clone());
+                self.remote_status = error;
+                self.active_remote_turn = None;
             }
         }
     }
