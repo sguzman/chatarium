@@ -13,13 +13,28 @@ use std::path::Path;
 const SCHEMA: &str = "chatarium-local-inference-settings";
 const VERSION: u64 = 1;
 const MAX_MODEL_BYTES: usize = 512;
+pub const DEFAULT_SLOW_WARNING_SECONDS: u32 = 12;
+pub const MIN_SLOW_WARNING_SECONDS: u32 = 3;
+pub const MAX_SLOW_WARNING_SECONDS: u32 = 120;
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationInferenceSettings {
     pub model: Option<String>,
     pub instructions: String,
     pub developer_context: String,
+    pub slow_warning_seconds: u32,
+}
+
+impl Default for ConversationInferenceSettings {
+    fn default() -> Self {
+        Self {
+            model: None,
+            instructions: String::new(),
+            developer_context: String::new(),
+            slow_warning_seconds: DEFAULT_SLOW_WARNING_SECONDS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -68,10 +83,19 @@ impl InferenceSettingsStore {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
+            // Preserve compatibility with existing version 1 settings.
+            let slow_warning_seconds = match object.get("slow_warning_seconds") {
+                None => DEFAULT_SLOW_WARNING_SECONDS,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|seconds| u32::try_from(seconds).ok())
+                    .ok_or_else(|| "invalid slow response warning setting".to_owned())?,
+            };
             validate(&ConversationInferenceSettings {
                 model: model.clone(),
                 instructions: instructions.clone(),
                 developer_context: developer_context.clone(),
+                slow_warning_seconds,
             })?;
             entries.insert(
                 conversation_id.clone(),
@@ -79,6 +103,7 @@ impl InferenceSettingsStore {
                     model,
                     instructions,
                     developer_context,
+                    slow_warning_seconds,
                 },
             );
         }
@@ -121,6 +146,7 @@ impl InferenceSettingsStore {
                         "model": settings.model,
                         "instructions": settings.instructions,
                         "developer_context": settings.developer_context,
+                        "slow_warning_seconds": settings.slow_warning_seconds,
                     }),
                 )
             })
@@ -153,6 +179,11 @@ fn validate(settings: &ConversationInferenceSettings) -> Result<(), String> {
     if settings.developer_context.len() > MAX_TEXT_BYTES {
         return Err("developer context is too large".to_owned());
     }
+    if !(MIN_SLOW_WARNING_SECONDS..=MAX_SLOW_WARNING_SECONDS)
+        .contains(&settings.slow_warning_seconds)
+    {
+        return Err("slow response warning must be between 3 and 120 seconds".to_owned());
+    }
     Ok(())
 }
 
@@ -184,6 +215,7 @@ mod tests {
                     model: Some("gpt-example".to_owned()),
                     instructions: "first instructions".to_owned(),
                     developer_context: "first developer context".to_owned(),
+                    slow_warning_seconds: 20,
                 },
             )
             .unwrap();
@@ -207,6 +239,7 @@ mod tests {
             model: Some("gpt-example".to_owned()),
             instructions: "Keep answers compact.".to_owned(),
             developer_context: "Lifecycle: working".to_owned(),
+            slow_warning_seconds: 27,
         };
         store.set(conversation, expected.clone()).unwrap();
         store.save_atomic(&path).unwrap();
@@ -214,6 +247,38 @@ mod tests {
         let loaded = InferenceSettingsStore::load(&path).unwrap();
         assert_eq!(loaded.for_conversation(conversation), expected);
 
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_settings_load_default_warning_and_invalid_values_fail() {
+        let path = temp_path();
+        let conversation = LocalConversationId::new();
+        let mut legacy = json!({
+            "schema": SCHEMA,
+            "version": VERSION,
+            "conversations": {}
+        });
+        legacy["conversations"]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                conversation.to_string(),
+                json!({"model": null, "instructions": "", "developer_context": ""}),
+            );
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let loaded = InferenceSettingsStore::load(&path).unwrap();
+        assert_eq!(
+            loaded.for_conversation(conversation).slow_warning_seconds,
+            DEFAULT_SLOW_WARNING_SECONDS
+        );
+
+        let mut store = InferenceSettingsStore::default();
+        let mut settings = ConversationInferenceSettings::default();
+        settings.slow_warning_seconds = 0;
+        assert!(store.set(conversation, settings.clone()).is_err());
+        settings.slow_warning_seconds = MAX_SLOW_WARNING_SECONDS + 1;
+        assert!(store.set(conversation, settings).is_err());
         let _ = fs::remove_file(path);
     }
 }

@@ -1,7 +1,6 @@
 //! Visible, per-session ChatGPT delivery evidence. This is telemetry, not remote receipt proof.
 use std::time::{Duration, Instant};
 
-pub const SLOW_RESPONSE_AFTER: Duration = Duration::from_secs(12);
 pub const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +44,11 @@ impl Attempt {
             .map(|t| t.duration_since(self.started_at).as_secs_f64())
     }
 
+    pub fn time_to_acknowledgment(&self) -> Option<f64> {
+        self.acknowledged_at
+            .map(|t| t.duration_since(self.started_at).as_secs_f64())
+    }
+
     pub fn label(&self) -> &'static str {
         match self.phase {
             Phase::Durable => "Saved locally · not yet dispatched",
@@ -59,13 +63,13 @@ impl Attempt {
         }
     }
 
-    pub fn slow(&self) -> bool {
+    pub fn slow(&self, warning_after: Duration) -> bool {
         self.finished_at.is_none()
             && self.phase != Phase::RetryScheduled
             && self.phase != Phase::Failed
             && self.phase != Phase::Unconfirmed
             && self.first_output_at.is_none()
-            && self.started_at.elapsed() >= SLOW_RESPONSE_AFTER
+            && self.started_at.elapsed() >= warning_after
     }
 }
 
@@ -155,6 +159,17 @@ impl Timeline {
             .filter(move |a| a.conversation_id == conversation_id)
     }
 
+    pub fn mean_first_output_seconds(&self, conversation_id: &str) -> Option<f64> {
+        let (sum, count) = self
+            .for_conversation(conversation_id)
+            .filter(|attempt| attempt.phase == Phase::Complete)
+            .filter_map(Attempt::time_to_first_output)
+            .fold((0.0, 0), |(sum, count), seconds| {
+                (sum + seconds, count + 1)
+            });
+        (count > 0).then(|| sum / f64::from(count))
+    }
+
     pub fn mean_response_seconds(&self, conversation_id: &str) -> Option<f64> {
         let completed = self
             .for_conversation(conversation_id)
@@ -188,6 +203,33 @@ mod tests {
         assert_eq!(a.phase, Phase::RetryScheduled);
         assert!(a.retry_at.is_some());
     }
+    #[test]
+    fn slow_warning_respects_threshold_and_terminal_state() {
+        let now = Instant::now();
+        let mut attempt = Attempt {
+            conversation_id: "chat".to_owned(),
+            request_id: "turn".to_owned(),
+            phase: Phase::Acknowledged,
+            started_at: now - Duration::from_secs(15),
+            wire_at: None,
+            acknowledged_at: Some(now - Duration::from_secs(12)),
+            first_output_at: None,
+            finished_at: None,
+            retry_at: None,
+            retries: 0,
+            error: None,
+        };
+        assert!(attempt.slow(Duration::from_secs(12)));
+        assert!(!attempt.slow(Duration::from_secs(30)));
+        assert!(attempt.time_to_acknowledgment().is_some());
+        attempt.first_output_at = Some(now);
+        assert!(!attempt.slow(Duration::from_secs(3)));
+        attempt.first_output_at = None;
+        attempt.phase = Phase::Unconfirmed;
+        attempt.finished_at = Some(now);
+        assert!(!attempt.slow(Duration::from_secs(3)));
+    }
+
     #[test]
     fn session_average_ignores_failures() {
         let mut timeline = Timeline::default();

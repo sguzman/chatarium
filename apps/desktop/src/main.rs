@@ -1061,6 +1061,7 @@ struct ChatariumApp {
     local_inference_contract: Option<local_inference_contract::LoadedContract>,
     model_list_pending: bool,
     selected_model: Option<String>,
+    slow_warning_seconds: u32,
     remote_status: String,
     remote_runtime_ready: bool,
     remote_runtime_failed: bool,
@@ -1351,6 +1352,7 @@ impl ChatariumApp {
                             &journal_path,
                         ),
                         model_list_pending: false,
+                        slow_warning_seconds: active_inference_settings.slow_warning_seconds,
                         selected_model: active_inference_settings.model,
                         remote_status: "starting sign-in runtime…".to_owned(),
                         remote_runtime_ready: false,
@@ -1547,6 +1549,7 @@ impl ChatariumApp {
             capability_probe: load_capability_probe_state(&journal_path),
             local_inference_contract: load_local_inference_contract_state(&journal_path),
             model_list_pending: false,
+            slow_warning_seconds: active_inference_settings.slow_warning_seconds,
             selected_model: active_inference_settings.model,
             remote_status: "starting sign-in runtime…".to_owned(),
             remote_runtime_ready: false,
@@ -1585,6 +1588,7 @@ impl ChatariumApp {
         self.evidence = TurnEvidence::default();
 
         let settings = self.inference_settings.for_conversation(conversation_id);
+        self.slow_warning_seconds = settings.slow_warning_seconds;
         self.selected_model = settings.model;
         self.conversation_instructions = settings.instructions;
         self.conversation_developer_context = settings.developer_context;
@@ -4438,6 +4442,7 @@ impl ChatariumApp {
             model: self.selected_model.clone(),
             instructions: self.conversation_instructions.clone(),
             developer_context: self.conversation_developer_context.clone(),
+            slow_warning_seconds: self.slow_warning_seconds,
         };
         if let Err(error) = self
             .inference_settings
@@ -7062,6 +7067,25 @@ impl eframe::App for ChatariumApp {
                             },
                             self.remote_connected(),
                         );
+                        ui.horizontal(|ui| {
+                            ui.label("Slow warning after");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.slow_warning_seconds)
+                                        .range(
+                                            local_inference_settings::MIN_SLOW_WARNING_SECONDS
+                                                ..=local_inference_settings::MAX_SLOW_WARNING_SECONDS,
+                                        )
+                                        .suffix(" s"),
+                                )
+                                .on_hover_text(
+                                    "Warn if no assistant output arrives in this many seconds. Stored per local conversation.",
+                                )
+                                .changed()
+                            {
+                                self.persist_current_inference_settings();
+                            }
+                        });
 
                         ui.add_space(8.0);
                         if self.account_bridge_provider.is_some() {
@@ -7842,7 +7866,7 @@ impl eframe::App for ChatariumApp {
                 if !historical_mode {
                     let conversation_id = self.local_conversation_id.to_string();
                     let last = self.delivery.for_conversation(&conversation_id).last();
-                    let color = last.map(delivery_status_color).unwrap_or_else(|| {
+                    let color = last.map(|attempt| delivery_status_color(attempt, self.slow_warning_seconds)).unwrap_or_else(|| {
                         if self.remote_connected() {
                             egui::Color32::from_rgb(126, 210, 156)
                         } else {
@@ -7850,7 +7874,7 @@ impl eframe::App for ChatariumApp {
                         }
                     });
                     let label = last.map(|a| {
-                        if a.slow() {
+                        if a.slow(Duration::from_secs(u64::from(self.slow_warning_seconds))) {
                             format!("● SLOW · {} · {:.1}s", a.label(), a.seconds())
                         } else {
                             format!("● {} · {:.1}s", a.label(), a.seconds())
@@ -14154,7 +14178,12 @@ impl eframe::App for ChatariumApp {
                         }
                         if !historical_mode {
                             let conversation_id = self.local_conversation_id.to_string();
-                            draw_delivery_timeline(ui, &self.delivery, &conversation_id);
+                            draw_delivery_timeline(
+                                ui,
+                                &self.delivery,
+                                &conversation_id,
+                                self.slow_warning_seconds,
+                            );
                         }
                     });
                 reader_output_offset = Some(reader_output.state.offset.y);
@@ -14210,9 +14239,14 @@ impl eframe::App for ChatariumApp {
     }
 }
 
-fn delivery_status_color(attempt: &delivery_telemetry::Attempt) -> egui::Color32 {
+fn delivery_status_color(
+    attempt: &delivery_telemetry::Attempt,
+    slow_warning_seconds: u32,
+) -> egui::Color32 {
     use delivery_telemetry::Phase;
-    if attempt.slow() || attempt.phase == Phase::RetryScheduled {
+    if attempt.slow(Duration::from_secs(u64::from(slow_warning_seconds)))
+        || attempt.phase == Phase::RetryScheduled
+    {
         egui::Color32::from_rgb(242, 167, 79)
     } else {
         match attempt.phase {
@@ -14227,6 +14261,7 @@ fn draw_delivery_timeline(
     ui: &mut egui::Ui,
     timeline: &delivery_telemetry::Timeline,
     conversation_id: &str,
+    slow_warning_seconds: u32,
 ) {
     let attempts = timeline
         .for_conversation(conversation_id)
@@ -14249,13 +14284,20 @@ fn draw_delivery_timeline(
                     .color(egui::Color32::from_rgb(151, 154, 163)),
             );
         }
+        if let Some(mean) = timeline.mean_first_output_seconds(conversation_id) {
+            ui.label(
+                egui::RichText::new(format!("average first output {:.1}s", mean))
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(151, 154, 163)),
+            );
+        }
     });
     ui.label(egui::RichText::new(
         "Receipt only after HTTP success. Timings in this display reset on app restart; journaled turns remain durable.",
     ).size(9.0).color(egui::Color32::from_rgb(125, 129, 139)));
     for attempt in attempts.iter().rev().take(8).rev() {
-        let color = delivery_status_color(attempt);
-        let label = if attempt.slow() {
+        let color = delivery_status_color(attempt, slow_warning_seconds);
+        let label = if attempt.slow(Duration::from_secs(u64::from(slow_warning_seconds))) {
             "SLOW · waiting for first response"
         } else {
             attempt.label()
@@ -14277,6 +14319,13 @@ fn draw_delivery_timeline(
                             .size(10.0)
                             .color(egui::Color32::from_rgb(195, 198, 205)),
                     );
+                    if let Some(acknowledged) = attempt.time_to_acknowledgment() {
+                        ui.label(
+                            egui::RichText::new(format!("server ack {:.1}s", acknowledged))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(151, 154, 163)),
+                        );
+                    }
                     if let Some(first) = attempt.time_to_first_output() {
                         ui.label(
                             egui::RichText::new(format!("first response {:.1}s", first))
