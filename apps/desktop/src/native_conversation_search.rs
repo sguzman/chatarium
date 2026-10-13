@@ -942,6 +942,77 @@ mod tests {
     }
 
     #[test]
+    fn incremental_siwc_activity_refresh_preserves_other_chats_and_later_authored_messages() {
+        use chatarium_store::siwc_agent_activity_audit::append_siwc_agent_activity_checked;
+        use chatarium_store::{EventStore, MemoryEventStore};
+        let first = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let mut store = MemoryEventStore::default();
+        let turn = author(&mut store, first, "First user");
+        author(&mut store, other, "Different conversation");
+        let mut index = NativeConversationSearchIndex::build(store.events());
+        let original_other = index.message_projection(other).unwrap();
+
+        let make_frame = |number: u64, stage: &str| {
+            serde_json::json!({
+                "type":"agent_activity",
+                "source":"siwc_bridge_observation",
+                "request_id":"incremental-test",
+                "sequence":number,
+                "stage":stage,
+                "observed_at_utc":"2026-10-13T19:00:00.000Z",
+                "elapsed_ms":number as f64 * 10.0
+            }).to_string()
+        };
+        for (number, stage) in [(1, "started"), (2, "wire_attempted")] {
+            let old_count = store.events().len();
+            append_siwc_agent_activity_checked(
+                &mut store, first, turn, &make_frame(number, stage)
+            ).unwrap();
+            index = index.extend_native_appends(store.events(), old_count).unwrap();
+            let first_messages = index.messages(first);
+            assert_eq!(first_messages.len(), 2);
+            assert_eq!(first_messages[1].role, super::super::DisplayRole::Activity);
+            assert!(first_messages[1].text.contains(stage));
+            assert!(
+                Arc::ptr_eq(&original_other, &index.message_projection(other).unwrap()),
+                "unrelated conversation vector must remain shared"
+            );
+        }
+        // Later authored messages are not allowed to erase the existing
+        // activity card when the incremental index refreshes its owner.
+        let old_count = store.events().len();
+        author(&mut store, first, "A second question");
+        index = index.extend_native_appends(store.events(), old_count).unwrap();
+        assert_eq!(index.messages(first).len(), 3);
+        assert_eq!(
+            index.messages(first).iter().filter(|entry|
+                entry.role == super::super::DisplayRole::Activity
+            ).count(),
+            1
+        );
+        assert!(
+            index.messages(first).iter().any(|entry| entry.text == "A second question")
+        );
+        assert!(Arc::ptr_eq(&original_other, &index.message_projection(other).unwrap()));
+
+        // A corrupt appended lifecycle must not leave cached cards visible.
+        let old_count = store.events().len();
+        store.append_scoped(
+            Some(chatarium_store::siwc_agent_activity_audit::activity_scope(first, turn)),
+            EventKind::SiwcAgentActivityObserved,
+            "{not-valid-json".to_owned(),
+        ).unwrap();
+        index = index.extend_native_appends(store.events(), old_count).unwrap();
+        assert!(
+            index.messages(first).iter().all(|entry|
+                entry.role != super::super::DisplayRole::Activity
+            )
+        );
+        assert!(Arc::ptr_eq(&original_other, &index.message_projection(other).unwrap()));
+    }
+
+    #[test]
     fn native_index_matches_reference_projection_and_isolates_other_conversations() {
         use chatarium_store::{EventStore, MemoryEventStore};
         let first = LocalConversationId::new();
