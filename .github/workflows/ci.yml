@@ -107,6 +107,10 @@ jobs:
         run: cargo check -p chatarium-desktop
       - name: Check full Linux workspace (matches local cbr build)
         run: cargo check --workspace
+      - name: Smoke the actual MCP demo stdio server
+        run: |
+          cargo build -p chatarium-desktop --bin chatarium-mcp-demo
+          python3 tools/qa-mcp-demo/smoke.py target/debug/chatarium-mcp-demo
       - name: Test Linux desktop
         run: cargo test -p chatarium-desktop
       - name: Profile native archive search (synthetic, non-gating)
