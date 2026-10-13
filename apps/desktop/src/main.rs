@@ -6985,1772 +6985,22 @@ impl eframe::App for ChatariumApp {
                             .color(egui::Color32::from_rgb(112, 176, 137)),
                         );
 
-                        if ACCOUNT_MIRRORING_ENABLED {
-                        ui.add_space(18.0);
-                        ui.label(
-                            egui::RichText::new("LOCAL ARCHIVE SEARCH")
-                                .size(10.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(112, 176, 137)),
-                        );
-                        ui.add_space(5.0);
-                        let search_response = ui.add(
-                            egui::TextEdit::singleline(&mut self.archive_search_query)
-                                .id(archive_search_id)
-                                .hint_text("Search local archive…")
-                                .desired_width(sidebar_control_width),
-                        );
-                        archive_search_has_focus = search_response.has_focus();
-                        if search_response.changed() {
-                            self.archive_search_selection = None;
-                        }
-                        ui.horizontal(|ui| {
-                            egui::ComboBox::from_id_salt("archive-search-mode")
-                                .selected_text(self.archive_search_mode.label())
-                                .show_ui(ui, |ui| {
-                                    for mode in [
-                                        local_archive_search::ArchiveSearchMode::AllLocalData,
-                                        local_archive_search::ArchiveSearchMode::Titles,
-                                        local_archive_search::ArchiveSearchMode::MirroredTranscriptText,
-                                    ] {
-                                        if ui
-                                            .selectable_value(
-                                                &mut self.archive_search_mode,
-                                                mode,
-                                                mode.label(),
-                                            )
-                                            .changed()
-                                        {
-                                            self.archive_search_selection = None;
-                                        }
-                                    }
-                                });
-                            egui::ComboBox::from_id_salt("archive-state-filter")
-                                .selected_text(self.archive_state_filter.label())
-                                .show_ui(ui, |ui| {
-                                    for filter in [
-                                        local_archive_search::ArchiveStateFilter::All,
-                                        local_archive_search::ArchiveStateFilter::Mirrored,
-                                        local_archive_search::ArchiveStateFilter::Partial,
-                                        local_archive_search::ArchiveStateFilter::NotMirrored,
-                                        local_archive_search::ArchiveStateFilter::TransientFailure,
-                                        local_archive_search::ArchiveStateFilter::RateLimited,
-                                        local_archive_search::ArchiveStateFilter::StructuralFailure,
-                                    ] {
-                                        if ui
-                                            .selectable_value(
-                                                &mut self.archive_state_filter,
-                                                filter,
-                                                filter.label(),
-                                            )
-                                            .changed()
-                                        {
-                                            self.archive_search_selection = None;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} local result{} · Ctrl+K focus · Esc clear",
-                                archive_results.len(),
-                                if archive_results.len() == 1 { "" } else { "s" }
-                            ))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                        );
-                        for (result_index, result) in archive_results.iter().enumerate() {
-                            let document = &self.local_archive_search_index.documents()[result.document_index];
-                            let selected = self.archive_search_selection == Some(result_index);
-                            if ui
-                                .selectable_label(
-                                    selected,
-                                    egui::RichText::new(document.title.as_str()).size(12.0),
-                                )
-                                .clicked()
-                            {
-                                self.archive_search_selection = Some(result_index);
-                                archive_result_clicked = Some(result.clone());
-                            }
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(result.kind.label())
-                                        .size(9.0)
-                                        .strong()
-                                        .color(egui::Color32::from_rgb(112, 176, 137)),
-                                );
-                                ui.label(
-                                    egui::RichText::new(document.state.label())
-                                        .size(9.0)
-                                        .color(egui::Color32::from_rgb(139, 143, 153)),
-                                );
-                            });
-                            if let Some(snippet) = result.snippet.as_deref() {
-                                ui.label(
-                                    egui::RichText::new(snippet)
-                                        .size(10.0)
-                                        .italics()
-                                        .color(egui::Color32::from_rgb(170, 174, 184)),
-                                );
-                            }
-                        }
-
-                        }
-                        ui.add_space(18.0);
-                        ui.label(
-                            egui::RichText::new("CHATS")
-                                .size(10.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(112, 116, 126)),
-                        );
-                        ui.add_space(6.0);
-                        let data_usage = local_storage_bytes_cached(ctx, &self.journal_path);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Local Chatarium data: {} on disk",
-                                readable_byte_size(data_usage),
-                            ))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(173, 189, 208)),
-                        );
-
-                        ui.horizontal(|ui| {
-                            if ui.button("+ New chat").clicked() {
-                                create_local_requested = true;
-                            }
-                            ui.checkbox(
-                                &mut self.show_archived_local_conversations,
-                                "Show archived",
-                            );
-                        });
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            // Reserve the button and item spacing even at the default 290px panel.
-                            let input_width = (ui.available_width() - 70.0).max(90.0);
-                            let native_search_response = ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.local_conversation_search_query,
-                                )
-                                .id(native_search_id)
-                                .hint_text("Search chats…")
-                                .desired_width(input_width),
-                            );
-                            native_search_has_focus = native_search_response.has_focus();
-                            if native_search_response.changed() {
-                                self.local_conversation_search_selection = None;
-                            }
-                            if ui
-                                .add_enabled(
-                                    !self.local_conversation_search_query.is_empty(),
-                                    egui::Button::new("Clear"),
-                                )
-                                .clicked()
-                            {
-                                self.local_conversation_search_query.clear();
-                                self.local_conversation_search_selection = None;
-                            }
-                        });
-                        ui.add_space(8.0);
-                        ui.add_space(4.0);
-
-                        let native_entries = self.local_conversation_catalog.entries();
-                        let native_rows = native_conversation_search::cached_rows(
-                            ctx,
-                            &native_search_index,
-                            &native_entries,
-                            self.show_archived_local_conversations,
-                            &self.local_conversation_search_query,
-                        );
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} chat{}{}",
-                                native_rows.len(),
-                                if native_rows.len() == 1 { "" } else { "s" },
-                                if self.local_conversation_search_query.trim().is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" found · {} total", native_entries.len())
-                                },
-                            ))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                        );
-                        if native_rows.is_empty() {
-                            ui.label(
-                                "No local chats match. Clear the search or enable Show archived.",
-                            );
-                        }
-                        // Scroll the conversation catalog separately from status/settings.
-                        egui::ScrollArea::vertical()
-                            .id_salt("local-chats-scroll")
-                            .max_height((ctx.content_rect().height() * 0.50).clamp(180.0, 620.0))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.set_width(sidebar_control_width);
-                        for row in native_rows.iter() {
-                            let entry = &native_entries[row.catalog_index];
-                            let messages = native_search_index.messages(entry.id);
-                            let title = row.title.as_str();
-                            // A 42-character unbroken title must not force the
-                            // entire resizable sidebar to its maximum width.
-                            // Keep the original title as a hover explanation.
-                            let title_preview = title.chars().take(24).collect::<String>();
-                            let title_preview = if title.chars().count() > 24 {
-                                format!("{title_preview}…")
-                            } else {
-                                title_preview
-                            };
-                            let match_kind = row.kind;
-                            let hit_choice_id =
-                                egui::Id::new(("chatarium-native-hit-choice", entry.id));
-                            let old_choice = ctx
-                                .data_mut(|data| data.get_temp::<(String, usize)>(hit_choice_id));
-                            let mut hit_ordinal = old_choice
-                                .filter(|(query, _)| query == &self.local_conversation_search_query)
-                                .map(|(_, ordinal)| ordinal)
-                                .unwrap_or(0);
-                            hit_ordinal = hit_ordinal
-                                .min(row.matching_message_indices.len().saturating_sub(1));
-                            if match_kind
-                                == native_conversation_search::NativeSearchMatch::Message
-                            {
-                                native_message_hit_conversations.insert(entry.id);
-                            }
-                            visible_native_search_matches += 1;
-                            let result_index = native_search_matches.len();
-                            native_search_matches.push(entry.id);
-                            native_copy_candidates.push((
-                                entry.id,
-                                native_conversation_search::selected_message_index(
-                                    row,
-                                    hit_ordinal,
-                                ),
-                            ));
-                            let keyboard_selected =
-                                self.local_conversation_search_selection == Some(result_index);
-                            let selected =
-                                !historical_mode && entry.id == self.local_conversation_id;
-                            egui::Frame::default()
-                                .fill(if selected || keyboard_selected {
-                                    egui::Color32::from_rgb(30, 48, 75)
-                                } else {
-                                    egui::Color32::from_rgb(27, 32, 42)
-                                })
-                                .stroke(egui::Stroke::new(
-                                    if selected || keyboard_selected { 1.7 } else { 1.0 },
-                                    if selected || keyboard_selected {
-                                        egui::Color32::from_rgb(82, 151, 235)
-                                    } else {
-                                        egui::Color32::from_rgb(57, 72, 94)
-                                    },
-                                ))
-                                .corner_radius(egui::CornerRadius::same(8))
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    // Egui Frames normally shrink to their text content.
-                                    // Fill every sidebar row to the same usable width.
-                                    ui.set_min_width((sidebar_control_width - 20.0).max(120.0));
-                                    if ui
-                                        .selectable_label(
-                                            selected || keyboard_selected,
-                                            egui::RichText::new(format!(
-                                                "{}{}",
-                                                if selected { "● " } else { "" },
-                                                title_preview,
-                                            ))
-                                            .strong(),
-                                        )
-                                        .on_hover_text(title)
-                                        .clicked()
-                                    {
-                                        select_local_requested = Some(entry.id);
-                                        native_reader_target_message =
-                                            native_conversation_search::selected_message_index(
-                                                row,
-                                                hit_ordinal,
-                                            )
-                                            .map(|index| (entry.id, index));
-                                    }
-                                    ui.horizontal(|ui| {
-                                        if !self.local_conversation_search_query.trim().is_empty() {
-                                            ui.label(
-                                                egui::RichText::new(match match_kind {
-                                                    native_conversation_search::NativeSearchMatch::Title => "TITLE MATCH",
-                                                    native_conversation_search::NativeSearchMatch::Message => "MESSAGE MATCH",
-                                                })
-                                                .size(9.0)
-                                                .strong()
-                                                .color(egui::Color32::from_rgb(112, 176, 137)),
-                                            );
-                                        }
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{} message{}",
-                                                messages.len(),
-                                                if messages.len() == 1 { "" } else { "s" }
-                                            ))
-                                            .size(10.0)
-                                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                                        );
-                                        if entry.archived {
-                                            ui.label(
-                                                egui::RichText::new("ARCHIVED")
-                                                    .size(9.0)
-                                                    .strong()
-                                                    .color(egui::Color32::from_rgb(166, 139, 112)),
-                                            );
-                                        }
-                                    });
-                                    // A compact latest-message excerpt distinguishes
-                                    // similarly named chats without opening them. Search
-                                    // result excerpts below remain separate and exact.
-                                    if self.local_conversation_search_query.trim().is_empty() {
-                                        let latest = messages.last().map(|message| {
-                                            message.text.split_whitespace()
-                                                .take(12)
-                                                .collect::<Vec<_>>()
-                                                .join(" ")
-                                        }).filter(|value| !value.is_empty());
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(
-                                                    latest.as_deref().unwrap_or("New conversation")
-                                                )
-                                                .size(10.0)
-                                                .color(egui::Color32::from_rgb(156, 160, 171)),
-                                            )
-                                            .truncate(),
-                                        );
-                                    }
-                                    let authored = messages.iter().filter(|m| {
-                                        matches!(m.role, DisplayRole::User | DisplayRole::Assistant)
-                                    });
-                                    let (words, bytes) = authored.fold((0_usize, 0_usize), |(words, bytes), message| {
-                                        (words + message.text.split_whitespace().count(), bytes + message.text.len())
-                                    });
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{words} words · {} chat text", readable_byte_size(bytes as u64)
-                                        ))
-                                        .size(10.0)
-                                        .color(egui::Color32::from_rgb(142, 167, 194)),
-                                    );
-                                    if row.matching_message_indices.len() > 1 {
-                                        ui.horizontal(|ui| {
-                                            if ui.small_button("Prev hit").clicked() {
-                                                hit_ordinal = if hit_ordinal == 0 {
-                                                    row.matching_message_indices.len() - 1
-                                                } else {
-                                                    hit_ordinal - 1
-                                                };
-                                            }
-                                            ui.label(format!(
-                                                "Match {} of {}",
-                                                hit_ordinal + 1,
-                                                row.matching_message_indices.len(),
-                                            ));
-                                            if ui.small_button("Next hit").clicked() {
-                                                hit_ordinal = (hit_ordinal + 1)
-                                                    % row.matching_message_indices.len();
-                                            }
-                                        });
-                                    }
-                                    ctx.data_mut(|data| {
-                                        data.insert_temp(
-                                            hit_choice_id,
-                                            (self.local_conversation_search_query.clone(), hit_ordinal),
-                                        )
-                                    });
-                                    let selected_message_index =
-                                        native_conversation_search::selected_message_index(
-                                            row,
-                                            hit_ordinal,
-                                        );
-                                    native_copy_candidates[result_index].1 = selected_message_index;
-                                    let selected_preview = if hit_ordinal == 0 {
-                                        row.preview.clone()
-                                    } else {
-                                        selected_message_index.and_then(|position| {
-                                            local_archive_search::local_snippet(
-                                                &messages[position].text,
-                                                &self.local_conversation_search_query.trim().to_lowercase(),
-                                            )
-                                        })
-                                    };
-                                    if let Some(excerpt) = selected_preview {
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(excerpt)
-                                                    .italics()
-                                                    .size(10.0)
-                                                    .color(egui::Color32::from_rgb(170, 174, 184)),
-                                            )
-                                            .truncate(),
-                                        );
-                                    }
-                                    if let Some(message_index) = selected_message_index {
-                                        if ui
-                                            .small_button("Copy matched message · Alt+Enter")
-                                            .on_hover_text(
-                                                "Copy the exact visible source message with its local conversation ID and event sequence. Does not send or admit context.",
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some((text, sequence)) =
-                                                native_conversation_search::copyable_hit_markdown(
-                                                    &native_search_index,
-                                                    entry.id,
-                                                    title,
-                                                    message_index,
-                                                )
-                                            {
-                                                ctx.copy_text(text);
-                                                self.status = format!(
-                                                    "copied visible message event #{sequence} from local conversation"
-                                                );
-                                            }
-                                        }
-
-                                        if ui
-                                            .add_enabled(
-                                                self.local_memory_draft.is_empty()
-                                                    && !self.local_memory_command_pending,
-                                                egui::Button::new("Stage as memory · Alt+M"),
-                                            )
-                                            .on_hover_text(
-                                                "Stage the exact matched message in the memory editor. Record and Admit / Use once are separate explicit actions. Requires an empty memory draft.",
-                                            )
-                                            .clicked()
-                                        {
-                                            stage_native_memory_requested =
-                                                Some((entry.id, message_index));
-                                        }
-                                    }
-                                });
-                            ui.add_space(2.0);
-                        }
-                            });
-                        if !self.local_conversation_search_query.trim().is_empty() {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} visible native conversation match{}",
-                                    visible_native_search_matches,
-                                    if visible_native_search_matches == 1 { "" } else { "es" },
-                                ))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(139, 143, 153)),
-                            );
-                            if visible_native_search_matches == 0 {
-                                ui.label(
-                                    "No visible native chats match. Enable Show archived to include archived chats.",
-                                );
-                            }
-                        }
-
-                        if !historical_mode {
-                            ui.add_space(8.0);
-                            egui::CollapsingHeader::new("Manage selected chat")
-                                .default_open(false)
-                                .show(ui, |ui| {
-                                    ui.label(format!("Selected: {local_conversation_title}"));
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.local_conversation_rename)
-                                                .hint_text("Rename selected chat…")
-                                                .desired_width((sidebar_control_width - 90.0).max(100.0)),
-                                        );
-                                        if ui.button("Save").clicked() {
-                                            rename_local_requested = true;
-                                        }
-                                    });
-                                    if ui.button("Archive selected chat").clicked() {
-                                        archive_local_requested = true;
-                                    }
-                                    ui.separator();
-                                    ui.label("Export visible messages");
-                                    ui.horizontal(|ui| {
-                                        if ui.button("Copy Markdown").clicked() {
-                                            ctx.copy_text(native_transcript_export::markdown(
-                                                self.local_conversation_id,
-                                                &local_conversation_title,
-                                                &local_display_messages,
-                                            ));
-                                            self.status = format!(
-                                                "copied {} visible native messages as Markdown",
-                                                local_display_messages.len(),
-                                            );
-                                        }
-                                        if ui.button("Copy JSON").clicked() {
-                                            match serde_json::to_string_pretty(
-                                                &native_transcript_export::json_value(
-                                                    self.local_conversation_id,
-                                                    &local_conversation_title,
-                                                    &local_display_messages,
-                                                ),
-                                            ) {
-                                                Ok(export) => {
-                                                    ctx.copy_text(export);
-                                                    self.status = format!(
-                                                        "copied {} visible native messages as JSON",
-                                                        local_display_messages.len(),
-                                                    );
-                                                }
-                                                Err(error) => {
-                                                    self.status = format!(
-                                                        "cannot format visible transcript export: {error}"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    });
-                                    ui.label(
-                                        egui::RichText::new("Clipboard export is not an archive backup.")
-                                            .size(9.0)
-                                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                                    );
-                                });
-                        }
-
-                        if ACCOUNT_MIRRORING_ENABLED && !self.remote_conversation_catalog.is_empty() {
-                            ui.add_space(16.0);
-                            ui.label(
-                                egui::RichText::new(history_observed_label(
-                                    self.remote_conversation_catalog.len(),
-                                    self.remote_conversation_total,
-                                ))
-                                .size(10.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(112, 176, 137)),
-                            );
-                            ui.add_space(6.0);
-                            for entry in &self.remote_catalog_view {
-                                let selected = entry
-                                    .local_conversation_id
-                                    .is_some_and(|local| {
-                                        self.selected_historical_conversation == Some(local)
-                                    })
-                                    || self.selected_remote_catalog_id.as_deref()
-                                        == Some(entry.item.id.as_str());
-                                let title = entry
-                                    .item
-                                    .title
-                                    .as_deref()
-                                    .filter(|title| !title.trim().is_empty())
-                                    .unwrap_or("Untitled ChatGPT conversation");
-
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(title).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    if let Some(local) = entry.local_conversation_id {
-                                        select_historical_requested = Some(local);
-                                    } else {
-                                        select_remote_requested = Some(entry.item.id.clone());
-                                    }
-                                }
-                                let remote_state = remote_catalog_state_label(entry.status);
-                                let remote_state_color = match entry.status {
-                                    RemoteMirrorQueueStatus::MirroredFully
-                                    | RemoteMirrorQueueStatus::MirroredPartial => {
-                                        egui::Color32::from_rgb(112, 176, 137)
-                                    }
-                                    RemoteMirrorQueueStatus::RateLimited
-                                    | RemoteMirrorQueueStatus::Queued
-                                    | RemoteMirrorQueueStatus::Capturing => {
-                                        egui::Color32::from_rgb(225, 194, 108)
-                                    }
-                                    RemoteMirrorQueueStatus::TransientFailure
-                                    | RemoteMirrorQueueStatus::StructuralFailure => {
-                                        egui::Color32::from_rgb(214, 128, 128)
-                                    }
-                                    RemoteMirrorQueueStatus::Discovered => {
-                                        egui::Color32::from_rgb(112, 116, 126)
-                                    }
-                                };
-                                ui.label(
-                                    egui::RichText::new(remote_state)
-                                        .size(9.0)
-                                        .color(remote_state_color),
-                                );
-                                ui.add_space(4.0);
-                            }
-                            if let Some(remote_id) = self.selected_remote_catalog_id.as_ref() {
-                                if ui.button("Mirror from ChatGPT").clicked() {
-                                    mirror_remote_requested = Some(remote_id.clone());
-                                }
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Remote capture is a separate action; selecting a row stays local.",
-                                    )
-                                    .size(9.0)
-                                    .color(egui::Color32::from_rgb(139, 143, 153)),
-                                );
-                            }
-                        }
-
-                        if ACCOUNT_MIRRORING_ENABLED && !self.live_mirror_catalog.is_empty() {
-                            ui.add_space(16.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "CACHED CHATGPT · {}",
-                                    self.live_mirror_catalog.len()
-                                ))
-                                .size(10.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(112, 116, 126)),
-                            );
-                            ui.add_space(6.0);
-                            for entry in &self.live_mirror_catalog {
-                                let selected = self.selected_historical_conversation
-                                    == Some(entry.local_conversation_id);
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(entry.title.as_str()).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    select_historical_requested = Some(entry.local_conversation_id);
-                                }
-                                ui.label(
-                                    egui::RichText::new("durable offline mirror · read-only")
-                                        .size(9.0)
-                                        .color(egui::Color32::from_rgb(112, 116, 126)),
-                                );
-                                ui.add_space(4.0);
-                            }
-                        }
-
-                        if ACCOUNT_MIRRORING_ENABLED && !self.historical_catalog.is_empty() {
-                            ui.add_space(16.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "IMPORTED HISTORY · {}",
-                                    self.historical_catalog.len()
-                                ))
-                                .size(10.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(112, 116, 126)),
-                            );
-                            ui.add_space(6.0);
-                            for entry in &self.historical_catalog {
-                                let selected = self.selected_historical_conversation
-                                    == Some(entry.local_conversation_id);
-                                let title = entry
-                                    .title
-                                    .as_deref()
-                                    .filter(|title| !title.trim().is_empty())
-                                    .unwrap_or("Untitled imported conversation");
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(title).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    select_historical_requested = Some(entry.local_conversation_id);
-                                }
-                                let live_mirrored = self
-                                    .live_mirrored_conversations
-                                    .contains(&entry.local_conversation_id);
-                                ui.label(
-                                    egui::RichText::new(if live_mirrored {
-                                        "live mirror · read-only"
-                                    } else {
-                                        "historical snapshot · read-only"
-                                    })
-                                    .size(9.0)
-                                    .color(if live_mirrored {
-                                        egui::Color32::from_rgb(112, 176, 137)
-                                    } else {
-                                        egui::Color32::from_rgb(112, 116, 126)
-                                    }),
-                                );
-                                ui.add_space(4.0);
-                            }
-                        }
-
-                        ui.add_space(24.0);
-                        ui.label(
-                            egui::RichText::new("STATUS")
-                                .size(10.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(112, 116, 126)),
-                        );
-                        ui.add_space(7.0);
-                        status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
-                        if ACCOUNT_MIRRORING_ENABLED {
-                        status_row(
-                            ui,
-                            "History discovery",
-                            self.account_bridge_status.as_str(),
-                            self.history_bridge_proven,
-                        );
-                        status_row(
-                            ui,
-                            "Mirror",
-                            self.mirror_status.as_str(),
-                            self.mirror_status.starts_with("MIRRORED"),
-                        );
-                        let queue_counts = remote_catalog_queue_counts(&self.remote_catalog_view);
-                        status_row(
-                            ui,
-                            "Mirror queue",
-                            &format!(
-                                "observed={} · full={} · partial={} · pending={} · transient={} · rate-limited={} · structural={}",
-                                queue_counts.observed,
-                                queue_counts.full,
-                                queue_counts.partial,
-                                queue_counts.pending,
-                                queue_counts.transient,
-                                queue_counts.rate_limited,
-                                queue_counts.structural,
-                            ),
-                            true,
-                        );
-                        status_row(
-                            ui,
-                            "Mirror intent",
-                            self.remote_health.intent.as_str(),
-                            self.remote_health.intent == MirrorIntent::Enabled,
-                        );
-                        status_row(
-                            ui,
-                            "Remote health",
-                            self.remote_health.state.as_str(),
-                            self.remote_health.state
-                                == chatarium_store::remote_health::RemoteHealthState::Healthy,
-                        );
-                        if let Some(until) = self.remote_health.cooldown_until_ms {
-                            ui.label(
-                                egui::RichText::new(format!("cooldown until unix-ms {until}"))
-                                    .size(9.0)
-                                    .color(egui::Color32::from_rgb(186, 189, 197)),
-                            );
-                        }
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "production controller · {}{}",
-                                mirror_controller_state_label(self.mirror_controller_state),
-                                self.mirror_controller_current_item
-                                    .map(|index| format!(" · current catalog item {index}"))
-                                    .unwrap_or_default(),
-                            ))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(186, 189, 197)),
-                        );
-                        if let Some(detail) = &self.mirror_controller_detail {
-                            ui.label(
-                                egui::RichText::new(detail)
-                                    .size(9.0)
-                                    .color(egui::Color32::from_rgb(139, 143, 153)),
-                            );
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            let can_start = matches!(
-                                self.mirror_controller_state,
-                                MirrorControllerState::Stopped
-                                    | MirrorControllerState::Completed
-                                    | MirrorControllerState::Failed
-                                    | MirrorControllerState::RateLimited
-                                    | MirrorControllerState::AuthenticationRequired
-                            );
-                            let can_pause = self.mirror_controller_state
-                                == MirrorControllerState::Running;
-                            let can_resume = self.mirror_controller_state
-                                == MirrorControllerState::Paused;
-                            if ui
-                                .add_enabled(can_start, egui::Button::new("START MIRRORING"))
-                                .clicked()
-                            {
-                                mirror_start_requested = true;
-                            }
-                            if ui
-                                .add_enabled(can_pause, egui::Button::new("PAUSE"))
-                                .clicked()
-                            {
-                                mirror_pause_requested = true;
-                            }
-                            if ui
-                                .add_enabled(can_resume, egui::Button::new("RESUME"))
-                                .clicked()
-                            {
-                                mirror_resume_requested = true;
-                            }
-                            if ui.button("RECHECK REMOTE HEALTH").clicked() {
-                                mirror_recheck_requested = true;
-                            }
-                        });
-                        }
-                        status_row(
-                            ui,
-                            "ChatGPT",
-                            if self.remote_connected() {
-                                "connected"
-                            } else if self.sign_in_pending {
-                                "connecting…"
-                            } else if self.sign_in_requested {
-                                "preparing sign-in…"
-                            } else if self.remote_runtime_failed {
-                                "runtime unavailable"
-                            } else if !self.remote_runtime_ready {
-                                "starting…"
-                            } else {
-                                "not connected"
-                            },
-                            self.remote_connected(),
-                        );
-                        ui.horizontal(|ui| {
-                            ui.label("Slow warning after");
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut self.slow_warning_seconds)
-                                        .range(
-                                            local_inference_settings::MIN_SLOW_WARNING_SECONDS
-                                                ..=local_inference_settings::MAX_SLOW_WARNING_SECONDS,
-                                        )
-                                        .suffix(" s"),
-                                )
-                                .on_hover_text(
-                                    "Warn if no assistant output arrives in this many seconds. Stored per local conversation.",
-                                )
-                                .changed()
-                            {
-                                self.persist_current_inference_settings();
-                            }
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Read-only model attempts");
-                            let mut attempts = self.inference_settings.read_retry_attempts();
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut attempts).range(
-                                        local_inference_settings::MIN_READ_RETRY_ATTEMPTS
-                                            ..=local_inference_settings::MAX_READ_RETRY_ATTEMPTS,
-                                    ),
-                                )
-                                .on_hover_text(
-                                    "1 disables automatic retries. Applies to subsequent read-only model discovery, never to inference POSTs.",
-                                )
-                                .changed()
-                            {
-                                match self.inference_settings.set_read_retry_attempts(attempts) {
-                                    Ok(()) => self.persist_current_inference_settings(),
-                                    Err(error) => self.status = error,
-                                }
-                            }
-                        });
-
-                        ui.add_space(8.0);
-                        if ACCOUNT_MIRRORING_ENABLED && self.account_bridge_provider.is_some() {
-                            if ui
-                                .add_enabled(
-                                    !self.history_list_pending,
-                                    egui::Button::new(if self.history_list_pending {
-                                        "Checking ChatGPT history…"
-                                    } else {
-                                        "Refresh ChatGPT history"
-                                    })
-                                    .min_size(egui::vec2(sidebar_control_width, 30.0)),
-                                )
-                                .clicked()
-                            {
-                                refresh_history_requested = true;
-                            }
-                        }
-
-                        ui.add_space(14.0);
-                        if self.remote_connected() {
-                            ui.label(
-                                egui::RichText::new(self.remote_identity_label())
-                                    .size(11.0)
-                                    .color(egui::Color32::from_rgb(186, 189, 197)),
-                            );
-                            if self.remote_models.is_empty() {
-                                if self.model_list_pending {
-                                    ui.label("Loading ChatGPT models…");
-                                } else if model_retry_available(
-                                    self.remote_connected(),
-                                    self.model_list_pending,
-                                    self.remote_models.is_empty(),
-                                ) && ui
-                                    .add_sized(
-                                        [sidebar_control_width, 30.0],
-                                        egui::Button::new("Retry model discovery"),
-                                    )
-                                    .clicked()
-                                {
-                                    self.request_chatgpt_models();
-                                }
-                            }
-                            if !self.remote_models.is_empty() {
-                                let selected_text = self
-                                    .selected_model
-                                    .as_ref()
-                                    .and_then(|slug| {
-                                        self.remote_models
-                                            .iter()
-                                            .find(|model| &model.slug == slug)
-                                            .map(|model| model.display_name.as_str())
-                                    })
-                                    .unwrap_or("Choose model");
-                                let model_before = self.selected_model.clone();
-                                egui::ComboBox::from_id_salt("chatgpt_model")
-                                    .selected_text(selected_text)
-                                    .width(sidebar_control_width)
-                                    .show_ui(ui, |ui| {
-                                        for model in &self.remote_models {
-                                            ui.selectable_value(
-                                                &mut self.selected_model,
-                                                Some(model.slug.clone()),
-                                                model.display_name.as_str(),
-                                            );
-                                        }
-                                    });
-                                if self.selected_model != model_before {
-                                    self.persist_current_inference_settings();
-                                }
-                            }
-                            if ui
-                                .add_sized(
-                                    [sidebar_control_width, 30.0],
-                                    egui::Button::new("Disconnect ChatGPT"),
-                                )
-                                .clicked()
-                            {
-                                self.disconnect_chatgpt();
-                            }
-                        } else {
-                            let sign_in_label = if self.remote_runtime_failed {
-                                "Retry ChatGPT"
-                            } else if self.sign_in_requested {
-                                "Preparing ChatGPT…"
-                            } else if self.sign_in_pending {
-                                "Opening sign-in…"
-                            } else {
-                                "Continue with ChatGPT"
-                            };
-                            if ui
-                                .add_enabled(
-                                    !self.sign_in_pending && !self.sign_in_requested,
-                                    egui::Button::new(egui::RichText::new(sign_in_label).strong())
-                                        .min_size(egui::vec2(sidebar_control_width, 34.0)),
-                                )
-                                .clicked()
-                            {
-                                self.start_chatgpt_sign_in(ctx);
-                            }
-                            if self.sign_in_pending || self.sign_in_requested {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(
-                                        egui::RichText::new("Finish in your browser")
-                                            .size(11.0)
-                                            .color(egui::Color32::from_rgb(151, 154, 163)),
-                                    );
-                                });
-                                if ui
-                                    .add_sized(
-                                        [sidebar_control_width, 28.0],
-                                        egui::Button::new("Cancel sign-in"),
-                                    )
-                                    .clicked()
-                                {
-                                    self.cancel_chatgpt_sign_in();
-                                }
-                            }
-                        }
-
                         ui.add_space(10.0);
-                        ui.label(
-                            egui::RichText::new(self.remote_status.as_str())
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(126, 130, 139)),
-                        );
-
-                        ui.add_space(18.0);
-                        egui::CollapsingHeader::new(
-                            egui::RichText::new("Diagnostics")
-                                .size(11.0)
-                                .color(egui::Color32::from_rgb(151, 154, 163)),
-                        )
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "journal\n{}",
-                                    self.journal_path.display()
-                                ))
-                                .monospace()
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(126, 130, 139)),
-                            );
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(format!("status\n{}", self.status))
-                                    .monospace()
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(126, 130, 139)),
-                            );
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(format!("events: {}", self.events.len()))
-                                    .monospace()
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(126, 130, 139)),
-                            );
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new("SIWC CAPABILITY PROBES")
-                                    .size(10.0)
-                                    .strong(),
-                            );
-                            ui.label(
-                                egui::RichText::new(
-                                    "Uses your existing local ChatGPT sign-in. Credentials stay inside the SIWC bridge; probes send small real plan-usage requests.",
-                                )
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(126, 130, 139)),
-                            );
-                            let probe_running = self.capability_probe.running();
-                            let probe_block_reason = capability_probe_block_reason(
-                                self.remote_connected(),
-                                self.selected_model.is_some(),
-                                self.pending_remote_turn.is_some(),
-                                self.active_remote_turn.is_some(),
-                                probe_running,
-                            );
-                            let can_probe = probe_block_reason.is_none();
-                            if ui
-                                .add_enabled(
-                                    can_probe,
-                                    egui::Button::new(if probe_running {
-                                        "RUNNING CAPABILITY PROBES…"
-                                    } else {
-                                        "RUN CAPABILITY PROBES"
-                                    }),
-                                )
-                                .clicked()
-                            {
-                                self.start_capability_probes();
-                            }
-                            if probe_running {
-                                ui.spinner();
-                            } else if let Some(reason) = probe_block_reason {
-                                ui.label(
-                                    egui::RichText::new(format!("probe unavailable · {reason}"))
-                                        .monospace()
-                                        .size(10.0)
-                                        .color(egui::Color32::from_rgb(126, 130, 139)),
-                                );
-                            }
-                            if !self.capability_probe.status.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(&self.capability_probe.status)
-                                        .monospace()
-                                        .size(10.0)
-                                        .color(egui::Color32::from_rgb(126, 130, 139)),
-                                );
-                            }
-                            if let Some(report_model) = self.capability_probe.model.as_deref() {
-                                let age = self
-                                    .capability_probe
-                                    .generated_unix_ms
-                                    .map(probe_report_age)
-                                    .unwrap_or_else(|| "time unknown".to_owned());
-                                let model_note = if self.selected_model.as_deref()
-                                    == Some(report_model)
-                                {
-                                    ""
-                                } else {
-                                    " · SELECTED MODEL DIFFERS"
-                                };
-                                let profile_note = match (
-                                    self.capability_probe.profile_id.as_deref(),
-                                    self.remote_session.profile_id.as_deref(),
-                                ) {
-                                    (Some(report), Some(current)) if report == current => "",
-                                    (Some(_), Some(_)) => " · PROFILE DIFFERS",
-                                    (Some(_), None) => " · PROFILE NOT CONNECTED",
-                                    (None, Some(_)) => " · REPORT PROFILE UNKNOWN",
-                                    (None, None) => "",
-                                };
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "saved report · {report_model} · {age}{model_note}{profile_note}"
-                                    ))
-                                    .monospace()
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(126, 130, 139)),
-                                );
-                            }
-                            if !self.capability_probe.results.is_empty() {
-                                let contract_state =
-                                    local_inference_contract::contract_state(&self.capability_probe);
-                                let contract_active = contract_state == "ready"
-                                    && self.capability_probe.profile_id.as_deref()
-                                        == self.remote_session.profile_id.as_deref()
-                                    && self.capability_probe.model.as_deref()
-                                        == self.selected_model.as_deref();
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "local inference contract · {contract_state}{}",
-                                        if contract_active {
-                                            " · ACTIVE FOR CURRENT PROFILE/MODEL"
-                                        } else {
-                                            ""
-                                        }
-                                    ))
-                                    .monospace()
-                                    .size(10.0)
-                                    .strong(),
-                                );
-
-                                let data_dir =
-                                    self.journal_path.parent().unwrap_or_else(|| Path::new("."));
-                                let report_path = data_dir.join("siwc-capability-probes.json");
-                                let contract_path = data_dir.join("local-inference-contract.json");
-                                let can_copy_artifacts =
-                                    !probe_running && self.capability_probe.generated_unix_ms.is_some();
-                                ui.horizontal(|ui| {
-                                    if ui
-                                        .add_enabled(
-                                            can_copy_artifacts,
-                                            egui::Button::new("COPY SANITIZED EVIDENCE"),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.capability_probe.status =
-                                            match std::fs::read_to_string(&report_path) {
-                                                Ok(text) => {
-                                                    ui.ctx().copy_text(text);
-                                                    "copied sanitized capability evidence"
-                                                        .to_owned()
-                                                }
-                                                Err(error) => format!(
-                                                    "could not copy sanitized evidence · {error}"
-                                                ),
-                                            };
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            can_copy_artifacts,
-                                            egui::Button::new("COPY INFERENCE CONTRACT"),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.capability_probe.status =
-                                            match std::fs::read_to_string(&contract_path) {
-                                                Ok(text) => {
-                                                    ui.ctx().copy_text(text);
-                                                    "copied local inference contract".to_owned()
-                                                }
-                                                Err(error) => format!(
-                                                    "could not copy inference contract · {error}"
-                                                ),
-                                            };
-                                    }
-                                });
-                            }
-                            for result in &self.capability_probe.results {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} · {}{}",
-                                        result.name,
-                                        result.status,
-                                        probe_result_detail(result)
-                                    ))
-                                    .monospace()
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(126, 130, 139)),
-                                );
-                            }
-
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new("LOCAL ARCHIVE").size(10.0).strong());
-                            ui.horizontal(|ui| {
-                                if ui.button("CHECK ARCHIVE").clicked() {
-                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
-                                    self.archive_maintenance_status = match check_archive(data_dir) {
-                                        Ok(report) => format!("{} · {} events · {} catalog items", report.status, report.journal_event_count, report.catalog_count),
-                                        Err(error) => format!("archive check failed · {error}"),
-                                    };
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("backup path");
-                                ui.text_edit_singleline(&mut self.archive_backup_path);
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("CREATE BACKUP").clicked() {
-                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
-                                    self.archive_maintenance_status = match create_backup(data_dir, self.archive_backup_path.trim()) {
-                                        Ok(_) => "backup created and verified".to_owned(),
-                                        Err(error) => format!("backup failed · {error}"),
-                                    };
-                                }
-                                if ui.button("VERIFY BACKUP").clicked() {
-                                    self.archive_maintenance_status = match verify_backup(self.archive_backup_path.trim()) {
-                                        Ok(_) => "backup verified".to_owned(),
-                                        Err(error) => format!("backup verification failed · {error}"),
-                                    };
-                                }
-                            });
-                            if ui.button("RESTORE BACKUP").clicked() && !self.archive_backup_path.trim().is_empty() {
-                                self.archive_restore_confirmation_pending = true;
-                            }
-                            if self.archive_restore_confirmation_pending {
-                                ui.colored_label(egui::Color32::YELLOW, "Restore replaces active local archive; a safety copy is retained.");
-                                ui.horizontal(|ui| {
-                                    if ui.button("CONFIRM RESTORE").clicked() {
-                                        let target = self.journal_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-                                        self.archive_maintenance_status = match restore_backup(self.archive_backup_path.trim(), target) {
-                                            Ok(_) => "backup restored after isolated verification".to_owned(),
-                                            Err(error) => format!("restore failed; active archive preserved · {error}"),
-                                        };
-                                        self.archive_restore_confirmation_pending = false;
-                                    }
-                                    if ui.button("CANCEL RESTORE").clicked() {
-                                        self.archive_restore_confirmation_pending = false;
-                                    }
-                                });
-                            }
-                            ui.label(egui::RichText::new(&self.archive_maintenance_status).size(10.0).color(egui::Color32::from_rgb(126, 130, 139)));
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "local conversation\n{}",
-                                    self.local_conversation_id
-                                ))
-                                .monospace()
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(126, 130, 139)),
-                            );
-                        });
-                    });
-            });
-
-        if focus_archive_search {
-            ctx.memory_mut(|memory| memory.request_focus(archive_search_id));
-        }
-        if focus_native_search {
-            ctx.memory_mut(|memory| memory.request_focus(native_search_id));
-        }
-        if focus_native_composer {
-            ctx.memory_mut(|memory| {
-                memory.request_focus(egui::Id::new("chatarium-message-composer"))
-            });
-        }
-        if self
-            .local_conversation_search_selection
-            .is_some_and(|index| index >= native_search_matches.len())
-        {
-            self.local_conversation_search_selection = None;
-        }
-        if native_search_has_focus {
-            let mut clear_focus = false;
-            let mut copy_hit_requested = false;
-            let mut stage_hit_requested = false;
-            let mut move_message_hit = 0_isize;
-            ctx.input_mut(|input| {
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                    self.local_conversation_search_selection = local_archive_search::move_selection(
-                        self.local_conversation_search_selection,
-                        native_search_matches.len(),
-                        1,
-                    );
-                }
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                    self.local_conversation_search_selection = local_archive_search::move_selection(
-                        self.local_conversation_search_selection,
-                        native_search_matches.len(),
-                        -1,
-                    );
-                }
-                if input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) {
-                    move_message_hit = 1;
-                }
-                if input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) {
-                    move_message_hit = -1;
-                }
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-                    select_local_requested = native_conversation_search::activate_selection(
-                        &native_search_matches,
-                        self.local_conversation_search_selection,
-                    );
-                    native_reader_target_message =
-                        native_conversation_search::activate_copy_selection(
-                            &native_copy_candidates,
-                            self.local_conversation_search_selection,
-                        );
-                }
-                if input.consume_key(egui::Modifiers::ALT, egui::Key::Enter) {
-                    copy_hit_requested = true;
-                }
-                if input.consume_key(egui::Modifiers::ALT, egui::Key::M) {
-                    stage_hit_requested = true;
-                }
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-                    self.local_conversation_search_query.clear();
-                    self.local_conversation_search_selection = None;
-                    clear_focus = true;
-                }
-            });
-            if move_message_hit != 0 {
-                let native_entries = self.local_conversation_catalog.entries();
-                let rows = native_conversation_search::cached_rows(
-                    ctx,
-                    &native_search_index,
-                    &native_entries,
-                    self.show_archived_local_conversations,
-                    &self.local_conversation_search_query,
-                );
-                let row_index = self.local_conversation_search_selection.unwrap_or(0);
-                if let Some(row) = rows.get(row_index) {
-                    let conversation_id = native_entries[row.catalog_index].id;
-                    let choice_id = egui::Id::new(("chatarium-native-hit-choice", conversation_id));
-                    let prior = ctx.data_mut(|data| data.get_temp::<(String, usize)>(choice_id));
-                    let ordinal = prior
-                        .filter(|(query, _)| query == &self.local_conversation_search_query)
-                        .map(|(_, ordinal)| ordinal)
-                        .unwrap_or(0);
-                    if let Some((next_ordinal, message_index)) =
-                        native_conversation_search::cycle_matching_message(
-                            row,
-                            ordinal,
-                            move_message_hit,
-                        )
-                    {
-                        ctx.data_mut(|data| {
-                            data.insert_temp(
-                                choice_id,
-                                (self.local_conversation_search_query.clone(), next_ordinal),
-                            )
-                        });
-                        if let Some(candidate) = native_copy_candidates.get_mut(row_index) {
-                            candidate.1 = Some(message_index);
-                        }
-                    }
-                }
-            }
-            if copy_hit_requested {
-                if let Some((conversation_id, message_index)) =
-                    native_conversation_search::activate_copy_selection(
-                        &native_copy_candidates,
-                        self.local_conversation_search_selection,
-                    )
-                {
-                    let messages = native_search_index.messages(conversation_id);
-                    let title = self
-                        .local_conversation_catalog
-                        .entry(conversation_id)
-                        .and_then(|entry| entry.title.clone())
-                        .filter(|title| !title.trim().is_empty())
-                        .unwrap_or_else(|| derived_conversation_title(messages));
-                    if let Some((text, sequence)) =
-                        native_conversation_search::copyable_hit_markdown(
-                            &native_search_index,
-                            conversation_id,
-                            &title,
-                            message_index,
-                        )
-                    {
-                        ctx.copy_text(text);
-                        self.status = format!(
-                            "copied visible message event #{sequence} from local conversation"
-                        );
-                    }
-                }
-            }
-            if stage_hit_requested {
-                stage_native_memory_requested = native_conversation_search::activate_copy_selection(
-                    &native_copy_candidates,
-                    self.local_conversation_search_selection,
-                );
-            }
-            if clear_focus {
-                ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
-            }
-        }
-        if let Some((source_conversation_id, message_index)) = stage_native_memory_requested {
-            if self.local_memory_draft.is_empty() && !self.local_memory_command_pending {
-                if let Some(staged) = native_conversation_search::stageable_hit(
-                    &native_search_index,
-                    source_conversation_id,
-                    message_index,
-                ) {
-                    self.local_memory_draft = staged.text;
-                    self.staged_local_memory_origin =
-                        Some((staged.source_conversation_id, staged.source_event_sequence));
-                    self.status = format!(
-                        "staged message event #{} as a local memory draft; open Context & inference controls → Local memory to review and Record. No context admitted.",
-                        staged.source_event_sequence,
-                    );
-                }
-            }
-        }
-        if archive_search_has_focus {
-            ctx.input_mut(|input| {
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                    self.archive_search_selection = local_archive_search::move_selection(
-                        self.archive_search_selection,
-                        archive_results.len(),
-                        1,
-                    );
-                }
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                    self.archive_search_selection = local_archive_search::move_selection(
-                        self.archive_search_selection,
-                        archive_results.len(),
-                        -1,
-                    );
-                }
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-                    self.archive_search_query.clear();
-                    self.archive_search_selection = None;
-                    clear_archive_search_focus = true;
-                }
-                if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-                    if let Some(selection) = self.archive_search_selection {
-                        archive_result_clicked = local_archive_search::activate_selection(
-                            &archive_results,
-                            Some(selection),
-                        );
-                    } else {
-                        archive_result_clicked =
-                            local_archive_search::activate_selection(&archive_results, None);
-                    }
-                }
-            });
-        }
-        if clear_archive_search_focus {
-            ctx.memory_mut(|memory| memory.surrender_focus(archive_search_id));
-        }
-        if let Some(result) = archive_result_clicked {
-            self.reader_search_query =
-                if result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript {
-                    self.archive_search_query.clone()
-                } else {
-                    String::new()
-                };
-            open_reader_from_transcript_search =
-                result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript;
-            if let Some(entry) = self
-                .remote_catalog_view
-                .iter()
-                .find(|entry| entry.catalog_index == result.catalog_index)
-            {
-                if let Some(local_conversation_id) = entry.local_conversation_id {
-                    select_historical_requested = Some(local_conversation_id);
-                } else {
-                    select_remote_requested = Some(entry.item.id.clone());
-                }
-            }
-        }
-        if create_local_requested {
-            let before = self.local_conversation_id;
-            self.create_local_conversation();
-            if self.local_conversation_id != before {
-                // The transcript snapshot was taken before this selection.
-                // Force a fresh frame rather than waiting for another event.
-                ctx.request_repaint();
-                // Newly created conversations are empty: show them even if a
-                // previous search filter would have hidden their sidebar row.
-                self.local_conversation_search_query.clear();
-                self.local_conversation_search_selection = None;
-                ctx.memory_mut(|memory| {
-                    memory.request_focus(egui::Id::new("chatarium-message-composer"))
-                });
-            }
-        } else if let Some(local_conversation_id) = select_local_requested {
-            let can_switch = !self.local_conversation_busy();
-            let before = self.local_conversation_id;
-            self.activate_local_conversation(local_conversation_id);
-            if self.local_conversation_id != before {
-                // Sidebar selection also occurs after the initial projection.
-                ctx.request_repaint();
-            }
-            if can_switch
-                && self.local_conversation_id == local_conversation_id
-                && !self.local_conversation_search_query.trim().is_empty()
-            {
-                let kind = if native_message_hit_conversations.contains(&local_conversation_id) {
-                    native_conversation_search::NativeSearchMatch::Message
-                } else {
-                    native_conversation_search::NativeSearchMatch::Title
-                };
-                self.reader_search_query = native_conversation_search::reader_query_for_result(
-                    &self.local_conversation_search_query,
-                    kind,
-                )
-                .unwrap_or_default();
-                self.reader_search_hit = native_reader_target_message
-                    .filter(|(owner, _)| *owner == local_conversation_id)
-                    .and_then(|(_, position)| {
-                        native_conversation_search::reader_hit_ordinal(
-                            native_search_index.messages(local_conversation_id),
-                            &self.reader_search_query,
-                            position,
-                        )
-                    })
-                    .or_else(|| (!self.reader_search_query.is_empty()).then_some(0));
-                if self.reader_search_hit.is_some() {
-                    self.reader_restore_pending = false;
-                }
-            }
-        } else if let Some(local_conversation_id) = select_historical_requested {
-            self.select_historical_conversation(local_conversation_id);
-        } else if let Some(remote_conversation_id) = select_remote_requested {
-            self.selected_historical_conversation = None;
-            self.selected_remote_catalog_id = Some(remote_conversation_id);
-            self.historical_messages.clear();
-            self.historical_load_pending = None;
-            self.status = "remote conversation selected; local mirror unavailable".to_owned();
-        }
-        if rename_local_requested {
-            self.rename_current_local_conversation();
-        }
-        if archive_local_requested {
-            self.archive_current_local_conversation();
-        }
-        if open_reader_from_transcript_search {
-            self.reader_search_hit = Some(0);
-        }
-        if let Some(remote_conversation_id) = mirror_remote_requested.as_ref() {
-            self.open_discovered_remote_conversation(remote_conversation_id.clone(), ctx);
-        }
-        if refresh_history_requested {
-            self.start_history_discovery(ctx);
-        }
-        if mirror_start_requested {
-            self.start_mirror_controller();
-        } else if mirror_recheck_requested {
-            self.recheck_remote_health();
-        } else if mirror_pause_requested {
-            self.send_mirror_controller_command(MirrorControllerCommand::Pause);
-        } else if mirror_resume_requested {
-            self.send_mirror_controller_command(MirrorControllerCommand::Resume);
-        }
-
-        egui::TopBottomPanel::top("conversation_header")
-            .resizable(false)
-            .exact_height(91.0)
-            .frame(
-                egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(23, 24, 29))
-                    .inner_margin(egui::Margin::symmetric(22, 10)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(conversation_title.as_str())
-                                .size(19.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(238, 239, 244)),
-                        );
-                        ui.label(
-                            egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
-                                "Remote catalog item · not mirrored locally"
-                            } else if selected_live_mirror {
-                                "Local durable mirror · read-only"
-                            } else if historical_mode {
-                                "Historical account-export snapshot · read-only"
-                            } else if self.remote_connected() {
-                                "Durable on this machine · authenticated with ChatGPT"
-                            } else {
-                                "Durable on this machine · connect ChatGPT to enable remote turns"
-                            })
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                        );
-                    });
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let connected = self.remote_connected();
-                        egui::Frame::default()
-                            .fill(if selected_live_mirror {
-                                egui::Color32::from_rgb(24, 52, 37)
-                            } else if historical_mode {
-                                egui::Color32::from_rgb(39, 42, 49)
-                            } else if connected {
-                                egui::Color32::from_rgb(24, 52, 37)
-                            } else {
-                                egui::Color32::from_rgb(48, 42, 26)
-                            })
-                            .corner_radius(egui::CornerRadius::same(12))
-                            .inner_margin(egui::Margin::symmetric(10, 5))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
-                                        "REMOTE · NOT MIRRORED"
-                                    } else if selected_live_mirror {
-                                        if self.live_mirror_truncated_before {
-                                            "MIRRORED LOCALLY · PARTIAL"
-                                        } else {
-                                            "MIRRORED LOCALLY"
-                                        }
-                                    } else if historical_mode {
-                                        "IMPORTED SNAPSHOT"
-                                    } else if connected {
-                                        "CHATGPT CONNECTED"
-                                    } else {
-                                        "LOCAL ONLY"
-                                    })
-                                    .size(10.0)
-                                    .strong()
-                                    .color(
-                                        if remote_catalog_selected && !selected_live_mirror {
-                                            egui::Color32::from_rgb(225, 194, 108)
-                                        } else if selected_live_mirror {
-                                            egui::Color32::from_rgb(126, 210, 156)
-                                        } else if historical_mode {
-                                            egui::Color32::from_rgb(179, 184, 196)
-                                        } else if connected {
-                                            egui::Color32::from_rgb(126, 210, 156)
-                                        } else {
-                                            egui::Color32::from_rgb(225, 194, 108)
-                                        },
-                                    ),
-                                );
-                            });
-                    });
-                });
-                if !historical_mode {
-                    let conversation_id = self.local_conversation_id.to_string();
-                    let last = self.delivery.for_conversation(&conversation_id).last();
-                    let color = last.map(|attempt| delivery_status_color(attempt, self.slow_warning_seconds)).unwrap_or_else(|| {
-                        if self.remote_connected() {
-                            egui::Color32::from_rgb(126, 210, 156)
-                        } else {
-                            egui::Color32::from_rgb(225, 194, 108)
-                        }
-                    });
-                    let label = last.map(|a| {
-                        if a.phase == delivery_telemetry::Phase::Complete {
-                            format!("● Ready for your message · previous reply {:.1}s", a.seconds())
-                        } else if a.slow(Duration::from_secs(u64::from(self.slow_warning_seconds))) {
-                            format!("● SLOW · {} · {:.1}s", a.label(), a.seconds())
-                        } else {
-                            format!("● {} · {:.1}s", a.label(), a.seconds())
-                        }
-                    }).unwrap_or_else(|| {
-                        if self.remote_connected() { "● Ready for your message".to_owned() }
-                        else { "● Local-only · connect ChatGPT to send".to_owned() }
-                    });
-                    ui.label(egui::RichText::new(label).size(10.0).color(color));
-                }
-            });
-
-        egui::TopBottomPanel::bottom("composer_panel")
-            .resizable(false)
-            .frame(
-                egui::Frame::default()
-                    .fill(egui::Color32::from_rgb(23, 24, 29))
-                    .inner_margin(egui::Margin::symmetric(22, 14)),
-            )
-            .show(ctx, |ui| {
-                if historical_mode {
-                    egui::Frame::default()
-                        .fill(egui::Color32::from_rgb(31, 33, 39))
-                        .stroke(egui::Stroke::new(
-                            1.0_f32,
-                            egui::Color32::from_rgb(54, 57, 66),
-                        ))
-                        .corner_radius(egui::CornerRadius::same(12))
-                        .inner_margin(egui::Margin::same(14))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
-                                    "Remote conversation is not mirrored locally"
-                                } else if selected_live_mirror {
-                                    "Live mirror is read-only for now"
-                                } else {
-                                    "Historical snapshot is read-only"
-                                })
-                                .strong()
-                                .color(egui::Color32::from_rgb(221, 223, 229)),
-                            );
-                            ui.label(
-                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
-                                    "Selecting a catalog row is local-only. Use the explicit mirror action to capture this conversation through ChatGPT."
-                                } else if selected_live_mirror {
-                                    "Chatarium can refresh this real ChatGPT thread through your browser session. Same-thread write-back remains evidence-gated, so the composer stays disabled."
-                                } else {
-                                    "Sync can upgrade this imported lineage to a validated live mirror without creating a parallel conversation. Same-thread write-back remains a separate interoperability problem."
-                                })
-                                .size(11.0)
-                                .color(egui::Color32::from_rgb(139, 143, 153)),
-                            );
-                            ui.add_space(8.0);
-                            if ACCOUNT_MIRRORING_ENABLED {
-                            ui.horizontal(|ui| {
-                                let pending = self.live_mirror_pending == selected_historical_id;
-                                let can_sync = (selected_historical_id.is_some()
-                                    || remote_catalog_selected)
-                                    && self.persist_tx.is_some()
-                                    && self.account_bridge_provider.is_some()
-                                    && self.live_mirror_pending.is_none();
-                                let label = if pending {
-                                    "Syncing…"
-                                } else if remote_catalog_selected && !selected_live_mirror {
-                                    "Mirror from ChatGPT"
-                                } else if selected_live_mirror {
-                                    "Refresh from ChatGPT"
-                                } else {
-                                    "Sync from ChatGPT"
-                                };
-                                if ui
-                                    .add_enabled(
-                                        can_sync,
-                                        egui::Button::new(egui::RichText::new(label).strong())
-                                            .min_size(egui::vec2(160.0, 32.0)),
-                                    )
-                                    .clicked()
-                                {
-                                    if remote_catalog_selected && !selected_live_mirror {
-                                        mirror_remote_requested =
-                                            self.selected_remote_catalog_id.clone();
-                                    } else {
-                                        sync_live_requested = selected_historical_id;
-                                    }
-                                }
-                                if pending {
-                                    ui.spinner();
-                                }
-                            });
-                            if self.account_bridge_provider.is_none() {
-                                ui.label(
-                                    egui::RichText::new(self.account_bridge_status.as_str())
-                                        .size(10.0)
-                                        .color(egui::Color32::from_rgb(166, 139, 112)),
-                                );
-                            }
-                            } else {
-                                ui.label("ChatGPT history mirroring is paused; saved snapshots remain read-only.");
-                            }
-                        });
-                    return;
-                }
-
-                let composer_fill = if self.persist_tx.is_some() {
-                    egui::Color32::from_rgb(31, 33, 39)
-                } else {
-                    egui::Color32::from_rgb(45, 29, 31)
-                };
-
+                        // Conversation controls belong in the left workspace,
+                        // not between the transcript and the composer.
                 let mut inference_controls_changed = false;
                 let mut behavior_profile_changed = false;
-                egui::CollapsingHeader::new("Diagnostics · display")
+                egui::CollapsingHeader::new("Display · messages and diagnostics")
                     .id_salt("chatarium-diagnostics-display")
                     .default_open(false)
                     .show(ui, |ui| {
                         let mut changed = false;
+                        changed |= ui.checkbox(
+                            &mut display_preferences.render_markdown,
+                            "Render Markdown in user and agent messages",
+                        ).changed();
+                        ui.label("Markdown formatting is enabled by default. Copy and storage always preserve the original source text.");
+                        ui.separator();
                         changed |= ui.checkbox(
                             &mut display_preferences.show_transport_trace,
                             "Show transport traces in chat",
@@ -14488,6 +12738,1769 @@ impl eframe::App for ChatariumApp {
                 if behavior_profile_changed {
                     self.persist_current_behavior_profile();
                 }
+
+
+                        ui.add_space(10.0);
+                        ui.separator();
+
+                        if ACCOUNT_MIRRORING_ENABLED {
+                        ui.add_space(18.0);
+                        ui.label(
+                            egui::RichText::new("LOCAL ARCHIVE SEARCH")
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 176, 137)),
+                        );
+                        ui.add_space(5.0);
+                        let search_response = ui.add(
+                            egui::TextEdit::singleline(&mut self.archive_search_query)
+                                .id(archive_search_id)
+                                .hint_text("Search local archive…")
+                                .desired_width(sidebar_control_width),
+                        );
+                        archive_search_has_focus = search_response.has_focus();
+                        if search_response.changed() {
+                            self.archive_search_selection = None;
+                        }
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("archive-search-mode")
+                                .selected_text(self.archive_search_mode.label())
+                                .show_ui(ui, |ui| {
+                                    for mode in [
+                                        local_archive_search::ArchiveSearchMode::AllLocalData,
+                                        local_archive_search::ArchiveSearchMode::Titles,
+                                        local_archive_search::ArchiveSearchMode::MirroredTranscriptText,
+                                    ] {
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.archive_search_mode,
+                                                mode,
+                                                mode.label(),
+                                            )
+                                            .changed()
+                                        {
+                                            self.archive_search_selection = None;
+                                        }
+                                    }
+                                });
+                            egui::ComboBox::from_id_salt("archive-state-filter")
+                                .selected_text(self.archive_state_filter.label())
+                                .show_ui(ui, |ui| {
+                                    for filter in [
+                                        local_archive_search::ArchiveStateFilter::All,
+                                        local_archive_search::ArchiveStateFilter::Mirrored,
+                                        local_archive_search::ArchiveStateFilter::Partial,
+                                        local_archive_search::ArchiveStateFilter::NotMirrored,
+                                        local_archive_search::ArchiveStateFilter::TransientFailure,
+                                        local_archive_search::ArchiveStateFilter::RateLimited,
+                                        local_archive_search::ArchiveStateFilter::StructuralFailure,
+                                    ] {
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.archive_state_filter,
+                                                filter,
+                                                filter.label(),
+                                            )
+                                            .changed()
+                                        {
+                                            self.archive_search_selection = None;
+                                        }
+                                    }
+                                });
+                        });
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} local result{} · Ctrl+K focus · Esc clear",
+                                archive_results.len(),
+                                if archive_results.len() == 1 { "" } else { "s" }
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        for (result_index, result) in archive_results.iter().enumerate() {
+                            let document = &self.local_archive_search_index.documents()[result.document_index];
+                            let selected = self.archive_search_selection == Some(result_index);
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    egui::RichText::new(document.title.as_str()).size(12.0),
+                                )
+                                .clicked()
+                            {
+                                self.archive_search_selection = Some(result_index);
+                                archive_result_clicked = Some(result.clone());
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(result.kind.label())
+                                        .size(9.0)
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(112, 176, 137)),
+                                );
+                                ui.label(
+                                    egui::RichText::new(document.state.label())
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
+                            });
+                            if let Some(snippet) = result.snippet.as_deref() {
+                                ui.label(
+                                    egui::RichText::new(snippet)
+                                        .size(10.0)
+                                        .italics()
+                                        .color(egui::Color32::from_rgb(170, 174, 184)),
+                                );
+                            }
+                        }
+
+                        }
+                        ui.add_space(18.0);
+                        ui.label(
+                            egui::RichText::new("CHATS")
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 116, 126)),
+                        );
+                        ui.add_space(6.0);
+                        let data_usage = local_storage_bytes_cached(ctx, &self.journal_path);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Local Chatarium data: {} on disk",
+                                readable_byte_size(data_usage),
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(173, 189, 208)),
+                        );
+
+                        ui.horizontal(|ui| {
+                            if ui.button("+ New chat").clicked() {
+                                create_local_requested = true;
+                            }
+                            ui.checkbox(
+                                &mut self.show_archived_local_conversations,
+                                "Show archived",
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            // Reserve the button and item spacing even at the default 290px panel.
+                            let input_width = (ui.available_width() - 70.0).max(90.0);
+                            let native_search_response = ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.local_conversation_search_query,
+                                )
+                                .id(native_search_id)
+                                .hint_text("Search chats…")
+                                .desired_width(input_width),
+                            );
+                            native_search_has_focus = native_search_response.has_focus();
+                            if native_search_response.changed() {
+                                self.local_conversation_search_selection = None;
+                            }
+                            if ui
+                                .add_enabled(
+                                    !self.local_conversation_search_query.is_empty(),
+                                    egui::Button::new("Clear"),
+                                )
+                                .clicked()
+                            {
+                                self.local_conversation_search_query.clear();
+                                self.local_conversation_search_selection = None;
+                            }
+                        });
+                        ui.add_space(8.0);
+                        ui.add_space(4.0);
+
+                        let native_entries = self.local_conversation_catalog.entries();
+                        let native_rows = native_conversation_search::cached_rows(
+                            ctx,
+                            &native_search_index,
+                            &native_entries,
+                            self.show_archived_local_conversations,
+                            &self.local_conversation_search_query,
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} chat{}{}",
+                                native_rows.len(),
+                                if native_rows.len() == 1 { "" } else { "s" },
+                                if self.local_conversation_search_query.trim().is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" found · {} total", native_entries.len())
+                                },
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                        if native_rows.is_empty() {
+                            ui.label(
+                                "No local chats match. Clear the search or enable Show archived.",
+                            );
+                        }
+                        // Scroll the conversation catalog separately from status/settings.
+                        egui::ScrollArea::vertical()
+                            .id_salt("local-chats-scroll")
+                            .max_height((ctx.content_rect().height() * 0.50).clamp(180.0, 620.0))
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_width(sidebar_control_width);
+                        for row in native_rows.iter() {
+                            let entry = &native_entries[row.catalog_index];
+                            let messages = native_search_index.messages(entry.id);
+                            let title = row.title.as_str();
+                            // A 42-character unbroken title must not force the
+                            // entire resizable sidebar to its maximum width.
+                            // Keep the original title as a hover explanation.
+                            let title_preview = title.chars().take(24).collect::<String>();
+                            let title_preview = if title.chars().count() > 24 {
+                                format!("{title_preview}…")
+                            } else {
+                                title_preview
+                            };
+                            let match_kind = row.kind;
+                            let hit_choice_id =
+                                egui::Id::new(("chatarium-native-hit-choice", entry.id));
+                            let old_choice = ctx
+                                .data_mut(|data| data.get_temp::<(String, usize)>(hit_choice_id));
+                            let mut hit_ordinal = old_choice
+                                .filter(|(query, _)| query == &self.local_conversation_search_query)
+                                .map(|(_, ordinal)| ordinal)
+                                .unwrap_or(0);
+                            hit_ordinal = hit_ordinal
+                                .min(row.matching_message_indices.len().saturating_sub(1));
+                            if match_kind
+                                == native_conversation_search::NativeSearchMatch::Message
+                            {
+                                native_message_hit_conversations.insert(entry.id);
+                            }
+                            visible_native_search_matches += 1;
+                            let result_index = native_search_matches.len();
+                            native_search_matches.push(entry.id);
+                            native_copy_candidates.push((
+                                entry.id,
+                                native_conversation_search::selected_message_index(
+                                    row,
+                                    hit_ordinal,
+                                ),
+                            ));
+                            let keyboard_selected =
+                                self.local_conversation_search_selection == Some(result_index);
+                            let selected =
+                                !historical_mode && entry.id == self.local_conversation_id;
+                            egui::Frame::default()
+                                .fill(if selected || keyboard_selected {
+                                    egui::Color32::from_rgb(30, 48, 75)
+                                } else {
+                                    egui::Color32::from_rgb(27, 32, 42)
+                                })
+                                .stroke(egui::Stroke::new(
+                                    if selected || keyboard_selected { 1.7 } else { 1.0 },
+                                    if selected || keyboard_selected {
+                                        egui::Color32::from_rgb(82, 151, 235)
+                                    } else {
+                                        egui::Color32::from_rgb(57, 72, 94)
+                                    },
+                                ))
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    // Egui Frames normally shrink to their text content.
+                                    // Fill every sidebar row to the same usable width.
+                                    ui.set_min_width((sidebar_control_width - 20.0).max(120.0));
+                                    if ui
+                                        .selectable_label(
+                                            selected || keyboard_selected,
+                                            egui::RichText::new(format!(
+                                                "{}{}",
+                                                if selected { "● " } else { "" },
+                                                title_preview,
+                                            ))
+                                            .strong(),
+                                        )
+                                        .on_hover_text(title)
+                                        .clicked()
+                                    {
+                                        select_local_requested = Some(entry.id);
+                                        native_reader_target_message =
+                                            native_conversation_search::selected_message_index(
+                                                row,
+                                                hit_ordinal,
+                                            )
+                                            .map(|index| (entry.id, index));
+                                    }
+                                    ui.horizontal(|ui| {
+                                        if !self.local_conversation_search_query.trim().is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(match match_kind {
+                                                    native_conversation_search::NativeSearchMatch::Title => "TITLE MATCH",
+                                                    native_conversation_search::NativeSearchMatch::Message => "MESSAGE MATCH",
+                                                })
+                                                .size(9.0)
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(112, 176, 137)),
+                                            );
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} message{}",
+                                                messages.len(),
+                                                if messages.len() == 1 { "" } else { "s" }
+                                            ))
+                                            .size(10.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                        );
+                                        if entry.archived {
+                                            ui.label(
+                                                egui::RichText::new("ARCHIVED")
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(egui::Color32::from_rgb(166, 139, 112)),
+                                            );
+                                        }
+                                    });
+                                    // A compact latest-message excerpt distinguishes
+                                    // similarly named chats without opening them. Search
+                                    // result excerpts below remain separate and exact.
+                                    if self.local_conversation_search_query.trim().is_empty() {
+                                        let latest = messages.last().map(|message| {
+                                            message.text.split_whitespace()
+                                                .take(12)
+                                                .collect::<Vec<_>>()
+                                                .join(" ")
+                                        }).filter(|value| !value.is_empty());
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(
+                                                    latest.as_deref().unwrap_or("New conversation")
+                                                )
+                                                .size(10.0)
+                                                .color(egui::Color32::from_rgb(156, 160, 171)),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
+                                    let authored = messages.iter().filter(|m| {
+                                        matches!(m.role, DisplayRole::User | DisplayRole::Assistant)
+                                    });
+                                    let (words, bytes) = authored.fold((0_usize, 0_usize), |(words, bytes), message| {
+                                        (words + message.text.split_whitespace().count(), bytes + message.text.len())
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{words} words · {} chat text", readable_byte_size(bytes as u64)
+                                        ))
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(142, 167, 194)),
+                                    );
+                                    if row.matching_message_indices.len() > 1 {
+                                        ui.horizontal(|ui| {
+                                            if ui.small_button("Prev hit").clicked() {
+                                                hit_ordinal = if hit_ordinal == 0 {
+                                                    row.matching_message_indices.len() - 1
+                                                } else {
+                                                    hit_ordinal - 1
+                                                };
+                                            }
+                                            ui.label(format!(
+                                                "Match {} of {}",
+                                                hit_ordinal + 1,
+                                                row.matching_message_indices.len(),
+                                            ));
+                                            if ui.small_button("Next hit").clicked() {
+                                                hit_ordinal = (hit_ordinal + 1)
+                                                    % row.matching_message_indices.len();
+                                            }
+                                        });
+                                    }
+                                    ctx.data_mut(|data| {
+                                        data.insert_temp(
+                                            hit_choice_id,
+                                            (self.local_conversation_search_query.clone(), hit_ordinal),
+                                        )
+                                    });
+                                    let selected_message_index =
+                                        native_conversation_search::selected_message_index(
+                                            row,
+                                            hit_ordinal,
+                                        );
+                                    native_copy_candidates[result_index].1 = selected_message_index;
+                                    let selected_preview = if hit_ordinal == 0 {
+                                        row.preview.clone()
+                                    } else {
+                                        selected_message_index.and_then(|position| {
+                                            local_archive_search::local_snippet(
+                                                &messages[position].text,
+                                                &self.local_conversation_search_query.trim().to_lowercase(),
+                                            )
+                                        })
+                                    };
+                                    if let Some(excerpt) = selected_preview {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(excerpt)
+                                                    .italics()
+                                                    .size(10.0)
+                                                    .color(egui::Color32::from_rgb(170, 174, 184)),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
+                                    if let Some(message_index) = selected_message_index {
+                                        if ui
+                                            .small_button("Copy matched message · Alt+Enter")
+                                            .on_hover_text(
+                                                "Copy the exact visible source message with its local conversation ID and event sequence. Does not send or admit context.",
+                                            )
+                                            .clicked()
+                                        {
+                                            if let Some((text, sequence)) =
+                                                native_conversation_search::copyable_hit_markdown(
+                                                    &native_search_index,
+                                                    entry.id,
+                                                    title,
+                                                    message_index,
+                                                )
+                                            {
+                                                ctx.copy_text(text);
+                                                self.status = format!(
+                                                    "copied visible message event #{sequence} from local conversation"
+                                                );
+                                            }
+                                        }
+
+                                        if ui
+                                            .add_enabled(
+                                                self.local_memory_draft.is_empty()
+                                                    && !self.local_memory_command_pending,
+                                                egui::Button::new("Stage as memory · Alt+M"),
+                                            )
+                                            .on_hover_text(
+                                                "Stage the exact matched message in the memory editor. Record and Admit / Use once are separate explicit actions. Requires an empty memory draft.",
+                                            )
+                                            .clicked()
+                                        {
+                                            stage_native_memory_requested =
+                                                Some((entry.id, message_index));
+                                        }
+                                    }
+                                });
+                            ui.add_space(2.0);
+                        }
+                            });
+                        if !self.local_conversation_search_query.trim().is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} visible native conversation match{}",
+                                    visible_native_search_matches,
+                                    if visible_native_search_matches == 1 { "" } else { "es" },
+                                ))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            if visible_native_search_matches == 0 {
+                                ui.label(
+                                    "No visible native chats match. Enable Show archived to include archived chats.",
+                                );
+                            }
+                        }
+
+                        if !historical_mode {
+                            ui.add_space(8.0);
+                            egui::CollapsingHeader::new("Manage selected chat")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    ui.label(format!("Selected: {local_conversation_title}"));
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.local_conversation_rename)
+                                                .hint_text("Rename selected chat…")
+                                                .desired_width((sidebar_control_width - 90.0).max(100.0)),
+                                        );
+                                        if ui.button("Save").clicked() {
+                                            rename_local_requested = true;
+                                        }
+                                    });
+                                    if ui.button("Archive selected chat").clicked() {
+                                        archive_local_requested = true;
+                                    }
+                                    ui.separator();
+                                    ui.label("Export visible messages");
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Copy Markdown").clicked() {
+                                            ctx.copy_text(native_transcript_export::markdown(
+                                                self.local_conversation_id,
+                                                &local_conversation_title,
+                                                &local_display_messages,
+                                            ));
+                                            self.status = format!(
+                                                "copied {} visible native messages as Markdown",
+                                                local_display_messages.len(),
+                                            );
+                                        }
+                                        if ui.button("Copy JSON").clicked() {
+                                            match serde_json::to_string_pretty(
+                                                &native_transcript_export::json_value(
+                                                    self.local_conversation_id,
+                                                    &local_conversation_title,
+                                                    &local_display_messages,
+                                                ),
+                                            ) {
+                                                Ok(export) => {
+                                                    ctx.copy_text(export);
+                                                    self.status = format!(
+                                                        "copied {} visible native messages as JSON",
+                                                        local_display_messages.len(),
+                                                    );
+                                                }
+                                                Err(error) => {
+                                                    self.status = format!(
+                                                        "cannot format visible transcript export: {error}"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    });
+                                    ui.label(
+                                        egui::RichText::new("Clipboard export is not an archive backup.")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                                    );
+                                });
+                        }
+
+                        if ACCOUNT_MIRRORING_ENABLED && !self.remote_conversation_catalog.is_empty() {
+                            ui.add_space(16.0);
+                            ui.label(
+                                egui::RichText::new(history_observed_label(
+                                    self.remote_conversation_catalog.len(),
+                                    self.remote_conversation_total,
+                                ))
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 176, 137)),
+                            );
+                            ui.add_space(6.0);
+                            for entry in &self.remote_catalog_view {
+                                let selected = entry
+                                    .local_conversation_id
+                                    .is_some_and(|local| {
+                                        self.selected_historical_conversation == Some(local)
+                                    })
+                                    || self.selected_remote_catalog_id.as_deref()
+                                        == Some(entry.item.id.as_str());
+                                let title = entry
+                                    .item
+                                    .title
+                                    .as_deref()
+                                    .filter(|title| !title.trim().is_empty())
+                                    .unwrap_or("Untitled ChatGPT conversation");
+
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(title).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    if let Some(local) = entry.local_conversation_id {
+                                        select_historical_requested = Some(local);
+                                    } else {
+                                        select_remote_requested = Some(entry.item.id.clone());
+                                    }
+                                }
+                                let remote_state = remote_catalog_state_label(entry.status);
+                                let remote_state_color = match entry.status {
+                                    RemoteMirrorQueueStatus::MirroredFully
+                                    | RemoteMirrorQueueStatus::MirroredPartial => {
+                                        egui::Color32::from_rgb(112, 176, 137)
+                                    }
+                                    RemoteMirrorQueueStatus::RateLimited
+                                    | RemoteMirrorQueueStatus::Queued
+                                    | RemoteMirrorQueueStatus::Capturing => {
+                                        egui::Color32::from_rgb(225, 194, 108)
+                                    }
+                                    RemoteMirrorQueueStatus::TransientFailure
+                                    | RemoteMirrorQueueStatus::StructuralFailure => {
+                                        egui::Color32::from_rgb(214, 128, 128)
+                                    }
+                                    RemoteMirrorQueueStatus::Discovered => {
+                                        egui::Color32::from_rgb(112, 116, 126)
+                                    }
+                                };
+                                ui.label(
+                                    egui::RichText::new(remote_state)
+                                        .size(9.0)
+                                        .color(remote_state_color),
+                                );
+                                ui.add_space(4.0);
+                            }
+                            if let Some(remote_id) = self.selected_remote_catalog_id.as_ref() {
+                                if ui.button("Mirror from ChatGPT").clicked() {
+                                    mirror_remote_requested = Some(remote_id.clone());
+                                }
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Remote capture is a separate action; selecting a row stays local.",
+                                    )
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                                );
+                            }
+                        }
+
+                        if ACCOUNT_MIRRORING_ENABLED && !self.live_mirror_catalog.is_empty() {
+                            ui.add_space(16.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "CACHED CHATGPT · {}",
+                                    self.live_mirror_catalog.len()
+                                ))
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 116, 126)),
+                            );
+                            ui.add_space(6.0);
+                            for entry in &self.live_mirror_catalog {
+                                let selected = self.selected_historical_conversation
+                                    == Some(entry.local_conversation_id);
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(entry.title.as_str()).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    select_historical_requested = Some(entry.local_conversation_id);
+                                }
+                                ui.label(
+                                    egui::RichText::new("durable offline mirror · read-only")
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(112, 116, 126)),
+                                );
+                                ui.add_space(4.0);
+                            }
+                        }
+
+                        if ACCOUNT_MIRRORING_ENABLED && !self.historical_catalog.is_empty() {
+                            ui.add_space(16.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "IMPORTED HISTORY · {}",
+                                    self.historical_catalog.len()
+                                ))
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 116, 126)),
+                            );
+                            ui.add_space(6.0);
+                            for entry in &self.historical_catalog {
+                                let selected = self.selected_historical_conversation
+                                    == Some(entry.local_conversation_id);
+                                let title = entry
+                                    .title
+                                    .as_deref()
+                                    .filter(|title| !title.trim().is_empty())
+                                    .unwrap_or("Untitled imported conversation");
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(title).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    select_historical_requested = Some(entry.local_conversation_id);
+                                }
+                                let live_mirrored = self
+                                    .live_mirrored_conversations
+                                    .contains(&entry.local_conversation_id);
+                                ui.label(
+                                    egui::RichText::new(if live_mirrored {
+                                        "live mirror · read-only"
+                                    } else {
+                                        "historical snapshot · read-only"
+                                    })
+                                    .size(9.0)
+                                    .color(if live_mirrored {
+                                        egui::Color32::from_rgb(112, 176, 137)
+                                    } else {
+                                        egui::Color32::from_rgb(112, 116, 126)
+                                    }),
+                                );
+                                ui.add_space(4.0);
+                            }
+                        }
+
+                        ui.add_space(24.0);
+                        ui.label(
+                            egui::RichText::new("STATUS")
+                                .size(10.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(112, 116, 126)),
+                        );
+                        ui.add_space(7.0);
+                        status_row(ui, "Storage", self.draft_state(), self.persist_tx.is_some());
+                        if ACCOUNT_MIRRORING_ENABLED {
+                        status_row(
+                            ui,
+                            "History discovery",
+                            self.account_bridge_status.as_str(),
+                            self.history_bridge_proven,
+                        );
+                        status_row(
+                            ui,
+                            "Mirror",
+                            self.mirror_status.as_str(),
+                            self.mirror_status.starts_with("MIRRORED"),
+                        );
+                        let queue_counts = remote_catalog_queue_counts(&self.remote_catalog_view);
+                        status_row(
+                            ui,
+                            "Mirror queue",
+                            &format!(
+                                "observed={} · full={} · partial={} · pending={} · transient={} · rate-limited={} · structural={}",
+                                queue_counts.observed,
+                                queue_counts.full,
+                                queue_counts.partial,
+                                queue_counts.pending,
+                                queue_counts.transient,
+                                queue_counts.rate_limited,
+                                queue_counts.structural,
+                            ),
+                            true,
+                        );
+                        status_row(
+                            ui,
+                            "Mirror intent",
+                            self.remote_health.intent.as_str(),
+                            self.remote_health.intent == MirrorIntent::Enabled,
+                        );
+                        status_row(
+                            ui,
+                            "Remote health",
+                            self.remote_health.state.as_str(),
+                            self.remote_health.state
+                                == chatarium_store::remote_health::RemoteHealthState::Healthy,
+                        );
+                        if let Some(until) = self.remote_health.cooldown_until_ms {
+                            ui.label(
+                                egui::RichText::new(format!("cooldown until unix-ms {until}"))
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(186, 189, 197)),
+                            );
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "production controller · {}{}",
+                                mirror_controller_state_label(self.mirror_controller_state),
+                                self.mirror_controller_current_item
+                                    .map(|index| format!(" · current catalog item {index}"))
+                                    .unwrap_or_default(),
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(186, 189, 197)),
+                        );
+                        if let Some(detail) = &self.mirror_controller_detail {
+                            ui.label(
+                                egui::RichText::new(detail)
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            let can_start = matches!(
+                                self.mirror_controller_state,
+                                MirrorControllerState::Stopped
+                                    | MirrorControllerState::Completed
+                                    | MirrorControllerState::Failed
+                                    | MirrorControllerState::RateLimited
+                                    | MirrorControllerState::AuthenticationRequired
+                            );
+                            let can_pause = self.mirror_controller_state
+                                == MirrorControllerState::Running;
+                            let can_resume = self.mirror_controller_state
+                                == MirrorControllerState::Paused;
+                            if ui
+                                .add_enabled(can_start, egui::Button::new("START MIRRORING"))
+                                .clicked()
+                            {
+                                mirror_start_requested = true;
+                            }
+                            if ui
+                                .add_enabled(can_pause, egui::Button::new("PAUSE"))
+                                .clicked()
+                            {
+                                mirror_pause_requested = true;
+                            }
+                            if ui
+                                .add_enabled(can_resume, egui::Button::new("RESUME"))
+                                .clicked()
+                            {
+                                mirror_resume_requested = true;
+                            }
+                            if ui.button("RECHECK REMOTE HEALTH").clicked() {
+                                mirror_recheck_requested = true;
+                            }
+                        });
+                        }
+                        status_row(
+                            ui,
+                            "ChatGPT",
+                            if self.remote_connected() {
+                                "connected"
+                            } else if self.sign_in_pending {
+                                "connecting…"
+                            } else if self.sign_in_requested {
+                                "preparing sign-in…"
+                            } else if self.remote_runtime_failed {
+                                "runtime unavailable"
+                            } else if !self.remote_runtime_ready {
+                                "starting…"
+                            } else {
+                                "not connected"
+                            },
+                            self.remote_connected(),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("Slow warning after");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.slow_warning_seconds)
+                                        .range(
+                                            local_inference_settings::MIN_SLOW_WARNING_SECONDS
+                                                ..=local_inference_settings::MAX_SLOW_WARNING_SECONDS,
+                                        )
+                                        .suffix(" s"),
+                                )
+                                .on_hover_text(
+                                    "Warn if no assistant output arrives in this many seconds. Stored per local conversation.",
+                                )
+                                .changed()
+                            {
+                                self.persist_current_inference_settings();
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Read-only model attempts");
+                            let mut attempts = self.inference_settings.read_retry_attempts();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut attempts).range(
+                                        local_inference_settings::MIN_READ_RETRY_ATTEMPTS
+                                            ..=local_inference_settings::MAX_READ_RETRY_ATTEMPTS,
+                                    ),
+                                )
+                                .on_hover_text(
+                                    "1 disables automatic retries. Applies to subsequent read-only model discovery, never to inference POSTs.",
+                                )
+                                .changed()
+                            {
+                                match self.inference_settings.set_read_retry_attempts(attempts) {
+                                    Ok(()) => self.persist_current_inference_settings(),
+                                    Err(error) => self.status = error,
+                                }
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        if ACCOUNT_MIRRORING_ENABLED && self.account_bridge_provider.is_some() {
+                            if ui
+                                .add_enabled(
+                                    !self.history_list_pending,
+                                    egui::Button::new(if self.history_list_pending {
+                                        "Checking ChatGPT history…"
+                                    } else {
+                                        "Refresh ChatGPT history"
+                                    })
+                                    .min_size(egui::vec2(sidebar_control_width, 30.0)),
+                                )
+                                .clicked()
+                            {
+                                refresh_history_requested = true;
+                            }
+                        }
+
+                        ui.add_space(14.0);
+                        if self.remote_connected() {
+                            ui.label(
+                                egui::RichText::new(self.remote_identity_label())
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(186, 189, 197)),
+                            );
+                            if self.remote_models.is_empty() {
+                                if self.model_list_pending {
+                                    ui.label("Loading ChatGPT models…");
+                                } else if model_retry_available(
+                                    self.remote_connected(),
+                                    self.model_list_pending,
+                                    self.remote_models.is_empty(),
+                                ) && ui
+                                    .add_sized(
+                                        [sidebar_control_width, 30.0],
+                                        egui::Button::new("Retry model discovery"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.request_chatgpt_models();
+                                }
+                            }
+                            if !self.remote_models.is_empty() {
+                                let selected_text = self
+                                    .selected_model
+                                    .as_ref()
+                                    .and_then(|slug| {
+                                        self.remote_models
+                                            .iter()
+                                            .find(|model| &model.slug == slug)
+                                            .map(|model| model.display_name.as_str())
+                                    })
+                                    .unwrap_or("Choose model");
+                                let model_before = self.selected_model.clone();
+                                egui::ComboBox::from_id_salt("chatgpt_model")
+                                    .selected_text(selected_text)
+                                    .width(sidebar_control_width)
+                                    .show_ui(ui, |ui| {
+                                        for model in &self.remote_models {
+                                            ui.selectable_value(
+                                                &mut self.selected_model,
+                                                Some(model.slug.clone()),
+                                                model.display_name.as_str(),
+                                            );
+                                        }
+                                    });
+                                if self.selected_model != model_before {
+                                    self.persist_current_inference_settings();
+                                }
+                            }
+                            if ui
+                                .add_sized(
+                                    [sidebar_control_width, 30.0],
+                                    egui::Button::new("Disconnect ChatGPT"),
+                                )
+                                .clicked()
+                            {
+                                self.disconnect_chatgpt();
+                            }
+                        } else {
+                            let sign_in_label = if self.remote_runtime_failed {
+                                "Retry ChatGPT"
+                            } else if self.sign_in_requested {
+                                "Preparing ChatGPT…"
+                            } else if self.sign_in_pending {
+                                "Opening sign-in…"
+                            } else {
+                                "Continue with ChatGPT"
+                            };
+                            if ui
+                                .add_enabled(
+                                    !self.sign_in_pending && !self.sign_in_requested,
+                                    egui::Button::new(egui::RichText::new(sign_in_label).strong())
+                                        .min_size(egui::vec2(sidebar_control_width, 34.0)),
+                                )
+                                .clicked()
+                            {
+                                self.start_chatgpt_sign_in(ctx);
+                            }
+                            if self.sign_in_pending || self.sign_in_requested {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(
+                                        egui::RichText::new("Finish in your browser")
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(151, 154, 163)),
+                                    );
+                                });
+                                if ui
+                                    .add_sized(
+                                        [sidebar_control_width, 28.0],
+                                        egui::Button::new("Cancel sign-in"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.cancel_chatgpt_sign_in();
+                                }
+                            }
+                        }
+
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(self.remote_status.as_str())
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(126, 130, 139)),
+                        );
+
+                        ui.add_space(18.0);
+                        egui::CollapsingHeader::new(
+                            egui::RichText::new("Diagnostics")
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(151, 154, 163)),
+                        )
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "journal\n{}",
+                                    self.journal_path.display()
+                                ))
+                                .monospace()
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(126, 130, 139)),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!("status\n{}", self.status))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!("events: {}", self.events.len()))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("SIWC CAPABILITY PROBES")
+                                    .size(10.0)
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Uses your existing local ChatGPT sign-in. Credentials stay inside the SIWC bridge; probes send small real plan-usage requests.",
+                                )
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(126, 130, 139)),
+                            );
+                            let probe_running = self.capability_probe.running();
+                            let probe_block_reason = capability_probe_block_reason(
+                                self.remote_connected(),
+                                self.selected_model.is_some(),
+                                self.pending_remote_turn.is_some(),
+                                self.active_remote_turn.is_some(),
+                                probe_running,
+                            );
+                            let can_probe = probe_block_reason.is_none();
+                            if ui
+                                .add_enabled(
+                                    can_probe,
+                                    egui::Button::new(if probe_running {
+                                        "RUNNING CAPABILITY PROBES…"
+                                    } else {
+                                        "RUN CAPABILITY PROBES"
+                                    }),
+                                )
+                                .clicked()
+                            {
+                                self.start_capability_probes();
+                            }
+                            if probe_running {
+                                ui.spinner();
+                            } else if let Some(reason) = probe_block_reason {
+                                ui.label(
+                                    egui::RichText::new(format!("probe unavailable · {reason}"))
+                                        .monospace()
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
+                            if !self.capability_probe.status.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&self.capability_probe.status)
+                                        .monospace()
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
+                            if let Some(report_model) = self.capability_probe.model.as_deref() {
+                                let age = self
+                                    .capability_probe
+                                    .generated_unix_ms
+                                    .map(probe_report_age)
+                                    .unwrap_or_else(|| "time unknown".to_owned());
+                                let model_note = if self.selected_model.as_deref()
+                                    == Some(report_model)
+                                {
+                                    ""
+                                } else {
+                                    " · SELECTED MODEL DIFFERS"
+                                };
+                                let profile_note = match (
+                                    self.capability_probe.profile_id.as_deref(),
+                                    self.remote_session.profile_id.as_deref(),
+                                ) {
+                                    (Some(report), Some(current)) if report == current => "",
+                                    (Some(_), Some(_)) => " · PROFILE DIFFERS",
+                                    (Some(_), None) => " · PROFILE NOT CONNECTED",
+                                    (None, Some(_)) => " · REPORT PROFILE UNKNOWN",
+                                    (None, None) => "",
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "saved report · {report_model} · {age}{model_note}{profile_note}"
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
+                            if !self.capability_probe.results.is_empty() {
+                                let contract_state =
+                                    local_inference_contract::contract_state(&self.capability_probe);
+                                let contract_active = contract_state == "ready"
+                                    && self.capability_probe.profile_id.as_deref()
+                                        == self.remote_session.profile_id.as_deref()
+                                    && self.capability_probe.model.as_deref()
+                                        == self.selected_model.as_deref();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "local inference contract · {contract_state}{}",
+                                        if contract_active {
+                                            " · ACTIVE FOR CURRENT PROFILE/MODEL"
+                                        } else {
+                                            ""
+                                        }
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .strong(),
+                                );
+
+                                let data_dir =
+                                    self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+                                let report_path = data_dir.join("siwc-capability-probes.json");
+                                let contract_path = data_dir.join("local-inference-contract.json");
+                                let can_copy_artifacts =
+                                    !probe_running && self.capability_probe.generated_unix_ms.is_some();
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .add_enabled(
+                                            can_copy_artifacts,
+                                            egui::Button::new("COPY SANITIZED EVIDENCE"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.capability_probe.status =
+                                            match std::fs::read_to_string(&report_path) {
+                                                Ok(text) => {
+                                                    ui.ctx().copy_text(text);
+                                                    "copied sanitized capability evidence"
+                                                        .to_owned()
+                                                }
+                                                Err(error) => format!(
+                                                    "could not copy sanitized evidence · {error}"
+                                                ),
+                                            };
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            can_copy_artifacts,
+                                            egui::Button::new("COPY INFERENCE CONTRACT"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.capability_probe.status =
+                                            match std::fs::read_to_string(&contract_path) {
+                                                Ok(text) => {
+                                                    ui.ctx().copy_text(text);
+                                                    "copied local inference contract".to_owned()
+                                                }
+                                                Err(error) => format!(
+                                                    "could not copy inference contract · {error}"
+                                                ),
+                                            };
+                                    }
+                                });
+                            }
+                            for result in &self.capability_probe.results {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} · {}{}",
+                                        result.name,
+                                        result.status,
+                                        probe_result_detail(result)
+                                    ))
+                                    .monospace()
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(126, 130, 139)),
+                                );
+                            }
+
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("LOCAL ARCHIVE").size(10.0).strong());
+                            ui.horizontal(|ui| {
+                                if ui.button("CHECK ARCHIVE").clicked() {
+                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+                                    self.archive_maintenance_status = match check_archive(data_dir) {
+                                        Ok(report) => format!("{} · {} events · {} catalog items", report.status, report.journal_event_count, report.catalog_count),
+                                        Err(error) => format!("archive check failed · {error}"),
+                                    };
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("backup path");
+                                ui.text_edit_singleline(&mut self.archive_backup_path);
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("CREATE BACKUP").clicked() {
+                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
+                                    self.archive_maintenance_status = match create_backup(data_dir, self.archive_backup_path.trim()) {
+                                        Ok(_) => "backup created and verified".to_owned(),
+                                        Err(error) => format!("backup failed · {error}"),
+                                    };
+                                }
+                                if ui.button("VERIFY BACKUP").clicked() {
+                                    self.archive_maintenance_status = match verify_backup(self.archive_backup_path.trim()) {
+                                        Ok(_) => "backup verified".to_owned(),
+                                        Err(error) => format!("backup verification failed · {error}"),
+                                    };
+                                }
+                            });
+                            if ui.button("RESTORE BACKUP").clicked() && !self.archive_backup_path.trim().is_empty() {
+                                self.archive_restore_confirmation_pending = true;
+                            }
+                            if self.archive_restore_confirmation_pending {
+                                ui.colored_label(egui::Color32::YELLOW, "Restore replaces active local archive; a safety copy is retained.");
+                                ui.horizontal(|ui| {
+                                    if ui.button("CONFIRM RESTORE").clicked() {
+                                        let target = self.journal_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                        self.archive_maintenance_status = match restore_backup(self.archive_backup_path.trim(), target) {
+                                            Ok(_) => "backup restored after isolated verification".to_owned(),
+                                            Err(error) => format!("restore failed; active archive preserved · {error}"),
+                                        };
+                                        self.archive_restore_confirmation_pending = false;
+                                    }
+                                    if ui.button("CANCEL RESTORE").clicked() {
+                                        self.archive_restore_confirmation_pending = false;
+                                    }
+                                });
+                            }
+                            ui.label(egui::RichText::new(&self.archive_maintenance_status).size(10.0).color(egui::Color32::from_rgb(126, 130, 139)));
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "local conversation\n{}",
+                                    self.local_conversation_id
+                                ))
+                                .monospace()
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(126, 130, 139)),
+                            );
+                        });
+                    });
+            });
+
+        if focus_archive_search {
+            ctx.memory_mut(|memory| memory.request_focus(archive_search_id));
+        }
+        if focus_native_search {
+            ctx.memory_mut(|memory| memory.request_focus(native_search_id));
+        }
+        if focus_native_composer {
+            ctx.memory_mut(|memory| {
+                memory.request_focus(egui::Id::new("chatarium-message-composer"))
+            });
+        }
+        if self
+            .local_conversation_search_selection
+            .is_some_and(|index| index >= native_search_matches.len())
+        {
+            self.local_conversation_search_selection = None;
+        }
+        if native_search_has_focus {
+            let mut clear_focus = false;
+            let mut copy_hit_requested = false;
+            let mut stage_hit_requested = false;
+            let mut move_message_hit = 0_isize;
+            ctx.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    self.local_conversation_search_selection = local_archive_search::move_selection(
+                        self.local_conversation_search_selection,
+                        native_search_matches.len(),
+                        1,
+                    );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    self.local_conversation_search_selection = local_archive_search::move_selection(
+                        self.local_conversation_search_selection,
+                        native_search_matches.len(),
+                        -1,
+                    );
+                }
+                if input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown) {
+                    move_message_hit = 1;
+                }
+                if input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp) {
+                    move_message_hit = -1;
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                    select_local_requested = native_conversation_search::activate_selection(
+                        &native_search_matches,
+                        self.local_conversation_search_selection,
+                    );
+                    native_reader_target_message =
+                        native_conversation_search::activate_copy_selection(
+                            &native_copy_candidates,
+                            self.local_conversation_search_selection,
+                        );
+                }
+                if input.consume_key(egui::Modifiers::ALT, egui::Key::Enter) {
+                    copy_hit_requested = true;
+                }
+                if input.consume_key(egui::Modifiers::ALT, egui::Key::M) {
+                    stage_hit_requested = true;
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    self.local_conversation_search_query.clear();
+                    self.local_conversation_search_selection = None;
+                    clear_focus = true;
+                }
+            });
+            if move_message_hit != 0 {
+                let native_entries = self.local_conversation_catalog.entries();
+                let rows = native_conversation_search::cached_rows(
+                    ctx,
+                    &native_search_index,
+                    &native_entries,
+                    self.show_archived_local_conversations,
+                    &self.local_conversation_search_query,
+                );
+                let row_index = self.local_conversation_search_selection.unwrap_or(0);
+                if let Some(row) = rows.get(row_index) {
+                    let conversation_id = native_entries[row.catalog_index].id;
+                    let choice_id = egui::Id::new(("chatarium-native-hit-choice", conversation_id));
+                    let prior = ctx.data_mut(|data| data.get_temp::<(String, usize)>(choice_id));
+                    let ordinal = prior
+                        .filter(|(query, _)| query == &self.local_conversation_search_query)
+                        .map(|(_, ordinal)| ordinal)
+                        .unwrap_or(0);
+                    if let Some((next_ordinal, message_index)) =
+                        native_conversation_search::cycle_matching_message(
+                            row,
+                            ordinal,
+                            move_message_hit,
+                        )
+                    {
+                        ctx.data_mut(|data| {
+                            data.insert_temp(
+                                choice_id,
+                                (self.local_conversation_search_query.clone(), next_ordinal),
+                            )
+                        });
+                        if let Some(candidate) = native_copy_candidates.get_mut(row_index) {
+                            candidate.1 = Some(message_index);
+                        }
+                    }
+                }
+            }
+            if copy_hit_requested {
+                if let Some((conversation_id, message_index)) =
+                    native_conversation_search::activate_copy_selection(
+                        &native_copy_candidates,
+                        self.local_conversation_search_selection,
+                    )
+                {
+                    let messages = native_search_index.messages(conversation_id);
+                    let title = self
+                        .local_conversation_catalog
+                        .entry(conversation_id)
+                        .and_then(|entry| entry.title.clone())
+                        .filter(|title| !title.trim().is_empty())
+                        .unwrap_or_else(|| derived_conversation_title(messages));
+                    if let Some((text, sequence)) =
+                        native_conversation_search::copyable_hit_markdown(
+                            &native_search_index,
+                            conversation_id,
+                            &title,
+                            message_index,
+                        )
+                    {
+                        ctx.copy_text(text);
+                        self.status = format!(
+                            "copied visible message event #{sequence} from local conversation"
+                        );
+                    }
+                }
+            }
+            if stage_hit_requested {
+                stage_native_memory_requested = native_conversation_search::activate_copy_selection(
+                    &native_copy_candidates,
+                    self.local_conversation_search_selection,
+                );
+            }
+            if clear_focus {
+                ctx.memory_mut(|memory| memory.surrender_focus(native_search_id));
+            }
+        }
+        if let Some((source_conversation_id, message_index)) = stage_native_memory_requested {
+            if self.local_memory_draft.is_empty() && !self.local_memory_command_pending {
+                if let Some(staged) = native_conversation_search::stageable_hit(
+                    &native_search_index,
+                    source_conversation_id,
+                    message_index,
+                ) {
+                    self.local_memory_draft = staged.text;
+                    self.staged_local_memory_origin =
+                        Some((staged.source_conversation_id, staged.source_event_sequence));
+                    self.status = format!(
+                        "staged message event #{} as a local memory draft; open Context & inference controls → Local memory to review and Record. No context admitted.",
+                        staged.source_event_sequence,
+                    );
+                }
+            }
+        }
+        if archive_search_has_focus {
+            ctx.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    self.archive_search_selection = local_archive_search::move_selection(
+                        self.archive_search_selection,
+                        archive_results.len(),
+                        1,
+                    );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    self.archive_search_selection = local_archive_search::move_selection(
+                        self.archive_search_selection,
+                        archive_results.len(),
+                        -1,
+                    );
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    self.archive_search_query.clear();
+                    self.archive_search_selection = None;
+                    clear_archive_search_focus = true;
+                }
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                    if let Some(selection) = self.archive_search_selection {
+                        archive_result_clicked = local_archive_search::activate_selection(
+                            &archive_results,
+                            Some(selection),
+                        );
+                    } else {
+                        archive_result_clicked =
+                            local_archive_search::activate_selection(&archive_results, None);
+                    }
+                }
+            });
+        }
+        if clear_archive_search_focus {
+            ctx.memory_mut(|memory| memory.surrender_focus(archive_search_id));
+        }
+        if let Some(result) = archive_result_clicked {
+            self.reader_search_query =
+                if result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript {
+                    self.archive_search_query.clone()
+                } else {
+                    String::new()
+                };
+            open_reader_from_transcript_search =
+                result.kind == local_archive_search::ArchiveMatchKind::LocalTranscript;
+            if let Some(entry) = self
+                .remote_catalog_view
+                .iter()
+                .find(|entry| entry.catalog_index == result.catalog_index)
+            {
+                if let Some(local_conversation_id) = entry.local_conversation_id {
+                    select_historical_requested = Some(local_conversation_id);
+                } else {
+                    select_remote_requested = Some(entry.item.id.clone());
+                }
+            }
+        }
+        if create_local_requested {
+            let before = self.local_conversation_id;
+            self.create_local_conversation();
+            if self.local_conversation_id != before {
+                // The transcript snapshot was taken before this selection.
+                // Force a fresh frame rather than waiting for another event.
+                ctx.request_repaint();
+                // Newly created conversations are empty: show them even if a
+                // previous search filter would have hidden their sidebar row.
+                self.local_conversation_search_query.clear();
+                self.local_conversation_search_selection = None;
+                ctx.memory_mut(|memory| {
+                    memory.request_focus(egui::Id::new("chatarium-message-composer"))
+                });
+            }
+        } else if let Some(local_conversation_id) = select_local_requested {
+            let can_switch = !self.local_conversation_busy();
+            let before = self.local_conversation_id;
+            self.activate_local_conversation(local_conversation_id);
+            if self.local_conversation_id != before {
+                // Sidebar selection also occurs after the initial projection.
+                ctx.request_repaint();
+            }
+            if can_switch
+                && self.local_conversation_id == local_conversation_id
+                && !self.local_conversation_search_query.trim().is_empty()
+            {
+                let kind = if native_message_hit_conversations.contains(&local_conversation_id) {
+                    native_conversation_search::NativeSearchMatch::Message
+                } else {
+                    native_conversation_search::NativeSearchMatch::Title
+                };
+                self.reader_search_query = native_conversation_search::reader_query_for_result(
+                    &self.local_conversation_search_query,
+                    kind,
+                )
+                .unwrap_or_default();
+                self.reader_search_hit = native_reader_target_message
+                    .filter(|(owner, _)| *owner == local_conversation_id)
+                    .and_then(|(_, position)| {
+                        native_conversation_search::reader_hit_ordinal(
+                            native_search_index.messages(local_conversation_id),
+                            &self.reader_search_query,
+                            position,
+                        )
+                    })
+                    .or_else(|| (!self.reader_search_query.is_empty()).then_some(0));
+                if self.reader_search_hit.is_some() {
+                    self.reader_restore_pending = false;
+                }
+            }
+        } else if let Some(local_conversation_id) = select_historical_requested {
+            self.select_historical_conversation(local_conversation_id);
+        } else if let Some(remote_conversation_id) = select_remote_requested {
+            self.selected_historical_conversation = None;
+            self.selected_remote_catalog_id = Some(remote_conversation_id);
+            self.historical_messages.clear();
+            self.historical_load_pending = None;
+            self.status = "remote conversation selected; local mirror unavailable".to_owned();
+        }
+        if rename_local_requested {
+            self.rename_current_local_conversation();
+        }
+        if archive_local_requested {
+            self.archive_current_local_conversation();
+        }
+        if open_reader_from_transcript_search {
+            self.reader_search_hit = Some(0);
+        }
+        if let Some(remote_conversation_id) = mirror_remote_requested.as_ref() {
+            self.open_discovered_remote_conversation(remote_conversation_id.clone(), ctx);
+        }
+        if refresh_history_requested {
+            self.start_history_discovery(ctx);
+        }
+        if mirror_start_requested {
+            self.start_mirror_controller();
+        } else if mirror_recheck_requested {
+            self.recheck_remote_health();
+        } else if mirror_pause_requested {
+            self.send_mirror_controller_command(MirrorControllerCommand::Pause);
+        } else if mirror_resume_requested {
+            self.send_mirror_controller_command(MirrorControllerCommand::Resume);
+        }
+
+        egui::TopBottomPanel::top("conversation_header")
+            .resizable(false)
+            .exact_height(91.0)
+            .frame(
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(23, 24, 29))
+                    .inner_margin(egui::Margin::symmetric(22, 10)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(conversation_title.as_str())
+                                .size(19.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(238, 239, 244)),
+                        );
+                        ui.label(
+                            egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                "Remote catalog item · not mirrored locally"
+                            } else if selected_live_mirror {
+                                "Local durable mirror · read-only"
+                            } else if historical_mode {
+                                "Historical account-export snapshot · read-only"
+                            } else if self.remote_connected() {
+                                "Durable on this machine · authenticated with ChatGPT"
+                            } else {
+                                "Durable on this machine · connect ChatGPT to enable remote turns"
+                            })
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(139, 143, 153)),
+                        );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let connected = self.remote_connected();
+                        egui::Frame::default()
+                            .fill(if selected_live_mirror {
+                                egui::Color32::from_rgb(24, 52, 37)
+                            } else if historical_mode {
+                                egui::Color32::from_rgb(39, 42, 49)
+                            } else if connected {
+                                egui::Color32::from_rgb(24, 52, 37)
+                            } else {
+                                egui::Color32::from_rgb(48, 42, 26)
+                            })
+                            .corner_radius(egui::CornerRadius::same(12))
+                            .inner_margin(egui::Margin::symmetric(10, 5))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                        "REMOTE · NOT MIRRORED"
+                                    } else if selected_live_mirror {
+                                        if self.live_mirror_truncated_before {
+                                            "MIRRORED LOCALLY · PARTIAL"
+                                        } else {
+                                            "MIRRORED LOCALLY"
+                                        }
+                                    } else if historical_mode {
+                                        "IMPORTED SNAPSHOT"
+                                    } else if connected {
+                                        "CHATGPT CONNECTED"
+                                    } else {
+                                        "LOCAL ONLY"
+                                    })
+                                    .size(10.0)
+                                    .strong()
+                                    .color(
+                                        if remote_catalog_selected && !selected_live_mirror {
+                                            egui::Color32::from_rgb(225, 194, 108)
+                                        } else if selected_live_mirror {
+                                            egui::Color32::from_rgb(126, 210, 156)
+                                        } else if historical_mode {
+                                            egui::Color32::from_rgb(179, 184, 196)
+                                        } else if connected {
+                                            egui::Color32::from_rgb(126, 210, 156)
+                                        } else {
+                                            egui::Color32::from_rgb(225, 194, 108)
+                                        },
+                                    ),
+                                );
+                            });
+                    });
+                });
+                if !historical_mode {
+                    let conversation_id = self.local_conversation_id.to_string();
+                    let last = self.delivery.for_conversation(&conversation_id).last();
+                    let color = last.map(|attempt| delivery_status_color(attempt, self.slow_warning_seconds)).unwrap_or_else(|| {
+                        if self.remote_connected() {
+                            egui::Color32::from_rgb(126, 210, 156)
+                        } else {
+                            egui::Color32::from_rgb(225, 194, 108)
+                        }
+                    });
+                    let label = last.map(|a| {
+                        if a.phase == delivery_telemetry::Phase::Complete {
+                            format!("● Ready for your message · previous reply {:.1}s", a.seconds())
+                        } else if a.slow(Duration::from_secs(u64::from(self.slow_warning_seconds))) {
+                            format!("● SLOW · {} · {:.1}s", a.label(), a.seconds())
+                        } else {
+                            format!("● {} · {:.1}s", a.label(), a.seconds())
+                        }
+                    }).unwrap_or_else(|| {
+                        if self.remote_connected() { "● Ready for your message".to_owned() }
+                        else { "● Local-only · connect ChatGPT to send".to_owned() }
+                    });
+                    ui.label(egui::RichText::new(label).size(10.0).color(color));
+                }
+            });
+
+        egui::TopBottomPanel::bottom("composer_panel")
+            .resizable(false)
+            .frame(
+                egui::Frame::default()
+                    .fill(egui::Color32::from_rgb(23, 24, 29))
+                    .inner_margin(egui::Margin::symmetric(22, 14)),
+            )
+            .show(ctx, |ui| {
+                if historical_mode {
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgb(31, 33, 39))
+                        .stroke(egui::Stroke::new(
+                            1.0_f32,
+                            egui::Color32::from_rgb(54, 57, 66),
+                        ))
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .inner_margin(egui::Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                    "Remote conversation is not mirrored locally"
+                                } else if selected_live_mirror {
+                                    "Live mirror is read-only for now"
+                                } else {
+                                    "Historical snapshot is read-only"
+                                })
+                                .strong()
+                                .color(egui::Color32::from_rgb(221, 223, 229)),
+                            );
+                            ui.label(
+                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                    "Selecting a catalog row is local-only. Use the explicit mirror action to capture this conversation through ChatGPT."
+                                } else if selected_live_mirror {
+                                    "Chatarium can refresh this real ChatGPT thread through your browser session. Same-thread write-back remains evidence-gated, so the composer stays disabled."
+                                } else {
+                                    "Sync can upgrade this imported lineage to a validated live mirror without creating a parallel conversation. Same-thread write-back remains a separate interoperability problem."
+                                })
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            ui.add_space(8.0);
+                            if ACCOUNT_MIRRORING_ENABLED {
+                            ui.horizontal(|ui| {
+                                let pending = self.live_mirror_pending == selected_historical_id;
+                                let can_sync = (selected_historical_id.is_some()
+                                    || remote_catalog_selected)
+                                    && self.persist_tx.is_some()
+                                    && self.account_bridge_provider.is_some()
+                                    && self.live_mirror_pending.is_none();
+                                let label = if pending {
+                                    "Syncing…"
+                                } else if remote_catalog_selected && !selected_live_mirror {
+                                    "Mirror from ChatGPT"
+                                } else if selected_live_mirror {
+                                    "Refresh from ChatGPT"
+                                } else {
+                                    "Sync from ChatGPT"
+                                };
+                                if ui
+                                    .add_enabled(
+                                        can_sync,
+                                        egui::Button::new(egui::RichText::new(label).strong())
+                                            .min_size(egui::vec2(160.0, 32.0)),
+                                    )
+                                    .clicked()
+                                {
+                                    if remote_catalog_selected && !selected_live_mirror {
+                                        mirror_remote_requested =
+                                            self.selected_remote_catalog_id.clone();
+                                    } else {
+                                        sync_live_requested = selected_historical_id;
+                                    }
+                                }
+                                if pending {
+                                    ui.spinner();
+                                }
+                            });
+                            if self.account_bridge_provider.is_none() {
+                                ui.label(
+                                    egui::RichText::new(self.account_bridge_status.as_str())
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(166, 139, 112)),
+                                );
+                            }
+                            } else {
+                                ui.label("ChatGPT history mirroring is paused; saved snapshots remain read-only.");
+                            }
+                        });
+                    return;
+                }
+
+                let composer_fill = if self.persist_tx.is_some() {
+                    egui::Color32::from_rgb(31, 33, 39)
+                } else {
+                    egui::Color32::from_rgb(45, 29, 31)
+                };
 
                 ui.add_space(8.0);
                 if let Some((filename, byte_len)) = self
