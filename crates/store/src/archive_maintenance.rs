@@ -43,6 +43,7 @@ use crate::remote_mirror_selection_audit::replay_remote_mirror_selection_audit;
 use crate::remote_mirror_snapshot_audit::replay_remote_conversation_snapshot_audit;
 use crate::remote_mirror_transcript::project_remote_active_transcript;
 use crate::remote_read_audit::replay_remote_read_audit;
+use crate::siwc_agent_activity_audit::replay_siwc_agent_activity_audit;
 use crate::supervision_audit::replay_supervision_audit;
 use crate::tool_call_audit::replay_tool_call_audit;
 use crate::tool_outcome_audit::replay_tool_call_outcome_audit;
@@ -222,6 +223,9 @@ pub fn check_archive(
     local_memory_label_facets(&events, true).map_err(err)?;
     local_memory_source_facets(&events, true).map_err(err)?;
     replay_local_memory_turn_selection_audit(&events).map_err(err)?;
+    // Tool and agent activity are context-excluded, but they are still
+    // authoritative local journal facts and must pass archive integrity.
+    replay_siwc_agent_activity_audit(&events).map_err(err)?;
     let memory_context = replay_local_memory_context_audit(&events).map_err(err)?;
     let memory_destinations = memory_context
         .iter()
@@ -497,6 +501,60 @@ mod tests {
 
     fn temp(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("chatarium-archive-{label}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn siwc_activity_backup_replays_and_archive_rejects_forged_provenance() {
+        use crate::siwc_agent_activity_audit::{
+            append_siwc_agent_activity_checked, replay_siwc_agent_activity_audit,
+        };
+        use chatarium_core::{LocalConversationId, LocalTurnId};
+
+        let root = temp("siwc-activity");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let conversation = LocalConversationId::new();
+        let turn = LocalTurnId::new();
+        let mut store = JsonlEventStore::open(root.join(JOURNAL_FILE)).unwrap();
+        let frame = json!({
+            "type": "agent_activity",
+            "source": "siwc_bridge_observation",
+            "request_id": "request-1",
+            "sequence": 1,
+            "stage": "started",
+            "observed_at_utc": "2026-10-13T18:30:00.000Z",
+            "elapsed_ms": 0.0
+        })
+        .to_string();
+        append_siwc_agent_activity_checked(&mut store, conversation, turn, &frame).unwrap();
+
+        check_archive(&root).unwrap();
+        let backup = root.join("backup");
+        let target = root.join("restored");
+        create_backup(&root, &backup).unwrap();
+        verify_backup(&backup).unwrap();
+        restore_backup(&backup, &target).unwrap();
+        let restored = JsonlEventStore::open(target.join(JOURNAL_FILE)).unwrap();
+        let rows = replay_siwc_agent_activity_audit(restored.events()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].conversation_id, conversation);
+        assert_eq!(rows[0].turn_id, turn);
+        drop(restored);
+
+        // A malformed complete activity event cannot masquerade as a valid
+        // backup or be normalized into success during archive inspection.
+        let previous: Value = serde_json::from_str(&store.events()[0].payload).unwrap();
+        let mut corrupted = previous;
+        corrupted["observation"]["source"] = json!("untrusted");
+        store
+            .append_scoped(
+                store.events()[0].scope.clone(),
+                EventKind::SiwcAgentActivityObserved,
+                corrupted.to_string(),
+            )
+            .unwrap();
+        assert!(check_archive(&root).is_err());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
