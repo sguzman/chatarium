@@ -3526,6 +3526,54 @@ impl ChatariumApp {
                     }
                     self.status = format!("tool provider {} durably updated", provider_id.get());
                 }
+                PersistNotice::AgentMcpCallProposed {
+                    turn_id,
+                    call_id,
+                    route_id,
+                    policy,
+                    appended_events,
+                } => {
+                    self.events.extend(appended_events);
+                    self.tool_command_pending = false;
+                    let matches_flow = self.agent_mcp_flow.as_ref().is_some_and(|flow| {
+                        flow.turn_id == turn_id
+                            && flow.pending_call.is_none()
+                            && flow.policy == policy
+                    });
+                    if !matches_flow {
+                        self.status = "MCP proposal was recorded, but its agent session is no longer active. No tool launched.".to_owned();
+                        continue;
+                    }
+                    if let Some(flow) = self.agent_mcp_flow.as_mut() {
+                        flow.pending_call = Some(call_id);
+                        flow.pending_route = Some(route_id);
+                    }
+                    let record = replay_tool_call_audit(&self.events)
+                        .ok()
+                        .and_then(|calls| calls.into_iter()
+                            .find(|call| call.call_id == call_id));
+                    let provider_is_builtin = record.and_then(|call| {
+                        replay_tool_provider_audit(&self.events)
+                            .ok()
+                            .and_then(|providers| providers.into_iter().find(|provider| {
+                                provider.provider_id == call.provider_id
+                            }))
+                    }).is_some_and(|provider| {
+                        provider.name.as_str() == local_tool_adapter::BUILTIN_PROVIDER_NAME
+                    });
+                    if policy == mcp_agent_defaults::ToolPolicy::Automatic {
+                        if provider_is_builtin {
+                            self.dispatch_builtin_hello(route_id);
+                        } else {
+                            self.execute_approved_stdio_tool(call_id);
+                        }
+                    } else {
+                        self.status = format!(
+                            "MCP call {} waiting for your Allow, then Run. The assistant turn is paused.",
+                            call_id.get(),
+                        );
+                    }
+                }
                 PersistNotice::ToolCallProposed {
                     call_id,
                     route_id,
@@ -3559,6 +3607,15 @@ impl ChatariumApp {
                         count,
                         if count == 1 { "" } else { "s" },
                     );
+                    let tool = self.agent_mcp_flow.as_ref().and_then(|flow| {
+                        (flow.pending_route == Some(route_id)).then_some(flow.pending_call).flatten()
+                    });
+                    if let Some(call_id) = tool {
+                        self.decide_tool_result_context(
+                            call_id,
+                            ToolResultContextDecision::Admit,
+                        );
+                    }
                 }
                 PersistNotice::SandboxHostChecked { result } => {
                     self.tool_command_pending = false;
@@ -3594,6 +3651,14 @@ impl ChatariumApp {
                         "external MCP call {} {status}; outcome durably recorded",
                         call_id.get()
                     );
+                    if self.agent_mcp_flow.as_ref()
+                        .is_some_and(|flow| flow.pending_call == Some(call_id))
+                    {
+                        self.decide_tool_result_context(
+                            call_id,
+                            ToolResultContextDecision::Admit,
+                        );
+                    }
                 }
                 PersistNotice::ToolResultContextDecisionUpdated { call_id, event } => {
                     self.events.push(event);
@@ -3602,6 +3667,22 @@ impl ChatariumApp {
                         "tool call {} context admission durably updated",
                         call_id.get()
                     );
+                    if self.agent_mcp_flow.as_ref()
+                        .is_some_and(|flow| flow.pending_call == Some(call_id))
+                    {
+                        let admitted = replay_tool_result_context_audit(&self.events)
+                            .ok()
+                            .is_some_and(|decisions| decisions.iter().any(|decision| {
+                                decision.call_id == call_id
+                                    && decision.decision == ToolResultContextDecision::Admit
+                            }));
+                        if admitted {
+                            self.continue_agent_after_admitted_result(call_id);
+                        } else {
+                            self.agent_mcp_flow = None;
+                            self.status = "MCP turn stopped: result was excluded or admission is unverified".to_owned();
+                        }
+                    }
                 }
                 PersistNotice::LocalMemoryArtifactRecorded { memory_id, event } => {
                     self.events.push(event);
