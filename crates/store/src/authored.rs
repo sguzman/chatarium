@@ -215,7 +215,10 @@ fn validate_attachment(attachment: &Value) -> Result<(), String> {
     {
         return Err("attachment filename mismatch".to_owned());
     }
-    let expected_mime = match filename.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()) {
+    let expected_mime = match filename
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+    {
         Some(ext) => match ext.as_str() {
             "txt" | "md" => "text/plain",
             "csv" => "text/csv",
@@ -239,9 +242,7 @@ fn validate_attachment(attachment: &Value) -> Result<(), String> {
     let encoded = payload
         .strip_prefix(&prefix)
         .ok_or_else(|| "attachment data URL MIME disagrees".to_owned())?;
-    if payload.len() > 180_000
-        || encoded.len() != (byte_len as usize).div_ceil(3) * 4
-    {
+    if payload.len() > 180_000 || encoded.len() != (byte_len as usize).div_ceil(3) * 4 {
         return Err("attachment encoded byte length invalid or oversized".to_owned());
     }
     let padding = if encoded.ends_with("==") {
@@ -256,7 +257,10 @@ fn validate_attachment(attachment: &Value) -> Result<(), String> {
             .bytes()
             .take(encoded.len() - padding)
             .all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/'))
-        || !encoded.bytes().skip(encoded.len() - padding).all(|byte| byte == b'=')
+        || !encoded
+            .bytes()
+            .skip(encoded.len() - padding)
+            .all(|byte| byte == b'=')
     {
         return Err("attachment base64 payload malformed or length disagrees".to_owned());
     }
@@ -470,14 +474,18 @@ mod tests {
             let mut forged = base.clone();
             forged[changed.0] = changed.1;
             let mut store = MemoryEventStore::default();
-            assert!(commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err());
+            assert!(
+                commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err()
+            );
             assert!(store.events().is_empty());
         }
         for corrupted in ["YWJ!", "YW=J", "YWJj="] {
             let mut forged = base.clone();
             forged["content"]["file_data"] = format!("data:text/plain;base64,{corrupted}");
             let mut store = MemoryEventStore::default();
-            assert!(commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err());
+            assert!(
+                commit_user_message_with_attachment(&mut store, &message, Some(&forged)).is_err()
+            );
             assert!(store.events().is_empty());
         }
     }
