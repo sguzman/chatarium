@@ -135,7 +135,7 @@ test("offline alpha: session, models, streamed turn, cancellation and recovery",
     event.source === "siwc_bridge_observation" &&
     typeof event.elapsed_ms === "number" &&
     event.elapsed_ms >= 0 &&
-    /^\\d{4}-\\d\\d-\\d\\dT/.test(event.observed_at_utc),
+    /^\d{4}-\d\d-\d\dT/.test(event.observed_at_utc),
   ));
   assert.equal(activity.at(-1).delivery_evidence, "assistant_delta_seen");
   assert.ok(!JSON.stringify(activity).includes("reasoning_summary"));
