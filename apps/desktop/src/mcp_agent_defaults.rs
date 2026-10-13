@@ -113,7 +113,10 @@ impl AgentDefaults {
             bootstrap,
             policy_rules,
             max_calls,
-            seed_new_conversations: value.get("seed_new_conversations").and_then(Value::as_bool).unwrap_or(false),
+            seed_new_conversations: value
+                .get("seed_new_conversations")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         };
         settings.validate()?;
         Ok(settings)
