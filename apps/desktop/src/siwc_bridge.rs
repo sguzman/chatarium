@@ -1080,18 +1080,20 @@ mod tests {
 
     #[test]
     fn only_sanitized_model_read_retries_are_diagnostic() {
-        let message = r#"{"type":"read_retry_scheduled","request_id":"an-account-local-request-id","operation":"models","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":350}"#;
+        let message = r#"{"type":"read_retry_scheduled","request_id":"an-account-local-request-id","operation":"models","stage":"model_discovery","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":350}"#;
         let notice = read_retry_diagnostic(message).unwrap();
         assert!(notice.contains("read-only models"));
         assert!(notice.contains("HTTP 429"));
         assert!(notice.contains("delay=350ms"));
         assert!(!notice.contains("an-account-local-request-id"));
+        let configured = r#"{"type":"read_retry_scheduled","request_id":"request-4","operation":"models","stage":"model_discovery","category":"http_transient","status":503,"attempt":4,"next_attempt":5,"delay_ms":20000}"#;
+        assert!(read_retry_diagnostic(configured).unwrap().contains("delay=20000ms"));
         for invalid in [
-            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1,"access_token":"secret"}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","stage":"model_discovery","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1,"access_token":"secret"}"#,
             r#"{"type":"read_retry_scheduled","request_id":"a","operation":"stream_response","category":"rate_limit","status":429,"attempt":1,"next_attempt":2,"delay_ms":1}"#,
-            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"arbitrary","attempt":1,"next_attempt":2,"delay_ms":1}"#,
-            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":100000}"#,
-            r#"{"type":"read_retry_scheduled","request_id":"injected\\nline","operation":"models","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":1}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","stage":"model_discovery","category":"arbitrary","attempt":1,"next_attempt":2,"delay_ms":1}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"a","operation":"models","stage":"model_discovery","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":100000}"#,
+            r#"{"type":"read_retry_scheduled","request_id":"injected\\nline","operation":"models","stage":"model_discovery","category":"rate_limit","attempt":1,"next_attempt":2,"delay_ms":1}"#,
         ] {
             assert!(read_retry_diagnostic(invalid).is_none());
         }
