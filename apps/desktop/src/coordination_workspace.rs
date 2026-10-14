@@ -1514,6 +1514,19 @@ pub fn render(
                 l.reports,
                 l.per_minute
             ));
+            if l.directives
+                && l.mode != "block"
+                && !container
+                    .links
+                    .iter()
+                    .any(|reverse| reverse.from == l.to && reverse.to == l.from)
+            {
+                ui.weak(format!(
+                    "  Automatic reply: {} → {} · reports / requests / results / ack, no directives",
+                    member_label(l.to),
+                    member_label(l.from)
+                ));
+            }
         }
     });
     egui::CollapsingHeader::new("Send a test message")
@@ -1574,10 +1587,7 @@ pub fn render(
         });
     let send_source = container.members.iter().find(|m| m.id == drafts.send_from);
     let send_target = container.members.iter().find(|m| m.id == drafts.send_to);
-    let route = container
-        .links
-        .iter()
-        .find(|l| l.from == drafts.send_from && l.to == drafts.send_to);
+    let route = Workspace::route_for(&container, drafts.send_from, drafts.send_to);
     let valid_pair =
         send_source.is_some() && send_target.is_some() && drafts.send_from != drafts.send_to;
     if !valid_pair {
@@ -1585,7 +1595,10 @@ pub fn render(
             Color32::from_rgb(240, 172, 108),
             "Select two different workers to send a message.",
         );
-    } else if let Some(link) = route {
+    } else if let Some((link, automatic_reply)) = route {
+        if automatic_reply {
+            ui.weak("Automatic report-only return route; reverse directives remain forbidden.");
+        }
         let authorized = if drafts.kind == "directive" {
             link.directives
         } else {
@@ -1778,6 +1791,66 @@ mod tests {
         assert!(s.attach(c, "chat-b", "Intruder", "Director").is_err());
         let _ = fs::remove_file(path);
     }
+    #[test]
+    fn reverse_acknowledgment_is_automatically_authorized_but_not_reverse_orders() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, false, "allow", 12)
+            .unwrap();
+        for kind in ["ack", "report", "request", "result"] {
+            assert_eq!(
+                workspace
+                    .send("chat-b", director, kind, "Received", 100)
+                    .unwrap()
+                    .1,
+                "delivered"
+            );
+        }
+        assert_eq!(
+            workspace
+                .send("chat-b", director, "directive", "Orders from below", 101)
+                .unwrap()
+                .1,
+            "blocked"
+        );
+        assert_eq!(workspace.containers[0].links.len(), 1);
+        workspace
+            .set_link(container, worker, director, false, false, "block", 12)
+            .unwrap();
+        assert_eq!(
+            workspace
+                .send("chat-b", director, "ack", "Denied by explicit block", 102)
+                .unwrap()
+                .1,
+            "blocked"
+        );
+    }
+
+    #[test]
+    fn revoking_forward_directive_authority_closes_automatic_reply_path() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, false, "allow", 12)
+            .unwrap();
+        assert_eq!(
+            workspace
+                .send("chat-b", director, "ack", "Before", 100)
+                .unwrap()
+                .1,
+            "delivered"
+        );
+        workspace
+            .set_link(container, director, worker, false, false, "block", 12)
+            .unwrap();
+        assert_eq!(
+            workspace
+                .send("chat-b", director, "ack", "After", 101)
+                .unwrap()
+                .1,
+            "blocked"
+        );
+    }
+
     #[test]
     fn authority_denies_reverse_orders_and_allows_reports_independently() {
         let (mut s, c, a, b) = setup();
