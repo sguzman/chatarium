@@ -16209,11 +16209,13 @@ fn draw_reader_bubble(
     active_hit: bool,
     ctx: &egui::Context,
 ) -> egui::Response {
-    let preferences = ctx.data_mut(|data| {
-        data.get_temp::<display_preferences::DisplayPreferences>(
-            egui::Id::new("chatarium-display-preferences"),
-        )
-    }).unwrap_or_default();
+    let preferences = ctx
+        .data_mut(|data| {
+            data.get_temp::<display_preferences::DisplayPreferences>(egui::Id::new(
+                "chatarium-display-preferences",
+            ))
+        })
+        .unwrap_or_default();
     let palette = &preferences.message_colors;
     let bubble_fill = |index: usize| {
         let [r, g, b] = palette[index];
