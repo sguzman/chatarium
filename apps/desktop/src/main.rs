@@ -8,6 +8,7 @@ mod conversation_navigation;
 mod delivery_telemetry;
 mod diagnostics;
 mod display_preferences;
+mod host_shell_mcp;
 #[cfg(test)]
 mod integration_journey;
 mod local_archive_search;
@@ -20,7 +21,6 @@ mod local_tool_adapter;
 mod local_tool_provider_control;
 mod markdown_inline;
 mod mcp_agent_defaults;
-mod host_shell_mcp;
 #[cfg(test)]
 mod mcp_async_tests;
 mod mcp_call_review;
@@ -1553,9 +1553,12 @@ impl ChatariumApp {
         )
         .unwrap_or_default();
         let host_shell_settings = host_shell_mcp::Settings::load(
-            &journal_path.parent().unwrap_or_else(|| std::path::Path::new("."))
+            &journal_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
                 .join(host_shell_mcp::FILE_NAME),
-        ).unwrap_or_default();
+        )
+        .unwrap_or_default();
         let active_inference_settings = inference_settings
             .for_conversation_with_mcp_defaults(local_conversation_id, &mcp_agent_defaults);
         let behavior_profiles = behavior_profile::BehaviorProfileStore::load(
@@ -3709,8 +3712,12 @@ impl ChatariumApp {
                         if provider_is_builtin {
                             let shell_request = replay_tool_call_audit(&self.events)
                                 .ok()
-                                .and_then(|calls| calls.into_iter().find(|call| call.call_id == call_id))
-                                .is_some_and(|call| call.operation.as_str() == host_shell_mcp::OPERATION);
+                                .and_then(|calls| {
+                                    calls.into_iter().find(|call| call.call_id == call_id)
+                                })
+                                .is_some_and(|call| {
+                                    call.operation.as_str() == host_shell_mcp::OPERATION
+                                });
                             if shell_request {
                                 self.dispatch_host_shell(route_id);
                             } else {
@@ -17665,7 +17672,10 @@ fn reserve_builtin_host_shell_checked(
         .authorize_dispatch(route_id)
         .map_err(|error| format!("host shell route denied: {error:?}"))?;
     record_route_dispatched(store, permit).map_err(|e| e.to_string())?;
-    let event = store.events().last().cloned()
+    let event = store
+        .events()
+        .last()
+        .cloned()
         .ok_or("host shell dispatch journal event missing")?;
     Ok((call.call_id, args, event))
 }
@@ -20287,8 +20297,7 @@ fn persistence_worker(
                 }
             }
             PersistCommand::SaveHostShellSettings { settings } => {
-                if let Err(error) =
-                    settings.save_atomic(&data_dir.join(host_shell_mcp::FILE_NAME))
+                if let Err(error) = settings.save_atomic(&data_dir.join(host_shell_mcp::FILE_NAME))
                 {
                     let _ = notices.send(PersistNotice::Failed {
                         operation: "host shell settings save",
@@ -20858,19 +20867,18 @@ fn persistence_worker(
                 }
             }
             PersistCommand::DispatchHostShell { route_id } => {
-                let prepared = host_shell_mcp::Settings::load(
-                    &data_dir.join(host_shell_mcp::FILE_NAME)
-                ).and_then(|settings| {
-                    let (call_id, args, event) =
-                        reserve_builtin_host_shell_checked(&mut store, route_id, &settings)?;
-                    Ok((call_id, args, event, settings))
-                });
+                let prepared =
+                    host_shell_mcp::Settings::load(&data_dir.join(host_shell_mcp::FILE_NAME))
+                        .and_then(|settings| {
+                            let (call_id, args, event) = reserve_builtin_host_shell_checked(
+                                &mut store, route_id, &settings,
+                            )?;
+                            Ok((call_id, args, event, settings))
+                        });
                 match prepared {
                     Ok((call_id, args, event, settings)) => {
-                        let _ = notices.send(PersistNotice::HostShellDispatched {
-                            route_id,
-                            event,
-                        });
+                        let _ =
+                            notices.send(PersistNotice::HostShellDispatched { route_id, event });
                         let completions = completion_tx.clone();
                         let failures = notices.clone();
                         let spawn = thread::Builder::new()
@@ -20908,7 +20916,9 @@ fn persistence_worker(
                                 revision: None,
                                 request_id: None,
                                 turn_id: None,
-                                error: format!("host shell was reserved but could not spawn: {error}"),
+                                error: format!(
+                                    "host shell was reserved but could not spawn: {error}"
+                                ),
                             });
                         }
                     }
@@ -20923,14 +20933,19 @@ fn persistence_worker(
                     }
                 }
             }
-            PersistCommand::RecordHostShellOutcome { call_id, route_id, result } => {
+            PersistCommand::RecordHostShellOutcome {
+                call_id,
+                route_id,
+                result,
+            } => {
                 let (kind, text) = match result {
                     Ok(output) => {
-                        let formatted = chatarium_protocol::tool_envelope::format_legacy_tool_success(
-                            &format!("call_{}", call_id.get()),
-                            host_shell_mcp::OPERATION,
-                            output,
-                        );
+                        let formatted =
+                            chatarium_protocol::tool_envelope::format_legacy_tool_success(
+                                &format!("call_{}", call_id.get()),
+                                host_shell_mcp::OPERATION,
+                                output,
+                            );
                         match formatted {
                             Ok(formatted) => (ToolCallOutcomeKind::Result, formatted),
                             Err(error) => (
@@ -20943,7 +20958,8 @@ fn persistence_worker(
                 };
                 match append_tool_call_outcome_checked(&mut store, call_id, route_id, kind, text) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::StdioToolDispatchFinished { call_id, event });
+                        let _ = notices
+                            .send(PersistNotice::StdioToolDispatchFinished { call_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -24888,26 +24904,32 @@ mod tests {
             LocalConversationId::new(),
             &proposal,
             mcp_agent_defaults::ToolPolicy::Ask,
-        ).unwrap();
+        )
+        .unwrap();
         let settings = host_shell_mcp::Settings {
             shell: "sh".to_owned(),
             ..Default::default()
         };
         assert!(reserve_builtin_host_shell_checked(&mut store, route, &settings).is_err());
-        append_tool_call_route_user_decision_checked(
-            &mut store,
-            route,
-            RouteUserDecision::Allow,
-        ).unwrap();
+        append_tool_call_route_user_decision_checked(&mut store, route, RouteUserDecision::Allow)
+            .unwrap();
         let (call_id, args, event) =
             reserve_builtin_host_shell_checked(&mut store, route, &settings).unwrap();
         assert_eq!(args["command"], "printf test");
         assert_eq!(event.kind, EventKind::RouteDispatched);
         assert!(reserve_builtin_host_shell_checked(&mut store, route, &settings).is_err());
-        assert!(replay_tool_call_outcome_audit(store.events()).unwrap().is_empty());
+        assert!(
+            replay_tool_call_outcome_audit(store.events())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            replay_tool_call_audit(store.events()).unwrap()
-                .iter().find(|call| call.call_id == call_id).unwrap().route_id,
+            replay_tool_call_audit(store.events())
+                .unwrap()
+                .iter()
+                .find(|call| call.call_id == call_id)
+                .unwrap()
+                .route_id,
             Some(route)
         );
     }
