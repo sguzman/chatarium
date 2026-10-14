@@ -217,6 +217,50 @@ pub fn matching_message_preview<'a>(
         .find_map(|message| super::local_archive_search::local_snippet(message, &folded))
 }
 
+/// Remove only a model-authored JSON tool request that is backed by a later,
+/// same-conversation *verified* call with identical provider, operation and
+/// arguments. A rejected/unrecorded proposal remains visible for diagnosis.
+/// The immutable journal, raw inference and MCP audit projection are untouched.
+fn hide_audited_mcp_protocol_requests(
+    messages: &mut Vec<DisplayMessage>,
+    audited_calls: &[DisplayMessage],
+) {
+    let next_turns = messages
+        .iter()
+        .filter(|row| row.role == super::DisplayRole::User)
+        .map(|row| row.sequence)
+        .collect::<Vec<_>>();
+    messages.retain(|row| {
+        if row.role != super::DisplayRole::Assistant {
+            return true;
+        }
+        let Ok(Some(request)) = super::mcp_agent_defaults::parse_model_tool_request(&row.text)
+        else {
+            return true;
+        };
+        let next_user = next_turns
+            .iter()
+            .copied()
+            .find(|&sequence| sequence > row.sequence)
+            .unwrap_or(u64::MAX);
+        let identity = format!(
+            "MCP CALL · journaled · {}::{} ·",
+            request.provider, request.tool
+        );
+        let arguments = format!("Exact tool arguments:\\n{}", request.arguments);
+        !audited_calls.iter().any(|call| {
+            call.role == super::DisplayRole::Mcp
+                && call.sequence > row.sequence
+                && call.sequence < next_user
+                && call
+                    .provenance_label
+                    .as_deref()
+                    .is_some_and(|label| label.starts_with(&identity))
+                && call.text.ends_with(&arguments)
+        })
+    });
+}
+
 /// One visible sidebar row, derived solely from the local catalog and
 /// projected native user/assistant messages. The position refers to the
 /// catalog snapshot supplied to `cached_rows`.
@@ -588,6 +632,10 @@ impl NativeConversationSearchIndex {
             let visible = messages
                 .entry(owner)
                 .or_insert_with(|| Arc::new(Vec::new()));
+            // A verified MCP proposal is protocol, not an agent answer. Keep
+            // its exact bytes in the immutable journal and audit card, but
+            // omit its duplicate raw JSON bubble from the native reader.
+            hide_audited_mcp_protocol_requests(Arc::make_mut(visible), &tool_entries);
             Arc::make_mut(visible).extend(tool_entries);
             Arc::make_mut(visible).sort_by_key(|message| message.sequence);
         }
@@ -2414,6 +2462,35 @@ mod tests {
             find_match_with_preview("  ", "", ["anything"]),
             Some((NativeSearchMatch::Title, None))
         );
+    }
+
+    #[test]
+    fn verified_mcp_call_replaces_raw_protocol_bubble_in_reader_only() {
+        let raw = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"shell.command","arguments":{"command":"echo Hello from the shell"}}}"#;
+        let display = |role, text: &str, sequence| DisplayMessage {
+            role,
+            text: text.to_owned(),
+            sequence,
+            timestamp: None,
+            provenance_label: None,
+        };
+        let mut messages = vec![
+            display(super::DisplayRole::User, "try to run shell", 1),
+            display(super::DisplayRole::Assistant, raw, 2),
+        ];
+        let verified = DisplayMessage {
+            provenance_label: Some("MCP CALL · journaled · chatarium.builtin::shell.command · call #9 · session #3".to_owned()),
+            ..display(
+                super::DisplayRole::Mcp,
+                "TOOL CALL\\nchatarium.builtin::shell.command · call #9 · session #3\\n\\nExact tool arguments:\\n{\\"command\\":\\"echo Hello from the shell\\"}",
+                3,
+            )
+        };
+        hide_audited_mcp_protocol_requests(&mut messages, &[]);
+        assert_eq!(messages.len(), 2, "unverified requests must remain visible");
+        hide_audited_mcp_protocol_requests(&mut messages, &[verified]);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, super::DisplayRole::User);
     }
 
     #[test]
