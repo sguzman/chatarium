@@ -2483,7 +2483,10 @@ mod tests {
             serde_json::json!({"command":"echo Hello from the shell"})
         );
         let verified = DisplayMessage {
-            provenance_label: Some("MCP CALL · journaled · chatarium.builtin::shell.command · call #9 · session #3".to_owned()),
+            provenance_label: Some(
+                "MCP CALL · journaled · chatarium.builtin::shell.command · call #9 · session #3"
+                    .to_owned(),
+            ),
             ..display(super::DisplayRole::Mcp, &verified_text, 3)
         };
         hide_audited_mcp_protocol_requests(&mut messages, &[]);
