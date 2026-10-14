@@ -741,7 +741,7 @@ impl Workspace {
             .map(|m| ConsumedDisplay {
                 id: m.id,
                 from: c.members.iter().find(|w| w.id == m.from)
-                    .map(|w| format!("{} (#{} )", w.name, w.id))
+                    .map(|w| format!("{} (#{})", w.name, w.id))
                     .unwrap_or_else(|| format!("Worker #{}", m.from)),
                 kind: m.kind.clone(),
                 body: m.body.clone(),
@@ -766,7 +766,14 @@ pub fn render_chat_inbox(
     };
     let Some(c) = store.containers.iter().find(|c| c.id == cid) else { return false; };
     let pending = c.messages.iter().filter(|m| m.to == worker && matches!(m.status.as_str(),
-        "delivered" | "queued" | "approval")).rev().cloned().collect::<Vec<_>>();
+        "delivered" | "queued" | "approval")).rev()
+        .map(|message| {
+            let sender = c.members.iter().find(|member| member.id == message.from)
+                .map(|member| member.name.clone())
+                .unwrap_or_else(|| format!("Worker #{}", message.from));
+            (message.clone(), sender)
+        })
+        .collect::<Vec<_>>();
     if pending.is_empty() {
         ui.label("Inbox empty. Consumed messages remain in the chat reader.");
         return false;
@@ -777,13 +784,11 @@ pub fn render_chat_inbox(
         .max_height(310.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for message in pending {
-                let sender_name = c.members.iter().find(|m| m.id == message.from)
-                    .map(|m| m.name.clone()).unwrap_or_else(|| format!("Worker #{}", message.from));
+            for (message, sender_name) in pending {
                 ui.group(|ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.strong(format!("#{} · {} · {}", message.id, message.kind, message.status));
-                        ui.label(format!("From {sender_name} (#{} )", message.from));
+                        ui.label(format!("From {sender_name} (#{})", message.from));
                     });
                     ui.add(egui::Label::new(&message.body).wrap());
                     ui.label(egui::RichText::new(&message.note).weak().size(10.0));
