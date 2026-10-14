@@ -1,0 +1,65 @@
+name: linux-prebuilt
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-prebuilt-main
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    if: github.repository == 'sguzman/chatarium'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-release-x86_64
+      - name: Build release executable in CI (not on the operator's computer)
+        run: cargo build --locked --release -p chatarium-desktop --bin chatarium-desktop
+      - name: Verify and package executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x target/release/chatarium-desktop
+          file target/release/chatarium-desktop
+          ldd target/release/chatarium-desktop
+          mkdir -p dist
+          cp target/release/chatarium-desktop dist/chatarium-desktop
+          printf '%s\n' "$GITHUB_SHA" > dist/COMMIT
+          tar -C dist -czf chatarium-linux-x86_64.tar.gz chatarium-desktop COMMIT
+          sha256sum chatarium-linux-x86_64.tar.gz > chatarium-linux-x86_64.tar.gz.sha256
+          tar -tzf chatarium-linux-x86_64.tar.gz
+      - name: Preserve build as downloadable Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatarium-linux-x86_64
+          path: |
+            chatarium-linux-x86_64.tar.gz
+            chatarium-linux-x86_64.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
+      - name: Publish downloadable prebuilt Linux binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=prebuilt-main
+          notes="Automated Linux x86_64 desktop build from main commit $GITHUB_SHA. Pre-release rolling artifact; the release tag itself is not the source-version indicator. The archive contains the exact source commit in COMMIT."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" chatarium-linux-x86_64.tar.gz chatarium-linux-x86_64.tar.gz.sha256 --clobber
+            gh release edit "$tag" --notes "$notes"
+          else
+            gh release create "$tag" chatarium-linux-x86_64.tar.gz chatarium-linux-x86_64.tar.gz.sha256 --target "$GITHUB_SHA" --title "Chatarium rolling Linux prebuilt" --prerelease --notes "$notes"
+          fi
