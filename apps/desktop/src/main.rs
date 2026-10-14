@@ -3,9 +3,9 @@ mod attachment_intake;
 mod behavior_profile;
 mod capability_probes;
 mod context_composer;
-mod coordination_workspace;
 mod conversation_keybindings;
 mod conversation_navigation;
+mod coordination_workspace;
 mod delivery_telemetry;
 mod diagnostics;
 mod display_preferences;
@@ -5606,7 +5606,6 @@ impl ChatariumApp {
         self.status = "MCP tool proposal queued for durable policy validation".to_owned();
     }
 
-
     fn coordination_store_path(&self) -> PathBuf {
         self.journal_path
             .parent()
@@ -5636,7 +5635,11 @@ impl ChatariumApp {
         let source = active.conversation_id.to_string();
         let result: Result<Value, String> = match proposal.tool.as_str() {
             "coordination.identity" => {
-                if proposal.arguments.as_object().is_none_or(|args| !args.is_empty()) {
+                if proposal
+                    .arguments
+                    .as_object()
+                    .is_none_or(|args| !args.is_empty())
+                {
                     Err("coordination.identity accepts no arguments".to_owned())
                 } else {
                     self.coordination_workspace.identity_tool(&source)
@@ -5647,9 +5650,9 @@ impl ChatariumApp {
                     self.status = "coordination.send requires object arguments".to_owned();
                     return;
                 };
-                let allowed_keys = args.keys().all(|key|
-                    matches!(key.as_str(), "to" | "kind" | "body")
-                );
+                let allowed_keys = args
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "to" | "kind" | "body"));
                 if !allowed_keys || args.len() != 3 {
                     Err("coordination.send requires exactly to, kind and body".to_owned())
                 } else {
@@ -5661,12 +5664,17 @@ impl ChatariumApp {
                         (Some(to), Some(kind), Some(body)) => {
                             let before = self.coordination_workspace.clone();
                             match self.coordination_workspace.send(
-                                &source, to, kind, body, unix_now_ms()
+                                &source,
+                                to,
+                                kind,
+                                body,
+                                unix_now_ms(),
                             ) {
                                 Ok((id, status)) => {
-                                    match self.coordination_workspace.save_atomic(
-                                        &self.coordination_store_path()
-                                    ) {
+                                    match self
+                                        .coordination_workspace
+                                        .save_atomic(&self.coordination_store_path())
+                                    {
                                         Ok(()) => Ok(serde_json::json!({
                                             "message_id":id,"status":status,
                                             "source_conversation":source,
@@ -5675,14 +5683,16 @@ impl ChatariumApp {
                                         })),
                                         Err(error) => {
                                             self.coordination_workspace = before;
-                                            Err(format!("coordination message persistence failed: {error}"))
+                                            Err(format!(
+                                                "coordination message persistence failed: {error}"
+                                            ))
                                         }
                                     }
                                 }
                                 Err(error) => Err(error),
                             }
                         }
-                        _ => Err("coordination.send arguments have invalid types".to_owned())
+                        _ => Err("coordination.send arguments have invalid types".to_owned()),
                     }
                 }
             }
@@ -5701,7 +5711,8 @@ impl ChatariumApp {
             instructions,
             request_patch,
             ..
-        } = active.command.clone() else {
+        } = active.command.clone()
+        else {
             self.status = "coordination continuation requires a Responses stream".to_owned();
             return;
         };
@@ -5719,7 +5730,10 @@ impl ChatariumApp {
                 tool_result
             )
         }));
-        let request_id = format!("{}-coordination-{}",active.turn_id,self.coordination_tool_steps);
+        let request_id = format!(
+            "{}-coordination-{}",
+            active.turn_id, self.coordination_tool_steps
+        );
         let next = PendingRemoteTurn {
             conversation_id: active.conversation_id,
             turn_id: active.turn_id,
@@ -5737,11 +5751,14 @@ impl ChatariumApp {
             Some("Chatarium verified local coordination operation; resuming same turn"),
         );
         if !self.queue_turn_event(active.turn_id, EventKind::DispatchAttempted, journal) {
-            self.status = "coordination result recorded; remote continuation could not be journaled".to_owned();
+            self.status =
+                "coordination result recorded; remote continuation could not be journaled"
+                    .to_owned();
             self.agent_mcp_flow = None;
             return;
         }
-        self.delivery.begin(active.conversation_id.to_string(), request_id);
+        self.delivery
+            .begin(active.conversation_id.to_string(), request_id);
         self.pending_remote_turn = Some(next);
         self.agent_mcp_flow = None;
         self.status = "coordination operation recorded; assistant continuation queued".to_owned();
@@ -14766,12 +14783,14 @@ impl eframe::App for ChatariumApp {
                 .default_size([780.0, 620.0])
                 .resizable(true)
                 .show(ctx, |ui| {
-                    let conversations = self.local_conversation_catalog.entries()
+                    let conversations = self
+                        .local_conversation_catalog
+                        .entries()
                         .iter()
                         .map(|entry| {
                             (
                                 entry.id.to_string(),
-                                entry.title.clone().unwrap_or_else(|| entry.id.to_string())
+                                entry.title.clone().unwrap_or_else(|| entry.id.to_string()),
                             )
                         })
                         .collect::<Vec<_>>();
@@ -14784,9 +14803,10 @@ impl eframe::App for ChatariumApp {
                         &self.local_conversation_id.to_string(),
                     );
                     if changed {
-                        if let Err(error) = self.coordination_workspace.save_atomic(
-                            &self.coordination_store_path()
-                        ) {
+                        if let Err(error) = self
+                            .coordination_workspace
+                            .save_atomic(&self.coordination_store_path())
+                        {
                             self.coordination_workspace = previous;
                             self.coordination_ui.notice =
                                 format!("coordination changes not saved: {error}");
