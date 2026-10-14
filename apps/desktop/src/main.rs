@@ -3361,10 +3361,8 @@ impl ChatariumApp {
                                 message.conversation_id.to_string(),
                                 remote_request_id.clone(),
                             );
-                            self.coordination_pending_admissions.insert(
-                                remote_request_id.clone(),
-                                intent.coordination_ids,
-                            );
+                            self.coordination_pending_admissions
+                                .insert(remote_request_id.clone(), intent.coordination_ids);
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 conversation_id: message.conversation_id,
                                 turn_id: message.turn_id,
@@ -3383,7 +3381,8 @@ impl ChatariumApp {
                                     "message durable as event #{sequence}; preparing ChatGPT dispatch"
                                 );
                             } else {
-                                self.coordination_pending_admissions.remove(&remote_request_id);
+                                self.coordination_pending_admissions
+                                    .remove(&remote_request_id);
                                 self.pending_remote_turn = None;
                             }
                         } else {
@@ -3423,7 +3422,10 @@ impl ChatariumApp {
                         let retry_command = command.clone();
                         match self.remote.send(command) {
                             Ok(()) => {
-                                if let Some(ids) = self.coordination_pending_admissions.remove(&pending.request_id) {
+                                if let Some(ids) = self
+                                    .coordination_pending_admissions
+                                    .remove(&pending.request_id)
+                                {
                                     if !ids.is_empty() {
                                         let before = self.coordination_workspace.clone();
                                         let changed = self.coordination_workspace.consume_ids(
@@ -3432,9 +3434,14 @@ impl ChatariumApp {
                                             unix_now_ms(),
                                         );
                                         if changed != 0 {
-                                            if let Err(error) = self.coordination_workspace.save_atomic(&self.coordination_store_path()) {
+                                            if let Err(error) = self
+                                                .coordination_workspace
+                                                .save_atomic(&self.coordination_store_path())
+                                            {
                                                 self.coordination_workspace = before;
-                                                self.status = format!("Coordination consumption persistence failed: {error}");
+                                                self.status = format!(
+                                                    "Coordination consumption persistence failed: {error}"
+                                                );
                                             }
                                         }
                                     }
@@ -3456,7 +3463,8 @@ impl ChatariumApp {
                                 });
                             }
                             Err(error) => {
-                                self.coordination_pending_admissions.remove(&pending.request_id);
+                                self.coordination_pending_admissions
+                                    .remove(&pending.request_id);
                                 self.delivery.error(
                                     &pending.request_id,
                                     delivery_telemetry::Phase::Unconfirmed,
@@ -16154,7 +16162,8 @@ fn draw_consumed_coordination_bubble(
     let fill = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
     ui.push_id(("consumed-coordination", message.id), |ui| {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-            let width = (ui.available_width() * 0.80).clamp(200.0, 950.0)
+            let width = (ui.available_width() * 0.80)
+                .clamp(200.0, 950.0)
                 .min((ui.available_width() - 47.0).max(1.0));
             egui::Frame::default()
                 .fill(fill)
@@ -16164,21 +16173,32 @@ fn draw_consumed_coordination_bubble(
                 .show(ui, |ui| {
                     ui.set_width(width);
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(
-                            format!("Coordination {} · #{}", message.kind, message.id)
-                        ).strong().color(egui::Color32::WHITE));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Coordination {} · #{}",
+                                message.kind, message.id
+                            ))
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                        );
                         if ui.small_button("Copy").clicked() {
                             ctx.copy_text(message.body.clone());
                         }
                     });
-                    ui.label(egui::RichText::new(&message.body)
-                        .color(egui::Color32::from_rgb(244, 246, 248)));
-                    ui.label(egui::RichText::new(format!(
-                        "From {} · consumed {} · verified coordination inbox (not authored)",
-                        message.from,
-                        timestamp_display::utc_minute(message.consumed_ms as f64 / 1000.0)
-                            .unwrap_or_else(|| "time unknown".to_owned()),
-                    )).size(10.0).color(egui::Color32::from_rgb(200, 204, 214)));
+                    ui.label(
+                        egui::RichText::new(&message.body)
+                            .color(egui::Color32::from_rgb(244, 246, 248)),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "From {} · consumed {} · verified coordination inbox (not authored)",
+                            message.from,
+                            timestamp_display::utc_minute(message.consumed_ms as f64 / 1000.0)
+                                .unwrap_or_else(|| "time unknown".to_owned()),
+                        ))
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(200, 204, 214)),
+                    );
                 });
         });
     });
