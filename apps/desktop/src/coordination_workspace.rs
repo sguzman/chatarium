@@ -913,35 +913,89 @@ pub fn render(
         ));
     }
     ui.separator();
-    ui.strong("Send as the selected local chat");
-    egui::ComboBox::from_label("Message recipient")
-        .selected_text(member_label(drafts.target))
-        .show_ui(ui, |ui| {
-            for m in &container.members {
-                ui.selectable_value(&mut drafts.target, m.id, member_label(m.id));
-            }
-        });
-    egui::ComboBox::from_label("Kind")
+    ui.strong("Send a test message");
+    ui.label("Human-operated test: choose which worker speaks. Agent messages still use verified conversation identity.");
+    if let Some(active) = container.members.iter().find(|m| m.conversation == current) {
+        ui.colored_label(member_accent(active.id),
+            format!("● Active conversation: {}", member_label(active.id)));
+    } else {
+        ui.label("The currently open conversation is not attached to this container.");
+    }
+    ui.horizontal(|ui| {
+        ui.label("From");
+        egui::ComboBox::from_id_salt("coordination-test-sender")
+            .selected_text(egui::RichText::new(format!("● {}", member_label(drafts.send_from)))
+                .color(member_accent(drafts.send_from)))
+            .show_ui(ui, |ui| {
+                for m in &container.members {
+                    ui.selectable_value(&mut drafts.send_from, m.id,
+                        egui::RichText::new(format!("● {}", member_label(m.id)))
+                            .color(member_accent(m.id)));
+                }
+            });
+        ui.label("→ To");
+        egui::ComboBox::from_id_salt("coordination-test-recipient")
+            .selected_text(egui::RichText::new(format!("● {}", member_label(drafts.send_to)))
+                .color(member_accent(drafts.send_to)))
+            .show_ui(ui, |ui| {
+                for m in &container.members {
+                    if m.id != drafts.send_from {
+                        ui.selectable_value(&mut drafts.send_to, m.id,
+                            egui::RichText::new(format!("● {}", member_label(m.id)))
+                                .color(member_accent(m.id)));
+                    }
+                }
+            });
+    });
+    egui::ComboBox::from_label("Message kind")
         .selected_text(&drafts.kind)
         .show_ui(ui, |ui| {
             for kind in ["directive", "report", "request", "result", "ack"] {
                 ui.selectable_value(&mut drafts.kind, kind.to_owned(), kind);
             }
         });
-    ui.add(
-        egui::TextEdit::multiline(&mut drafts.body)
-            .hint_text("Worker message")
-            .desired_rows(2),
-    );
-    if ui.button("Send with verified identity").clicked() {
-        match store.send(current, drafts.target, &drafts.kind, &drafts.body, now_ms()) {
-            Ok((id, status)) => {
-                dirty = true;
-                drafts.notice = format!("message #{id} {status}");
-                drafts.body.clear();
-            }
-            Err(e) => drafts.notice = e,
+    let send_source = container.members.iter().find(|m| m.id == drafts.send_from);
+    let send_target = container.members.iter().find(|m| m.id == drafts.send_to);
+    let route = container.links.iter().find(|l| l.from == drafts.send_from && l.to == drafts.send_to);
+    let valid_pair = send_source.is_some() && send_target.is_some()
+        && drafts.send_from != drafts.send_to;
+    if !valid_pair {
+        ui.colored_label(Color32::from_rgb(240, 172, 108),
+            "Select two different workers to send a message.");
+    } else if let Some(link) = route {
+        let authorized = if drafts.kind == "directive" { link.directives } else { link.reports };
+        if !authorized || link.mode == "block" {
+            ui.colored_label(Color32::from_rgb(240, 172, 108),
+                "This message will be recorded as BLOCKED by authority or delivery policy.");
+        } else if link.mode == "queue" || link.mode == "approve" {
+            ui.label(format!("Delivery will wait under the {} policy.", link.mode));
+        } else {
+            ui.colored_label(Color32::from_rgb(116, 201, 155), "Authorized route configured.");
         }
+    } else {
+        ui.colored_label(Color32::from_rgb(240, 172, 108),
+            "No authority edge for this direction. Sending will record a BLOCKED message.");
+    }
+    ui.add(egui::TextEdit::multiline(&mut drafts.body)
+        .hint_text("Message for the other worker")
+        .desired_rows(2)
+        .desired_width(ui.available_width()));
+    if ui.add_enabled(valid_pair && !drafts.body.trim().is_empty(),
+        egui::Button::new("Send test message")).clicked() {
+        if let Some(source) = send_source {
+            match store.send(&source.conversation, drafts.send_to, &drafts.kind, &drafts.body, now_ms()) {
+                Ok((id, status)) => {
+                    dirty = true;
+                    drafts.notice = format!("Message #{id}: {status} · {} → {}",
+                        member_label(drafts.send_from), member_label(drafts.send_to));
+                    drafts.body.clear();
+                }
+                Err(error) => drafts.notice = format!("Message not sent: {error}"),
+            }
+        }
+    }
+    if !drafts.notice.is_empty() {
+        ui.label(&drafts.notice);
     }
     ui.separator();
     ui.strong("Message flow and queue");
@@ -978,9 +1032,6 @@ pub fn render(
                 ui.label(&m.body);
             }
         });
-    if !drafts.notice.is_empty() {
-        ui.label(&drafts.notice);
-    }
     dirty
 }
 
