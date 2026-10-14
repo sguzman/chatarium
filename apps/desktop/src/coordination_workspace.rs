@@ -232,7 +232,13 @@ impl Workspace {
                     || body.len() > MAX_MESSAGE
                     || !matches!(
                         status,
-                        "delivered" | "consumed" | "queued" | "approval" | "blocked" | "rejected" | "deleted"
+                        "delivered"
+                            | "consumed"
+                            | "queued"
+                            | "approval"
+                            | "blocked"
+                            | "rejected"
+                            | "deleted"
                     )
                     || !message_ids.insert(id)
                     || id == 0
@@ -589,8 +595,14 @@ impl Workspace {
     /// Transition messages admitted to an actual model dispatch to durable consumed history.
     /// Only delivered messages owned by this conversation can transition.
     pub fn consume_ids(&mut self, conversation: &str, ids: &[u64], now: u64) -> usize {
-        let Some((container, worker)) = self.member_for(conversation) else { return 0; };
-        let Some(c) = self.containers.iter_mut().find(|record| record.id == container) else {
+        let Some((container, worker)) = self.member_for(conversation) else {
+            return 0;
+        };
+        let Some(c) = self
+            .containers
+            .iter_mut()
+            .find(|record| record.id == container)
+        else {
             return 0;
         };
         let mut changed = 0;
@@ -598,7 +610,8 @@ impl Workspace {
             if message.to == worker && message.status == "delivered" && ids.contains(&message.id) {
                 message.status = "consumed".to_owned();
                 message.consumed_ms = Some(now);
-                message.note = "admitted to recipient model request; preserved in transcript".to_owned();
+                message.note =
+                    "admitted to recipient model request; preserved in transcript".to_owned();
                 changed += 1;
             }
         }
@@ -609,9 +622,15 @@ impl Workspace {
     /// A content-free tombstone retains its identity and delivery timestamp for
     /// rate limiting and audit. Consumed transcript messages are not inbox deletable.
     pub fn delete_message(&mut self, container: u64, id: u64) -> Result<(), String> {
-        let record = self.containers.iter_mut().find(|record| record.id == container)
+        let record = self
+            .containers
+            .iter_mut()
+            .find(|record| record.id == container)
             .ok_or("container not found")?;
-        let index = record.messages.iter().position(|message| message.id == id)
+        let index = record
+            .messages
+            .iter()
+            .position(|message| message.id == id)
             .ok_or("message not found")?;
         if record.messages[index].status == "consumed" {
             return Err("consumed transcript records cannot be deleted from the inbox".to_owned());
@@ -732,26 +751,51 @@ pub struct ConsumedDisplay {
 
 impl Workspace {
     pub fn inbox_counts(&self, conversation: &str) -> (usize, usize) {
-        let Some((cid, worker)) = self.member_for(conversation) else { return (0, 0); };
-        let Some(c) = self.containers.iter().find(|container| container.id == cid) else { return (0, 0); };
-        let pending = c.messages.iter().filter(|m| m.to == worker && m.status == "delivered").count();
-        let queued = c.messages.iter().filter(|m| m.to == worker && matches!(m.status.as_str(), "queued" | "approval")).count();
+        let Some((cid, worker)) = self.member_for(conversation) else {
+            return (0, 0);
+        };
+        let Some(c) = self.containers.iter().find(|container| container.id == cid) else {
+            return (0, 0);
+        };
+        let pending = c
+            .messages
+            .iter()
+            .filter(|m| m.to == worker && m.status == "delivered")
+            .count();
+        let queued = c
+            .messages
+            .iter()
+            .filter(|m| m.to == worker && matches!(m.status.as_str(), "queued" | "approval"))
+            .count();
         (pending, queued)
     }
 
     pub fn consumed_for(&self, conversation: &str) -> Vec<ConsumedDisplay> {
-        let Some((cid, worker)) = self.member_for(conversation) else { return Vec::new(); };
-        let Some(c) = self.containers.iter().find(|container| container.id == cid) else { return Vec::new(); };
-        let mut list = c.messages.iter().filter(|m| m.to == worker && m.status == "consumed")
+        let Some((cid, worker)) = self.member_for(conversation) else {
+            return Vec::new();
+        };
+        let Some(c) = self.containers.iter().find(|container| container.id == cid) else {
+            return Vec::new();
+        };
+        let mut list = c
+            .messages
+            .iter()
+            .filter(|m| m.to == worker && m.status == "consumed")
             .map(|m| ConsumedDisplay {
                 id: m.id,
-                from: c.members.iter().find(|w| w.id == m.from)
+                from: c
+                    .members
+                    .iter()
+                    .find(|w| w.id == m.from)
                     .map(|w| format!("{} (#{})", w.name, w.id))
                     .unwrap_or_else(|| format!("Worker #{}", m.from)),
                 kind: m.kind.clone(),
                 body: m.body.clone(),
-                consumed_ms: m.consumed_ms.unwrap_or(m.delivered_ms.unwrap_or(m.created_ms)),
-            }).collect::<Vec<_>>();
+                consumed_ms: m
+                    .consumed_ms
+                    .unwrap_or(m.delivered_ms.unwrap_or(m.created_ms)),
+            })
+            .collect::<Vec<_>>();
         list.sort_by_key(|message| (message.consumed_ms, message.id));
         list
     }
@@ -769,11 +813,21 @@ pub fn render_chat_inbox(
         ui.label("This chat is not attached to a coordination worker.");
         return false;
     };
-    let Some(c) = store.containers.iter().find(|c| c.id == cid) else { return false; };
-    let pending = c.messages.iter().filter(|m| m.to == worker && matches!(m.status.as_str(),
-        "delivered" | "queued" | "approval")).rev()
+    let Some(c) = store.containers.iter().find(|c| c.id == cid) else {
+        return false;
+    };
+    let pending = c
+        .messages
+        .iter()
+        .filter(|m| {
+            m.to == worker && matches!(m.status.as_str(), "delivered" | "queued" | "approval")
+        })
+        .rev()
         .map(|message| {
-            let sender = c.members.iter().find(|member| member.id == message.from)
+            let sender = c
+                .members
+                .iter()
+                .find(|member| member.id == message.from)
                 .map(|member| member.name.clone())
                 .unwrap_or_else(|| format!("Worker #{}", message.from));
             (message.clone(), sender)
@@ -792,7 +846,10 @@ pub fn render_chat_inbox(
             for (message, sender_name) in pending {
                 ui.group(|ui| {
                     ui.horizontal_wrapped(|ui| {
-                        ui.strong(format!("#{} · {} · {}", message.id, message.kind, message.status));
+                        ui.strong(format!(
+                            "#{} · {} · {}",
+                            message.id, message.kind, message.status
+                        ));
                         ui.label(format!("From {sender_name} (#{})", message.from));
                     });
                     ui.add(egui::Label::new(&message.body).wrap());
@@ -803,14 +860,17 @@ pub fn render_chat_inbox(
                             if ui.button("Confirm delete").clicked() {
                                 match store.delete_message(cid, message.id) {
                                     Ok(()) => {
-                                        drafts.notice = format!("Inbox message #{} deleted", message.id);
+                                        drafts.notice =
+                                            format!("Inbox message #{} deleted", message.id);
                                         drafts.confirm_delete = None;
                                         dirty = true;
                                     }
                                     Err(error) => drafts.notice = error,
                                 }
                             }
-                            if ui.button("Cancel").clicked() { drafts.confirm_delete = None; }
+                            if ui.button("Cancel").clicked() {
+                                drafts.confirm_delete = None;
+                            }
                         });
                     } else if ui.small_button("Delete…").clicked() {
                         drafts.confirm_delete = Some(message.id);
@@ -1070,13 +1130,14 @@ pub fn render(
     ui.separator();
     let (inbox_count, queue_count) = store.inbox_counts(current);
     egui::CollapsingHeader::new(format!(
-        "Active chat inbox ({} delivered, {} queued)", inbox_count, queue_count
+        "Active chat inbox ({} delivered, {} queued)",
+        inbox_count, queue_count
     ))
-        .id_salt("coordination-active-inbox")
-        .default_open(false)
-        .show(ui, |ui| {
-            dirty |= render_chat_inbox(ui, store, drafts, current);
-        });
+    .id_salt("coordination-active-inbox")
+    .default_open(false)
+    .show(ui, |ui| {
+        dirty |= render_chat_inbox(ui, store, drafts, current);
+    });
     egui::CollapsingHeader::new("Topology viewer")
         .id_salt("coordination-topology-view")
         .default_open(false)
@@ -1348,7 +1409,9 @@ mod tests {
     fn delivery_read_consumption_deletion_and_reopen_have_distinct_states() {
         let (mut s, c, a, b) = setup();
         s.set_link(c, a, b, true, true, "allow", 12).unwrap();
-        let (message, _) = s.send("chat-a", b, "directive", "Do the test", 100).unwrap();
+        let (message, _) = s
+            .send("chat-a", b, "directive", "Do the test", 100)
+            .unwrap();
         assert_eq!(s.context_delivered_ids("chat-b"), vec![message]);
         let identity = s.identity_tool("chat-b").unwrap();
         assert_eq!(identity["inbox"][0]["id"], message);
@@ -1358,9 +1421,13 @@ mod tests {
         assert_eq!(s.consume_ids("chat-b", &[message], 110), 1);
         assert_eq!(s.consume_ids("chat-b", &[message], 120), 0);
         assert!(s.context_delivered_ids("chat-b").is_empty());
-        assert_eq!(s.identity_tool("chat-b").unwrap()["recent_consumed"][0]["id"], message);
+        assert_eq!(
+            s.identity_tool("chat-b").unwrap()["recent_consumed"][0]["id"],
+            message
+        );
         assert!(s.delete_message(c, message).is_err());
-        let path = std::env::temp_dir().join(format!("chatarium-consumption-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("chatarium-consumption-{}.json", std::process::id()));
         s.save_atomic(&path).unwrap();
         let reloaded = Workspace::load(&path).unwrap();
         assert_eq!(reloaded, s);
@@ -1375,9 +1442,12 @@ mod tests {
         let (first, _) = s.send("chat-a", b, "directive", "First", 1).unwrap();
         let (second, _) = s.send("chat-a", b, "directive", "Second", 2).unwrap();
         s.delete_message(c, first).unwrap();
-        assert!(s.containers[0].messages.iter().any(|m|
-            m.id == first && m.status == "deleted" && m.body.is_empty()
-        ));
+        assert!(
+            s.containers[0]
+                .messages
+                .iter()
+                .any(|m| m.id == first && m.status == "deleted" && m.body.is_empty())
+        );
         assert!(s.containers[0].messages.iter().any(|m| m.id == second));
         let (third, _) = s.send("chat-a", b, "directive", "Third", 3).unwrap();
         assert!(third > second);
