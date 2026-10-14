@@ -73,6 +73,7 @@ pub struct UiDrafts {
     pub kind: String,
     pub body: String,
     pub notice: String,
+    pub confirm_delete: Option<u64>,
 }
 impl Default for UiDrafts {
     fn default() -> Self {
@@ -93,6 +94,7 @@ impl Default for UiDrafts {
             kind: "directive".to_owned(),
             body: String::new(),
             notice: String::new(),
+            confirm_delete: None,
         }
     }
 }
@@ -714,6 +716,101 @@ fn conversation_color(conversations: &[(String, String, Color32)], id: &str) -> 
         .unwrap_or(Color32::from_rgb(125, 160, 190))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsumedDisplay {
+    pub id: u64,
+    pub from: String,
+    pub kind: String,
+    pub body: String,
+    pub consumed_ms: u64,
+}
+
+impl Workspace {
+    pub fn inbox_counts(&self, conversation: &str) -> (usize, usize) {
+        let Some((cid, worker)) = self.member_for(conversation) else { return (0, 0); };
+        let Some(c) = self.containers.iter().find(|container| container.id == cid) else { return (0, 0); };
+        let pending = c.messages.iter().filter(|m| m.to == worker && m.status == "delivered").count();
+        let queued = c.messages.iter().filter(|m| m.to == worker && matches!(m.status.as_str(), "queued" | "approval")).count();
+        (pending, queued)
+    }
+
+    pub fn consumed_for(&self, conversation: &str) -> Vec<ConsumedDisplay> {
+        let Some((cid, worker)) = self.member_for(conversation) else { return Vec::new(); };
+        let Some(c) = self.containers.iter().find(|container| container.id == cid) else { return Vec::new(); };
+        let mut list = c.messages.iter().filter(|m| m.to == worker && m.status == "consumed")
+            .map(|m| ConsumedDisplay {
+                id: m.id,
+                from: c.members.iter().find(|w| w.id == m.from)
+                    .map(|w| format!("{} (#{} )", w.name, w.id))
+                    .unwrap_or_else(|| format!("Worker #{}", m.from)),
+                kind: m.kind.clone(),
+                body: m.body.clone(),
+                consumed_ms: m.consumed_ms.unwrap_or(m.delivered_ms.unwrap_or(m.created_ms)),
+            }).collect::<Vec<_>>();
+        list.sort_by_key(|message| (message.consumed_ms, message.id));
+        list
+    }
+}
+
+/// Inspect the active chat's outstanding inbox without model execution or hidden reads.
+/// The human controls deletion; deletion cannot erase an already-consumed transcript item.
+pub fn render_chat_inbox(
+    ui: &mut egui::Ui,
+    store: &mut Workspace,
+    drafts: &mut UiDrafts,
+    conversation: &str,
+) -> bool {
+    let Some((cid, worker)) = store.member_for(conversation) else {
+        ui.label("This chat is not attached to a coordination worker.");
+        return false;
+    };
+    let Some(c) = store.containers.iter().find(|c| c.id == cid) else { return false; };
+    let pending = c.messages.iter().filter(|m| m.to == worker && matches!(m.status.as_str(),
+        "delivered" | "queued" | "approval")).rev().cloned().collect::<Vec<_>>();
+    if pending.is_empty() {
+        ui.label("Inbox empty. Consumed messages remain in the chat reader.");
+        return false;
+    }
+    let mut dirty = false;
+    egui::ScrollArea::vertical()
+        .id_salt(("coordination-chat-inbox-scroll", conversation))
+        .max_height(310.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for message in pending {
+                let sender_name = c.members.iter().find(|m| m.id == message.from)
+                    .map(|m| m.name.clone()).unwrap_or_else(|| format!("Worker #{}", message.from));
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong(format!("#{} · {} · {}", message.id, message.kind, message.status));
+                        ui.label(format!("From {sender_name} (#{} )", message.from));
+                    });
+                    ui.add(egui::Label::new(&message.body).wrap());
+                    ui.label(egui::RichText::new(&message.note).weak().size(10.0));
+                    if drafts.confirm_delete == Some(message.id) {
+                        ui.horizontal(|ui| {
+                            ui.label("Permanently delete this inbox record?");
+                            if ui.button("Confirm delete").clicked() {
+                                match store.delete_message(cid, message.id) {
+                                    Ok(()) => {
+                                        drafts.notice = format!("Inbox message #{} deleted", message.id);
+                                        drafts.confirm_delete = None;
+                                        dirty = true;
+                                    }
+                                    Err(error) => drafts.notice = error,
+                                }
+                            }
+                            if ui.button("Cancel").clicked() { drafts.confirm_delete = None; }
+                        });
+                    } else if ui.small_button("Delete…").clicked() {
+                        drafts.confirm_delete = Some(message.id);
+                    }
+                });
+            }
+        });
+    dirty
+}
+
 pub fn topology_ui(ui: &mut egui::Ui, c: &Container, conversations: &[(String, String, Color32)]) {
     if c.members.is_empty() {
         ui.label("No workers attached yet. Choose a conversation above.");
@@ -961,6 +1058,15 @@ pub fn render(
             }
         });
     ui.separator();
+    let (inbox_count, queue_count) = store.inbox_counts(current);
+    egui::CollapsingHeader::new(format!(
+        "Active chat inbox ({} delivered, {} queued)", inbox_count, queue_count
+    ))
+        .id_salt("coordination-active-inbox")
+        .default_open(false)
+        .show(ui, |ui| {
+            dirty |= render_chat_inbox(ui, store, drafts, current);
+        });
     egui::CollapsingHeader::new("Topology viewer")
         .id_salt("coordination-topology-view")
         .default_open(false)
