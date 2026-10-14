@@ -15836,7 +15836,6 @@ impl eframe::App for ChatariumApp {
                                                             &self.reader_search_query,
                                                             false,
                                                             ctx,
-                                                            &display_preferences,
                                                         );
                                                         row_ui.add_space(12.0);
                                                         let actual_height =
@@ -15890,7 +15889,6 @@ impl eframe::App for ChatariumApp {
                                         &self.reader_search_query,
                                         message_is_active_hit,
                                         ctx,
-                                        &display_preferences,
                                     );
                                     if message_is_active_hit {
                                         response.scroll_to_me(Some(egui::Align::Center));
@@ -16210,8 +16208,12 @@ fn draw_reader_bubble(
     search_query: &str,
     active_hit: bool,
     ctx: &egui::Context,
-    preferences: &display_preferences::DisplayPreferences,
 ) -> egui::Response {
+    let preferences = ctx.data_mut(|data| {
+        data.get_temp::<display_preferences::DisplayPreferences>(
+            egui::Id::new("chatarium-display-preferences"),
+        )
+    }).unwrap_or_default();
     let palette = &preferences.message_colors;
     let bubble_fill = |index: usize| {
         let [r, g, b] = palette[index];
