@@ -87,6 +87,11 @@ pub enum ContextSource {
         admitted_sequence: u64,
         outcome: String,
     },
+    CoordinationActivation {
+        started_sequence: u64,
+        activation_turn_id: String,
+        inbox_ids: Vec<u64>,
+    },
     CurrentDraft,
 }
 
@@ -178,6 +183,13 @@ impl ContextSource {
             } => format!(
                 "controller coordination result · {outcome} · turn {coordination_turn_id} · result #{result_sequence} · admitted #{admitted_sequence}"
             ),
+            Self::CoordinationActivation {
+                started_sequence,
+                activation_turn_id,
+                inbox_ids,
+            } => format!(
+                "verified coordination activation · turn {activation_turn_id} · inbox {inbox_ids:?} · started #{started_sequence}"
+            ),
             Self::CurrentDraft => "current draft preview".to_owned(),
         }
     }
@@ -258,6 +270,7 @@ impl ContextPolicy {
             ContextSource::ControllerCoordinationResult { .. } => {
                 self.include_controller_coordination_results
             }
+            ContextSource::CoordinationActivation { .. } => self.include_durable_transcript,
             ContextSource::CurrentDraft => self.include_current_draft,
         }
     }
@@ -494,6 +507,27 @@ impl TranscriptMessage {
     }
 
     #[must_use]
+    pub fn coordination_activation(
+        turn_id: impl Into<String>,
+        started_sequence: u64,
+        inbox_ids: Vec<u64>,
+    ) -> Self {
+        let activation_turn_id = turn_id.into();
+        let text = format!(
+            "[Chatarium verified coordination inbox activation — non-user-authored, user-level context]\nactivation_turn_id: {activation_turn_id}\nstarted_event: #{started_sequence}\nmessage_ids: {inbox_ids:?}\nRead and respond to the verified coordination messages in your supplied workspace identity context. Do not claim a message was sent unless Chatarium returns a verified coordination tool result. Do not repeat already processed directives.\n[/Chatarium verified coordination inbox activation]"
+        );
+        Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::CoordinationActivation {
+                started_sequence,
+                activation_turn_id,
+                inbox_ids,
+            },
+        }
+    }
+
+    #[must_use]
     pub fn draft(text: impl Into<String>) -> Self {
         Self {
             role: TranscriptRole::User,
@@ -531,6 +565,9 @@ impl TranscriptMessage {
             ContextSource::ControllerCoordinationResult {
                 admitted_sequence, ..
             } => *admitted_sequence,
+            ContextSource::CoordinationActivation {
+                started_sequence, ..
+            } => *started_sequence,
             ContextSource::CurrentDraft => u64::MAX,
             ContextSource::TopLevelInstructions | ContextSource::ConversationDeveloperContext => 0,
         }

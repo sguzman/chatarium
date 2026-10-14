@@ -425,6 +425,8 @@ pub enum EventKind {
     ToolResultContextDecisionRecorded,
     /// A generic routing-layer result or error observation was recorded.
     RouteResultObserved,
+    /// A non-user-authored worker wake-up was durably admitted from a coordination inbox.
+    CoordinationActivationStarted,
     /// One local conversation was durably correlated to an orchestration worker identity.
     LocalConversationWorkerBound,
     /// One local conversation was durably correlated to a logical chat container.
@@ -558,6 +560,7 @@ impl EventKind {
             Self::SiwcAgentActivityObserved => "siwc_agent_activity_observed",
             Self::ToolResultContextDecisionRecorded => "tool_result_context_decision_recorded",
             Self::RouteResultObserved => "route_result_observed",
+            Self::CoordinationActivationStarted => "coordination_activation_started",
             Self::LocalConversationWorkerBound => "local_conversation_worker_bound",
             Self::LocalConversationChatContainerBound => "local_conversation_chat_container_bound",
             Self::WorkerGoalAssigned => "worker_goal_assigned",
@@ -670,6 +673,7 @@ impl EventKind {
                 Some(Self::ToolResultContextDecisionRecorded)
             }
             "route_result_observed" => Some(Self::RouteResultObserved),
+            "coordination_activation_started" => Some(Self::CoordinationActivationStarted),
             "local_conversation_worker_bound" => Some(Self::LocalConversationWorkerBound),
             "local_conversation_chat_container_bound" => {
                 Some(Self::LocalConversationChatContainerBound)
