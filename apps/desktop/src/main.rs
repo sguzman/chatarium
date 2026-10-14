@@ -1348,11 +1348,10 @@ impl ChatariumApp {
                         commit_in_flight: None,
                         evidence: TurnEvidence::default(),
                         local_conversation_id,
-                        local_conversation_rename: local_conversation_display_title(
-                            &local_conversation_catalog,
-                            local_conversation_id,
-                            &events,
-                        ),
+                        local_conversation_rename: local_conversation_catalog
+                            .entry(local_conversation_id)
+                            .and_then(|entry| entry.title.clone())
+                            .unwrap_or_default(),
                         local_conversation_project_directory: local_conversation_catalog
                             .entry(local_conversation_id)
                             .and_then(|entry| entry.project_directory.clone())
@@ -1582,11 +1581,10 @@ impl ChatariumApp {
             commit_in_flight: None,
             evidence: TurnEvidence::default(),
             local_conversation_id,
-            local_conversation_rename: local_conversation_display_title(
-                &local_conversation_catalog,
-                local_conversation_id,
-                &events,
-            ),
+            local_conversation_rename: local_conversation_catalog
+                .entry(local_conversation_id)
+                .and_then(|entry| entry.title.clone())
+                .unwrap_or_default(),
             local_conversation_project_directory: local_conversation_catalog
                 .entry(local_conversation_id)
                 .and_then(|entry| entry.project_directory.clone())
@@ -1766,11 +1764,11 @@ impl ChatariumApp {
             self.persist_current_inference_settings();
         }
 
-        self.local_conversation_rename = local_conversation_display_title(
-            &self.local_conversation_catalog,
-            conversation_id,
-            &self.events,
-        );
+        self.local_conversation_rename = self
+            .local_conversation_catalog
+            .entry(conversation_id)
+            .and_then(|entry| entry.title.clone())
+            .unwrap_or_default();
         self.local_conversation_project_directory = self
             .local_conversation_catalog
             .entry(conversation_id)
@@ -1845,11 +1843,11 @@ impl ChatariumApp {
         ) {
             self.status = format!("failed to rename local conversation: {error}");
         } else if self.persist_local_conversation_catalog() {
-            self.local_conversation_rename = local_conversation_display_title(
-                &self.local_conversation_catalog,
-                self.local_conversation_id,
-                &self.events,
-            );
+            self.local_conversation_rename = self
+                .local_conversation_catalog
+                .entry(self.local_conversation_id)
+                .and_then(|entry| entry.title.clone())
+                .unwrap_or_default();
             self.status = "local conversation title saved".to_owned();
         }
     }
@@ -3115,7 +3113,7 @@ impl ChatariumApp {
                                 .and_then(|entry| entry.project_directory.as_deref())
                             {
                                 context.push_str(&format!(
-                                    "\n\nChatarium project directory for this conversation: {directory}\n                                     Use this directory as the default working directory for shell commands.                                      This folder is a workspace hint, not a request to execute anything."
+                                    "\n\nChatarium project directory for this conversation: {directory}\n                                     For local Git, file, and shell tasks, invoke chatarium.builtin::shell.command directly,                                      e.g. {{\"command\":\"git status --short --branch\"}}.                                      The shell's default cwd is this project folder; an explicit cwd overrides it.                                      tools.list is optional discovery, not a prerequisite to shell execution.                                      Do not claim results before the tool reply is admitted.                                      This directory is a workspace hint, not a request to execute anything."
                                 ));
                             }
                             context
@@ -13498,29 +13496,28 @@ impl eframe::App for ChatariumApp {
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.label(format!("Selected: {local_conversation_title}"));
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.local_conversation_rename)
-                                                .hint_text("Rename selected chat…")
-                                                .desired_width((sidebar_control_width - 90.0).max(100.0)),
-                                        );
-                                        if ui.button("Save").clicked() {
-                                            rename_local_requested = true;
-                                        }
-                                    });
+                                    ui.label("Rename this chat:");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.local_conversation_rename)
+                                            .hint_text("Enter a title…")
+                                            .desired_width(ui.available_width()),
+                                    );
+                                    if ui.button("Save title").clicked() {
+                                        rename_local_requested = true;
+                                    }
                                     ui.label("Project folder for this chat (absolute path):");
+                                    ui.add(
+                                        egui::TextEdit::singleline(
+                                            &mut self.local_conversation_project_directory,
+                                        )
+                                        .hint_text("/home/user/Code/project")
+                                        .desired_width(ui.available_width()),
+                                    );
                                     ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(
-                                                &mut self.local_conversation_project_directory,
-                                            )
-                                            .hint_text("/home/user/Code/project")
-                                            .desired_width((sidebar_control_width - 90.0).max(100.0)),
-                                        );
                                         if ui.button("Save folder").clicked() {
                                             save_project_directory_requested = true;
                                         }
-                                        if ui.button("Clear").clicked() {
+                                        if ui.button("Clear folder").clicked() {
                                             self.local_conversation_project_directory.clear();
                                             save_project_directory_requested = true;
                                         }
