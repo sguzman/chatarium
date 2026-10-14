@@ -34,11 +34,19 @@ The `cwd` field is optional and defaults to the user's `$HOME`.
 
 This executes `/usr/bin/fish -c <command>` (or the selected shell) using
 the invoking user's HOME, environment, Fish configuration, Fish functions,
-and configured PATH. Output is returned as a journaled MCP result with
-stdout, stderr, exit code and timeout flag. The shell is bounded by 30 seconds
-via `/usr/bin/timeout` and stdout/stderr are capped at 24 KiB each. A new
-call has a new immutable route ID. Re-running a crashed or ambiguous call
-is never automatic.
+and configured PATH. The shell is bounded by one hour via
+`/usr/bin/timeout`. Both output pipes are continuously drained: the full
+stdout and stderr are saved to private per-call log files under
+`$XDG_STATE_HOME/chatarium/shell-logs` (or `~/.local/state/chatarium/shell-logs`).
+Each file can grow to 64 MiB, after which output is still drained without
+blocking the command. The tool result returns the real exit code, total byte
+counts, log paths, truncated flags and recent output excerpts. Large output
+never creates a false "shell output exceeds limit" execution failure.
+
+A compact result is deliberately kept under the existing 64 KiB agent-context
+admission limit. When the output is larger, the agent can inspect the saved
+log file using follow-up shell commands. A new call has a new immutable route
+ID. Re-running a crashed or ambiguous call is never automatic.
 
 ## IMPORTANT: authority and trust
 
