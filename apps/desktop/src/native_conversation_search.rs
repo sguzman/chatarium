@@ -2475,8 +2475,8 @@ mod tests {
             provenance_label: None,
         };
         let mut messages = vec![
-            display(super::DisplayRole::User, "try to run shell", 1),
-            display(super::DisplayRole::Assistant, raw, 2),
+            display(crate::DisplayRole::User, "try to run shell", 1),
+            display(crate::DisplayRole::Assistant, raw, 2),
         ];
         let verified_text = format!(
             "TOOL CALL\nchatarium.builtin::shell.command · call #9 · session #3\n\nExact tool arguments:\n{}",
@@ -2487,13 +2487,13 @@ mod tests {
                 "MCP CALL · journaled · chatarium.builtin::shell.command · call #9 · session #3"
                     .to_owned(),
             ),
-            ..display(super::DisplayRole::Mcp, &verified_text, 3)
+            ..display(crate::DisplayRole::Mcp, &verified_text, 3)
         };
         hide_audited_mcp_protocol_requests(&mut messages, &[]);
         assert_eq!(messages.len(), 2, "unverified requests must remain visible");
         hide_audited_mcp_protocol_requests(&mut messages, &[verified]);
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].role, super::DisplayRole::User);
+        assert_eq!(messages[0].role, crate::DisplayRole::User);
     }
 
     #[test]
