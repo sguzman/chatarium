@@ -332,9 +332,15 @@ pub fn execute(settings: &Settings, args: &Value) -> Result<Value, String> {
     let stderr = child.stderr.take().ok_or("missing shell stderr")?;
     let out_worker = thread::spawn(move || read_stream(stdout, stdout_path, STDOUT_TAIL_BYTES));
     let err_worker = thread::spawn(move || read_stream(stderr, stderr_path, STDERR_TAIL_BYTES));
-    let status = child.wait().map_err(|error| format!("cannot wait for shell: {error}"))?;
-    let stdout = out_worker.join().map_err(|_| "shell stdout worker panicked")?;
-    let stderr = err_worker.join().map_err(|_| "shell stderr worker panicked")?;
+    let status = child
+        .wait()
+        .map_err(|error| format!("cannot wait for shell: {error}"))?;
+    let stdout = out_worker
+        .join()
+        .map_err(|_| "shell stdout worker panicked")?;
+    let stderr = err_worker
+        .join()
+        .map_err(|_| "shell stderr worker panicked")?;
     let mut out_excerpt = String::from_utf8_lossy(&stdout.tail).into_owned();
     let mut err_excerpt = String::from_utf8_lossy(&stderr.tail).into_owned();
     let mut outcome = json!({
@@ -446,7 +452,12 @@ mod tests {
         assert_eq!(result["exit_code"], 7);
         assert!(result["stdout_truncated"].as_bool().unwrap());
         assert!(result["stdout_total_bytes"].as_u64().unwrap() > 24 * 1024);
-        assert!(result["stdout"].as_str().unwrap().contains("verbose-build-output"));
+        assert!(
+            result["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("verbose-build-output")
+        );
         assert!(result["stdout_log"].as_str().is_some());
         assert!(std::path::Path::new(result["stdout_log"].as_str().unwrap()).is_file());
         assert!(serde_json::to_vec(&result).unwrap().len() < 65_536);
