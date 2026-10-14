@@ -400,17 +400,19 @@ impl Workspace {
         c.links
             .iter()
             .find(|l| l.from == to && l.to == from && l.directives && l.mode != "block")
-            .map(|_| (
-                Link {
-                    from,
-                    to,
-                    directives: false,
-                    reports: true,
-                    mode: "allow".to_owned(),
-                    per_minute: 0,
-                },
-                true,
-            ))
+            .map(|_| {
+                (
+                    Link {
+                        from,
+                        to,
+                        directives: false,
+                        reports: true,
+                        mode: "allow".to_owned(),
+                        per_minute: 0,
+                    },
+                    true,
+                )
+            })
     }
 
     /// Source identity is resolved by the application from its active conversation.
@@ -519,15 +521,14 @@ impl Workspace {
         }
         // Recheck current authority at delivery, so revoked power cannot be
         // smuggled through a formerly eligible queue.
-        let permitted = Self::route_for(c, record.from, record.to)
-            .is_some_and(|(l, _)| {
-                l.mode != "block"
-                    && if record.kind == "directive" {
-                        l.directives
-                    } else {
-                        l.reports
-                    }
-            });
+        let permitted = Self::route_for(c, record.from, record.to).is_some_and(|(l, _)| {
+            l.mode != "block"
+                && if record.kind == "directive" {
+                    l.directives
+                } else {
+                    l.reports
+                }
+        });
         let m = c.messages.iter_mut().find(|m| m.id == id).unwrap();
         if allow && permitted {
             m.status = "delivered".to_owned();
