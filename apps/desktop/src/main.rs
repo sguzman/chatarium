@@ -14811,10 +14811,21 @@ impl eframe::App for ChatariumApp {
         }
         if self.coordination_window_open {
             let mut open = true;
+            let work_area = ctx.available_rect().size();
+            let max_window_size = egui::vec2(
+                (work_area.x - 24.0).max(260.0),
+                (work_area.y - 32.0).max(240.0),
+            );
+            let preferred_window_size = egui::vec2(
+                max_window_size.x.min(690.0),
+                max_window_size.y.min(540.0),
+            );
             egui::Window::new("Chatarium coordination topology")
                 .open(&mut open)
-                .default_size([780.0, 620.0])
+                .default_size(preferred_window_size)
+                .max_size(max_window_size)
                 .resizable(true)
+                .constrain(true)
                 .show(ctx, |ui| {
                     let conversations = self
                         .local_conversation_catalog
@@ -14837,13 +14848,20 @@ impl eframe::App for ChatariumApp {
                         })
                         .collect::<Vec<_>>();
                     let previous = self.coordination_workspace.clone();
-                    let changed = coordination_workspace::render(
-                        ui,
-                        &mut self.coordination_workspace,
-                        &mut self.coordination_ui,
-                        &conversations,
-                        &self.local_conversation_id.to_string(),
-                    );
+                    let changed = egui::ScrollArea::vertical()
+                        .id_salt("chatarium-coordination-scroll")
+                        .max_height((max_window_size.y - 65.0).max(140.0))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            coordination_workspace::render(
+                                ui,
+                                &mut self.coordination_workspace,
+                                &mut self.coordination_ui,
+                                &conversations,
+                                &self.local_conversation_id.to_string(),
+                            )
+                        })
+                        .inner;
                     if changed {
                         if let Err(error) = self
                             .coordination_workspace
