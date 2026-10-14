@@ -953,6 +953,7 @@ struct PendingInferenceIntent {
     controller_coordination_result_context: Vec<context_composer::TranscriptMessage>,
     request_patch: Value,
     attachment: Option<attachment_intake::PreparedAttachment>,
+    coordination_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1031,6 +1032,7 @@ struct ChatariumApp {
     local_conversation_id: LocalConversationId,
     local_conversation_catalog: local_conversations::LocalConversationCatalog,
     coordination_workspace: coordination_workspace::Workspace,
+    coordination_pending_admissions: BTreeMap<String, Vec<u64>>,
     coordination_ui: coordination_workspace::UiDrafts,
     coordination_window_open: bool,
     coordination_tool_steps: u32,
@@ -1368,6 +1370,7 @@ impl ChatariumApp {
                             .unwrap_or_default(),
                         local_conversation_catalog,
                         coordination_workspace,
+                        coordination_pending_admissions: BTreeMap::new(),
                         coordination_ui: coordination_workspace::UiDrafts::default(),
                         coordination_window_open: false,
                         coordination_tool_steps: 0,
@@ -1613,6 +1616,7 @@ impl ChatariumApp {
                 .unwrap_or_default(),
             local_conversation_catalog,
             coordination_workspace,
+            coordination_pending_admissions: BTreeMap::new(),
             coordination_ui: coordination_workspace::UiDrafts::default(),
             coordination_window_open: false,
             coordination_tool_steps: 0,
@@ -3156,6 +3160,9 @@ impl ChatariumApp {
                         controller_coordination_result_context,
                         request_patch,
                         attachment: self.staged_attachment.clone(),
+                        coordination_ids: self.coordination_workspace.context_delivered_ids(
+                            &self.local_conversation_id.to_string(),
+                        ),
                     },
                 );
             }
@@ -3354,6 +3361,10 @@ impl ChatariumApp {
                                 message.conversation_id.to_string(),
                                 remote_request_id.clone(),
                             );
+                            self.coordination_pending_admissions.insert(
+                                remote_request_id.clone(),
+                                intent.coordination_ids,
+                            );
                             self.pending_remote_turn = Some(PendingRemoteTurn {
                                 conversation_id: message.conversation_id,
                                 turn_id: message.turn_id,
@@ -3372,6 +3383,7 @@ impl ChatariumApp {
                                     "message durable as event #{sequence}; preparing ChatGPT dispatch"
                                 );
                             } else {
+                                self.coordination_pending_admissions.remove(&remote_request_id);
                                 self.pending_remote_turn = None;
                             }
                         } else {
@@ -3411,6 +3423,22 @@ impl ChatariumApp {
                         let retry_command = command.clone();
                         match self.remote.send(command) {
                             Ok(()) => {
+                                if let Some(ids) = self.coordination_pending_admissions.remove(&pending.request_id) {
+                                    if !ids.is_empty() {
+                                        let before = self.coordination_workspace.clone();
+                                        let changed = self.coordination_workspace.consume_ids(
+                                            &pending.conversation_id.to_string(),
+                                            &ids,
+                                            unix_now_ms(),
+                                        );
+                                        if changed != 0 {
+                                            if let Err(error) = self.coordination_workspace.save_atomic(&self.coordination_store_path()) {
+                                                self.coordination_workspace = before;
+                                                self.status = format!("Coordination consumption persistence failed: {error}");
+                                            }
+                                        }
+                                    }
+                                }
                                 self.delivery.set(
                                     &pending.request_id,
                                     delivery_telemetry::Phase::BridgeQueued,
@@ -3428,6 +3456,7 @@ impl ChatariumApp {
                                 });
                             }
                             Err(error) => {
+                                self.coordination_pending_admissions.remove(&pending.request_id);
                                 self.delivery.error(
                                     &pending.request_id,
                                     delivery_telemetry::Phase::Unconfirmed,
