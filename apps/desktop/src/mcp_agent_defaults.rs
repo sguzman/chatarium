@@ -13,6 +13,7 @@ const ACTIVATION_DEFAULT_VERSION: u64 = 2;
 // Upgrade only the exact previously generated shell-approval default, once.
 // Saved explicit 'ask', 'manual' and 'disabled' policies remain authoritative.
 const HOST_SHELL_DEFAULT_VERSION: u64 = 2;
+const COORDINATION_DEFAULT_VERSION: u64 = 2;
 const MAX_PROMPT: usize = 32 * 1024;
 const PRIOR_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask";
 const READ_ONLY_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask\nchatarium.builtin::time.now = automatic";
@@ -42,7 +43,9 @@ impl Default for AgentDefaults {
                 "Never claim to have called a tool unless its actual result appears in context. ",
                 "If execution requires approval, wait for the user to approve it."
             ).to_owned(),
-            policy_rules: format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic"),
+            policy_rules: format!(
+                "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic\n                 chatarium.builtin::coordination.identity = automatic\n                 chatarium.builtin::coordination.send = automatic"
+            ),
             max_calls: 8,
             seed_new_conversations: true,
         }
@@ -199,6 +202,22 @@ impl AgentDefaults {
             }
             settings.save_atomic(path)?;
         }
+        // Only the exact previously generated shell default receives the new
+        // coordination tool grants. Customized policies, including explicit
+        // denials, are never silently escalated.
+        if value
+            .get("coordination_default_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            < COORDINATION_DEFAULT_VERSION
+        {
+            let previous_generated_default =
+                format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic");
+            if settings.policy_rules == previous_generated_default {
+                settings.policy_rules = Self::default().policy_rules;
+            }
+            settings.save_atomic(path)?;
+        }
         if value
             .get("activation_default_version")
             .and_then(Value::as_u64)
@@ -232,7 +251,8 @@ impl AgentDefaults {
             "max_calls": self.max_calls,
             "seed_new_conversations": self.seed_new_conversations,
             "activation_default_version": ACTIVATION_DEFAULT_VERSION,
-            "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION
+            "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION,
+            "coordination_default_version": COORDINATION_DEFAULT_VERSION
         }))
         .map_err(|e| e.to_string())?;
         let temporary = path.with_extension("json.tmp");
@@ -392,6 +412,45 @@ mod tests {
     fn multiple_leading_envelopes_are_rejected_not_queued() {
         let one = "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"tools.list\",\"arguments\":{}}}";
         assert!(parse_model_tool_request(&format!("{one}\n{one}")).is_err());
+    }
+
+    #[test]
+    fn generated_shell_default_gains_coordination_without_escalating_custom_policy() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-coordination-permissions-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let defaults = AgentDefaults::default();
+        let old = format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic");
+        let file = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "bootstrap": defaults.bootstrap,
+            "policy_rules": old,
+            "max_calls": 8,
+            "seed_new_conversations": true,
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION,
+            "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION
+        });
+        fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        let upgraded = AgentDefaults::load(&path).unwrap();
+        assert_eq!(
+            tool_policy(&upgraded.policy_rules,"chatarium.builtin","coordination.send"),
+            Ok(ToolPolicy::Automatic)
+        );
+        let mut disabled = upgraded.clone();
+        disabled.policy_rules = disabled.policy_rules.replace(
+            "chatarium.builtin::coordination.send = automatic",
+            "chatarium.builtin::coordination.send = disabled",
+        );
+        disabled.save_atomic(&path).unwrap();
+        let reloaded = AgentDefaults::load(&path).unwrap();
+        assert_eq!(reloaded.policy_rules, disabled.policy_rules);
+        let _ = fs::remove_file(path);
     }
 
     #[test]
