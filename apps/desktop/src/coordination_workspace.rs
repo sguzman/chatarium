@@ -815,7 +815,38 @@ pub fn render(
         }
         return dirty;
     };
+    if !drafts.notice.is_empty() {
+        ui.label(&drafts.notice);
+    }
     ui.separator();
+    let member_label = |id: u64| {
+        container
+            .members
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| {
+                let chat = conversations
+                    .iter()
+                    .find(|(id, _, _)| *id == w.conversation)
+                    .map(|(_, title, _)| title.chars().take(32).collect::<String>())
+                    .unwrap_or_else(|| "missing chat".to_owned());
+                format!("{} · {} (#{})", w.name, chat, w.id)
+            })
+            .unwrap_or("Select worker".to_owned())
+    };
+    let member_accent = |id: u64| {
+        container
+            .members
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| conversation_color(conversations, &w.conversation))
+            .unwrap_or(Color32::GRAY)
+    };
+
+    egui::CollapsingHeader::new(format!("Workers ({})", container.members.len()))
+        .id_salt("coordination-workers")
+        .default_open(false)
+        .show(ui, |ui| {
     ui.strong("Add existing conversation as worker");
     egui::ComboBox::from_label("Conversation")
         .selected_text(
@@ -854,29 +885,6 @@ pub fn render(
             Err(e) => drafts.notice = e,
         }
     }
-    let member_label = |id: u64| {
-        container
-            .members
-            .iter()
-            .find(|w| w.id == id)
-            .map(|w| {
-                let chat = conversations
-                    .iter()
-                    .find(|(id, _, _)| *id == w.conversation)
-                    .map(|(_, title, _)| title.chars().take(32).collect::<String>())
-                    .unwrap_or_else(|| "missing chat".to_owned());
-                format!("{} · {} (#{})", w.name, chat, w.id)
-            })
-            .unwrap_or("Select worker".to_owned())
-    };
-    let member_accent = |id: u64| {
-        container
-            .members
-            .iter()
-            .find(|w| w.id == id)
-            .map(|w| conversation_color(conversations, &w.conversation))
-            .unwrap_or(Color32::GRAY)
-    };
     for m in &container.members {
         ui.horizontal(|ui| {
             ui.colored_label(member_accent(m.id), "●");
@@ -892,12 +900,19 @@ pub fn render(
             ));
         });
     }
+        });
     ui.separator();
-    ui.strong("Topology and authority");
-    topology_ui(ui, &container, conversations);
-    ui.label(
-        "Edges configure authority; changing an edge sender does not change your active chat.",
-    );
+    egui::CollapsingHeader::new("Topology viewer")
+        .id_salt("coordination-topology-view")
+        .default_open(false)
+        .show(ui, |ui| {
+            topology_ui(ui, &container, conversations);
+        });
+    egui::CollapsingHeader::new(format!("Authority and delivery rules ({} edges)", container.links.len()))
+        .id_salt("coordination-authority")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label("Configure a directed edge. This does not change the active chat.");
     egui::ComboBox::from_label("Authority sender")
         .selected_text(member_label(drafts.source))
         .show_ui(ui, |ui| {
@@ -968,8 +983,11 @@ pub fn render(
             l.per_minute
         ));
     }
-    ui.separator();
-    ui.strong("Send a test message");
+        });
+    egui::CollapsingHeader::new("Send a test message")
+        .id_salt("coordination-test-message")
+        .default_open(true)
+        .show(ui, |ui| {
     ui.label("Human-operated test: choose which worker speaks. Agent messages still use verified conversation identity.");
     if let Some(active) = container.members.iter().find(|m| m.conversation == current) {
         ui.colored_label(
@@ -1097,13 +1115,10 @@ pub fn render(
             }
         }
     }
-    if !drafts.notice.is_empty() {
-        ui.label(&drafts.notice);
-    }
-    ui.separator();
-    ui.strong("Message flow and queue");
-    egui::ScrollArea::vertical()
-        .max_height(195.0)
+        });
+    egui::CollapsingHeader::new(format!("Message flow and queue ({} messages)", container.messages.len()))
+        .id_salt("coordination-message-history")
+        .default_open(false)
         .show(ui, |ui| {
             for m in container.messages.iter().rev().take(60) {
                 ui.horizontal_wrapped(|ui| {
