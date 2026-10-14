@@ -130,88 +130,137 @@ fn kind_ok(kind: &str) -> bool {
 impl Workspace {
     pub fn load(path: &Path) -> Result<Self, String> {
         if !path.exists() {
-            return Ok(Self { containers: Vec::new(), next_id: 1 });
+            return Ok(Self {
+                containers: Vec::new(),
+                next_id: 1,
+            });
         }
-        let data = fs::read(path).map_err(|e| format!("cannot read coordination workspace: {e}"))?;
+        let data =
+            fs::read(path).map_err(|e| format!("cannot read coordination workspace: {e}"))?;
         if data.len() > MAX_FILE {
             return Err("coordination workspace exceeds 16 MiB".to_owned());
         }
-        let root: Value = serde_json::from_slice(&data).map_err(|e| format!("invalid coordination workspace JSON: {e}"))?;
+        let root: Value = serde_json::from_slice(&data)
+            .map_err(|e| format!("invalid coordination workspace JSON: {e}"))?;
         if root["schema"] != SCHEMA || root["version"] != 1 {
             return Err("unknown coordination workspace schema".to_owned());
         }
         let mut containers = Vec::new();
         let mut ids = std::collections::BTreeSet::new();
         let mut largest = 0_u64;
-        for c in root["containers"].as_array().ok_or("missing coordination containers")? {
+        for c in root["containers"]
+            .as_array()
+            .ok_or("missing coordination containers")?
+        {
             let id = number(c, "id")?;
-            if id == 0 || !ids.insert(id) { return Err("duplicate container identity".to_owned()); }
+            if id == 0 || !ids.insert(id) {
+                return Err("duplicate container identity".to_owned());
+            }
             largest = largest.max(id);
             let name = clean_label(required(c, "name")?, 128)?;
             let mut members = Vec::new();
             let mut member_ids = std::collections::BTreeSet::new();
             let mut local_ids = std::collections::BTreeSet::new();
             for m in c["members"].as_array().ok_or("missing members")? {
-                let worker_id = number(m,"id")?;
-                let conversation = clean_label(required(m,"conversation")?, 128)?;
-                if worker_id == 0 || !member_ids.insert(worker_id) || !local_ids.insert(conversation.clone()) {
+                let worker_id = number(m, "id")?;
+                let conversation = clean_label(required(m, "conversation")?, 128)?;
+                if worker_id == 0
+                    || !member_ids.insert(worker_id)
+                    || !local_ids.insert(conversation.clone())
+                {
                     return Err("duplicate worker or conversation membership".to_owned());
                 }
                 largest = largest.max(worker_id);
                 members.push(Member {
-                    id: worker_id, conversation,
-                    name: clean_label(required(m,"name")?, 128)?,
-                    role: clean_label(required(m,"role")?, 128)?,
+                    id: worker_id,
+                    conversation,
+                    name: clean_label(required(m, "name")?, 128)?,
+                    role: clean_label(required(m, "role")?, 128)?,
                 });
             }
             let mut links = Vec::new();
             let mut edges = std::collections::BTreeSet::new();
             for l in c["links"].as_array().ok_or("missing topology links")? {
-                let from = number(l,"from")?;
-                let to = number(l,"to")?;
-                let mode = required(l,"mode")?;
-                if !member_ids.contains(&from) || !member_ids.contains(&to) || from == to
-                    || !edges.insert((from,to)) || !mode_ok(mode) {
+                let from = number(l, "from")?;
+                let to = number(l, "to")?;
+                let mode = required(l, "mode")?;
+                if !member_ids.contains(&from)
+                    || !member_ids.contains(&to)
+                    || from == to
+                    || !edges.insert((from, to))
+                    || !mode_ok(mode)
+                {
                     return Err("invalid or duplicate authority edge".to_owned());
                 }
-                let per_minute = u32::try_from(number(l,"per_minute")?).map_err(|e| e.to_string())?;
-                if per_minute > 600 { return Err("invalid rate limit".to_owned()); }
+                let per_minute =
+                    u32::try_from(number(l, "per_minute")?).map_err(|e| e.to_string())?;
+                if per_minute > 600 {
+                    return Err("invalid rate limit".to_owned());
+                }
                 links.push(Link {
-                    from,to,mode:mode.to_owned(),per_minute,
-                    directives: field_bool(l,"directives")?,
-                    reports: field_bool(l,"reports")?,
+                    from,
+                    to,
+                    mode: mode.to_owned(),
+                    per_minute,
+                    directives: field_bool(l, "directives")?,
+                    reports: field_bool(l, "reports")?,
                 });
             }
             let mut messages = Vec::new();
             let mut message_ids = std::collections::BTreeSet::new();
-            for m in c["messages"].as_array().ok_or("missing coordination messages")? {
-                let id = number(m,"id")?;
-                let from = number(m,"from")?;
-                let to = number(m,"to")?;
-                let kind = required(m,"kind")?;
-                let status = required(m,"status")?;
-                let body = required(m,"body")?;
-                if !member_ids.contains(&from) || !member_ids.contains(&to) || from == to
-                    || !kind_ok(kind) || body.len()>MAX_MESSAGE
-                    || !matches!(status, "delivered" | "queued" | "approval" | "blocked" | "rejected")
-                    || !message_ids.insert(id) || id == 0 {
+            for m in c["messages"]
+                .as_array()
+                .ok_or("missing coordination messages")?
+            {
+                let id = number(m, "id")?;
+                let from = number(m, "from")?;
+                let to = number(m, "to")?;
+                let kind = required(m, "kind")?;
+                let status = required(m, "status")?;
+                let body = required(m, "body")?;
+                if !member_ids.contains(&from)
+                    || !member_ids.contains(&to)
+                    || from == to
+                    || !kind_ok(kind)
+                    || body.len() > MAX_MESSAGE
+                    || !matches!(
+                        status,
+                        "delivered" | "queued" | "approval" | "blocked" | "rejected"
+                    )
+                    || !message_ids.insert(id)
+                    || id == 0
+                {
                     return Err("invalid or duplicate coordination message".to_owned());
                 }
-                largest=largest.max(id);
+                largest = largest.max(id);
                 messages.push(Message {
-                    id,from,to,kind:kind.to_owned(),body:body.to_owned(),
-                    status:status.to_owned(),created_ms:number(m,"created_ms")?,
-                    delivered_ms:m["delivered_ms"].as_u64(),
-                    note:required(m,"note")?.to_owned(),
+                    id,
+                    from,
+                    to,
+                    kind: kind.to_owned(),
+                    body: body.to_owned(),
+                    status: status.to_owned(),
+                    created_ms: number(m, "created_ms")?,
+                    delivered_ms: m["delivered_ms"].as_u64(),
+                    note: required(m, "note")?.to_owned(),
                 });
             }
-            containers.push(Container{id,name,members,links,messages});
+            containers.push(Container {
+                id,
+                name,
+                members,
+                links,
+                messages,
+            });
         }
-        let next_id = number(&root,"next_id")?;
+        let next_id = number(&root, "next_id")?;
         if next_id == 0 || next_id <= largest {
             return Err("coordination ID sequence cannot be reused".to_owned());
         }
-        Ok(Self{containers,next_id})
+        Ok(Self {
+            containers,
+            next_id,
+        })
     }
     pub fn save_atomic(&self, path: &Path) -> Result<(), String> {
         let root = json!({
@@ -223,123 +272,301 @@ impl Workspace {
                 "messages":c.messages.iter().map(|m|json!({"id":m.id,"from":m.from,"to":m.to,"kind":m.kind,"body":m.body,"status":m.status,"created_ms":m.created_ms,"delivered_ms":m.delivered_ms,"note":m.note})).collect::<Vec<_>>()
             })).collect::<Vec<_>>()
         });
-        let bytes=serde_json::to_vec_pretty(&root).map_err(|e|e.to_string())?;
-        if bytes.len()>MAX_FILE{return Err("coordination workspace is full".to_owned());}
-        if let Some(parent)=path.parent(){fs::create_dir_all(parent).map_err(|e|e.to_string())?;}
-        let tmp=path.with_extension("json.tmp");
-        fs::write(&tmp,bytes).map_err(|e|e.to_string())?;
-        fs::rename(tmp,path).map_err(|e|e.to_string())
+        let bytes = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_FILE {
+            return Err("coordination workspace is full".to_owned());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+        fs::rename(tmp, path).map_err(|e| e.to_string())
     }
     fn allocate(&mut self) -> u64 {
-        let id=self.next_id.max(1);
-        self.next_id=id.saturating_add(1);
+        let id = self.next_id.max(1);
+        self.next_id = id.saturating_add(1);
         id
     }
-    pub fn create_container(&mut self, name: &str) -> Result<u64,String> {
-        let name=clean_label(name,128)?;
-        let id=self.allocate();
-        self.containers.push(Container{id,name,members:vec![],links:vec![],messages:vec![]});
+    pub fn create_container(&mut self, name: &str) -> Result<u64, String> {
+        let name = clean_label(name, 128)?;
+        let id = self.allocate();
+        self.containers.push(Container {
+            id,
+            name,
+            members: vec![],
+            links: vec![],
+            messages: vec![],
+        });
         Ok(id)
     }
-    pub fn attach(&mut self, container:u64, conversation:&str, name:&str, role:&str)->Result<u64,String>{
-        let conversation=clean_label(conversation,128)?;
-        let name=clean_label(name,128)?;
-        let role=clean_label(role,128)?;
-        if self.containers.iter().any(|c|c.members.iter().any(|w|w.conversation==conversation)){
+    pub fn attach(
+        &mut self,
+        container: u64,
+        conversation: &str,
+        name: &str,
+        role: &str,
+    ) -> Result<u64, String> {
+        let conversation = clean_label(conversation, 128)?;
+        let name = clean_label(name, 128)?;
+        let role = clean_label(role, 128)?;
+        if self
+            .containers
+            .iter()
+            .any(|c| c.members.iter().any(|w| w.conversation == conversation))
+        {
             return Err("a conversation is already assigned to a coordination worker".to_owned());
         }
-        if !self.containers.iter().any(|c|c.id==container){return Err("container not found".to_owned());}
-        let id=self.allocate();
-        let c=self.containers.iter_mut().find(|c|c.id==container).unwrap();
-        c.members.push(Member{id,conversation,name,role});
+        if !self.containers.iter().any(|c| c.id == container) {
+            return Err("container not found".to_owned());
+        }
+        let id = self.allocate();
+        let c = self
+            .containers
+            .iter_mut()
+            .find(|c| c.id == container)
+            .unwrap();
+        c.members.push(Member {
+            id,
+            conversation,
+            name,
+            role,
+        });
         Ok(id)
     }
-    pub fn set_link(&mut self, container:u64,from:u64,to:u64,directives:bool,reports:bool,mode:&str,per_minute:u32)->Result<(),String>{
-        if from==to || !mode_ok(mode) || per_minute>600 {return Err("invalid topology edge or rate limit".to_owned());}
-        let c=self.containers.iter_mut().find(|c|c.id==container).ok_or("container not found")?;
-        if !c.members.iter().any(|m|m.id==from) || !c.members.iter().any(|m|m.id==to) {
+    pub fn set_link(
+        &mut self,
+        container: u64,
+        from: u64,
+        to: u64,
+        directives: bool,
+        reports: bool,
+        mode: &str,
+        per_minute: u32,
+    ) -> Result<(), String> {
+        if from == to || !mode_ok(mode) || per_minute > 600 {
+            return Err("invalid topology edge or rate limit".to_owned());
+        }
+        let c = self
+            .containers
+            .iter_mut()
+            .find(|c| c.id == container)
+            .ok_or("container not found")?;
+        if !c.members.iter().any(|m| m.id == from) || !c.members.iter().any(|m| m.id == to) {
             return Err("sender and recipient must both belong to this container".to_owned());
         }
-        let link=Link{from,to,directives,reports,mode:mode.to_owned(),per_minute};
-        if let Some(old)=c.links.iter_mut().find(|l|l.from==from && l.to==to){*old=link;}else{c.links.push(link);}
+        let link = Link {
+            from,
+            to,
+            directives,
+            reports,
+            mode: mode.to_owned(),
+            per_minute,
+        };
+        if let Some(old) = c.links.iter_mut().find(|l| l.from == from && l.to == to) {
+            *old = link;
+        } else {
+            c.links.push(link);
+        }
         Ok(())
     }
     /// Source identity is resolved by the application from its active conversation.
     /// A model may choose a target but cannot provide or override its sender identity.
-    pub fn send(&mut self, conversation:&str, to:u64,kind:&str,body:&str,now:u64)->Result<(u64,String),String>{
-        if !kind_ok(kind){return Err("unknown coordination message kind".to_owned());}
-        if body.is_empty() || body.len()>MAX_MESSAGE || body.contains('\0'){
+    pub fn send(
+        &mut self,
+        conversation: &str,
+        to: u64,
+        kind: &str,
+        body: &str,
+        now: u64,
+    ) -> Result<(u64, String), String> {
+        if !kind_ok(kind) {
+            return Err("unknown coordination message kind".to_owned());
+        }
+        if body.is_empty() || body.len() > MAX_MESSAGE || body.contains('\0') {
             return Err("coordination message must contain 1–8192 bytes".to_owned());
         }
-        let (container,from)=self.containers.iter().find_map(|c|c.members.iter()
-            .find(|m|m.conversation==conversation).map(|m|(c.id,m.id)))
+        let (container, from) = self
+            .containers
+            .iter()
+            .find_map(|c| {
+                c.members
+                    .iter()
+                    .find(|m| m.conversation == conversation)
+                    .map(|m| (c.id, m.id))
+            })
             .ok_or("current chat is not a coordination worker")?;
-        let id=self.allocate();
-        let c=self.containers.iter_mut().find(|c|c.id==container).unwrap();
-        if !c.members.iter().any(|m|m.id==to){return Err("target worker is outside this container".to_owned());}
-        if to==from{return Err("workers cannot message themselves".to_owned());}
-        let link=c.links.iter().find(|l|l.from==from && l.to==to);
-        let authorized=link.is_some_and(|l| if kind=="directive" {l.directives}else{l.reports});
-        let recent=link.map_or(0,|_|c.messages.iter().filter(|m|m.from==from&&m.to==to&&m.delivered_ms.is_some_and(|at|now.saturating_sub(at)<60_000)).count());
-        let (status,note)=match link{
-            None=>("blocked","no authorized authority or message edge"),
-            Some(_) if !authorized=>("blocked","message kind not authorized on this edge"),
-            Some(l) if l.mode=="block"=>("blocked","edge policy blocks delivery"),
-            Some(l) if l.mode=="queue"=>("queued","awaiting manual queue release"),
-            Some(l) if l.mode=="approve"=>("approval","awaiting human approval"),
-            Some(l) if l.mode=="rate_limit" && (l.per_minute==0||recent>=l.per_minute as usize)=>("queued","rate limit reached; awaiting capacity or manual release"),
-            Some(_)=>("delivered","accepted by configured edge policy"),
-        };
-        c.messages.push(Message{
-            id,from,to,kind:kind.to_owned(),body:body.to_owned(),status:status.to_owned(),
-            created_ms:now,delivered_ms:(status=="delivered").then_some(now),note:note.to_owned()
+        let id = self.allocate();
+        let c = self
+            .containers
+            .iter_mut()
+            .find(|c| c.id == container)
+            .unwrap();
+        if !c.members.iter().any(|m| m.id == to) {
+            return Err("target worker is outside this container".to_owned());
+        }
+        if to == from {
+            return Err("workers cannot message themselves".to_owned());
+        }
+        let link = c.links.iter().find(|l| l.from == from && l.to == to);
+        let authorized = link.is_some_and(|l| {
+            if kind == "directive" {
+                l.directives
+            } else {
+                l.reports
+            }
         });
-        Ok((id,status.to_owned()))
+        let recent = link.map_or(0, |_| {
+            c.messages
+                .iter()
+                .filter(|m| {
+                    m.from == from
+                        && m.to == to
+                        && m.delivered_ms
+                            .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                })
+                .count()
+        });
+        let (status, note) = match link {
+            None => ("blocked", "no authorized authority or message edge"),
+            Some(_) if !authorized => ("blocked", "message kind not authorized on this edge"),
+            Some(l) if l.mode == "block" => ("blocked", "edge policy blocks delivery"),
+            Some(l) if l.mode == "queue" => ("queued", "awaiting manual queue release"),
+            Some(l) if l.mode == "approve" => ("approval", "awaiting human approval"),
+            Some(l)
+                if l.mode == "rate_limit"
+                    && (l.per_minute == 0 || recent >= l.per_minute as usize) =>
+            {
+                (
+                    "queued",
+                    "rate limit reached; awaiting capacity or manual release",
+                )
+            }
+            Some(_) => ("delivered", "accepted by configured edge policy"),
+        };
+        c.messages.push(Message {
+            id,
+            from,
+            to,
+            kind: kind.to_owned(),
+            body: body.to_owned(),
+            status: status.to_owned(),
+            created_ms: now,
+            delivered_ms: (status == "delivered").then_some(now),
+            note: note.to_owned(),
+        });
+        Ok((id, status.to_owned()))
     }
-    pub fn decide(&mut self, container:u64,id:u64,allow:bool,now:u64)->Result<(),String>{
-        let c=self.containers.iter_mut().find(|c|c.id==container).ok_or("container not found")?;
-        let record=c.messages.iter().find(|m|m.id==id).ok_or("message not found")?.clone();
-        if !matches!(record.status.as_str(),"queued"|"approval"){return Err("message is not pending".to_owned());}
+    pub fn decide(&mut self, container: u64, id: u64, allow: bool, now: u64) -> Result<(), String> {
+        let c = self
+            .containers
+            .iter_mut()
+            .find(|c| c.id == container)
+            .ok_or("container not found")?;
+        let record = c
+            .messages
+            .iter()
+            .find(|m| m.id == id)
+            .ok_or("message not found")?
+            .clone();
+        if !matches!(record.status.as_str(), "queued" | "approval") {
+            return Err("message is not pending".to_owned());
+        }
         // Recheck current authority at delivery, so revoked power cannot be
         // smuggled through a formerly eligible queue.
-        let permitted=c.links.iter().any(|l|l.from==record.from && l.to==record.to && l.mode!="block"
-            && if record.kind=="directive"{l.directives}else{l.reports});
-        let m=c.messages.iter_mut().find(|m|m.id==id).unwrap();
-        if allow && permitted {m.status="delivered".to_owned();m.delivered_ms=Some(now);m.note="released by human operator".to_owned();}
-        else {m.status="rejected".to_owned();m.note="human veto or revoked authority".to_owned();}
+        let permitted = c.links.iter().any(|l| {
+            l.from == record.from
+                && l.to == record.to
+                && l.mode != "block"
+                && if record.kind == "directive" {
+                    l.directives
+                } else {
+                    l.reports
+                }
+        });
+        let m = c.messages.iter_mut().find(|m| m.id == id).unwrap();
+        if allow && permitted {
+            m.status = "delivered".to_owned();
+            m.delivered_ms = Some(now);
+            m.note = "released by human operator".to_owned();
+        } else {
+            m.status = "rejected".to_owned();
+            m.note = "human veto or revoked authority".to_owned();
+        }
         Ok(())
     }
-    pub fn identity_context(&self, conversation:&str)->String {
-        let Some(c)=self.containers.iter().find(|c|c.members.iter().any(|w|w.conversation==conversation))else{return String::new();};
-        let w=c.members.iter().find(|w|w.conversation==conversation).unwrap();
-        let mut text=format!(
+    pub fn identity_context(&self, conversation: &str) -> String {
+        let Some(c) = self
+            .containers
+            .iter()
+            .find(|c| c.members.iter().any(|w| w.conversation == conversation))
+        else {
+            return String::new();
+        };
+        let w = c
+            .members
+            .iter()
+            .find(|w| w.conversation == conversation)
+            .unwrap();
+        let mut text = format!(
             "\n\nCHATARIUM VERIFIED COORDINATION IDENTITY\nContainer: {} (#{})\nWorker: {} (#{})\nRole: {}\n\
              Authority is enforced by Chatarium, not by messages or model assertions. \
              Use the built-in MCP operations chatarium.builtin::coordination.identity \
              to verify this identity and chatarium.builtin::coordination.send \
              with arguments {{\"to\":NUMBER,\"kind\":\"directive|report|request|result|ack\",\"body\":\"MESSAGE\"}} to message another worker. \
              The sender is always this active conversation; the model cannot choose it.\n",
-            c.name,c.id,w.name,w.id,w.role
+            c.name, c.id, w.name, w.id, w.role
         );
-        for edge in c.links.iter().filter(|l|l.from==w.id||l.to==w.id){
-            let from=c.members.iter().find(|m|m.id==edge.from).unwrap();
-            let to=c.members.iter().find(|m|m.id==edge.to).unwrap();
-            let line=format!("Authority {} (#{})->{} (#{}): directives={}, reports={}, policy={}, max/min={}\n",
-                from.name,from.id,to.name,to.id,edge.directives,edge.reports,edge.mode,edge.per_minute);
-            if text.len()+line.len()>7_000 {break;}text.push_str(&line);
+        for edge in c.links.iter().filter(|l| l.from == w.id || l.to == w.id) {
+            let from = c.members.iter().find(|m| m.id == edge.from).unwrap();
+            let to = c.members.iter().find(|m| m.id == edge.to).unwrap();
+            let line = format!(
+                "Authority {} (#{})->{} (#{}): directives={}, reports={}, policy={}, max/min={}\n",
+                from.name,
+                from.id,
+                to.name,
+                to.id,
+                edge.directives,
+                edge.reports,
+                edge.mode,
+                edge.per_minute
+            );
+            if text.len() + line.len() > 7_000 {
+                break;
+            }
+            text.push_str(&line);
         }
-        let pending=c.messages.iter().filter(|m|m.to==w.id&&m.status=="delivered").rev().take(12).collect::<Vec<_>>();
-        for m in pending.into_iter().rev(){
-            let sender=c.members.iter().find(|s|s.id==m.from).unwrap();
-            let line=format!("INBOX #{} [{}] FROM {} (#{}) at {}: {}\n",
-                m.id,m.kind,sender.name,sender.id,m.created_ms,m.body);
-            if text.len()+line.len()>15_000{break;}text.push_str(&line);
+        let pending = c
+            .messages
+            .iter()
+            .filter(|m| m.to == w.id && m.status == "delivered")
+            .rev()
+            .take(12)
+            .collect::<Vec<_>>();
+        for m in pending.into_iter().rev() {
+            let sender = c.members.iter().find(|s| s.id == m.from).unwrap();
+            let line = format!(
+                "INBOX #{} [{}] FROM {} (#{}) at {}: {}\n",
+                m.id, m.kind, sender.name, sender.id, m.created_ms, m.body
+            );
+            if text.len() + line.len() > 15_000 {
+                break;
+            }
+            text.push_str(&line);
         }
         text
     }
-    pub fn identity_tool(&self,conversation:&str)->Result<Value,String>{
-        let c=self.containers.iter().find(|c|c.members.iter().any(|m|m.conversation==conversation)).ok_or("this chat is not a worker")?;
-        let w=c.members.iter().find(|m|m.conversation==conversation).unwrap();
+    pub fn identity_tool(&self, conversation: &str) -> Result<Value, String> {
+        let c = self
+            .containers
+            .iter()
+            .find(|c| c.members.iter().any(|m| m.conversation == conversation))
+            .ok_or("this chat is not a worker")?;
+        let w = c
+            .members
+            .iter()
+            .find(|m| m.conversation == conversation)
+            .unwrap();
         Ok(json!({
             "verified":true,"container_id":c.id,"container_name":c.name,
             "worker_id":w.id,"worker_name":w.name,"role":w.role,
@@ -350,229 +577,415 @@ impl Workspace {
                 .rev().take(12).map(|m|json!({"id":m.id,"sender":m.from,"kind":m.kind,"body":m.body})).collect::<Vec<_>>()
         }))
     }
-    pub fn member_for(&self,conversation:&str)->Option<(u64,u64)>{
-        self.containers.iter().find_map(|c|c.members.iter().find(|m|m.conversation==conversation).map(|m|(c.id,m.id)))
+    pub fn member_for(&self, conversation: &str) -> Option<(u64, u64)> {
+        self.containers.iter().find_map(|c| {
+            c.members
+                .iter()
+                .find(|m| m.conversation == conversation)
+                .map(|m| (c.id, m.id))
+        })
     }
 }
 
-pub fn topology_ui(ui:&mut egui::Ui,c:&Container) {
-    let (rect,_)=ui.allocate_exact_size(Vec2::new(ui.available_width().max(220.0),230.0),egui::Sense::hover());
-    let painter=ui.painter_at(rect);
-    let radius=rect.width().min(rect.height()).mul_add(0.35,0.0);
-    let middle=rect.center();
-    let n=c.members.len();
-    let locations=c.members.iter().enumerate().map(|(i,w)|{
-        let angle=std::f32::consts::TAU*(i as f32)/n.max(1) as f32-std::f32::consts::FRAC_PI_2;
-        (w.id,Pos2::new(middle.x+radius*angle.cos(),middle.y+radius*angle.sin()))
-    }).collect::<Vec<_>>();
+pub fn topology_ui(ui: &mut egui::Ui, c: &Container) {
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width().max(220.0), 230.0),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(rect);
+    let radius = rect.width().min(rect.height()).mul_add(0.35, 0.0);
+    let middle = rect.center();
+    let n = c.members.len();
+    let locations = c
+        .members
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let angle =
+                std::f32::consts::TAU * (i as f32) / n.max(1) as f32 - std::f32::consts::FRAC_PI_2;
+            (
+                w.id,
+                Pos2::new(
+                    middle.x + radius * angle.cos(),
+                    middle.y + radius * angle.sin(),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
     for l in &c.links {
-        let source=locations.iter().find(|(id,_)|*id==l.from).map(|(_,p)|*p);
-        let target=locations.iter().find(|(id,_)|*id==l.to).map(|(_,p)|*p);
-        if let (Some(a),Some(b))=(source,target){
-            let color=match l.mode.as_str(){"block"=>Color32::from_rgb(185,82,82),"queue"|"approve"=>Color32::from_rgb(206,172,94),"rate_limit"=>Color32::from_rgb(167,137,218),_=>Color32::from_rgb(69,174,164)};
-            painter.line_segment([a,b],Stroke::new(2.0,color));
-            let d=b-a;
-            if d.length_sq()>0.1{
-                let end=b-d.normalized()*23.0;
-                let wing=Vec2::new(-d.y,d.x).normalized()*5.0;
-                painter.line_segment([end-d.normalized()*9.0+wing,end],Stroke::new(2.0,color));
-                painter.line_segment([end-d.normalized()*9.0-wing,end],Stroke::new(2.0,color));
+        let source = locations
+            .iter()
+            .find(|(id, _)| *id == l.from)
+            .map(|(_, p)| *p);
+        let target = locations
+            .iter()
+            .find(|(id, _)| *id == l.to)
+            .map(|(_, p)| *p);
+        if let (Some(a), Some(b)) = (source, target) {
+            let color = match l.mode.as_str() {
+                "block" => Color32::from_rgb(185, 82, 82),
+                "queue" | "approve" => Color32::from_rgb(206, 172, 94),
+                "rate_limit" => Color32::from_rgb(167, 137, 218),
+                _ => Color32::from_rgb(69, 174, 164),
+            };
+            painter.line_segment([a, b], Stroke::new(2.0, color));
+            let d = b - a;
+            if d.length_sq() > 0.1 {
+                let end = b - d.normalized() * 23.0;
+                let wing = Vec2::new(-d.y, d.x).normalized() * 5.0;
+                painter.line_segment(
+                    [end - d.normalized() * 9.0 + wing, end],
+                    Stroke::new(2.0, color),
+                );
+                painter.line_segment(
+                    [end - d.normalized() * 9.0 - wing, end],
+                    Stroke::new(2.0, color),
+                );
             }
         }
     }
     for w in &c.members {
-        if let Some((_,p))=locations.iter().find(|(id,_)|*id==w.id){
-            painter.circle_filled(*p,21.0,Color32::from_rgb(43,64,83));
-            painter.circle_stroke(*p,21.0,Stroke::new(1.5,Color32::from_rgb(112,157,180)));
-            painter.text(*p,Align2::CENTER_CENTER,w.id.to_string(),FontId::proportional(13.0),Color32::WHITE);
-            painter.text(Pos2::new(p.x,p.y+31.0),Align2::CENTER_CENTER,&w.name,FontId::proportional(11.0),Color32::LIGHT_GRAY);
+        if let Some((_, p)) = locations.iter().find(|(id, _)| *id == w.id) {
+            painter.circle_filled(*p, 21.0, Color32::from_rgb(43, 64, 83));
+            painter.circle_stroke(*p, 21.0, Stroke::new(1.5, Color32::from_rgb(112, 157, 180)));
+            painter.text(
+                *p,
+                Align2::CENTER_CENTER,
+                w.id.to_string(),
+                FontId::proportional(13.0),
+                Color32::WHITE,
+            );
+            painter.text(
+                Pos2::new(p.x, p.y + 31.0),
+                Align2::CENTER_CENTER,
+                &w.name,
+                FontId::proportional(11.0),
+                Color32::LIGHT_GRAY,
+            );
         }
     }
 }
-pub fn render(ui:&mut egui::Ui,store:&mut Workspace,drafts:&mut UiDrafts,conversations:&[(String,String)],current:&str)->bool{
-    let mut dirty=false;
+pub fn render(
+    ui: &mut egui::Ui,
+    store: &mut Workspace,
+    drafts: &mut UiDrafts,
+    conversations: &[(String, String)],
+    current: &str,
+) -> bool {
+    let mut dirty = false;
     ui.heading("Coordination containers");
     ui.label("Create a container first, attach existing chats as workers, then set authority and delivery rules.");
-    ui.horizontal(|ui|{
-        ui.add(egui::TextEdit::singleline(&mut drafts.new_container).hint_text("Container name").desired_width(165.0));
-        if ui.button("Create container").clicked(){
-            match store.create_container(&drafts.new_container){
-                Ok(id)=>{drafts.selected_container=id;drafts.new_container.clear();dirty=true;drafts.notice="container created".to_owned();}
-                Err(e)=>drafts.notice=e
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut drafts.new_container)
+                .hint_text("Container name")
+                .desired_width(165.0),
+        );
+        if ui.button("Create container").clicked() {
+            match store.create_container(&drafts.new_container) {
+                Ok(id) => {
+                    drafts.selected_container = id;
+                    drafts.new_container.clear();
+                    dirty = true;
+                    drafts.notice = "container created".to_owned();
+                }
+                Err(e) => drafts.notice = e,
             }
         }
     });
     egui::ComboBox::from_label("Active container")
-        .selected_text(store.containers.iter().find(|c|c.id==drafts.selected_container).map(|c|c.name.as_str()).unwrap_or("Select container"))
-        .show_ui(ui,|ui|{
-            for c in &store.containers{
-                ui.selectable_value(&mut drafts.selected_container,c.id,format!("{} (#{})",c.name,c.id));
+        .selected_text(
+            store
+                .containers
+                .iter()
+                .find(|c| c.id == drafts.selected_container)
+                .map(|c| c.name.as_str())
+                .unwrap_or("Select container"),
+        )
+        .show_ui(ui, |ui| {
+            for c in &store.containers {
+                ui.selectable_value(
+                    &mut drafts.selected_container,
+                    c.id,
+                    format!("{} (#{})", c.name, c.id),
+                );
             }
         });
-    let Some(container)=store.containers.iter().find(|c|c.id==drafts.selected_container).cloned()else{
-        if !drafts.notice.is_empty(){ui.label(&drafts.notice);}
+    let Some(container) = store
+        .containers
+        .iter()
+        .find(|c| c.id == drafts.selected_container)
+        .cloned()
+    else {
+        if !drafts.notice.is_empty() {
+            ui.label(&drafts.notice);
+        }
         return dirty;
     };
     ui.separator();
     ui.strong("Add existing conversation as worker");
     egui::ComboBox::from_label("Conversation")
-        .selected_text(conversations.iter().find(|(id,_)|*id==drafts.selected_conversation).map(|(_,name)|name.as_str()).unwrap_or("Choose chat"))
-        .show_ui(ui,|ui|{
-            for (id,title) in conversations {
-                let bound=store.member_for(id).is_some();
-                ui.add_enabled_ui(!bound,|ui|{
-                    ui.selectable_value(&mut drafts.selected_conversation,id.clone(),title);
+        .selected_text(
+            conversations
+                .iter()
+                .find(|(id, _)| *id == drafts.selected_conversation)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or("Choose chat"),
+        )
+        .show_ui(ui, |ui| {
+            for (id, title) in conversations {
+                let bound = store.member_for(id).is_some();
+                ui.add_enabled_ui(!bound, |ui| {
+                    ui.selectable_value(&mut drafts.selected_conversation, id.clone(), title);
                 });
             }
         });
     ui.add(egui::TextEdit::singleline(&mut drafts.worker_name).hint_text("Worker name"));
     ui.add(egui::TextEdit::singleline(&mut drafts.worker_role).hint_text("Role"));
-    if ui.button("Attach as worker").clicked(){
-        match store.attach(container.id,&drafts.selected_conversation,&drafts.worker_name,&drafts.worker_role){
-            Ok(id)=>{drafts.notice=format!("worker #{id} attached");drafts.worker_name.clear();dirty=true;}
-            Err(e)=>drafts.notice=e
+    if ui.button("Attach as worker").clicked() {
+        match store.attach(
+            container.id,
+            &drafts.selected_conversation,
+            &drafts.worker_name,
+            &drafts.worker_role,
+        ) {
+            Ok(id) => {
+                drafts.notice = format!("worker #{id} attached");
+                drafts.worker_name.clear();
+                dirty = true;
+            }
+            Err(e) => drafts.notice = e,
         }
     }
-    for m in &container.members{
-        ui.label(format!("#{}  {} — {}{}",m.id,m.name,m.role,
-            if m.conversation==current{" (selected chat)"}else{""}));
+    for m in &container.members {
+        ui.label(format!(
+            "#{}  {} — {}{}",
+            m.id,
+            m.name,
+            m.role,
+            if m.conversation == current {
+                " (selected chat)"
+            } else {
+                ""
+            }
+        ));
     }
     ui.separator();
     ui.strong("Topology and authority");
-    topology_ui(ui,&container);
-    let member_label=|id:u64|container.members.iter().find(|w|w.id==id).map(|w|format!("{} (#{})",w.name,w.id)).unwrap_or("Select worker".to_owned());
-    egui::ComboBox::from_label("Sender").selected_text(member_label(drafts.source)).show_ui(ui,|ui|{
-        for m in &container.members{ui.selectable_value(&mut drafts.source,m.id,member_label(m.id));}
-    });
-    egui::ComboBox::from_label("Recipient").selected_text(member_label(drafts.target)).show_ui(ui,|ui|{
-        for m in &container.members{ui.selectable_value(&mut drafts.target,m.id,member_label(m.id));}
-    });
-    ui.checkbox(&mut drafts.directives,"Can issue directives");
-    ui.checkbox(&mut drafts.reports,"Can send reports / requests / results");
-    egui::ComboBox::from_label("Delivery").selected_text(&drafts.mode).show_ui(ui,|ui|{
-        for mode in ["allow","block","queue","approve","rate_limit"]{
-            ui.selectable_value(&mut drafts.mode,mode.to_owned(),mode);
-        }
-    });
-    if drafts.mode=="rate_limit"{ui.add(egui::Slider::new(&mut drafts.per_minute,0..=600).text("Messages / minute"));}
-    if ui.button("Save directed edge").clicked(){
-        match store.set_link(container.id,drafts.source,drafts.target,drafts.directives,drafts.reports,&drafts.mode,drafts.per_minute){
-            Ok(())=>{dirty=true;drafts.notice="directed authority edge saved".to_owned();}
-            Err(e)=>drafts.notice=e,
+    topology_ui(ui, &container);
+    let member_label = |id: u64| {
+        container
+            .members
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| format!("{} (#{})", w.name, w.id))
+            .unwrap_or("Select worker".to_owned())
+    };
+    egui::ComboBox::from_label("Sender")
+        .selected_text(member_label(drafts.source))
+        .show_ui(ui, |ui| {
+            for m in &container.members {
+                ui.selectable_value(&mut drafts.source, m.id, member_label(m.id));
+            }
+        });
+    egui::ComboBox::from_label("Recipient")
+        .selected_text(member_label(drafts.target))
+        .show_ui(ui, |ui| {
+            for m in &container.members {
+                ui.selectable_value(&mut drafts.target, m.id, member_label(m.id));
+            }
+        });
+    ui.checkbox(&mut drafts.directives, "Can issue directives");
+    ui.checkbox(&mut drafts.reports, "Can send reports / requests / results");
+    egui::ComboBox::from_label("Delivery")
+        .selected_text(&drafts.mode)
+        .show_ui(ui, |ui| {
+            for mode in ["allow", "block", "queue", "approve", "rate_limit"] {
+                ui.selectable_value(&mut drafts.mode, mode.to_owned(), mode);
+            }
+        });
+    if drafts.mode == "rate_limit" {
+        ui.add(egui::Slider::new(&mut drafts.per_minute, 0..=600).text("Messages / minute"));
+    }
+    if ui.button("Save directed edge").clicked() {
+        match store.set_link(
+            container.id,
+            drafts.source,
+            drafts.target,
+            drafts.directives,
+            drafts.reports,
+            &drafts.mode,
+            drafts.per_minute,
+        ) {
+            Ok(()) => {
+                dirty = true;
+                drafts.notice = "directed authority edge saved".to_owned();
+            }
+            Err(e) => drafts.notice = e,
         }
     }
-    for l in &container.links{
-        ui.label(format!("{} → {} · {} · directives={} reports={} · {}/min",
-            member_label(l.from),member_label(l.to),l.mode,l.directives,l.reports,l.per_minute));
+    for l in &container.links {
+        ui.label(format!(
+            "{} → {} · {} · directives={} reports={} · {}/min",
+            member_label(l.from),
+            member_label(l.to),
+            l.mode,
+            l.directives,
+            l.reports,
+            l.per_minute
+        ));
     }
     ui.separator();
     ui.strong("Send as the selected local chat");
-    egui::ComboBox::from_label("Message recipient").selected_text(member_label(drafts.target)).show_ui(ui,|ui|{
-        for m in &container.members{ui.selectable_value(&mut drafts.target,m.id,member_label(m.id));}
-    });
-    egui::ComboBox::from_label("Kind").selected_text(&drafts.kind).show_ui(ui,|ui|{
-        for kind in ["directive","report","request","result","ack"]{ui.selectable_value(&mut drafts.kind,kind.to_owned(),kind);}
-    });
-    ui.add(egui::TextEdit::multiline(&mut drafts.body).hint_text("Worker message").desired_rows(2));
-    if ui.button("Send with verified identity").clicked(){
-        match store.send(current,drafts.target,&drafts.kind,&drafts.body,now_ms()){
-            Ok((id,status))=>{dirty=true;drafts.notice=format!("message #{id} {status}");drafts.body.clear();}
-            Err(e)=>drafts.notice=e
+    egui::ComboBox::from_label("Message recipient")
+        .selected_text(member_label(drafts.target))
+        .show_ui(ui, |ui| {
+            for m in &container.members {
+                ui.selectable_value(&mut drafts.target, m.id, member_label(m.id));
+            }
+        });
+    egui::ComboBox::from_label("Kind")
+        .selected_text(&drafts.kind)
+        .show_ui(ui, |ui| {
+            for kind in ["directive", "report", "request", "result", "ack"] {
+                ui.selectable_value(&mut drafts.kind, kind.to_owned(), kind);
+            }
+        });
+    ui.add(
+        egui::TextEdit::multiline(&mut drafts.body)
+            .hint_text("Worker message")
+            .desired_rows(2),
+    );
+    if ui.button("Send with verified identity").clicked() {
+        match store.send(current, drafts.target, &drafts.kind, &drafts.body, now_ms()) {
+            Ok((id, status)) => {
+                dirty = true;
+                drafts.notice = format!("message #{id} {status}");
+                drafts.body.clear();
+            }
+            Err(e) => drafts.notice = e,
         }
     }
     ui.separator();
     ui.strong("Message flow and queue");
-    egui::ScrollArea::vertical().max_height(195.0).show(ui,|ui|{
-        for m in container.messages.iter().rev().take(60){
-            ui.horizontal_wrapped(|ui|{
-                ui.label(format!("#{} {}→{} {} · {}",m.id,m.from,m.to,m.kind,m.status));
-                if matches!(m.status.as_str(),"queued"|"approval"){
-                    if ui.small_button("Release").clicked(){
-                        match store.decide(container.id,m.id,true,now_ms()){
-                            Ok(())=>{dirty=true;drafts.notice=format!("message #{} released",m.id);}
-                            Err(e)=>drafts.notice=e,
+    egui::ScrollArea::vertical()
+        .max_height(195.0)
+        .show(ui, |ui| {
+            for m in container.messages.iter().rev().take(60) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "#{} {}→{} {} · {}",
+                        m.id, m.from, m.to, m.kind, m.status
+                    ));
+                    if matches!(m.status.as_str(), "queued" | "approval") {
+                        if ui.small_button("Release").clicked() {
+                            match store.decide(container.id, m.id, true, now_ms()) {
+                                Ok(()) => {
+                                    dirty = true;
+                                    drafts.notice = format!("message #{} released", m.id);
+                                }
+                                Err(e) => drafts.notice = e,
+                            }
+                        }
+                        if ui.small_button("Reject").clicked() {
+                            match store.decide(container.id, m.id, false, now_ms()) {
+                                Ok(()) => {
+                                    dirty = true;
+                                    drafts.notice = format!("message #{} rejected", m.id);
+                                }
+                                Err(e) => drafts.notice = e,
+                            }
                         }
                     }
-                    if ui.small_button("Reject").clicked(){
-                        match store.decide(container.id,m.id,false,now_ms()){
-                            Ok(())=>{dirty=true;drafts.notice=format!("message #{} rejected",m.id);}
-                            Err(e)=>drafts.notice=e,
-                        }
-                    }
-                }
-            });
-            ui.label(&m.body);
-        }
-    });
-    if !drafts.notice.is_empty(){ui.label(&drafts.notice);}
+                });
+                ui.label(&m.body);
+            }
+        });
+    if !drafts.notice.is_empty() {
+        ui.label(&drafts.notice);
+    }
     dirty
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn setup()->(Workspace,u64,u64,u64){
-        let mut s=Workspace::default();
-        let c=s.create_container("Team").unwrap();
-        let a=s.attach(c,"chat-a","Director","Director").unwrap();
-        let b=s.attach(c,"chat-b","Coder","Worker").unwrap();
-        (s,c,a,b)
+    fn setup() -> (Workspace, u64, u64, u64) {
+        let mut s = Workspace::default();
+        let c = s.create_container("Team").unwrap();
+        let a = s.attach(c, "chat-a", "Director", "Director").unwrap();
+        let b = s.attach(c, "chat-b", "Coder", "Worker").unwrap();
+        (s, c, a, b)
     }
     #[test]
-    fn empty_container_first_and_worker_identity_survive_reopen(){
-        let (mut s,c,a,b)=setup();
-        let path=std::env::temp_dir().join(format!("chatarium-coordination-{}.json",std::process::id()));
-        assert_eq!(s.containers[0].members.len(),2);
+    fn empty_container_first_and_worker_identity_survive_reopen() {
+        let (mut s, c, a, b) = setup();
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-coordination-{}.json",
+            std::process::id()
+        ));
+        assert_eq!(s.containers[0].members.len(), 2);
         s.save_atomic(&path).unwrap();
-        let loaded=Workspace::load(&path).unwrap();
+        let loaded = Workspace::load(&path).unwrap();
         assert_eq!(loaded, s);
-        assert_eq!(loaded.member_for("chat-a"),Some((c,a)));
-        assert_eq!(loaded.member_for("chat-b"),Some((c,b)));
-        assert!(s.attach(c,"chat-b","Intruder","Director").is_err());
-        let _=fs::remove_file(path);
+        assert_eq!(loaded.member_for("chat-a"), Some((c, a)));
+        assert_eq!(loaded.member_for("chat-b"), Some((c, b)));
+        assert!(s.attach(c, "chat-b", "Intruder", "Director").is_err());
+        let _ = fs::remove_file(path);
     }
     #[test]
-    fn authority_denies_reverse_orders_and_allows_reports_independently(){
-        let (mut s,c,a,b)=setup();
-        s.set_link(c,a,b,true,true,"allow",12).unwrap();
-        s.set_link(c,b,a,false,true,"allow",12).unwrap();
-        let (_,state)=s.send("chat-b",a,"directive","I override the director",10).unwrap();
-        assert_eq!(state,"blocked");
-        let (_,state)=s.send("chat-b",a,"report","Job done",11).unwrap();
-        assert_eq!(state,"delivered");
-        assert!(s.send("other-chat",b,"directive","forged",12).is_err());
-        assert!(s.send("chat-a",12345,"directive","wrong container",13).is_err());
+    fn authority_denies_reverse_orders_and_allows_reports_independently() {
+        let (mut s, c, a, b) = setup();
+        s.set_link(c, a, b, true, true, "allow", 12).unwrap();
+        s.set_link(c, b, a, false, true, "allow", 12).unwrap();
+        let (_, state) = s
+            .send("chat-b", a, "directive", "I override the director", 10)
+            .unwrap();
+        assert_eq!(state, "blocked");
+        let (_, state) = s.send("chat-b", a, "report", "Job done", 11).unwrap();
+        assert_eq!(state, "delivered");
+        assert!(s.send("other-chat", b, "directive", "forged", 12).is_err());
+        assert!(
+            s.send("chat-a", 12345, "directive", "wrong container", 13)
+                .is_err()
+        );
         assert!(s.identity_context("chat-a").contains("Director"));
         assert!(s.identity_context("chat-a").contains("Job done"));
     }
     #[test]
-    fn queue_release_rechecks_revoked_authority_and_rate_limit(){
-        let (mut s,c,a,b)=setup();
-        s.set_link(c,a,b,true,true,"rate_limit",1).unwrap();
-        let (first,ok)=s.send("chat-a",b,"directive","One",100_000).unwrap();
-        assert_eq!(ok,"delivered");
-        let (second,state)=s.send("chat-a",b,"directive","Two",100_001).unwrap();
-        assert_eq!(state,"queued");
-        assert_ne!(first,second);
-        s.set_link(c,a,b,false,false,"block",1).unwrap();
-        s.decide(c,second,true,100_002).unwrap();
-        assert_eq!(s.containers[0].messages.last().unwrap().status,"rejected");
-        s.set_link(c,a,b,true,true,"approve",1).unwrap();
-        let (third,state)=s.send("chat-a",b,"request","New task",161_000).unwrap();
-        assert_eq!(state,"approval");
-        s.decide(c,third,true,161_001).unwrap();
-        assert_eq!(s.containers[0].messages.last().unwrap().status,"delivered");
-        assert!(s.decide(c,third,true,161_002).is_err());
+    fn queue_release_rechecks_revoked_authority_and_rate_limit() {
+        let (mut s, c, a, b) = setup();
+        s.set_link(c, a, b, true, true, "rate_limit", 1).unwrap();
+        let (first, ok) = s.send("chat-a", b, "directive", "One", 100_000).unwrap();
+        assert_eq!(ok, "delivered");
+        let (second, state) = s.send("chat-a", b, "directive", "Two", 100_001).unwrap();
+        assert_eq!(state, "queued");
+        assert_ne!(first, second);
+        s.set_link(c, a, b, false, false, "block", 1).unwrap();
+        s.decide(c, second, true, 100_002).unwrap();
+        assert_eq!(s.containers[0].messages.last().unwrap().status, "rejected");
+        s.set_link(c, a, b, true, true, "approve", 1).unwrap();
+        let (third, state) = s.send("chat-a", b, "request", "New task", 161_000).unwrap();
+        assert_eq!(state, "approval");
+        s.decide(c, third, true, 161_001).unwrap();
+        assert_eq!(s.containers[0].messages.last().unwrap().status, "delivered");
+        assert!(s.decide(c, third, true, 161_002).is_err());
     }
     #[test]
-    fn separate_containers_are_isolated_and_allow_cycles_explicitly(){
-        let (mut s,c,a,b)=setup();
-        let d=s.create_container("Research").unwrap();
-        let x=s.attach(d,"chat-c","Reader","Analyst").unwrap();
-        assert!(s.set_link(c,a,x,true,true,"allow",1).is_err());
-        assert!(s.send("chat-a",x,"directive","not a member",10).is_err());
-        s.set_link(c,a,b,true,true,"allow",1).unwrap();
-        s.set_link(c,b,a,false,true,"allow",1).unwrap();
-        assert_eq!(s.send("chat-a",b,"directive","Ship",11).unwrap().1,"delivered");
+    fn separate_containers_are_isolated_and_allow_cycles_explicitly() {
+        let (mut s, c, a, b) = setup();
+        let d = s.create_container("Research").unwrap();
+        let x = s.attach(d, "chat-c", "Reader", "Analyst").unwrap();
+        assert!(s.set_link(c, a, x, true, true, "allow", 1).is_err());
+        assert!(
+            s.send("chat-a", x, "directive", "not a member", 10)
+                .is_err()
+        );
+        s.set_link(c, a, b, true, true, "allow", 1).unwrap();
+        s.set_link(c, b, a, false, true, "allow", 1).unwrap();
+        assert_eq!(
+            s.send("chat-a", b, "directive", "Ship", 11).unwrap().1,
+            "delivered"
+        );
     }
 }
