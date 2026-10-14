@@ -14821,16 +14821,19 @@ impl eframe::App for ChatariumApp {
                         .entries()
                         .iter()
                         .map(|entry| {
-                            {
-                                let rgb = entry.accent_rgb();
-                                (
-                                    entry.id.to_string(),
-                                    entry.title.clone().filter(|s| !s.trim().is_empty())
-                                        .or_else(|| entry.project_directory.clone())
-                                        .unwrap_or_else(|| format!("Chat {}", &entry.id.to_string()[..8])),
-                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
-                                )
-                            }
+                            let rgb = entry.accent_rgb();
+                            (
+                                entry.id.to_string(),
+                                entry
+                                    .title
+                                    .clone()
+                                    .filter(|s| !s.trim().is_empty())
+                                    .or_else(|| entry.project_directory.clone())
+                                    .unwrap_or_else(|| {
+                                        format!("Chat {}", &entry.id.to_string()[..8])
+                                    }),
+                                egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                            )
                         })
                         .collect::<Vec<_>>();
                     let previous = self.coordination_workspace.clone();
