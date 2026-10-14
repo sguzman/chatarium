@@ -13591,8 +13591,9 @@ impl eframe::App for ChatariumApp {
                                     // Egui Frames normally shrink to their text content.
                                     // Fill every sidebar row to the same usable width.
                                     ui.set_min_width((sidebar_control_width - 20.0).max(120.0));
-                                    ui.colored_label(accent, "●");
-                                    if ui
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(accent, "●");
+                                        if ui
                                         .selectable_label(
                                             selected || keyboard_selected,
                                             egui::RichText::new(title_preview.as_str())
@@ -13609,7 +13610,8 @@ impl eframe::App for ChatariumApp {
                                                 hit_ordinal,
                                             )
                                             .map(|index| (entry.id, index));
-                                    }
+                                        }
+                                    });
                                     ui.horizontal(|ui| {
                                         if !self.local_conversation_search_query.trim().is_empty() {
                                             ui.label(
