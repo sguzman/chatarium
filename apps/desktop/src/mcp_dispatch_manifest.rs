@@ -67,7 +67,7 @@ pub fn capture(
 ) -> Result<Value, String> {
     if !matches!(
         request_class,
-        "authored" | "controller_coordination" | "worker_continuation"
+        "authored" | "controller_coordination" | "worker_continuation" | "coordination_auto_wake"
     ) {
         return Err("unknown outgoing request class".to_owned());
     }
@@ -388,7 +388,7 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         .filter(|class| {
             matches!(
                 *class,
-                "authored" | "controller_coordination" | "worker_continuation"
+                "authored" | "controller_coordination" | "worker_continuation" | "coordination_auto_wake"
             )
         })
         .ok_or_else(error)?;
