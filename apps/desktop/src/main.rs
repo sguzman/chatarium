@@ -15754,8 +15754,88 @@ fn render_markdown_block(
     }
 }
 
-/// Render inline emphasis only in user/agent messages. No HTML, network
-/// lookups or context changes. Raw source is kept for copying and searching.
+/// Build one styled paragraph instead of one widget for every Markdown fragment.
+/// egui's horizontal wrapping can wrap *between* widgets but cannot keep a
+/// long URL/inline-code widget inside the enclosing message bubble. A single
+/// LayoutJob preserves emphasis AND lets the text shaper break long words at
+/// the maximum available width. Keep the durable source unchanged.
+fn markdown_layout_job(
+    text: &str,
+    search_query: &str,
+    active_hit: bool,
+    heading_level: Option<u8>,
+    body_font: egui::FontId,
+    has_bold_face: bool,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for span in markdown_inline::parse(text) {
+        let hits = offline_reader::search_hits(&span.text, search_query);
+        let mut pieces = Vec::new();
+        if hits.is_empty() {
+            pieces.push((span.text.as_str(), false));
+        } else {
+            let mut at = 0;
+            for (start, end) in hits {
+                if start > at {
+                    pieces.push((&span.text[at..start], false));
+                }
+                pieces.push((&span.text[start..end], true));
+                at = end;
+            }
+            if at < span.text.len() {
+                pieces.push((&span.text[at..], false));
+            }
+        }
+        for (fragment, highlighted) in pieces {
+            let mut font_id = body_font.clone();
+            let mut color = egui::Color32::from_rgb(232, 234, 239);
+            if span.code {
+                font_id.family = egui::FontFamily::Monospace;
+            }
+            if let Some(level) = heading_level {
+                font_id.size = match level {
+                    1 => 22.0,
+                    2 => 19.0,
+                    3 => 17.0,
+                    _ => 15.0,
+                };
+            }
+            if span.bold || heading_level.is_some() {
+                color = egui::Color32::WHITE;
+                if !span.code && has_bold_face {
+                    font_id.family =
+                        egui::FontFamily::Name(system_fonts::MARKDOWN_BOLD_FAMILY.into());
+                } else if !span.code && heading_level.is_none() {
+                    font_id.size = 15.0;
+                }
+            }
+            let mut format = egui::TextFormat {
+                font_id,
+                color,
+                italics: span.italic,
+                ..Default::default()
+            };
+            if span.strike {
+                format.strikethrough = egui::Stroke::new(1.0, color);
+            }
+            if span.code {
+                format.background = egui::Color32::from_rgb(20, 23, 30);
+            }
+            if highlighted {
+                format.background = if active_hit {
+                    egui::Color32::from_rgb(161, 120, 43)
+                } else {
+                    egui::Color32::from_rgb(91, 78, 38)
+                };
+            }
+            job.append(fragment, 0.0, format);
+        }
+    }
+    job
+}
+
+/// Render authored inline Markdown as a single width-constrained paragraph.
+/// Code fences remain independently horizontally scrollable.
 fn render_markdown_lines(
     ui: &mut egui::Ui,
     text: &str,
@@ -15764,76 +15844,75 @@ fn render_markdown_lines(
     heading_level: Option<u8>,
 ) {
     let has_bold_face = system_fonts::markdown_bold_available(ui.ctx());
+    let body_font = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .cloned()
+        .unwrap_or_else(|| egui::FontId::proportional(14.0));
     for line in text.split('\n') {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            for span in markdown_inline::parse(line) {
-                let hits = offline_reader::search_hits(&span.text, search_query);
-                let mut pieces = Vec::new();
-                if hits.is_empty() {
-                    pieces.push((span.text.as_str(), false));
-                } else {
-                    let mut at = 0;
-                    for (start, end) in hits {
-                        if start > at {
-                            pieces.push((&span.text[at..start], false));
-                        }
-                        pieces.push((&span.text[start..end], true));
-                        at = end;
-                    }
-                    if at < span.text.len() {
-                        pieces.push((&span.text[at..], false));
-                    }
-                }
-                for (fragment, highlighted) in pieces {
-                    let mut rich = egui::RichText::new(fragment.to_owned())
-                        .color(egui::Color32::from_rgb(232, 234, 239));
-                    if span.bold {
-                        rich = rich.strong();
-                    }
-                    if span.italic {
-                        rich = rich.italics();
-                    }
-                    if span.strike {
-                        rich = rich.strikethrough();
-                    }
-                    if span.code {
-                        rich = rich
-                            .monospace()
-                            .background_color(egui::Color32::from_rgb(20, 23, 30));
-                    }
-                    if let Some(level) = heading_level {
-                        rich = rich.strong().size(match level {
-                            1 => 22.0,
-                            2 => 19.0,
-                            3 => 17.0,
-                            _ => 15.0,
-                        });
-                    }
-                    // egui RichText::strong() only changes contrast, not the
-                    // actual glyph weight. Select a real heavyweight face;
-                    // preserve monospace code and retain a visible fallback.
-                    if span.bold || heading_level.is_some() {
-                        rich = rich.color(egui::Color32::WHITE);
-                        if !span.code && has_bold_face {
-                            rich = rich.family(egui::FontFamily::Name(
-                                system_fonts::MARKDOWN_BOLD_FAMILY.into(),
-                            ));
-                        } else if !span.code && heading_level.is_none() {
-                            rich = rich.size(15.0);
-                        }
-                    }
-                    if highlighted {
-                        rich = rich.background_color(if active_hit {
-                            egui::Color32::from_rgb(161, 120, 43)
-                        } else {
-                            egui::Color32::from_rgb(91, 78, 38)
-                        });
-                    }
-                    ui.label(rich);
-                }
-            }
+        let job = markdown_layout_job(
+            line,
+            search_query,
+            active_hit,
+            heading_level,
+            body_font.clone(),
+            has_bold_face,
+        );
+        // One galley uses the actual remaining bubble width. In particular,
+        // a URL with no spaces is broken inside the card, never painted beyond
+        // the message stroke or over adjacent UI.
+        ui.add(egui::Label::new(job).wrap());
+    }
+}
+
+#[cfg(test)]
+mod markdown_bubble_wrap_regressions {
+    use super::*;
+
+    #[test]
+    fn smithsonian_web_search_long_urls_are_one_styled_paragraph() {
+        let input = "Read **Ask Smithsonian** at https://www.smithsonianmag.com/smithsonian-institution/ask-smithsonian-are-cats-domesticated-180955111/?utm_source=openai — for the history.";
+        let job = markdown_layout_job(
+            input,
+            "",
+            false,
+            None,
+            egui::FontId::proportional(14.0),
+            true,
+        );
+        assert_eq!(
+            job.text,
+            "Read Ask Smithsonian at https://www.smithsonianmag.com/smithsonian-institution/ask-smithsonian-are-cats-domesticated-180955111/?utm_source=openai — for the history."
+        );
+        assert!(job.sections.iter().any(|section| {
+            section.format.font_id.family
+                == egui::FontFamily::Name(system_fonts::MARKDOWN_BOLD_FAMILY.into())
+        }));
+    }
+
+    #[test]
+    fn narrow_web_search_paragraph_wraps_within_its_width() {
+        let context = egui::Context::default();
+        let mut observed = None;
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut job = markdown_layout_job(
+                    "https://www.smithsonianmag.com/smithsonian-institution/ask-smithsonian-are-cats-domesticated-180955111/?utm_source=openai",
+                    "",
+                    false,
+                    None,
+                    egui::FontId::proportional(14.0),
+                    false,
+                );
+                job.wrap.max_width = 230.0;
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                observed = Some((galley.rows.len(), galley.size().x));
+            });
         });
+        let (rows, width) = observed.expect("layout ran");
+        assert!(rows > 1, "unbroken URL must wrap over multiple rows");
+        assert!(width <= 231.0, "URL escaped the bubble: {width}");
     }
 }
 
