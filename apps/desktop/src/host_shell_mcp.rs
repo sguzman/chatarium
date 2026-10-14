@@ -438,6 +438,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn verbose_shell_output_does_not_fail_or_block_and_preserves_exit_code() {
         let settings = Settings {
