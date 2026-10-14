@@ -74,6 +74,10 @@ pub struct UiDrafts {
     pub body: String,
     pub notice: String,
     pub confirm_delete: Option<u64>,
+    /// Viewer state only; never persisted in the coordination workspace.
+    pub message_query: String,
+    pub message_filter: String,
+    pub navigate_to_conversation: Option<String>,
 }
 impl Default for UiDrafts {
     fn default() -> Self {
@@ -95,6 +99,9 @@ impl Default for UiDrafts {
             body: String::new(),
             notice: String::new(),
             confirm_delete: None,
+            message_query: String::new(),
+            message_filter: "all".to_owned(),
+            navigate_to_conversation: None,
         }
     }
 }
@@ -853,7 +860,7 @@ pub fn render_chat_inbox(
         })
         .collect::<Vec<_>>();
     if pending.is_empty() {
-        ui.label("Inbox empty. Consumed messages remain in the chat reader.");
+        ui.label("No pending messages for this chat. To see sent, consumed, or acknowledged messages across all chats, open Coordination / messages.");
         return false;
     }
     let mut dirty = false;
@@ -1001,6 +1008,243 @@ pub fn topology_ui(ui: &mut egui::Ui, c: &Container, conversations: &[(String, S
         }
     }
 }
+/// The single cross-chat ledger: an inbox only shows pending receipts, but this
+/// viewer shows every durable message in every container, including sent and
+/// consumed records. It never performs implicit reads or model activation.
+fn message_visible(
+    message: &Message,
+    container_name: &str,
+    sender: &str,
+    recipient: &str,
+    query: &str,
+    filter: &str,
+) -> bool {
+    let status_matches = match filter {
+        "pending" => matches!(message.status.as_str(), "delivered" | "queued" | "approval"),
+        "consumed" => message.status == "consumed",
+        "other" => !matches!(
+            message.status.as_str(),
+            "delivered" | "queued" | "approval" | "consumed"
+        ),
+        _ => true,
+    };
+    if !status_matches {
+        return false;
+    }
+    let needle = query.trim().to_lowercase();
+    needle.is_empty()
+        || [
+            container_name.to_lowercase(),
+            sender.to_lowercase(),
+            recipient.to_lowercase(),
+            message.id.to_string(),
+            format!("#{}", message.id),
+            message.status.to_lowercase(),
+            message.kind.to_lowercase(),
+            message.body.to_lowercase(),
+        ]
+        .iter()
+        .any(|haystack| haystack.contains(&needle))
+}
+
+fn render_message_center(
+    ui: &mut egui::Ui,
+    store: &mut Workspace,
+    drafts: &mut UiDrafts,
+    conversations: &[(String, String, Color32)],
+) -> bool {
+    let total = store.containers.iter().map(|c| c.messages.len()).sum::<usize>();
+    let pending = store
+        .containers
+        .iter()
+        .flat_map(|c| c.messages.iter())
+        .filter(|m| matches!(m.status.as_str(), "delivered" | "queued" | "approval"))
+        .count();
+    let consumed = store
+        .containers
+        .iter()
+        .flat_map(|c| c.messages.iter())
+        .filter(|m| m.status == "consumed")
+        .count();
+    let mut dirty = false;
+    egui::CollapsingHeader::new(format!(
+        "All-message explorer · {total} total · {pending} pending · {consumed} consumed"
+    ))
+    .id_salt("chatarium-all-coordination-messages")
+    .default_open(true)
+    .show(ui, |ui| {
+        ui.label("Every coordination message, across ALL chats and containers. An empty chat inbox means no PENDING receipts, not missing history.");
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut drafts.message_query)
+                    .hint_text("Search IDs, workers, message kinds, or content")
+                    .desired_width(280.0),
+            );
+            egui::ComboBox::from_id_salt("coordination-message-status-filter")
+                .selected_text(match drafts.message_filter.as_str() {
+                    "pending" => "Pending inboxes",
+                    "consumed" => "Consumed",
+                    "other" => "Blocked / deleted / other",
+                    _ => "All statuses",
+                })
+                .show_ui(ui, |ui| {
+                    for (value, title) in [
+                        ("all", "All statuses"),
+                        ("pending", "Pending inboxes"),
+                        ("consumed", "Consumed"),
+                        ("other", "Blocked / deleted / other"),
+                    ] {
+                        ui.selectable_value(&mut drafts.message_filter, value.to_owned(), title);
+                    }
+                });
+            if ui.small_button("Clear filters").clicked() {
+                drafts.message_filter = "all".to_owned();
+                drafts.message_query.clear();
+            }
+        });
+
+        // Clone only lightweight records so queue controls can mutate the
+        // workspace without borrowing the selected container.
+        let mut entries = store
+            .containers
+            .iter()
+            .flat_map(|container| {
+                container.messages.iter().filter_map(move |message| {
+                    let source = container.members.iter().find(|m| m.id == message.from);
+                    let target = container.members.iter().find(|m| m.id == message.to);
+                    let source_name = source
+                        .map(|m| m.name.as_str())
+                        .unwrap_or("Former worker");
+                    let target_name = target
+                        .map(|m| m.name.as_str())
+                        .unwrap_or("Former worker");
+                    message_visible(
+                        message,
+                        &container.name,
+                        source_name,
+                        target_name,
+                        &drafts.message_query,
+                        &drafts.message_filter,
+                    )
+                    .then(|| {
+                        (
+                            container.id,
+                            container.name.clone(),
+                            source.cloned(),
+                            target.cloned(),
+                            message.clone(),
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(container, _, _, _, message)| {
+            (std::cmp::Reverse(message.created_ms), std::cmp::Reverse(*container), std::cmp::Reverse(message.id))
+        });
+        let matching = entries.len();
+        if matching == 0 {
+            ui.label("No messages match those filters. Try All statuses or clear the search.");
+            return;
+        }
+        ui.label(format!("Showing newest {} of {matching} matching messages", matching.min(100)));
+        egui::ScrollArea::vertical()
+            .id_salt("coordination-all-message-scroll")
+            .max_height(385.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (container_id, container_name, source, target, message) in
+                    entries.into_iter().take(100)
+                {
+                    ui.push_id((container_id, message.id), |ui| {
+                        let source_name = source.as_ref().map_or("Former worker", |m| m.name.as_str());
+                        let target_name = target.as_ref().map_or("Former worker", |m| m.name.as_str());
+                        let status = match message.status.as_str() {
+                            "delivered" => "DELIVERED TO INBOX",
+                            "consumed" => "CONSUMED BY MODEL REQUEST",
+                            "queued" => "QUEUED",
+                            "approval" => "AWAITING APPROVAL",
+                            "blocked" => "BLOCKED",
+                            "deleted" => "DELETED",
+                            "rejected" => "REJECTED",
+                            other => other,
+                        };
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(format!("#{} · {} · {status}", message.id, message.kind));
+                                ui.weak(format!("in {container_name}"));
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                let source_color = source.as_ref()
+                                    .map(|m| conversation_color(conversations, &m.conversation))
+                                    .unwrap_or(Color32::GRAY);
+                                let target_color = target.as_ref()
+                                    .map(|m| conversation_color(conversations, &m.conversation))
+                                    .unwrap_or(Color32::GRAY);
+                                ui.colored_label(source_color, "●");
+                                ui.strong(format!("{source_name} (#{} )", message.from));
+                                ui.label("→");
+                                ui.colored_label(target_color, "●");
+                                ui.strong(format!("{target_name} (#{} )", message.to));
+                            });
+                            if message.status != "deleted" {
+                                let summary = message.body.chars().take(180).collect::<String>();
+                                ui.add(egui::Label::new(summary).wrap());
+                            }
+                            egui::CollapsingHeader::new("Details / navigate / manage")
+                                .id_salt("message-details")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    if message.status != "deleted" {
+                                        ui.add(egui::Label::new(&message.body).wrap());
+                                        if ui.small_button("Copy message").clicked() {
+                                            ui.ctx().copy_text(message.body.clone());
+                                        }
+                                    }
+                                    ui.add(egui::Label::new(format!(
+                                        "Message #{} · created {} · status {} · {}",
+                                        message.id, message.created_ms, message.status, message.note,
+                                    )).wrap());
+                                    ui.horizontal_wrapped(|ui| {
+                                        if let Some(source) = &source {
+                                            if ui.small_button(format!("Open sender: {}", source.name)).clicked() {
+                                                drafts.navigate_to_conversation = Some(source.conversation.clone());
+                                            }
+                                        }
+                                        if let Some(target) = &target {
+                                            if ui.small_button(format!("Open recipient: {}", target.name)).clicked() {
+                                                drafts.navigate_to_conversation = Some(target.conversation.clone());
+                                            }
+                                        }
+                                        if matches!(message.status.as_str(), "queued" | "approval") {
+                                            if ui.small_button("Release").clicked() {
+                                                match store.decide(container_id, message.id, true, now_ms()) {
+                                                    Ok(()) => {
+                                                        dirty = true;
+                                                        drafts.notice = format!("Message #{} released", message.id);
+                                                    }
+                                                    Err(error) => drafts.notice = error,
+                                                }
+                                            }
+                                            if ui.small_button("Reject").clicked() {
+                                                match store.decide(container_id, message.id, false, now_ms()) {
+                                                    Ok(()) => {
+                                                        dirty = true;
+                                                        drafts.notice = format!("Message #{} rejected", message.id);
+                                                    }
+                                                    Err(error) => drafts.notice = error,
+                                                }
+                                            }
+                                        }
+                                    });
+                                });
+                        });
+                    });
+                }
+            });
+    });
+    dirty
+}
+
 pub fn render(
     ui: &mut egui::Ui,
     store: &mut Workspace,
@@ -1009,7 +1253,10 @@ pub fn render(
     current: &str,
 ) -> bool {
     let mut dirty = false;
-    ui.heading("Coordination containers");
+    ui.heading("Coordination · messages");
+    dirty |= render_message_center(ui, store, drafts, conversations);
+    ui.separator();
+    ui.heading("Containers and routing");
     ui.label("Create a container first, attach existing chats as workers, then set authority and delivery rules.");
     ui.horizontal(|ui| {
         ui.add(
@@ -1374,43 +1621,6 @@ pub fn render(
         }
     }
         });
-    egui::CollapsingHeader::new(format!(
-        "Message flow and queue ({} messages)",
-        container.messages.len()
-    ))
-    .id_salt("coordination-message-history")
-    .default_open(false)
-    .show(ui, |ui| {
-        for m in container.messages.iter().rev().take(60) {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "#{} {}→{} {} · {}",
-                    m.id, m.from, m.to, m.kind, m.status
-                ));
-                if matches!(m.status.as_str(), "queued" | "approval") {
-                    if ui.small_button("Release").clicked() {
-                        match store.decide(container.id, m.id, true, now_ms()) {
-                            Ok(()) => {
-                                dirty = true;
-                                drafts.notice = format!("message #{} released", m.id);
-                            }
-                            Err(e) => drafts.notice = e,
-                        }
-                    }
-                    if ui.small_button("Reject").clicked() {
-                        match store.decide(container.id, m.id, false, now_ms()) {
-                            Ok(()) => {
-                                dirty = true;
-                                drafts.notice = format!("message #{} rejected", m.id);
-                            }
-                            Err(e) => drafts.notice = e,
-                        }
-                    }
-                }
-            });
-            ui.label(&m.body);
-        }
-    });
     dirty
 }
 
@@ -1424,6 +1634,34 @@ mod tests {
         let b = s.attach(c, "chat-b", "Coder", "Worker").unwrap();
         (s, c, a, b)
     }
+    #[test]
+    fn message_explorer_filters_all_statuses_and_sender_recipient() {
+        let make = |status: &str, kind: &str| Message {
+            id: 17,
+            from: 2,
+            to: 3,
+            kind: kind.to_owned(),
+            body: "Acknowledge directive".to_owned(),
+            status: status.to_owned(),
+            created_ms: 100,
+            delivered_ms: Some(101),
+            consumed_ms: (status == "consumed").then_some(102),
+            note: String::new(),
+        };
+        let delivered = make("delivered", "directive");
+        let consumed = make("consumed", "ack");
+        assert!(message_visible(&delivered, "Team", "Director", "Coder", "", "all"));
+        assert!(message_visible(&consumed, "Team", "Director", "Coder", "ack", "all"));
+        assert!(message_visible(&consumed, "Team", "Director", "Coder", "coder", "all"));
+        assert!(message_visible(&consumed, "Team", "Director", "Coder", "#17", "all"));
+        assert!(message_visible(&delivered, "Team", "Director", "Coder", "", "pending"));
+        assert!(!message_visible(&consumed, "Team", "Director", "Coder", "", "pending"));
+        assert!(message_visible(&consumed, "Team", "Director", "Coder", "", "consumed"));
+        assert!(!message_visible(&delivered, "Team", "Director", "Coder", "", "consumed"));
+        assert!(!message_visible(&consumed, "Team", "Director", "Coder", "", "other"));
+        assert!(message_visible(&make("blocked", "request"), "Team", "Director", "Coder", "", "other"));
+    }
+
     #[test]
     fn delivery_read_consumption_deletion_and_reopen_have_distinct_states() {
         let (mut s, c, a, b) = setup();

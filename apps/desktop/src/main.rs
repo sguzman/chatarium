@@ -13907,7 +13907,7 @@ impl eframe::App for ChatariumApp {
 
                         if !historical_mode {
                             ui.add_space(9.0);
-                            if ui.button("Open coordination topology").clicked() {
+                            if ui.button("Coordination / messages").clicked() {
                                 self.coordination_window_open = true;
                             }
                         }
@@ -14922,7 +14922,7 @@ impl eframe::App for ChatariumApp {
             );
             let preferred_window_size =
                 egui::vec2(max_window_size.x.min(690.0), max_window_size.y.min(540.0));
-            egui::Window::new("Chatarium coordination topology")
+            egui::Window::new("Chatarium coordination / message center")
                 .open(&mut open)
                 .default_size(preferred_window_size)
                 .max_size(max_window_size)
@@ -14976,6 +14976,18 @@ impl eframe::App for ChatariumApp {
                     }
                 });
             self.coordination_window_open = open;
+        }
+        if let Some(target) = self.coordination_ui.navigate_to_conversation.take() {
+            match target.parse::<LocalConversationId>() {
+                Ok(target_id) => {
+                    self.activate_local_conversation(target_id);
+                    if self.local_conversation_id == target_id {
+                        self.coordination_window_open = false;
+                        ctx.request_repaint();
+                    }
+                }
+                Err(_) => self.status = "Coordination message refers to an invalid local chat ID".to_owned(),
+            }
         }
         if rename_local_requested {
             self.rename_current_local_conversation();
