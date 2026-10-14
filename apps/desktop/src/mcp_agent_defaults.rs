@@ -533,7 +533,7 @@ mod tests {
                 .as_nanos(),
         ));
         let policy = format!(
-            "{READ_ONLY_DEFAULT_POLICY}\\nchatarium.builtin::shell.command = ask"
+            "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"
         )
         .replace(
             "chatarium.demo::shell.command = ask",
