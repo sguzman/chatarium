@@ -262,13 +262,24 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
         Some(Ok(parsed)) => parsed,
         _ => return Ok(None),
     };
-    let suffix = candidate[values.byte_offset()..].trim_start_matches([' ', '\t']);
+    let suffix = &candidate[values.byte_offset()..];
     if !suffix.trim().is_empty() {
-        if !suffix.starts_with('\n') && !suffix.starts_with("\r\n") {
-            return Ok(None);
-        }
-        if suffix.trim_start().starts_with('{') {
+        // Some model responses append a sentence directly after the final
+        // closing brace, without a newline. This is still a valid *single*
+        // leading tool request when the suffix starts with prose. Keep
+        // rejecting inline examples separated by a space and extra JSON
+        // envelopes, which could otherwise silently execute a second call.
+        let after_whitespace = suffix.trim_start();
+        if after_whitespace.starts_with('{') || after_whitespace.starts_with('[') {
             return Err("MCP response may request only one tool".to_owned());
+        }
+        let separated_by_newline = suffix.starts_with('\n') || suffix.starts_with("\r\n");
+        let immediately_followed_by_prose = suffix
+            .chars()
+            .next()
+            .is_some_and(char::is_alphabetic);
+        if !separated_by_newline && !immediately_followed_by_prose {
+            return Ok(None);
         }
     }
     let Some(top) = parsed.as_object() else {
@@ -358,6 +369,23 @@ mod tests {
         assert!(parse_model_tool_request(
             "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"hello\",\"arguments\":{}}} extra"
         ).unwrap().is_none());
+    }
+
+    #[test]
+    fn contiguous_prose_after_tool_envelope_still_invokes_one_tool() {
+        // Regression: the agent once emitted this exact shape during a
+        // git-status request. The caller displayed it as prose and never
+        // journaled a tools.list call.
+        let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        let response = format!(
+            "{tool}I've requested the available tools so I can check Git status."
+        );
+        let call = parse_model_tool_request(&response).unwrap().unwrap();
+        assert_eq!(call.provider, "chatarium.builtin");
+        assert_eq!(call.tool, "tools.list");
+        assert_eq!(call.arguments, json!({}));
+        assert!(parse_model_tool_request(&format!("{tool} extra")).unwrap().is_none());
+        assert!(parse_model_tool_request(&format!("{tool}{tool}")).is_err());
     }
 
     #[test]
