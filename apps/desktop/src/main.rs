@@ -1037,6 +1037,9 @@ struct ChatariumApp {
     coordination_window_open: bool,
     coordination_tool_steps: u32,
     coordination_last_queue_check: Instant,
+    coordination_auto_wake_enabled: bool,
+    coordination_auto_wake_count: u32,
+    coordination_pending_wake: Option<(LocalTurnId, LocalConversationId, Vec<u64>)>,
     local_conversation_rename: String,
     local_conversation_project_directory: String,
     show_archived_local_conversations: bool,
@@ -1375,6 +1378,9 @@ impl ChatariumApp {
                         coordination_window_open: false,
                         coordination_tool_steps: 0,
                         coordination_last_queue_check: Instant::now(),
+            coordination_auto_wake_enabled: false,
+            coordination_auto_wake_count: 0,
+            coordination_pending_wake: None,
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
                         local_conversation_search_selection: None,
@@ -1621,6 +1627,9 @@ impl ChatariumApp {
             coordination_window_open: false,
             coordination_tool_steps: 0,
             coordination_last_queue_check: Instant::now(),
+            coordination_auto_wake_enabled: false,
+            coordination_auto_wake_count: 0,
+            coordination_pending_wake: None,
             show_archived_local_conversations: false,
             local_conversation_search_query: String::new(),
             local_conversation_search_selection: None,
@@ -1763,6 +1772,7 @@ impl ChatariumApp {
             || self.pending_remote_turn.is_some()
             || self.active_remote_turn.is_some()
             || self.agent_mcp_flow.is_some()
+            || self.coordination_pending_wake.is_some()
     }
 
     fn apply_local_conversation(&mut self, conversation_id: LocalConversationId) {
@@ -3204,6 +3214,169 @@ impl ChatariumApp {
         true
     }
 
+    /// Session-only opt-in. Recovered wake records prevent duplicate execution.
+    fn maybe_wake_open_coordination_worker(&mut self) {
+        if !self.coordination_auto_wake_enabled
+            || self.coordination_auto_wake_count >= 8
+            || self.local_conversation_busy()
+            || !self.draft.trim().is_empty()
+            || !self.remote_connected()
+            || self.selected_model.is_none()
+            || self.capability_probe.running()
+        {
+            return;
+        }
+        let conversation = self.local_conversation_id.to_string();
+        if self.coordination_workspace.member_for(&conversation).is_none() {
+            return;
+        }
+        let started = self.events.iter()
+            .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
+            .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
+            .filter(|json| json["conversation_id"].as_str() == Some(&conversation))
+            .filter_map(|json| json["inbox_ids"].as_array().cloned())
+            .flatten()
+            .filter_map(|value| value.as_u64())
+            .collect::<HashSet<_>>();
+        let inbox_ids = self.coordination_workspace.context_delivered_ids(&conversation)
+            .into_iter()
+            .filter(|id| !started.contains(id))
+            .take(8)
+            .collect::<Vec<_>>();
+        if inbox_ids.is_empty() {
+            return;
+        }
+        let turn_id = LocalTurnId::new();
+        let payload = serde_json::json!({
+            "schema": "chatarium-coordination-activation",
+            "version": 1,
+            "conversation_id": conversation,
+            "turn_id": turn_id.to_string(),
+            "inbox_ids": inbox_ids,
+            "not_user_authored": true
+        }).to_string();
+        self.coordination_pending_wake = Some((
+            turn_id, self.local_conversation_id, inbox_ids.clone()
+        ));
+        if self.queue_turn_event(turn_id, EventKind::CoordinationActivationStarted, payload) {
+            self.coordination_auto_wake_count += 1;
+            self.status = format!(
+                "journaling non-authored coordination wake for {} message(s)",
+                inbox_ids.len()
+            );
+        } else {
+            self.coordination_pending_wake = None;
+        }
+    }
+
+    fn dispatch_durable_coordination_wake(
+        &mut self,
+        turn_id: LocalTurnId,
+        start: &EventEnvelope,
+    ) {
+        let Some((pending_id, conversation_id, inbox_ids)) =
+            self.coordination_pending_wake.take()
+        else {
+            return;
+        };
+        if pending_id != turn_id || conversation_id != self.local_conversation_id {
+            self.status = "coordination wake target changed; dispatch denied".to_owned();
+            return;
+        }
+        if self.pending_remote_turn.is_some()
+            || self.active_remote_turn.is_some()
+            || !self.remote_connected()
+        {
+            self.status = "coordination wake persisted; bridge unavailable".to_owned();
+            return;
+        }
+        let Some(model) = self.selected_model.clone() else {
+            return;
+        };
+        let patch = match self.current_behavior_request_patch() {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = format!("coordination wake policy rejected: {error}");
+                return;
+            }
+        };
+        let mut transcript = context_transcript(
+            &projected_local_display_messages(&self.events, conversation_id)
+        );
+        let tools = match admitted_tool_result_context_messages(
+            &self.events, conversation_id
+        ) {
+            Ok(tools) => tools,
+            Err(error) => {
+                self.status = format!("coordination wake tool evidence invalid: {error}");
+                return;
+            }
+        };
+        let frozen_sources = tools.iter().map(|item| item.source.clone()).collect::<Vec<_>>();
+        transcript.extend(tools);
+        match admitted_routed_context_messages(&self.events, conversation_id) {
+            Ok(context) => transcript.extend(context),
+            Err(error) => {
+                self.status = format!("coordination wake routed context invalid: {error}");
+                return;
+            }
+        }
+        transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
+        transcript.push(context_composer::TranscriptMessage::coordination_activation(
+            turn_id.to_string(), start.sequence, inbox_ids.clone()
+        ));
+        let mut developer = self.conversation_developer_context.clone();
+        developer.push_str(
+            &self.coordination_workspace.identity_context(&conversation_id.to_string())
+        );
+        let plan = context_composer::ContextPlan::compose(
+            context_composer::ContextPolicy::dispatch(),
+            &self.conversation_instructions,
+            &developer,
+            transcript,
+        );
+        let manifest = match mcp_dispatch_manifest::capture(
+            conversation_id, "coordination_auto_wake", &frozen_sources, &plan
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = format!("coordination wake manifest rejected: {error}");
+                return;
+            }
+        };
+        let request_id = turn_id.to_string();
+        let payload = match mcp_dispatch_manifest::attach_to_dispatch_payload(
+            remote_turn_payload(
+                turn_id, &request_id, Some(&model), None,
+                Some("non-authored coordination inbox wake")
+            ),
+            manifest,
+        ) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.status = format!("coordination wake context rejected: {error}");
+                return;
+            }
+        };
+        self.coordination_pending_admissions.insert(request_id.clone(), inbox_ids);
+        self.delivery.begin(conversation_id.to_string(), request_id.clone());
+        self.pending_remote_turn = Some(PendingRemoteTurn {
+            conversation_id,
+            turn_id,
+            request_id,
+            model,
+            input: plan.input_json(),
+            instructions: plan.instructions,
+            request_patch: patch,
+        });
+        if self.queue_turn_event(turn_id, EventKind::DispatchAttempted, payload) {
+            self.status = "coordination wake journaled; remote dispatch queued".to_owned();
+        } else {
+            self.coordination_pending_admissions.remove(&turn_id.to_string());
+            self.pending_remote_turn = None;
+        }
+    }
+
     fn process_notices(&mut self) {
         let notices = self
             .notice_rx
@@ -3401,7 +3574,10 @@ impl ChatariumApp {
                     kind,
                     event,
                 } => {
-                    self.events.push(event);
+                    self.events.push(event.clone());
+                    if kind == EventKind::CoordinationActivationStarted {
+                        self.dispatch_durable_coordination_wake(turn_id, &event);
+                    }
                     if kind == EventKind::DispatchAttempted
                         && self
                             .pending_remote_turn
@@ -7231,6 +7407,7 @@ impl eframe::App for ChatariumApp {
         }
         self.process_remote_notices();
         self.process_due_delivery_retry();
+        self.maybe_wake_open_coordination_worker();
         // Visibility preferences are local-only and never mutate the durable
         // audit. Cache them in egui state to avoid disk reads each frame.
         let display_preferences_path = self.journal_path.with_file_name("display-preferences.json");
@@ -7467,6 +7644,10 @@ impl eframe::App for ChatariumApp {
                 {
                     self.coordination_window_open = true;
                 }
+                ui.checkbox(
+                    &mut self.coordination_auto_wake_enabled,
+                    "Auto-wake open worker (max 8 this session)",
+                ).on_hover_text("Opt in to automatic turns for this currently visible worker chat only. No authored messages are created; does not wake hidden conversations.");
                 ui.separator();
                 // Overflowing horizontal content belongs to the scroll area,
                 // not to the user-resizable panel. A vertical-only scroll area
