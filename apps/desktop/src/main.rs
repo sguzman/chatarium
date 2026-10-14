@@ -7484,6 +7484,26 @@ impl eframe::App for ChatariumApp {
                             "Show delivery history below chat",
                         ).changed();
                         ui.label("Both views are debugging diagnostics. Hiding them does not discard their underlying audit events.");
+                        ui.separator();
+                        egui::CollapsingHeader::new("Coordination message colors")
+                            .id_salt("chatarium-coordination-message-colors")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label("Background colors for consumed coordination bubbles, by message kind.");
+                                for (index, kind) in display_preferences::DisplayPreferences::COORDINATION_KINDS.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(*kind);
+                                        changed |= ui.color_edit_button_srgb(
+                                            &mut display_preferences.coordination_colors[index]
+                                        ).changed();
+                                    });
+                                }
+                                if ui.button("Restore coordination colors").clicked() {
+                                    display_preferences.coordination_colors =
+                                        display_preferences::DisplayPreferences::default().coordination_colors;
+                                    changed = true;
+                                }
+                            });
                         if changed {
                             if let Err(error) = display_preferences.save(&display_preferences_path) {
                                 self.status = format!("Cannot save display settings: {error}");
@@ -13553,11 +13573,12 @@ impl eframe::App for ChatariumApp {
                                     // Egui Frames normally shrink to their text content.
                                     // Fill every sidebar row to the same usable width.
                                     ui.set_min_width((sidebar_control_width - 20.0).max(120.0));
+                                    ui.colored_label(accent, "●");
                                     if ui
                                         .selectable_label(
                                             selected || keyboard_selected,
-                                            egui::RichText::new(format!("● {title_preview}"))
-                                                .color(accent)
+                                            egui::RichText::new(title_preview.as_str())
+                                                .color(egui::Color32::from_rgb(244, 245, 249))
                                                 .strong(),
                                         )
                                         .on_hover_text(title)
@@ -13748,6 +13769,30 @@ impl eframe::App for ChatariumApp {
                         }
 
                         if !historical_mode {
+                            let (pending_count, queued_count) = self.coordination_workspace.inbox_counts(
+                                &self.local_conversation_id.to_string(),
+                            );
+                            egui::CollapsingHeader::new(format!(
+                                "Inbox · {} delivered · {} queued",
+                                pending_count, queued_count
+                            ))
+                            .id_salt(("chatarium-selected-inbox", self.local_conversation_id))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let before = self.coordination_workspace.clone();
+                                let changed = coordination_workspace::render_chat_inbox(
+                                    ui,
+                                    &mut self.coordination_workspace,
+                                    &mut self.coordination_ui,
+                                    &self.local_conversation_id.to_string(),
+                                );
+                                if changed {
+                                    if let Err(error) = self.coordination_workspace.save_atomic(&self.coordination_store_path()) {
+                                        self.coordination_workspace = before;
+                                        self.status = format!("Failed to persist inbox deletion: {error}");
+                                    }
+                                }
+                            });
                             ui.add_space(8.0);
                             egui::CollapsingHeader::new("Manage selected chat")
                                 .default_open(false)
