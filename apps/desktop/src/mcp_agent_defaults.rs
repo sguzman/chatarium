@@ -39,7 +39,7 @@ impl Default for AgentDefaults {
                 "Never claim to have called a tool unless its actual result appears in context. ",
                 "If execution requires approval, wait for the user to approve it."
             ).to_owned(),
-            policy_rules: format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic"),
+            policy_rules: format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"),
             max_calls: 8,
             seed_new_conversations: true,
         }
