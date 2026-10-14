@@ -232,7 +232,7 @@ impl Workspace {
                     || body.len() > MAX_MESSAGE
                     || !matches!(
                         status,
-                        "delivered" | "consumed" | "queued" | "approval" | "blocked" | "rejected"
+                        "delivered" | "consumed" | "queued" | "approval" | "blocked" | "rejected" | "deleted"
                     )
                     || !message_ids.insert(id)
                     || id == 0
@@ -605,9 +605,9 @@ impl Workspace {
         changed
     }
 
-    /// Explicit human deletion of a recipient inbox record or pending queued item.
-    /// Consumed records are separately retained as transcript history and cannot be
-    /// silently erased by an inbox operation.
+    /// Explicit human deletion of a recipient inbox payload or queued item.
+    /// A content-free tombstone retains its identity and delivery timestamp for
+    /// rate limiting and audit. Consumed transcript messages are not inbox deletable.
     pub fn delete_message(&mut self, container: u64, id: u64) -> Result<(), String> {
         let record = self.containers.iter_mut().find(|record| record.id == container)
             .ok_or("container not found")?;
@@ -616,7 +616,12 @@ impl Workspace {
         if record.messages[index].status == "consumed" {
             return Err("consumed transcript records cannot be deleted from the inbox".to_owned());
         }
-        record.messages.remove(index);
+        let message = &mut record.messages[index];
+        message.status = "deleted".to_owned();
+        // Erase the payload while retaining a minimal tombstone so rate limits
+        // cannot be bypassed by deleting delivered inbox entries.
+        message.body.clear();
+        message.note = "deleted from inbox by human".to_owned();
         Ok(())
     }
 
@@ -794,7 +799,7 @@ pub fn render_chat_inbox(
                     ui.label(egui::RichText::new(&message.note).weak().size(10.0));
                     if drafts.confirm_delete == Some(message.id) {
                         ui.horizontal(|ui| {
-                            ui.label("Permanently delete this inbox record?");
+                            ui.label("Erase message contents and remove it from the inbox?");
                             if ui.button("Confirm delete").clicked() {
                                 match store.delete_message(cid, message.id) {
                                     Ok(()) => {
@@ -1370,7 +1375,9 @@ mod tests {
         let (first, _) = s.send("chat-a", b, "directive", "First", 1).unwrap();
         let (second, _) = s.send("chat-a", b, "directive", "Second", 2).unwrap();
         s.delete_message(c, first).unwrap();
-        assert!(s.containers[0].messages.iter().all(|m| m.id != first));
+        assert!(s.containers[0].messages.iter().any(|m|
+            m.id == first && m.status == "deleted" && m.body.is_empty()
+        ));
         assert!(s.containers[0].messages.iter().any(|m| m.id == second));
         let (third, _) = s.send("chat-a", b, "directive", "Third", 3).unwrap();
         assert!(third > second);
