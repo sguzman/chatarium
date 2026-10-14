@@ -39,15 +39,20 @@ impl Settings {
         if !SHELLS.contains(&self.shell.as_str()) {
             return Err("shell must be fish, bash, zsh, or sh".to_owned());
         }
-        if self.blocked_commands.len() > 16 * 1024
-            || self.blocked_commands.lines().count() > 256
-        {
+        if self.blocked_commands.len() > 16 * 1024 || self.blocked_commands.lines().count() > 256 {
             return Err("shell command blacklist exceeds allowed length".to_owned());
         }
-        for name in self.blocked_commands.lines().map(str::trim).filter(|s| !s.is_empty()) {
-            if name.len() > 128 || name.chars().any(|c| {
-                !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.' | '/' | '+')
-            }) {
+        for name in self
+            .blocked_commands
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if name.len() > 128
+                || name.chars().any(|c| {
+                    !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.' | '/' | '+')
+                })
+            {
                 return Err(format!("invalid blocked command name: {name}"));
             }
         }
@@ -70,8 +75,13 @@ impl Settings {
             return Err("unknown host shell settings version".to_owned());
         }
         let saved = Self {
-            enabled: value["enabled"].as_bool().ok_or("missing shell enabled flag")?,
-            shell: value["shell"].as_str().ok_or("missing shell selection")?.to_owned(),
+            enabled: value["enabled"]
+                .as_bool()
+                .ok_or("missing shell enabled flag")?,
+            shell: value["shell"]
+                .as_str()
+                .ok_or("missing shell selection")?
+                .to_owned(),
             blocked_commands: value["blocked_commands"]
                 .as_str()
                 .ok_or("missing command blacklist")?
@@ -93,7 +103,8 @@ impl Settings {
             "enabled": self.enabled,
             "shell": self.shell,
             "blocked_commands": self.blocked_commands,
-        })).map_err(|e| e.to_string())?;
+        }))
+        .map_err(|e| e.to_string())?;
         fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
         fs::rename(temporary, path).map_err(|e| e.to_string())
     }
@@ -103,18 +114,27 @@ impl Settings {
         if !self.enabled {
             return Err("native host shell is disabled in local settings".to_owned());
         }
-        let obj = args.as_object().ok_or("shell arguments must be a JSON object")?;
+        let obj = args
+            .as_object()
+            .ok_or("shell arguments must be a JSON object")?;
         if obj.keys().any(|key| key != "command" && key != "cwd") {
             return Err("shell arguments allow only command and optional cwd".to_owned());
         }
-        let command = obj.get("command").and_then(Value::as_str)
+        let command = obj
+            .get("command")
+            .and_then(Value::as_str)
             .ok_or("shell.command requires a command string")?;
         if command.trim().is_empty() || command.len() > MAX_COMMAND || command.contains('\0') {
             return Err("shell command is empty, oversized, or contains NUL".to_owned());
         }
         // Filter names at separator-delimited command positions. This is only
         // a convenience stoplist, not a security promise about shell programs.
-        for name in self.blocked_commands.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        for name in self
+            .blocked_commands
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             if mentions_blocked_command(command, name) {
                 return Err(format!("command {name} is blocked by local shell settings"));
             }
@@ -126,7 +146,8 @@ impl Settings {
             }
             PathBuf::from(value)
         } else {
-            std::env::var_os("HOME").map(PathBuf::from)
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/"))
         };
         if !cwd.is_dir() {
@@ -143,7 +164,8 @@ impl Settings {
 /// Best-effort stoplist. Not a security boundary. Cover direct command
 /// positions after common shell separators, including paths to executables.
 fn mentions_blocked_command(command: &str, blocked: &str) -> bool {
-    command.split([';', '|', '&', '\n', '(', ')'])
+    command
+        .split([';', '|', '&', '\n', '(', ')'])
         .any(|segment| {
             let segment = segment.trim_start();
             let first = segment.split_whitespace().next().unwrap_or_default();
@@ -158,7 +180,10 @@ pub fn execute(settings: &Settings, args: &Value) -> Result<Value, String> {
     let (command, cwd) = settings.validate_request(args)?;
     let shell = settings.shell_path();
     if !shell.is_file() {
-        return Err(format!("selected shell {} is not installed", shell.display()));
+        return Err(format!(
+            "selected shell {} is not installed",
+            shell.display()
+        ));
     }
     if !Path::new("/usr/bin/timeout").is_file() {
         return Err("bounded native shell requires /usr/bin/timeout".to_owned());
@@ -180,19 +205,29 @@ pub fn execute(settings: &Settings, args: &Value) -> Result<Value, String> {
     let stderr = child.stderr.take().ok_or("missing shell stderr")?;
     let out_worker = thread::spawn(move || -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        stdout.take(MAX_CAPTURE + 1).read_to_end(&mut out)
+        stdout
+            .take(MAX_CAPTURE + 1)
+            .read_to_end(&mut out)
             .map_err(|e| format!("cannot read shell stdout: {e}"))?;
         Ok(out)
     });
     let err_worker = thread::spawn(move || -> Result<Vec<u8>, String> {
         let mut err = Vec::new();
-        stderr.take(MAX_CAPTURE + 1).read_to_end(&mut err)
+        stderr
+            .take(MAX_CAPTURE + 1)
+            .read_to_end(&mut err)
             .map_err(|e| format!("cannot read shell stderr: {e}"))?;
         Ok(err)
     });
-    let status = child.wait().map_err(|e| format!("cannot wait for shell: {e}"))?;
-    let stdout = out_worker.join().map_err(|_| "shell stdout worker panicked")??;
-    let stderr = err_worker.join().map_err(|_| "shell stderr worker panicked")??;
+    let status = child
+        .wait()
+        .map_err(|e| format!("cannot wait for shell: {e}"))?;
+    let stdout = out_worker
+        .join()
+        .map_err(|_| "shell stdout worker panicked")??;
+    let stderr = err_worker
+        .join()
+        .map_err(|_| "shell stderr worker panicked")??;
     if stdout.len() > MAX_CAPTURE as usize || stderr.len() > MAX_CAPTURE as usize {
         return Err("shell output exceeds 24 KiB capture limit".to_owned());
     }
@@ -223,18 +258,45 @@ mod tests {
     fn optional_cwd_and_blocked_command_are_validated() {
         let mut settings = Settings::default();
         settings.blocked_commands = "rm\nsudo".to_owned();
-        assert!(settings.validate_request(&json!({"command": "rm -rf ./target"})).is_err());
-        assert!(settings.validate_request(&json!({"command": "echo yes; /usr/bin/sudo whoami"})).is_err());
-        assert!(settings.validate_request(&json!({"command": "echo safe"})).is_ok());
-        assert!(settings.validate_request(&json!({"command": "echo ok", "cwd": "relative"})).is_err());
-        assert!(settings.validate_request(&json!({"command": "echo ok", "args": []})).is_err());
+        assert!(
+            settings
+                .validate_request(&json!({"command": "rm -rf ./target"}))
+                .is_err()
+        );
+        assert!(
+            settings
+                .validate_request(&json!({"command": "echo yes; /usr/bin/sudo whoami"}))
+                .is_err()
+        );
+        assert!(
+            settings
+                .validate_request(&json!({"command": "echo safe"}))
+                .is_ok()
+        );
+        assert!(
+            settings
+                .validate_request(&json!({"command": "echo ok", "cwd": "relative"}))
+                .is_err()
+        );
+        assert!(
+            settings
+                .validate_request(&json!({"command": "echo ok", "args": []}))
+                .is_err()
+        );
         settings.enabled = false;
-        assert!(settings.validate_request(&json!({"command": "echo yes"})).is_err());
+        assert!(
+            settings
+                .validate_request(&json!({"command": "echo yes"}))
+                .is_err()
+        );
     }
 
     #[test]
     fn selected_shell_and_stoplist_round_trip() {
-        let path = std::env::temp_dir().join(format!("chatarium-shell-settings-test-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-shell-settings-test-{}.json",
+            std::process::id()
+        ));
         let mut settings = Settings::default();
         settings.shell = "bash".to_owned();
         settings.blocked_commands = "shutdown\nreboot".to_owned();
@@ -246,7 +308,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn direct_host_shell_executes_with_explicit_user_environment() {
-        let settings = Settings { shell: "sh".to_owned(), ..Settings::default() };
+        let settings = Settings {
+            shell: "sh".to_owned(),
+            ..Settings::default()
+        };
         let output = execute(&settings, &json!({"command": "printf shell_mcp_works"})).unwrap();
         assert_eq!(output["stdout"], "shell_mcp_works");
         assert_eq!(output["exit_code"], 0);
