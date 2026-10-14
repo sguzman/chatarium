@@ -458,7 +458,18 @@ mod tests {
         ));
         let mut current = AgentDefaults::default();
         current.policy_rules = PRIOR_DEFAULT_POLICY.to_owned();
-        current.save_atomic(&path).unwrap();
+        // Emulate a real pre-migration file: the current save function
+        // correctly stamps new writes as already migrated.
+        let legacy = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "bootstrap": current.bootstrap,
+            "policy_rules": current.policy_rules,
+            "max_calls": current.max_calls,
+            "seed_new_conversations": current.seed_new_conversations,
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION,
+        });
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let migrated = AgentDefaults::load(&path).unwrap();
         assert_eq!(
             tool_policy(&migrated.policy_rules, "chatarium.builtin", "time.now"),
