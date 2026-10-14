@@ -64,6 +64,14 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             HOST_SHELL_OPERATION,
             "Run a host command with the configured user shell, PATH and Fish configuration; unconfined host access",
         ),
+        (
+            "coordination.identity",
+            "Verify this conversation's Chatarium-owned worker identity, container, authority, and inbox; arguments: {}",
+        ),
+        (
+            "coordination.send",
+            "Send an authenticated worker message by target worker ID using {to,kind,body}; Chatarium enforces authority, queue and rate policies",
+        ),
     ] {
         tools.push(json!({
             "provider": BUILTIN_PROVIDER_NAME,
@@ -362,6 +370,8 @@ mod tests {
         assert_eq!(parsed.payload["tools"][0]["name"], "hello");
         assert_eq!(parsed.payload["tools"][1]["name"], "tools.list");
         assert_eq!(parsed.payload["tools"][2]["name"], "time.now");
+        assert_eq!(parsed.payload["tools"][4]["name"], "coordination.identity");
+        assert_eq!(parsed.payload["tools"][5]["name"], "coordination.send");
         assert_eq!(
             parsed.payload["tools"][1]["execution_permission"],
             "exact standing policy or per-call user approval"
