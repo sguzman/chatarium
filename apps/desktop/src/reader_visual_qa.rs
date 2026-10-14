@@ -355,7 +355,6 @@ impl eframe::App for ReaderQa {
                                     index == SEARCH_TARGET
                                         && matches!(self.phase, "search" | "edited"),
                                     ctx,
-                                    &crate::display_preferences::DisplayPreferences::default(),
                                 );
                                 if bubble.rect.intersects(row.clip_rect()) {
                                     let clipped = bubble.rect.intersect(row.clip_rect());
