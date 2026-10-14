@@ -274,10 +274,7 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
             return Err("MCP response may request only one tool".to_owned());
         }
         let separated_by_newline = suffix.starts_with('\n') || suffix.starts_with("\r\n");
-        let immediately_followed_by_prose = suffix
-            .chars()
-            .next()
-            .is_some_and(char::is_alphabetic);
+        let immediately_followed_by_prose = suffix.chars().next().is_some_and(char::is_alphabetic);
         if !separated_by_newline && !immediately_followed_by_prose {
             return Ok(None);
         }
@@ -377,14 +374,17 @@ mod tests {
         // git-status request. The caller displayed it as prose and never
         // journaled a tools.list call.
         let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
-        let response = format!(
-            "{tool}I've requested the available tools so I can check Git status."
-        );
+        let response =
+            format!("{tool}I've requested the available tools so I can check Git status.");
         let call = parse_model_tool_request(&response).unwrap().unwrap();
         assert_eq!(call.provider, "chatarium.builtin");
         assert_eq!(call.tool, "tools.list");
         assert_eq!(call.arguments, json!({}));
-        assert!(parse_model_tool_request(&format!("{tool} extra")).unwrap().is_none());
+        assert!(
+            parse_model_tool_request(&format!("{tool} extra"))
+                .unwrap()
+                .is_none()
+        );
         assert!(parse_model_tool_request(&format!("{tool}{tool}")).is_err());
     }
 
