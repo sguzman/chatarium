@@ -847,59 +847,61 @@ pub fn render(
         .id_salt("coordination-workers")
         .default_open(false)
         .show(ui, |ui| {
-    ui.strong("Add existing conversation as worker");
-    egui::ComboBox::from_label("Conversation")
-        .selected_text(
-            conversations
-                .iter()
-                .find(|(id, _, _)| *id == drafts.selected_conversation)
-                .map(|(_, name, color)| egui::RichText::new(format!("● {name}")).color(*color))
-                .unwrap_or_else(|| egui::RichText::new("Choose chat")),
-        )
-        .show_ui(ui, |ui| {
-            for (id, title, color) in conversations {
-                let bound = store.member_for(id).is_some();
-                ui.add_enabled_ui(!bound, |ui| {
-                    ui.selectable_value(
-                        &mut drafts.selected_conversation,
-                        id.clone(),
-                        egui::RichText::new(format!("● {title}")).color(*color),
-                    );
+            ui.strong("Add existing conversation as worker");
+            egui::ComboBox::from_label("Conversation")
+                .selected_text(
+                    conversations
+                        .iter()
+                        .find(|(id, _, _)| *id == drafts.selected_conversation)
+                        .map(|(_, name, color)| {
+                            egui::RichText::new(format!("● {name}")).color(*color)
+                        })
+                        .unwrap_or_else(|| egui::RichText::new("Choose chat")),
+                )
+                .show_ui(ui, |ui| {
+                    for (id, title, color) in conversations {
+                        let bound = store.member_for(id).is_some();
+                        ui.add_enabled_ui(!bound, |ui| {
+                            ui.selectable_value(
+                                &mut drafts.selected_conversation,
+                                id.clone(),
+                                egui::RichText::new(format!("● {title}")).color(*color),
+                            );
+                        });
+                    }
+                });
+            ui.add(egui::TextEdit::singleline(&mut drafts.worker_name).hint_text("Worker name"));
+            ui.add(egui::TextEdit::singleline(&mut drafts.worker_role).hint_text("Role"));
+            if ui.button("Attach as worker").clicked() {
+                match store.attach(
+                    container.id,
+                    &drafts.selected_conversation,
+                    &drafts.worker_name,
+                    &drafts.worker_role,
+                ) {
+                    Ok(id) => {
+                        drafts.notice = format!("worker #{id} attached");
+                        drafts.worker_name.clear();
+                        dirty = true;
+                    }
+                    Err(e) => drafts.notice = e,
+                }
+            }
+            for m in &container.members {
+                ui.horizontal(|ui| {
+                    ui.colored_label(member_accent(m.id), "●");
+                    ui.label(format!(
+                        "{} — {}{}",
+                        member_label(m.id),
+                        m.role,
+                        if m.conversation == current {
+                            " (ACTIVE CHAT)"
+                        } else {
+                            ""
+                        }
+                    ));
                 });
             }
-        });
-    ui.add(egui::TextEdit::singleline(&mut drafts.worker_name).hint_text("Worker name"));
-    ui.add(egui::TextEdit::singleline(&mut drafts.worker_role).hint_text("Role"));
-    if ui.button("Attach as worker").clicked() {
-        match store.attach(
-            container.id,
-            &drafts.selected_conversation,
-            &drafts.worker_name,
-            &drafts.worker_role,
-        ) {
-            Ok(id) => {
-                drafts.notice = format!("worker #{id} attached");
-                drafts.worker_name.clear();
-                dirty = true;
-            }
-            Err(e) => drafts.notice = e,
-        }
-    }
-    for m in &container.members {
-        ui.horizontal(|ui| {
-            ui.colored_label(member_accent(m.id), "●");
-            ui.label(format!(
-                "{} — {}{}",
-                member_label(m.id),
-                m.role,
-                if m.conversation == current {
-                    " (ACTIVE CHAT)"
-                } else {
-                    ""
-                }
-            ));
-        });
-    }
         });
     ui.separator();
     egui::CollapsingHeader::new("Topology viewer")
@@ -908,82 +910,85 @@ pub fn render(
         .show(ui, |ui| {
             topology_ui(ui, &container, conversations);
         });
-    egui::CollapsingHeader::new(format!("Authority and delivery rules ({} edges)", container.links.len()))
-        .id_salt("coordination-authority")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.label("Configure a directed edge. This does not change the active chat.");
-    egui::ComboBox::from_label("Authority sender")
-        .selected_text(member_label(drafts.source))
-        .show_ui(ui, |ui| {
-            for m in &container.members {
-                ui.selectable_value(
-                    &mut drafts.source,
-                    m.id,
-                    egui::RichText::new(format!("● {}", member_label(m.id)))
-                        .color(member_accent(m.id)),
-                );
-            }
-        });
-    egui::ComboBox::from_label("Authority recipient")
-        .selected_text(member_label(drafts.target))
-        .show_ui(ui, |ui| {
-            for m in &container.members {
-                ui.selectable_value(
-                    &mut drafts.target,
-                    m.id,
-                    egui::RichText::new(format!("● {}", member_label(m.id)))
-                        .color(member_accent(m.id)),
-                );
-            }
-        });
-    ui.checkbox(&mut drafts.directives, "Can issue directives");
-    ui.checkbox(&mut drafts.reports, "Can send reports / requests / results");
-    egui::ComboBox::from_label("Delivery")
-        .selected_text(&drafts.mode)
-        .show_ui(ui, |ui| {
-            for mode in ["allow", "block", "queue", "approve", "rate_limit"] {
-                ui.selectable_value(&mut drafts.mode, mode.to_owned(), mode);
-            }
-        });
-    if drafts.mode == "rate_limit" {
-        ui.add(egui::Slider::new(&mut drafts.per_minute, 0..=600).text("Messages / minute"));
-    }
-    if ui.button("Save directed edge").clicked() {
-        match store.set_link(
-            container.id,
-            drafts.source,
-            drafts.target,
-            drafts.directives,
-            drafts.reports,
-            &drafts.mode,
-            drafts.per_minute,
-        ) {
-            Ok(()) => {
-                dirty = true;
-                drafts.send_from = drafts.source;
-                drafts.send_to = drafts.target;
-                drafts.notice = format!(
-                    "authority saved: {} → {}",
-                    member_label(drafts.source),
-                    member_label(drafts.target)
-                );
-            }
-            Err(e) => drafts.notice = e,
+    egui::CollapsingHeader::new(format!(
+        "Authority and delivery rules ({} edges)",
+        container.links.len()
+    ))
+    .id_salt("coordination-authority")
+    .default_open(false)
+    .show(ui, |ui| {
+        ui.label("Configure a directed edge. This does not change the active chat.");
+        egui::ComboBox::from_label("Authority sender")
+            .selected_text(member_label(drafts.source))
+            .show_ui(ui, |ui| {
+                for m in &container.members {
+                    ui.selectable_value(
+                        &mut drafts.source,
+                        m.id,
+                        egui::RichText::new(format!("● {}", member_label(m.id)))
+                            .color(member_accent(m.id)),
+                    );
+                }
+            });
+        egui::ComboBox::from_label("Authority recipient")
+            .selected_text(member_label(drafts.target))
+            .show_ui(ui, |ui| {
+                for m in &container.members {
+                    ui.selectable_value(
+                        &mut drafts.target,
+                        m.id,
+                        egui::RichText::new(format!("● {}", member_label(m.id)))
+                            .color(member_accent(m.id)),
+                    );
+                }
+            });
+        ui.checkbox(&mut drafts.directives, "Can issue directives");
+        ui.checkbox(&mut drafts.reports, "Can send reports / requests / results");
+        egui::ComboBox::from_label("Delivery")
+            .selected_text(&drafts.mode)
+            .show_ui(ui, |ui| {
+                for mode in ["allow", "block", "queue", "approve", "rate_limit"] {
+                    ui.selectable_value(&mut drafts.mode, mode.to_owned(), mode);
+                }
+            });
+        if drafts.mode == "rate_limit" {
+            ui.add(egui::Slider::new(&mut drafts.per_minute, 0..=600).text("Messages / minute"));
         }
-    }
-    for l in &container.links {
-        ui.label(format!(
-            "{} → {} · {} · directives={} reports={} · {}/min",
-            member_label(l.from),
-            member_label(l.to),
-            l.mode,
-            l.directives,
-            l.reports,
-            l.per_minute
-        ));
-    }
-        });
+        if ui.button("Save directed edge").clicked() {
+            match store.set_link(
+                container.id,
+                drafts.source,
+                drafts.target,
+                drafts.directives,
+                drafts.reports,
+                &drafts.mode,
+                drafts.per_minute,
+            ) {
+                Ok(()) => {
+                    dirty = true;
+                    drafts.send_from = drafts.source;
+                    drafts.send_to = drafts.target;
+                    drafts.notice = format!(
+                        "authority saved: {} → {}",
+                        member_label(drafts.source),
+                        member_label(drafts.target)
+                    );
+                }
+                Err(e) => drafts.notice = e,
+            }
+        }
+        for l in &container.links {
+            ui.label(format!(
+                "{} → {} · {} · directives={} reports={} · {}/min",
+                member_label(l.from),
+                member_label(l.to),
+                l.mode,
+                l.directives,
+                l.reports,
+                l.per_minute
+            ));
+        }
+    });
     egui::CollapsingHeader::new("Send a test message")
         .id_salt("coordination-test-message")
         .default_open(true)
@@ -1116,40 +1121,43 @@ pub fn render(
         }
     }
         });
-    egui::CollapsingHeader::new(format!("Message flow and queue ({} messages)", container.messages.len()))
-        .id_salt("coordination-message-history")
-        .default_open(false)
-        .show(ui, |ui| {
-            for m in container.messages.iter().rev().take(60) {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(format!(
-                        "#{} {}→{} {} · {}",
-                        m.id, m.from, m.to, m.kind, m.status
-                    ));
-                    if matches!(m.status.as_str(), "queued" | "approval") {
-                        if ui.small_button("Release").clicked() {
-                            match store.decide(container.id, m.id, true, now_ms()) {
-                                Ok(()) => {
-                                    dirty = true;
-                                    drafts.notice = format!("message #{} released", m.id);
-                                }
-                                Err(e) => drafts.notice = e,
+    egui::CollapsingHeader::new(format!(
+        "Message flow and queue ({} messages)",
+        container.messages.len()
+    ))
+    .id_salt("coordination-message-history")
+    .default_open(false)
+    .show(ui, |ui| {
+        for m in container.messages.iter().rev().take(60) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!(
+                    "#{} {}→{} {} · {}",
+                    m.id, m.from, m.to, m.kind, m.status
+                ));
+                if matches!(m.status.as_str(), "queued" | "approval") {
+                    if ui.small_button("Release").clicked() {
+                        match store.decide(container.id, m.id, true, now_ms()) {
+                            Ok(()) => {
+                                dirty = true;
+                                drafts.notice = format!("message #{} released", m.id);
                             }
-                        }
-                        if ui.small_button("Reject").clicked() {
-                            match store.decide(container.id, m.id, false, now_ms()) {
-                                Ok(()) => {
-                                    dirty = true;
-                                    drafts.notice = format!("message #{} rejected", m.id);
-                                }
-                                Err(e) => drafts.notice = e,
-                            }
+                            Err(e) => drafts.notice = e,
                         }
                     }
-                });
-                ui.label(&m.body);
-            }
-        });
+                    if ui.small_button("Reject").clicked() {
+                        match store.decide(container.id, m.id, false, now_ms()) {
+                            Ok(()) => {
+                                dirty = true;
+                                drafts.notice = format!("message #{} rejected", m.id);
+                            }
+                            Err(e) => drafts.notice = e,
+                        }
+                    }
+                }
+            });
+            ui.label(&m.body);
+        }
+    });
     dirty
 }
 
