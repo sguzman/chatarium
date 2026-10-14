@@ -36,7 +36,9 @@ pub fn capability_unavailable_reason(
         return "No connected account profile identity; reconnect before verification.".to_owned();
     };
     let Some(contract) = contract else {
-        return format!("No saved capability evidence for {model}; verify this model to enable {capability}.");
+        return format!(
+            "No saved capability evidence for {model}; verify this model to enable {capability}."
+        );
     };
     if contract.model != model {
         return format!(
@@ -380,20 +382,41 @@ mod tests {
             probe_generated_unix_ms: 1234,
             capabilities,
         };
-        assert!(capability_unavailable_reason(
-            Some(&contract), Some("profile-1"), Some("gpt-6"), "web_search"
-        ).contains("covers gpt-5.6-sol"));
-        assert!(capability_unavailable_reason(
-            Some(&contract), Some("profile-2"), Some("gpt-5.6-sol"), "web_search"
-        ).contains("different signed-in profile"));
-        assert!(capability_unavailable_reason(
-            Some(&contract), None, Some("gpt-5.6-sol"), "web_search"
-        ).contains("reconnect"));
+        assert!(
+            capability_unavailable_reason(
+                Some(&contract),
+                Some("profile-1"),
+                Some("gpt-6"),
+                "web_search"
+            )
+            .contains("covers gpt-5.6-sol")
+        );
+        assert!(
+            capability_unavailable_reason(
+                Some(&contract),
+                Some("profile-2"),
+                Some("gpt-5.6-sol"),
+                "web_search"
+            )
+            .contains("different signed-in profile")
+        );
+        assert!(
+            capability_unavailable_reason(Some(&contract), None, Some("gpt-5.6-sol"), "web_search")
+                .contains("reconnect")
+        );
         let mut unsupported = contract;
-        unsupported.capabilities.insert("web_search".to_owned(), "unsupported_route".to_owned());
-        assert!(capability_unavailable_reason(
-            Some(&unsupported), Some("profile-1"), Some("gpt-5.6-sol"), "web_search"
-        ).contains("explicitly rejected"));
+        unsupported
+            .capabilities
+            .insert("web_search".to_owned(), "unsupported_route".to_owned());
+        assert!(
+            capability_unavailable_reason(
+                Some(&unsupported),
+                Some("profile-1"),
+                Some("gpt-5.6-sol"),
+                "web_search"
+            )
+            .contains("explicitly rejected")
+        );
     }
 
     #[test]
