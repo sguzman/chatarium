@@ -1030,6 +1030,7 @@ struct ChatariumApp {
     local_conversation_id: LocalConversationId,
     local_conversation_catalog: local_conversations::LocalConversationCatalog,
     local_conversation_rename: String,
+    local_conversation_project_directory: String,
     show_archived_local_conversations: bool,
     local_conversation_search_query: String,
     local_conversation_search_selection: Option<usize>,
@@ -1352,6 +1353,10 @@ impl ChatariumApp {
                             local_conversation_id,
                             &events,
                         ),
+                        local_conversation_project_directory: local_conversation_catalog
+                            .entry(local_conversation_id)
+                            .and_then(|entry| entry.project_directory.clone())
+                            .unwrap_or_default(),
                         local_conversation_catalog,
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
@@ -1582,6 +1587,10 @@ impl ChatariumApp {
                 local_conversation_id,
                 &events,
             ),
+            local_conversation_project_directory: local_conversation_catalog
+                .entry(local_conversation_id)
+                .and_then(|entry| entry.project_directory.clone())
+                .unwrap_or_default(),
             local_conversation_catalog,
             show_archived_local_conversations: false,
             local_conversation_search_query: String::new(),
@@ -1762,6 +1771,11 @@ impl ChatariumApp {
             conversation_id,
             &self.events,
         );
+        self.local_conversation_project_directory = self
+            .local_conversation_catalog
+            .entry(conversation_id)
+            .and_then(|entry| entry.project_directory.clone())
+            .unwrap_or_default();
         self.select_local_conversation();
     }
 
@@ -1837,6 +1851,37 @@ impl ChatariumApp {
                 &self.events,
             );
             self.status = "local conversation title saved".to_owned();
+        }
+    }
+
+    fn save_current_project_directory(&mut self) {
+        if self.local_conversation_busy() {
+            self.status = "finish the active turn before changing this chat's project folder"
+                .to_owned();
+            return;
+        }
+        if let Err(error) = self.local_conversation_catalog.set_project_directory(
+            self.local_conversation_id,
+            Some(self.local_conversation_project_directory.clone()),
+            unix_now_ms(),
+        ) {
+            self.status = format!("project folder not saved: {error}");
+            return;
+        }
+        if self.persist_local_conversation_catalog() {
+            self.local_conversation_project_directory = self
+                .local_conversation_catalog
+                .entry(self.local_conversation_id)
+                .and_then(|entry| entry.project_directory.clone())
+                .unwrap_or_default();
+            self.status = if self.local_conversation_project_directory.is_empty() {
+                "project folder cleared for this chat".to_owned()
+            } else {
+                format!(
+                    "project folder saved for this chat: {}",
+                    self.local_conversation_project_directory
+                )
+            };
         }
     }
 
@@ -3062,7 +3107,19 @@ impl ChatariumApp {
                         model,
                         instructions: (!self.conversation_instructions.trim().is_empty())
                             .then(|| self.conversation_instructions.clone()),
-                        developer_context: self.conversation_developer_context.clone(),
+                        developer_context: {
+                            let mut context = self.conversation_developer_context.clone();
+                            if let Some(directory) = self
+                                .local_conversation_catalog
+                                .entry(self.local_conversation_id)
+                                .and_then(|entry| entry.project_directory.as_deref())
+                            {
+                                context.push_str(&format!(
+                                    "\n\nChatarium project directory for this conversation: {directory}\n                                     Use this directory as the default working directory for shell commands.                                      This folder is a workspace hint, not a request to execute anything."
+                                ));
+                            }
+                            context
+                        },
                         routed_context,
                         tool_result_context,
                         local_memory_context,
@@ -5420,8 +5477,25 @@ impl ChatariumApp {
         &mut self,
         active: &ActiveRemoteTurn,
         final_text: &str,
-        proposal: mcp_agent_defaults::ModelToolRequest,
+        mut proposal: mcp_agent_defaults::ModelToolRequest,
     ) {
+        // Inject the user's selected per-chat cwd into the audited call only
+        // when the model has not explicitly supplied its own cwd.
+        if proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME
+            && proposal.tool == host_shell_mcp::OPERATION
+        {
+            if let Some(directory) = self
+                .local_conversation_catalog
+                .entry(self.local_conversation_id)
+                .and_then(|entry| entry.project_directory.as_deref())
+            {
+                if let Some(arguments) = proposal.arguments.as_object_mut() {
+                    arguments
+                        .entry("cwd")
+                        .or_insert_with(|| Value::String(directory.to_owned()));
+                }
+            }
+        }
         if self.tool_command_pending {
             self.agent_mcp_flow = None;
             self.status = "MCP call stopped: another tool action is pending".to_owned();
@@ -7030,6 +7104,7 @@ impl eframe::App for ChatariumApp {
         let mut native_copy_candidates = Vec::<(LocalConversationId, Option<usize>)>::new();
         let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
         let mut rename_local_requested = false;
+        let mut save_project_directory_requested = false;
         let mut archive_local_requested = false;
         let mut select_historical_requested = None;
         let mut sync_live_requested = None;
@@ -13433,6 +13508,26 @@ impl eframe::App for ChatariumApp {
                                             rename_local_requested = true;
                                         }
                                     });
+                                    ui.label("Project folder for this chat (absolute path):");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(
+                                                &mut self.local_conversation_project_directory,
+                                            )
+                                            .hint_text("/home/user/Code/project")
+                                            .desired_width((sidebar_control_width - 90.0).max(100.0)),
+                                        );
+                                        if ui.button("Save folder").clicked() {
+                                            save_project_directory_requested = true;
+                                        }
+                                        if ui.button("Clear").clicked() {
+                                            self.local_conversation_project_directory.clear();
+                                            save_project_directory_requested = true;
+                                        }
+                                    });
+                                    ui.label(
+                                        "Used as the agent's project context and Fish default cwd. An explicit tool cwd overrides it.",
+                                    );
                                     if ui.button("Archive selected chat").clicked() {
                                         archive_local_requested = true;
                                     }
@@ -14485,6 +14580,9 @@ impl eframe::App for ChatariumApp {
         if rename_local_requested {
             self.rename_current_local_conversation();
         }
+        if save_project_directory_requested {
+            self.save_current_project_directory();
+        }
         if archive_local_requested {
             self.archive_current_local_conversation();
         }
@@ -14760,6 +14858,31 @@ impl eframe::App for ChatariumApp {
                 if response.changed() {
                     self.evidence = TurnEvidence::default();
                     self.queue_draft_snapshot();
+                }
+                // Keep the editable Markdown source intact and provide a
+                // live rendered preview, using the same block renderer as
+                // both user and agent transcript messages after Send.
+                let draft_has_markdown = self.draft.contains("**")
+                    || self.draft.contains('`')
+                    || self.draft.lines().any(|line| {
+                        line.starts_with("# ")
+                            || line.starts_with("## ")
+                            || line.starts_with("- ")
+                            || line.starts_with("> ")
+                    });
+                if display_preferences.render_markdown && draft_has_markdown {
+                    egui::CollapsingHeader::new("Rendered Markdown preview")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(160.0)
+                                .show(ui, |ui| {
+                                    for block in offline_reader::parse_markdown(&self.draft) {
+                                        render_markdown_block(ui, &block, "", false, ctx);
+                                        ui.add_space(4.0);
+                                    }
+                                });
+                        });
                 }
 
                 let remote_turn_idle =
