@@ -7485,6 +7485,24 @@ impl eframe::App for ChatariumApp {
                         ).changed();
                         ui.label("Both views are debugging diagnostics. Hiding them does not discard their underlying audit events.");
                         ui.separator();
+                        egui::CollapsingHeader::new("Chat message colors")
+                            .id_salt("chatarium-standard-message-colors")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                for (index, kind) in display_preferences::DisplayPreferences::MESSAGE_KINDS.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(*kind);
+                                        changed |= ui.color_edit_button_srgb(
+                                            &mut display_preferences.message_colors[index]
+                                        ).changed();
+                                    });
+                                }
+                                if ui.button("Restore standard message colors").clicked() {
+                                    display_preferences.message_colors =
+                                        display_preferences::DisplayPreferences::default().message_colors;
+                                    changed = true;
+                                }
+                            });
                         egui::CollapsingHeader::new("Coordination message colors")
                             .id_salt("chatarium-coordination-message-colors")
                             .default_open(false)
@@ -15808,6 +15826,7 @@ impl eframe::App for ChatariumApp {
                                                             &self.reader_search_query,
                                                             false,
                                                             ctx,
+                                                            &display_preferences,
                                                         );
                                                         row_ui.add_space(12.0);
                                                         let actual_height =
@@ -15861,6 +15880,7 @@ impl eframe::App for ChatariumApp {
                                         &self.reader_search_query,
                                         message_is_active_hit,
                                         ctx,
+                                        &display_preferences,
                                     );
                                     if message_is_active_hit {
                                         response.scroll_to_me(Some(egui::Align::Center));
@@ -16168,14 +16188,20 @@ fn draw_reader_bubble(
     search_query: &str,
     active_hit: bool,
     ctx: &egui::Context,
+    preferences: &display_preferences::DisplayPreferences,
 ) -> egui::Response {
+    let palette = &preferences.message_colors;
+    let bubble_fill = |index: usize| {
+        let [r, g, b] = palette[index];
+        egui::Color32::from_rgb(r, g, b)
+    };
     match message.role {
         DisplayRole::User => {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 transcript_bubble(
                     ui,
                     message,
-                    egui::Color32::from_rgb(27, 43, 65),
+                    bubble_fill(0),
                     "You",
                     search_query,
                     active_hit,
@@ -16189,7 +16215,7 @@ fn draw_reader_bubble(
                 transcript_bubble(
                     ui,
                     message,
-                    egui::Color32::from_rgb(26, 44, 36),
+                    bubble_fill(1),
                     "Agent",
                     search_query,
                     active_hit,
@@ -16203,7 +16229,7 @@ fn draw_reader_bubble(
                 transcript_bubble(
                     ui,
                     message,
-                    egui::Color32::from_rgb(42, 31, 56),
+                    bubble_fill(2),
                     "MCP tool",
                     search_query,
                     active_hit,
@@ -16217,7 +16243,7 @@ fn draw_reader_bubble(
                 transcript_bubble(
                     ui,
                     message,
-                    egui::Color32::from_rgb(50, 39, 26),
+                    bubble_fill(3),
                     "Transport trace",
                     search_query,
                     active_hit,
