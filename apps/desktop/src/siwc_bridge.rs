@@ -543,10 +543,7 @@ fn parse_bridge_event(line: &str) -> Option<BridgeEvent> {
                     request_id: request_id.clone().unwrap_or_default(),
                     text: text.to_owned(),
                     web_search_executed: request_id.as_deref() == Some("probe:web_search")
-                        && result
-                            .get("web_search_executed")
-                            .and_then(Value::as_bool)
-                            == Some(true),
+                        && result.get("web_search_executed").and_then(Value::as_bool) == Some(true),
                 });
             }
             Some(BridgeEvent::CommandSucceeded { request_id })
@@ -1066,11 +1063,23 @@ mod tests {
         let claim = parse_bridge_event(
             r#"{"type":"result","request_id":"probe:web_search","result":{"text":"Yes I can search","web_search_executed":false}}"#,
         ).unwrap();
-        assert!(matches!(claim, BridgeEvent::ResponseCompleted { web_search_executed: false, .. }));
+        assert!(matches!(
+            claim,
+            BridgeEvent::ResponseCompleted {
+                web_search_executed: false,
+                ..
+            }
+        ));
         let wrong_id = parse_bridge_event(
             r#"{"type":"result","request_id":"normal-turn","result":{"text":"ok","web_search_executed":true}}"#,
         ).unwrap();
-        assert!(matches!(wrong_id, BridgeEvent::ResponseCompleted { web_search_executed: false, .. }));
+        assert!(matches!(
+            wrong_id,
+            BridgeEvent::ResponseCompleted {
+                web_search_executed: false,
+                ..
+            }
+        ));
     }
 
     #[test]

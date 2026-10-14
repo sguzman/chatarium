@@ -928,8 +928,7 @@ impl CapabilityGate {
 
         let web_search_evidence = match (contract, model) {
             (Some(contract), Some(model))
-                if contract.profile_id.as_deref() == profile_id
-                    && contract.model == model =>
+                if contract.profile_id.as_deref() == profile_id && contract.model == model =>
             {
                 Some(contract)
             }

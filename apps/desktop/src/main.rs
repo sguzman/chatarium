@@ -4750,7 +4750,8 @@ impl ChatariumApp {
                 "web search verification needs an active model and profile identity".to_owned();
             return;
         };
-        self.capability_probe.start_web_search(model, Some(profile_id));
+        self.capability_probe
+            .start_web_search(model, Some(profile_id));
         self.dispatch_next_capability_probe();
     }
 

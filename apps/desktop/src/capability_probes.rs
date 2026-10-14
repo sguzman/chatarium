@@ -509,7 +509,10 @@ mod tests {
         run.mark_active(next.name);
         run.complete_web_search(true, false);
         assert!(!run.web_search_execution_confirmed);
-        assert_eq!(run.results[0].code.as_deref(), Some("web_search_not_observed"));
+        assert_eq!(
+            run.results[0].code.as_deref(),
+            Some("web_search_not_observed")
+        );
         run.start_web_search("gpt-6.1-sol".to_owned(), Some("profile-1".to_owned()));
         let next = run.next().unwrap();
         run.mark_active(next.name);
