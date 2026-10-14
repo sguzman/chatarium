@@ -1378,9 +1378,9 @@ impl ChatariumApp {
                         coordination_window_open: false,
                         coordination_tool_steps: 0,
                         coordination_last_queue_check: Instant::now(),
-            coordination_auto_wake_enabled: false,
-            coordination_auto_wake_count: 0,
-            coordination_pending_wake: None,
+                        coordination_auto_wake_enabled: false,
+                        coordination_auto_wake_count: 0,
+                        coordination_pending_wake: None,
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
                         local_conversation_search_selection: None,
@@ -3227,10 +3227,16 @@ impl ChatariumApp {
             return;
         }
         let conversation = self.local_conversation_id.to_string();
-        if self.coordination_workspace.member_for(&conversation).is_none() {
+        if self
+            .coordination_workspace
+            .member_for(&conversation)
+            .is_none()
+        {
             return;
         }
-        let started = self.events.iter()
+        let started = self
+            .events
+            .iter()
             .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
             .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
             .filter(|json| json["conversation_id"].as_str() == Some(conversation.as_str()))
@@ -3238,7 +3244,9 @@ impl ChatariumApp {
             .flatten()
             .filter_map(|value| value.as_u64())
             .collect::<HashSet<_>>();
-        let inbox_ids = self.coordination_workspace.context_delivered_ids(&conversation)
+        let inbox_ids = self
+            .coordination_workspace
+            .context_delivered_ids(&conversation)
             .into_iter()
             .filter(|id| !started.contains(id))
             .take(8)
@@ -3254,10 +3262,10 @@ impl ChatariumApp {
             "turn_id": turn_id.to_string(),
             "inbox_ids": inbox_ids,
             "not_user_authored": true
-        }).to_string();
-        self.coordination_pending_wake = Some((
-            turn_id, self.local_conversation_id, inbox_ids.clone()
-        ));
+        })
+        .to_string();
+        self.coordination_pending_wake =
+            Some((turn_id, self.local_conversation_id, inbox_ids.clone()));
         if self.queue_turn_event(turn_id, EventKind::CoordinationActivationStarted, payload) {
             self.coordination_auto_wake_count += 1;
             self.status = format!(
@@ -3269,13 +3277,8 @@ impl ChatariumApp {
         }
     }
 
-    fn dispatch_durable_coordination_wake(
-        &mut self,
-        turn_id: LocalTurnId,
-        start: &EventEnvelope,
-    ) {
-        let Some((pending_id, conversation_id, inbox_ids)) =
-            self.coordination_pending_wake.take()
+    fn dispatch_durable_coordination_wake(&mut self, turn_id: LocalTurnId, start: &EventEnvelope) {
+        let Some((pending_id, conversation_id, inbox_ids)) = self.coordination_pending_wake.take()
         else {
             return;
         };
@@ -3300,19 +3303,21 @@ impl ChatariumApp {
                 return;
             }
         };
-        let mut transcript = context_transcript(
-            &projected_local_display_messages(&self.events, conversation_id)
-        );
-        let tools = match admitted_tool_result_context_messages(
-            &self.events, conversation_id
-        ) {
+        let mut transcript = context_transcript(&projected_local_display_messages(
+            &self.events,
+            conversation_id,
+        ));
+        let tools = match admitted_tool_result_context_messages(&self.events, conversation_id) {
             Ok(tools) => tools,
             Err(error) => {
                 self.status = format!("coordination wake tool evidence invalid: {error}");
                 return;
             }
         };
-        let frozen_sources = tools.iter().map(|item| item.source.clone()).collect::<Vec<_>>();
+        let frozen_sources = tools
+            .iter()
+            .map(|item| item.source.clone())
+            .collect::<Vec<_>>();
         transcript.extend(tools);
         match admitted_routed_context_messages(&self.events, conversation_id) {
             Ok(context) => transcript.extend(context),
@@ -3322,12 +3327,18 @@ impl ChatariumApp {
             }
         }
         transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
-        transcript.push(context_composer::TranscriptMessage::coordination_activation(
-            turn_id.to_string(), start.sequence, inbox_ids.clone()
-        ));
+        transcript.push(
+            context_composer::TranscriptMessage::coordination_activation(
+                turn_id.to_string(),
+                start.sequence,
+                inbox_ids.clone(),
+            ),
+        );
         let mut developer = self.conversation_developer_context.clone();
         developer.push_str(
-            &self.coordination_workspace.identity_context(&conversation_id.to_string())
+            &self
+                .coordination_workspace
+                .identity_context(&conversation_id.to_string()),
         );
         let plan = context_composer::ContextPlan::compose(
             context_composer::ContextPolicy::dispatch(),
@@ -3336,7 +3347,10 @@ impl ChatariumApp {
             transcript,
         );
         let manifest = match mcp_dispatch_manifest::capture(
-            conversation_id, "coordination_auto_wake", &frozen_sources, &plan
+            conversation_id,
+            "coordination_auto_wake",
+            &frozen_sources,
+            &plan,
         ) {
             Ok(value) => value,
             Err(error) => {
@@ -3347,8 +3361,11 @@ impl ChatariumApp {
         let request_id = turn_id.to_string();
         let payload = match mcp_dispatch_manifest::attach_to_dispatch_payload(
             remote_turn_payload(
-                turn_id, &request_id, Some(&model), None,
-                Some("non-authored coordination inbox wake")
+                turn_id,
+                &request_id,
+                Some(&model),
+                None,
+                Some("non-authored coordination inbox wake"),
             ),
             manifest,
         ) {
@@ -3358,8 +3375,10 @@ impl ChatariumApp {
                 return;
             }
         };
-        self.coordination_pending_admissions.insert(request_id.clone(), inbox_ids);
-        self.delivery.begin(conversation_id.to_string(), request_id.clone());
+        self.coordination_pending_admissions
+            .insert(request_id.clone(), inbox_ids);
+        self.delivery
+            .begin(conversation_id.to_string(), request_id.clone());
         self.pending_remote_turn = Some(PendingRemoteTurn {
             conversation_id,
             turn_id,
@@ -3372,7 +3391,8 @@ impl ChatariumApp {
         if self.queue_turn_event(turn_id, EventKind::DispatchAttempted, payload) {
             self.status = "coordination wake journaled; remote dispatch queued".to_owned();
         } else {
-            self.coordination_pending_admissions.remove(&turn_id.to_string());
+            self.coordination_pending_admissions
+                .remove(&turn_id.to_string());
             self.pending_remote_turn = None;
         }
     }

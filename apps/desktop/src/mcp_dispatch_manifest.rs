@@ -388,7 +388,10 @@ fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManife
         .filter(|class| {
             matches!(
                 *class,
-                "authored" | "controller_coordination" | "worker_continuation" | "coordination_auto_wake"
+                "authored"
+                    | "controller_coordination"
+                    | "worker_continuation"
+                    | "coordination_auto_wake"
             )
         })
         .ok_or_else(error)?;
