@@ -391,6 +391,28 @@ impl Workspace {
         }
         Ok(())
     }
+    /// An authorized directive edge implies a report-only return route.
+    /// Explicit reverse policies, including blocks, take precedence.
+    fn route_for(c: &Container, from: u64, to: u64) -> Option<(Link, bool)> {
+        if let Some(edge) = c.links.iter().find(|l| l.from == from && l.to == to) {
+            return Some((edge.clone(), false));
+        }
+        c.links
+            .iter()
+            .find(|l| l.from == to && l.to == from && l.directives && l.mode != "block")
+            .map(|_| (
+                Link {
+                    from,
+                    to,
+                    directives: false,
+                    reports: true,
+                    mode: "allow".to_owned(),
+                    per_minute: 0,
+                },
+                true,
+            ))
+    }
+
     /// Source identity is resolved by the application from its active conversation.
     /// A model may choose a target but cannot provide or override its sender identity.
     pub fn send(
@@ -429,15 +451,15 @@ impl Workspace {
         if to == from {
             return Err("workers cannot message themselves".to_owned());
         }
-        let link = c.links.iter().find(|l| l.from == from && l.to == to);
-        let authorized = link.is_some_and(|l| {
+        let route = Self::route_for(c, from, to);
+        let authorized = route.as_ref().is_some_and(|(l, _)| {
             if kind == "directive" {
                 l.directives
             } else {
                 l.reports
             }
         });
-        let recent = link.map_or(0, |_| {
+        let recent = route.as_ref().map_or(0, |_| {
             c.messages
                 .iter()
                 .filter(|m| {
@@ -448,13 +470,13 @@ impl Workspace {
                 })
                 .count()
         });
-        let (status, note) = match link {
+        let (status, note) = match route.as_ref() {
             None => ("blocked", "no authorized authority or message edge"),
             Some(_) if !authorized => ("blocked", "message kind not authorized on this edge"),
-            Some(l) if l.mode == "block" => ("blocked", "edge policy blocks delivery"),
-            Some(l) if l.mode == "queue" => ("queued", "awaiting manual queue release"),
-            Some(l) if l.mode == "approve" => ("approval", "awaiting human approval"),
-            Some(l)
+            Some((l, _)) if l.mode == "block" => ("blocked", "edge policy blocks delivery"),
+            Some((l, _)) if l.mode == "queue" => ("queued", "awaiting manual queue release"),
+            Some((l, _)) if l.mode == "approve" => ("approval", "awaiting human approval"),
+            Some((l, _))
                 if l.mode == "rate_limit"
                     && (l.per_minute == 0 || recent >= l.per_minute as usize) =>
             {
@@ -463,6 +485,7 @@ impl Workspace {
                     "rate limit reached; awaiting capacity or manual release",
                 )
             }
+            Some((_, true)) => ("delivered", "accepted by automatic report-only return path"),
             Some(_) => ("delivered", "accepted by configured edge policy"),
         };
         c.messages.push(Message {
@@ -496,16 +519,15 @@ impl Workspace {
         }
         // Recheck current authority at delivery, so revoked power cannot be
         // smuggled through a formerly eligible queue.
-        let permitted = c.links.iter().any(|l| {
-            l.from == record.from
-                && l.to == record.to
-                && l.mode != "block"
-                && if record.kind == "directive" {
-                    l.directives
-                } else {
-                    l.reports
-                }
-        });
+        let permitted = Self::route_for(c, record.from, record.to)
+            .is_some_and(|(l, _)| {
+                l.mode != "block"
+                    && if record.kind == "directive" {
+                        l.directives
+                    } else {
+                        l.reports
+                    }
+            });
         let m = c.messages.iter_mut().find(|m| m.id == id).unwrap();
         if allow && permitted {
             m.status = "delivered".to_owned();
@@ -533,11 +555,8 @@ impl Workspace {
                 let Some(record) = c.messages.iter().find(|m| m.id == id).cloned() else {
                     continue;
                 };
-                let link = c
-                    .links
-                    .iter()
-                    .find(|l| l.from == record.from && l.to == record.to);
-                let valid = link.is_some_and(|l| {
+                let link = Self::route_for(c, record.from, record.to);
+                let valid = link.as_ref().is_some_and(|(l, _)| {
                     l.mode == "rate_limit"
                         && if record.kind == "directive" {
                             l.directives
@@ -552,7 +571,7 @@ impl Workspace {
                     changed += 1;
                     continue;
                 }
-                let limit = link.unwrap().per_minute as usize;
+                let limit = link.unwrap().0.per_minute as usize;
                 let within_window = c
                     .messages
                     .iter()
