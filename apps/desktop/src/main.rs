@@ -3,6 +3,7 @@ mod attachment_intake;
 mod behavior_profile;
 mod capability_probes;
 mod context_composer;
+mod coordination_workspace;
 mod conversation_keybindings;
 mod conversation_navigation;
 mod delivery_telemetry;
@@ -1029,6 +1030,10 @@ struct ChatariumApp {
     evidence: TurnEvidence,
     local_conversation_id: LocalConversationId,
     local_conversation_catalog: local_conversations::LocalConversationCatalog,
+    coordination_workspace: coordination_workspace::Workspace,
+    coordination_ui: coordination_workspace::UiDrafts,
+    coordination_window_open: bool,
+    coordination_tool_steps: u32,
     local_conversation_rename: String,
     local_conversation_project_directory: String,
     show_archived_local_conversations: bool,
@@ -1311,6 +1316,10 @@ impl ChatariumApp {
                         .unwrap_or_default();
                 let active_inference_settings = inference_settings
                     .for_conversation_with_mcp_defaults(local_conversation_id, &mcp_agent_defaults);
+                let coordination_workspace = coordination_workspace::Workspace::load(
+                    &data_dir.join(coordination_workspace::FILE_NAME),
+                )
+                .unwrap_or_default();
                 let behavior_profile_path = local_behavior_profile_path(&journal_path);
                 let behavior_profiles =
                     match behavior_profile::BehaviorProfileStore::load(&behavior_profile_path) {
@@ -1357,6 +1366,10 @@ impl ChatariumApp {
                             .and_then(|entry| entry.project_directory.clone())
                             .unwrap_or_default(),
                         local_conversation_catalog,
+                        coordination_workspace,
+                        coordination_ui: coordination_workspace::UiDrafts::default(),
+                        coordination_window_open: false,
+                        coordination_tool_steps: 0,
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
                         local_conversation_search_selection: None,
@@ -1556,6 +1569,13 @@ impl ChatariumApp {
                 .join(mcp_agent_defaults::FILE_NAME),
         )
         .unwrap_or_default();
+        let coordination_workspace = coordination_workspace::Workspace::load(
+            &journal_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(coordination_workspace::FILE_NAME),
+        )
+        .unwrap_or_default();
         let host_shell_settings = host_shell_mcp::Settings::load(
             &journal_path
                 .parent()
@@ -1590,6 +1610,10 @@ impl ChatariumApp {
                 .and_then(|entry| entry.project_directory.clone())
                 .unwrap_or_default(),
             local_conversation_catalog,
+            coordination_workspace,
+            coordination_ui: coordination_workspace::UiDrafts::default(),
+            coordination_window_open: false,
+            coordination_tool_steps: 0,
             show_archived_local_conversations: false,
             local_conversation_search_query: String::new(),
             local_conversation_search_selection: None,
@@ -1742,6 +1766,7 @@ impl ChatariumApp {
         self.draft_revision = 0;
         self.saved_revision = 0;
         self.evidence = TurnEvidence::default();
+        self.coordination_tool_steps = 0;
 
         let settings = self
             .inference_settings
@@ -3116,6 +3141,9 @@ impl ChatariumApp {
                                     "\n\nChatarium project directory for this conversation: {directory}\n                                     For local Git, file, and shell tasks, invoke chatarium.builtin::shell.command directly,                                      e.g. {{\"command\":\"git status --short --branch\"}}.                                      The shell's default cwd is this project folder; an explicit cwd overrides it.                                      tools.list is optional discovery, not a prerequisite to shell execution.                                      Do not claim results before the tool reply is admitted.                                      This directory is a workspace hint, not a request to execute anything."
                                 ));
                             }
+                            context.push_str(&self.coordination_workspace.identity_context(
+                                &self.local_conversation_id.to_string(),
+                            ));
                             context
                         },
                         routed_context,
@@ -4531,7 +4559,16 @@ impl ChatariumApp {
                     let opt_in = self.conversation_mcp_enabled;
                     match mcp_agent_defaults::parse_model_tool_request(&final_text) {
                         Ok(Some(proposal)) if opt_in || self.agent_mcp_flow.is_some() => {
-                            self.propose_agent_mcp_call(&active, &final_text, proposal);
+                            if proposal.provider == "chatarium.builtin"
+                                && matches!(
+                                    proposal.tool.as_str(),
+                                    "coordination.identity" | "coordination.send"
+                                )
+                            {
+                                self.execute_coordination_proposal(&active, &final_text, &proposal);
+                            } else {
+                                self.propose_agent_mcp_call(&active, &final_text, proposal);
+                            }
                         }
                         Ok(Some(_)) => {
                             self.status = "Assistant produced an MCP proposal, but tool execution is not enabled for this conversation. No tool was dispatched.".to_owned();
@@ -5567,6 +5604,147 @@ impl ChatariumApp {
         });
         self.tool_command_pending = true;
         self.status = "MCP tool proposal queued for durable policy validation".to_owned();
+    }
+
+
+    fn coordination_store_path(&self) -> PathBuf {
+        self.journal_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(coordination_workspace::FILE_NAME)
+    }
+
+    /// Resolve the sender from the active, authenticated local conversation.
+    /// The model can supply a destination but never a source or permission.
+    fn execute_coordination_proposal(
+        &mut self,
+        active: &ActiveRemoteTurn,
+        final_text: &str,
+        proposal: &mcp_agent_defaults::ModelToolRequest,
+    ) {
+        if active.conversation_id != self.local_conversation_id {
+            self.status = "coordination call denied: source conversation changed".to_owned();
+            self.agent_mcp_flow = None;
+            return;
+        }
+        let limit = self.mcp_agent_defaults.max_calls;
+        if self.coordination_tool_steps >= limit {
+            self.status = "coordination call limit reached for this turn".to_owned();
+            self.agent_mcp_flow = None;
+            return;
+        }
+        let source = active.conversation_id.to_string();
+        let result: Result<Value, String> = match proposal.tool.as_str() {
+            "coordination.identity" => {
+                if proposal.arguments.as_object().is_none_or(|args| !args.is_empty()) {
+                    Err("coordination.identity accepts no arguments".to_owned())
+                } else {
+                    self.coordination_workspace.identity_tool(&source)
+                }
+            }
+            "coordination.send" => {
+                let Some(args) = proposal.arguments.as_object() else {
+                    self.status = "coordination.send requires object arguments".to_owned();
+                    return;
+                };
+                let allowed_keys = args.keys().all(|key|
+                    matches!(key.as_str(), "to" | "kind" | "body")
+                );
+                if !allowed_keys || args.len() != 3 {
+                    Err("coordination.send requires exactly to, kind and body".to_owned())
+                } else {
+                    match (
+                        args.get("to").and_then(Value::as_u64),
+                        args.get("kind").and_then(Value::as_str),
+                        args.get("body").and_then(Value::as_str),
+                    ) {
+                        (Some(to), Some(kind), Some(body)) => {
+                            let before = self.coordination_workspace.clone();
+                            match self.coordination_workspace.send(
+                                &source, to, kind, body, unix_now_ms()
+                            ) {
+                                Ok((id, status)) => {
+                                    match self.coordination_workspace.save_atomic(
+                                        &self.coordination_store_path()
+                                    ) {
+                                        Ok(()) => Ok(serde_json::json!({
+                                            "message_id":id,"status":status,
+                                            "source_conversation":source,
+                                            "target_worker":to,
+                                            "verified_by":"Chatarium local coordination authority",
+                                        })),
+                                        Err(error) => {
+                                            self.coordination_workspace = before;
+                                            Err(format!("coordination message persistence failed: {error}"))
+                                        }
+                                    }
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        _ => Err("coordination.send arguments have invalid types".to_owned())
+                    }
+                }
+            }
+            _ => Err("unknown coordination operation".to_owned()),
+        };
+        self.coordination_tool_steps += 1;
+        let tool_result = match result {
+            Ok(value) => serde_json::json!({"ok":true,"result":value}),
+            Err(error) => serde_json::json!({"ok":false,"error":error}),
+        };
+        // This result is derived from the saved workspace and is distinguishable
+        // from user text and journaled shell MCP tool results.
+        let siwc_bridge::BridgeCommand::StreamResponse {
+            model,
+            mut input,
+            instructions,
+            request_patch,
+            ..
+        } = active.command.clone() else {
+            self.status = "coordination continuation requires a Responses stream".to_owned();
+            return;
+        };
+        let Some(messages) = input.as_array_mut() else {
+            self.status = "coordination continuation requires typed messages".to_owned();
+            return;
+        };
+        messages.push(serde_json::json!({
+            "role":"assistant","content":final_text
+        }));
+        messages.push(serde_json::json!({
+            "role":"user",
+            "content":format!(
+                "CHATARIUM VERIFIED COORDINATION TOOL RESULT (not a human message)\n{}",
+                tool_result
+            )
+        }));
+        let request_id = format!("{}-coordination-{}",active.turn_id,self.coordination_tool_steps);
+        let next = PendingRemoteTurn {
+            conversation_id: active.conversation_id,
+            turn_id: active.turn_id,
+            request_id: request_id.clone(),
+            model,
+            input,
+            instructions,
+            request_patch,
+        };
+        let journal = remote_turn_payload(
+            active.turn_id,
+            &request_id,
+            Some(&next.model),
+            None,
+            Some("Chatarium verified local coordination operation; resuming same turn"),
+        );
+        if !self.queue_turn_event(active.turn_id, EventKind::DispatchAttempted, journal) {
+            self.status = "coordination result recorded; remote continuation could not be journaled".to_owned();
+            self.agent_mcp_flow = None;
+            return;
+        }
+        self.delivery.begin(active.conversation_id.to_string(), request_id);
+        self.pending_remote_turn = Some(next);
+        self.agent_mcp_flow = None;
+        self.status = "coordination operation recorded; assistant continuation queued".to_owned();
     }
 
     /// Exactly the admitted result from the durable journal is returned to the
@@ -13573,6 +13751,13 @@ impl eframe::App for ChatariumApp {
                                 });
                         }
 
+                        if !historical_mode {
+                            ui.add_space(9.0);
+                            if ui.button("Open coordination topology").clicked() {
+                                self.coordination_window_open = true;
+                            }
+                        }
+
                         if ACCOUNT_MIRRORING_ENABLED && !self.remote_conversation_catalog.is_empty() {
                             ui.add_space(16.0);
                             ui.label(
@@ -14573,6 +14758,42 @@ impl eframe::App for ChatariumApp {
             self.historical_messages.clear();
             self.historical_load_pending = None;
             self.status = "remote conversation selected; local mirror unavailable".to_owned();
+        }
+        if self.coordination_window_open {
+            let mut open = true;
+            egui::Window::new("Chatarium coordination topology")
+                .open(&mut open)
+                .default_size([780.0, 620.0])
+                .resizable(true)
+                .show(ctx, |ui| {
+                    let conversations = self.local_conversation_catalog.entries()
+                        .iter()
+                        .map(|entry| {
+                            (
+                                entry.id.to_string(),
+                                entry.title.clone().unwrap_or_else(|| entry.id.to_string())
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let previous = self.coordination_workspace.clone();
+                    let changed = coordination_workspace::render(
+                        ui,
+                        &mut self.coordination_workspace,
+                        &mut self.coordination_ui,
+                        &conversations,
+                        &self.local_conversation_id.to_string(),
+                    );
+                    if changed {
+                        if let Err(error) = self.coordination_workspace.save_atomic(
+                            &self.coordination_store_path()
+                        ) {
+                            self.coordination_workspace = previous;
+                            self.coordination_ui.notice =
+                                format!("coordination changes not saved: {error}");
+                        }
+                    }
+                });
+            self.coordination_window_open = open;
         }
         if rename_local_requested {
             self.rename_current_local_conversation();
