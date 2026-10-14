@@ -1037,7 +1037,7 @@ struct ChatariumApp {
     coordination_window_open: bool,
     coordination_tool_steps: u32,
     coordination_last_queue_check: Instant,
-    coordination_auto_wake_enabled: bool,
+    coordination_auto_wake_target: Option<LocalConversationId>,
     coordination_auto_wake_count: u32,
     coordination_pending_wake: Option<(LocalTurnId, LocalConversationId, Vec<u64>)>,
     local_conversation_rename: String,
@@ -1378,7 +1378,7 @@ impl ChatariumApp {
                         coordination_window_open: false,
                         coordination_tool_steps: 0,
                         coordination_last_queue_check: Instant::now(),
-                        coordination_auto_wake_enabled: false,
+                        coordination_auto_wake_target: None,
                         coordination_auto_wake_count: 0,
                         coordination_pending_wake: None,
                         show_archived_local_conversations: false,
@@ -1627,7 +1627,7 @@ impl ChatariumApp {
             coordination_window_open: false,
             coordination_tool_steps: 0,
             coordination_last_queue_check: Instant::now(),
-            coordination_auto_wake_enabled: false,
+            coordination_auto_wake_target: None,
             coordination_auto_wake_count: 0,
             coordination_pending_wake: None,
             show_archived_local_conversations: false,
@@ -3216,7 +3216,9 @@ impl ChatariumApp {
 
     /// Session-only opt-in. Recovered wake records prevent duplicate execution.
     fn maybe_wake_open_coordination_worker(&mut self) {
-        if !self.coordination_auto_wake_enabled
+        if self.coordination_auto_wake_target != Some(self.local_conversation_id)
+            || self.selected_historical_conversation.is_some()
+            || self.selected_remote_catalog_id.is_some()
             || self.coordination_auto_wake_count >= 8
             || self.local_conversation_busy()
             || !self.draft.trim().is_empty()
@@ -4468,7 +4470,7 @@ impl ChatariumApp {
                             .is_some_and(|pending| pending.0 == turn_id)
                         {
                             self.coordination_pending_wake = None;
-                            self.coordination_auto_wake_enabled = false;
+                            self.coordination_auto_wake_target = None;
                         }
                         if self
                             .pending_remote_turn
@@ -7672,10 +7674,19 @@ impl eframe::App for ChatariumApp {
                 {
                     self.coordination_window_open = true;
                 }
-                ui.checkbox(
-                    &mut self.coordination_auto_wake_enabled,
-                    "Auto-wake open worker (max 8 this session)",
-                ).on_hover_text("Opt in to automatic turns for this currently visible worker chat only. No authored messages are created; does not wake hidden conversations.");
+                let mut wake_this_chat =
+                    self.coordination_auto_wake_target == Some(self.local_conversation_id);
+                if ui
+                    .checkbox(
+                        &mut wake_this_chat,
+                        "Auto-wake this chat (max 8 this session)",
+                    )
+                    .on_hover_text("Opt in for this chat only. No authored messages are created and switching chats never transfers the opt-in.")
+                    .changed()
+                {
+                    self.coordination_auto_wake_target =
+                        wake_this_chat.then_some(self.local_conversation_id);
+                }
                 ui.separator();
                 // Overflowing horizontal content belongs to the scroll area,
                 // not to the user-resizable panel. A vertical-only scroll area
