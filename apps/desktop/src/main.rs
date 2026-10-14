@@ -3233,7 +3233,7 @@ impl ChatariumApp {
         let started = self.events.iter()
             .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
             .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
-            .filter(|json| json["conversation_id"].as_str() == Some(&conversation))
+            .filter(|json| json["conversation_id"].as_str() == Some(conversation.as_str()))
             .filter_map(|json| json["inbox_ids"].as_array().cloned())
             .flatten()
             .filter_map(|value| value.as_u64())
@@ -4442,6 +4442,14 @@ impl ChatariumApp {
                         self.saved_revision = self.saved_revision.min(revision.saturating_sub(1));
                     }
                     if let Some(turn_id) = turn_id {
+                        if self
+                            .coordination_pending_wake
+                            .as_ref()
+                            .is_some_and(|pending| pending.0 == turn_id)
+                        {
+                            self.coordination_pending_wake = None;
+                            self.coordination_auto_wake_enabled = false;
+                        }
                         if self
                             .pending_remote_turn
                             .as_ref()

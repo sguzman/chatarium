@@ -1228,6 +1228,24 @@ mod tests {
     }
 
     #[test]
+    fn coordination_activation_keeps_non_authored_source_and_message_ids() {
+        let trigger = TranscriptMessage::coordination_activation("wake-turn", 12, vec![4, 5]);
+        assert_eq!(trigger.role, TranscriptRole::User);
+        assert_eq!(trigger.order_sequence(), 12);
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [trigger]);
+        assert_eq!(plan.messages.len(), 1);
+        assert!(plan.messages[0].content.contains("non-user-authored"));
+        assert!(plan.messages[0].content.contains("message_ids: [4, 5]"));
+        assert!(matches!(
+            plan.messages[0].source,
+            ContextSource::CoordinationActivation {
+                started_sequence: 12,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn controller_worker_result_is_user_level_with_explicit_result_provenance() {
         let result = TranscriptMessage::controller_worker_result(
             1,
