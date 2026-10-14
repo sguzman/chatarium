@@ -126,7 +126,9 @@ pub fn prepare_builtin_response(
         return prepare_time_response(call);
     }
     if call.operation.as_str() != TOOLS_LIST_OPERATION {
-        return Err("side-effecting host shell must use the audited asynchronous executor".to_owned());
+        return Err(
+            "side-effecting host shell must use the audited asynchronous executor".to_owned(),
+        );
     }
     let input = call.arguments_text.trim();
     let (legacy_id, arguments): (String, Value) = if input.starts_with("<tool_call") {
