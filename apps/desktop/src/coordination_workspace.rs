@@ -579,7 +579,7 @@ impl Workspace {
                 .map(|member| member.name.as_str()).unwrap_or("Unknown");
             let bytes = format!("INBOX #{} [{}] FROM {} (#{}) at {}: {}\\n",
                 message.id, message.kind, sender, message.from, message.created_ms, message.body).len();
-            if length + bytes > 8_000 { break; }
+            if length + bytes > 6_000 { break; }
             length += bytes;
             ids.push(message.id);
         }
