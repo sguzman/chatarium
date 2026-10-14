@@ -285,6 +285,7 @@ impl TurnEvidence {
             | EventKind::SiwcAgentActivityObserved
             | EventKind::ToolResultContextDecisionRecorded
             | EventKind::RouteResultObserved
+            | EventKind::CoordinationActivationStarted
             | EventKind::LocalConversationWorkerBound
             | EventKind::LocalConversationChatContainerBound
             | EventKind::WorkerGoalAssigned
