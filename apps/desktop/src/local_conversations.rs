@@ -14,11 +14,13 @@ use std::str::FromStr;
 const SCHEMA: &str = "chatarium-local-conversation-catalog";
 const VERSION: u64 = 1;
 const MAX_TITLE_BYTES: usize = 512;
+const MAX_PROJECT_DIRECTORY_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalConversationEntry {
     pub id: LocalConversationId,
     pub title: Option<String>,
+    pub project_directory: Option<String>,
     pub archived: bool,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
@@ -75,6 +77,18 @@ impl LocalConversationCatalog {
             {
                 return Err("local conversation title is too large".to_owned());
             }
+            let project_directory = object
+                .get("project_directory")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            if let Some(directory) = project_directory.as_deref() {
+                if !Path::new(directory).is_absolute()
+                    || directory.len() > MAX_PROJECT_DIRECTORY_BYTES
+                    || directory.contains('\0')
+                {
+                    return Err("invalid local conversation project directory".to_owned());
+                }
+            }
             let archived = object
                 .get("archived")
                 .and_then(Value::as_bool)
@@ -93,6 +107,7 @@ impl LocalConversationCatalog {
                     LocalConversationEntry {
                         id,
                         title,
+                        project_directory,
                         archived,
                         created_at_unix_ms,
                         updated_at_unix_ms,
@@ -121,6 +136,7 @@ impl LocalConversationCatalog {
                 json!({
                     "id": entry.id.to_string(),
                     "title": entry.title,
+                    "project_directory": entry.project_directory,
                     "archived": entry.archived,
                     "created_at_unix_ms": entry.created_at_unix_ms,
                     "updated_at_unix_ms": entry.updated_at_unix_ms,
@@ -175,6 +191,7 @@ impl LocalConversationCatalog {
             LocalConversationEntry {
                 id,
                 title: derived_title.filter(|title| !title.trim().is_empty()),
+                project_directory: None,
                 archived: false,
                 created_at_unix_ms: now_ms,
                 updated_at_unix_ms: now_ms,
@@ -189,6 +206,7 @@ impl LocalConversationCatalog {
             LocalConversationEntry {
                 id,
                 title: None,
+                project_directory: None,
                 archived: false,
                 created_at_unix_ms: now_ms,
                 updated_at_unix_ms: now_ms,
@@ -226,6 +244,44 @@ impl LocalConversationCatalog {
         entry.title = title
             .map(|title| title.trim().to_owned())
             .filter(|title| !title.is_empty());
+        entry.updated_at_unix_ms = now_ms;
+        Ok(())
+    }
+
+    /// The directory belongs to the selected chat only; explicit shell cwd
+    /// arguments may still override it. An empty value clears the binding.
+    pub fn set_project_directory(
+        &mut self,
+        id: LocalConversationId,
+        directory: Option<String>,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let directory = directory
+            .map(|directory| directory.trim().to_owned())
+            .filter(|directory| !directory.is_empty())
+            .map(|directory| {
+                if directory.len() > MAX_PROJECT_DIRECTORY_BYTES
+                    || directory.contains('\0')
+                    || !Path::new(&directory).is_absolute()
+                {
+                    return Err("project folder must be an absolute local path".to_owned());
+                }
+                let canonical = fs::canonicalize(&directory)
+                    .map_err(|error| format!("project folder not accessible: {error}"))?;
+                if !canonical.is_dir() {
+                    return Err("project folder must be an existing directory".to_owned());
+                }
+                canonical
+                    .to_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| "project folder path must be UTF-8".to_owned())
+            })
+            .transpose()?;
+        let entry = self
+            .entries
+            .get_mut(&id.to_string())
+            .ok_or_else(|| "local conversation is absent from catalog".to_owned())?;
+        entry.project_directory = directory;
         entry.updated_at_unix_ms = now_ms;
         Ok(())
     }
@@ -311,6 +367,36 @@ mod tests {
         );
         assert!(loaded.entry(second).is_some_and(|entry| entry.archived));
 
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_folder_is_per_chat_persistent_and_clearable() {
+        let path = temp_path();
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(first, 1);
+        catalog.create(second, 2);
+        let directory = std::env::current_dir().unwrap();
+        catalog
+            .set_project_directory(first, Some(directory.display().to_string()), 3)
+            .unwrap();
+        assert_eq!(
+            catalog.entry(second).unwrap().project_directory,
+            None
+        );
+        assert!(catalog
+            .set_project_directory(second, Some("relative-path".to_owned()), 4)
+            .is_err());
+        catalog.save_atomic(&path).unwrap();
+        let mut reloaded = LocalConversationCatalog::load(&path).unwrap();
+        assert_eq!(
+            reloaded.entry(first).unwrap().project_directory.as_deref(),
+            directory.canonicalize().unwrap().to_str()
+        );
+        reloaded.set_project_directory(first, None, 5).unwrap();
+        assert_eq!(reloaded.entry(first).unwrap().project_directory, None);
         let _ = fs::remove_file(path);
     }
 
