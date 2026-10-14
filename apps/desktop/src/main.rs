@@ -1120,6 +1120,8 @@ struct ChatariumApp {
     remote_models: Vec<siwc_bridge::Model>,
     capability_probe: capability_probes::ProbeRun,
     local_inference_contract: Option<local_inference_contract::LoadedContract>,
+    // One-click verification intent; never enable a different chat/model/profile.
+    pending_web_search_enable: Option<(LocalConversationId, String, String)>,
     model_list_pending: bool,
     selected_model: Option<String>,
     slow_warning_seconds: u32,
@@ -1437,6 +1439,7 @@ impl ChatariumApp {
                         local_inference_contract: load_local_inference_contract_state(
                             &journal_path,
                         ),
+                        pending_web_search_enable: None,
                         model_list_pending: false,
                         slow_warning_seconds: active_inference_settings.slow_warning_seconds,
                         selected_model: active_inference_settings.model,
@@ -1660,6 +1663,7 @@ impl ChatariumApp {
             remote_models: Vec::new(),
             capability_probe: load_capability_probe_state(&journal_path),
             local_inference_contract: load_local_inference_contract_state(&journal_path),
+            pending_web_search_enable: None,
             model_list_pending: false,
             slow_warning_seconds: active_inference_settings.slow_warning_seconds,
             selected_model: active_inference_settings.model,
@@ -4753,7 +4757,7 @@ impl ChatariumApp {
         let report_path = data_dir.join("siwc-capability-probes.json");
         let contract_path = data_dir.join("local-inference-contract.json");
         let generated_unix_ms = unix_now_ms();
-        self.capability_probe.status = match capability_probes::save_report(
+        let status = match capability_probes::save_report(
             &report_path,
             &self.capability_probe,
             generated_unix_ms,
@@ -4796,6 +4800,26 @@ impl ChatariumApp {
             }
             Err(error) => format!("capability probes complete · {error}"),
         };
+        self.capability_probe.status = status;
+        if let Some((conversation, model, profile)) = self.pending_web_search_enable.take() {
+            if self.local_conversation_id == conversation
+                && self.selected_model.as_deref() == Some(model.as_str())
+                && self.remote_session.profile_id.as_deref() == Some(profile.as_str())
+                && self
+                    .current_capability_gate()
+                    .allows(context_composer::CapabilitySlot::WebSearch)
+            {
+                self.conversation_behavior_profile.web_search = true;
+                self.persist_current_behavior_profile();
+                self.capability_probe
+                    .status
+                    .push_str(" · web search enabled for this conversation");
+            } else {
+                self.capability_probe.status.push_str(
+                    " · web search remains off: probe evidence did not authorize the current conversation/model/profile",
+                );
+            }
+        }
     }
 
     fn remote_connected(&self) -> bool {
@@ -7114,9 +7138,12 @@ impl eframe::App for ChatariumApp {
                         }
                         if !reasoning_available {
                             ui.label(
-                                egui::RichText::new(
-                                    "Low reasoning is not verified for the selected model/profile; controls remain unchanged.",
-                                )
+                                egui::RichText::new(local_inference_contract::capability_unavailable_reason(
+                                    self.local_inference_contract.as_ref(),
+                                    self.remote_session.profile_id.as_deref(),
+                                    self.selected_model.as_deref(),
+                                    "reasoning",
+                                ))
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(166, 139, 112)),
                             );
@@ -7142,9 +7169,12 @@ impl eframe::App for ChatariumApp {
                         }
                         if !verbosity_available {
                             ui.label(
-                                egui::RichText::new(
-                                    "Low verbosity is not verified for the selected model/profile; controls remain unchanged.",
-                                )
+                                egui::RichText::new(local_inference_contract::capability_unavailable_reason(
+                                    self.local_inference_contract.as_ref(),
+                                    self.remote_session.profile_id.as_deref(),
+                                    self.selected_model.as_deref(),
+                                    "verbosity",
+                                ))
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(166, 139, 112)),
                             );
@@ -7167,18 +7197,49 @@ impl eframe::App for ChatariumApp {
                         }
                         if !web_search_available {
                             ui.label(
-                                egui::RichText::new(
-                                    if self.selected_model.is_none() {
-                                        "Model discovery has not provided a selectable model; web-search capability is not verified. Retry model discovery."
-                                    } else if self.local_inference_contract.as_ref().is_none() {
-                                        "No validated capability report is loaded for this model; web search is not yet verified."
-                                    } else {
-                                        "Web search has not been verified for the selected model and signed-in profile; rerun capability checks."
-                                    },
-                                )
+                                egui::RichText::new(local_inference_contract::capability_unavailable_reason(
+                                    self.local_inference_contract.as_ref(),
+                                    self.remote_session.profile_id.as_deref(),
+                                    self.selected_model.as_deref(),
+                                    "web_search",
+                                ))
                                 .size(9.0)
                                 .color(egui::Color32::from_rgb(166, 139, 112)),
                             );
+                            let cannot_probe = capability_probe_block_reason(
+                                self.remote_connected(),
+                                self.selected_model.is_some(),
+                                self.pending_remote_turn.is_some(),
+                                self.active_remote_turn.is_some(),
+                                self.capability_probe.running(),
+                            );
+                            if let Some(reason) = cannot_probe {
+                                ui.label(
+                                    egui::RichText::new(format!("Verification unavailable: {reason}"))
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(166, 139, 112)),
+                                );
+                            } else if self.remote_session.profile_id.is_none() {
+                                ui.label(
+                                    egui::RichText::new("Verification requires a connected profile identity.")
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(166, 139, 112)),
+                                );
+                            } else if ui.button("Verify + enable web search").clicked() {
+                                // Existing suite verifies the exact signed-in account and
+                                // selected model. Never bypass or broaden its safety gate.
+                                let scope = (
+                                    self.local_conversation_id,
+                                    self.selected_model.clone().expect("model checked"),
+                                    self.remote_session.profile_id.clone().expect("profile checked"),
+                                );
+                                self.start_capability_probes();
+                                if self.capability_probe.running() {
+                                    self.pending_web_search_enable = Some(scope);
+                                    self.capability_probe.status =
+                                        "checking this model and profile before enabling web search".to_owned();
+                                }
+                            }
                         }
 
                         ui.add_space(10.0);

@@ -20,6 +20,48 @@ impl LoadedContract {
     }
 }
 
+/// Human-readable explanation for why a capability is gated. This never
+/// confuses an unverified scope with an unsupported model or subscription.
+#[must_use]
+pub fn capability_unavailable_reason(
+    contract: Option<&LoadedContract>,
+    profile_id: Option<&str>,
+    model: Option<&str>,
+    capability: &str,
+) -> String {
+    let Some(model) = model else {
+        return "No model is selected; refresh account model discovery.".to_owned();
+    };
+    let Some(profile_id) = profile_id else {
+        return "No connected account profile identity; reconnect before verification.".to_owned();
+    };
+    let Some(contract) = contract else {
+        return format!("No saved capability evidence for {model}; verify this model to enable {capability}.");
+    };
+    if contract.model != model {
+        return format!(
+            "Saved verification covers {} but you selected {model}; verify this model to enable {capability}.",
+            contract.model
+        );
+    }
+    if contract.profile_id.as_deref() != Some(profile_id) {
+        return "Saved verification belongs to a different signed-in profile; verify the current profile.".to_owned();
+    }
+    if contract.state != "ready" {
+        return format!(
+            "Capability evidence for {model} is {} (not ready); rerun verification for this model.",
+            contract.state
+        );
+    }
+    match contract.capabilities.get(capability).map(String::as_str) {
+        Some("unsupported_route") => {
+            format!("{capability} was explicitly rejected as unsupported for {model}.")
+        }
+        Some("supported") => format!("{capability} is verified; refresh the capability view."),
+        _ => format!("{capability} has not been confirmed for {model}; verify this model."),
+    }
+}
+
 const EXPECTED_PROBES: [&str; 9] = [
     "baseline",
     "image_input",
@@ -325,6 +367,33 @@ mod tests {
             "{error:{code:string,param:string}}"
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn unavailable_reason_distinguishes_stale_scope_from_unsupported_feature() {
+        let mut capabilities = BTreeMap::new();
+        capabilities.insert("web_search".to_owned(), "supported".to_owned());
+        let contract = LoadedContract {
+            state: "ready".to_owned(),
+            profile_id: Some("profile-1".to_owned()),
+            model: "gpt-5.6-sol".to_owned(),
+            probe_generated_unix_ms: 1234,
+            capabilities,
+        };
+        assert!(capability_unavailable_reason(
+            Some(&contract), Some("profile-1"), Some("gpt-6"), "web_search"
+        ).contains("covers gpt-5.6-sol"));
+        assert!(capability_unavailable_reason(
+            Some(&contract), Some("profile-2"), Some("gpt-5.6-sol"), "web_search"
+        ).contains("different signed-in profile"));
+        assert!(capability_unavailable_reason(
+            Some(&contract), None, Some("gpt-5.6-sol"), "web_search"
+        ).contains("reconnect"));
+        let mut unsupported = contract;
+        unsupported.capabilities.insert("web_search".to_owned(), "unsupported_route".to_owned());
+        assert!(capability_unavailable_reason(
+            Some(&unsupported), Some("profile-1"), Some("gpt-5.6-sol"), "web_search"
+        ).contains("explicitly rejected"));
     }
 
     #[test]
