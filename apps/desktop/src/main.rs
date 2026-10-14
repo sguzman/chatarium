@@ -15569,7 +15569,12 @@ fn transcript_bubble(
     // maximized/restored window immediately reflows the transcript.
     // A single width rule shared by all roles; preserve contrasting side
     // alignment, but avoid different card widths based on short message text.
-    let content_width = (ui.available_width() * 0.80).clamp(280.0, 950.0);
+    // Keep a real gutter inside the outline even for narrow windows.
+    // Account for the entire frame inset before fixing the inner width.
+    let available_width = ui.available_width();
+    let content_width = (available_width * 0.80)
+        .clamp(200.0, 950.0)
+        .min((available_width - 47.0).max(1.0));
 
     egui::Frame::default()
         .fill(fill)
@@ -15586,7 +15591,7 @@ fn transcript_bubble(
             },
         ))
         .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::symmetric(14, 11))
+        .inner_margin(egui::Margin::symmetric(22, 13))
         .show(ui, |ui| {
             ui.set_width(content_width);
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -15701,18 +15706,18 @@ fn render_markdown_block(
         }
         offline_reader::MarkdownBlock::UnorderedList(items) => {
             for item in items {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("•").strong());
-                    render_markdown_lines(ui, item, search_query, active_hit, None);
-                });
+                render_markdown_list_item(ui, "•", item, search_query, active_hit);
             }
         }
         offline_reader::MarkdownBlock::OrderedList(items) => {
             for (index, item) in items.iter().enumerate() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("{}.", index + 1)).strong());
-                    render_markdown_lines(ui, item, search_query, active_hit, None);
-                });
+                render_markdown_list_item(
+                    ui,
+                    &format!("{}.", index + 1),
+                    item,
+                    search_query,
+                    active_hit,
+                );
             }
         }
         offline_reader::MarkdownBlock::BlockQuote(lines) => {
@@ -15752,6 +15757,29 @@ fn render_markdown_block(
                 });
         }
     }
+}
+
+/// Keep list markers beside a vertical text lane. An outer
+/// horizontal_wrapped() shifts continuation rows to the bubble's outer left
+/// edge because egui places wrapped label rows at the horizontal UI origin.
+/// A nonwrapping row with its own vertical text lane preserves the inset and
+/// the hanging indent, including long source URLs from web-search results.
+fn render_markdown_list_item(
+    ui: &mut egui::Ui,
+    marker: &str,
+    text: &str,
+    search_query: &str,
+    active_hit: bool,
+) -> egui::Rect {
+    ui.horizontal_top(|ui| {
+        ui.label(egui::RichText::new(marker).strong());
+        ui.vertical(|ui| {
+            render_markdown_lines(ui, text, search_query, active_hit, None);
+        })
+        .response
+        .rect
+    })
+    .inner
 }
 
 /// Build one styled paragraph instead of one widget for every Markdown fragment.
@@ -15889,6 +15917,45 @@ mod markdown_bubble_wrap_regressions {
             section.format.font_id.family
                 == egui::FontFamily::Name(system_fonts::MARKDOWN_BOLD_FAMILY.into())
         }));
+    }
+
+    #[test]
+    fn web_search_list_continuations_keep_the_inner_gutter() {
+        // Regresses the real agent response: the old nested
+        // horizontal_wrapped() placed URL continuation rows flush against
+        // the bubble outline rather than inside the content lane.
+        let context = egui::Context::default();
+        let mut measured = None;
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                egui::Frame::default()
+                    .inner_margin(egui::Margin::symmetric(22, 13))
+                    .show(ui, |ui| {
+                        ui.set_width(310.0);
+                        let content_left = ui.cursor().left();
+                        let content_right = content_left + ui.available_width();
+                        let body = render_markdown_list_item(
+                            ui,
+                            "•",
+                            "**Ask Smithsonian: Are Cats Domesticated?** — https://www.smithsonianmag.com/smithsonian-institution/ask-smithsonian-are-cats-domesticated-180955111/?utm_source=openai",
+                            "",
+                            false,
+                        );
+                        measured = Some((content_left, content_right, body));
+                    });
+            });
+        });
+        let (left, right, body) = measured.expect("native layout ran");
+        assert!(
+            body.left() >= left + 8.0,
+            "list continuation lost its gutter: body={} parent={left}",
+            body.left()
+        );
+        assert!(
+            body.right() <= right + 1.0,
+            "list text exceeds its content lane: {} > {right}",
+            body.right()
+        );
     }
 
     #[test]
