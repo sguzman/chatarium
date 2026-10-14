@@ -532,19 +532,12 @@ mod tests {
                 .unwrap()
                 .as_nanos(),
         ));
-        let mut policy = format!(
-            "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"
-        );
-        policy.push_str("\nchatarium.demo::shell.command = disabled");
-        // Remove the previous demo policy before adding the override so
-        // the fixture is a valid, genuinely customized exact-rule set.
-        policy = policy.replace(
+        let policy = format!(
+            "{READ_ONLY_DEFAULT_POLICY}\\nchatarium.builtin::shell.command = ask"
+        )
+        .replace(
             "chatarium.demo::shell.command = ask",
             "chatarium.demo::shell.command = disabled",
-        );
-        policy = policy.replace(
-            "\nchatarium.demo::shell.command = disabled\nchatarium.builtin::time.now",
-            "\nchatarium.builtin::time.now",
         );
         let old = json!({
             "schema": SCHEMA,
