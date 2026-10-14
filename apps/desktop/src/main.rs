@@ -5641,73 +5641,75 @@ impl ChatariumApp {
             &proposal.provider,
             &proposal.tool,
         );
-        let result: Result<Value, String> = if authorization != Ok(mcp_agent_defaults::ToolPolicy::Automatic) {
+        let result: Result<Value, String> = if authorization
+            != Ok(mcp_agent_defaults::ToolPolicy::Automatic)
+        {
             Err("coordination operation denied by exact MCP tool policy".to_owned())
         } else {
             match proposal.tool.as_str() {
-            "coordination.identity" => {
-                if proposal
-                    .arguments
-                    .as_object()
-                    .is_none_or(|args| !args.is_empty())
-                {
-                    Err("coordination.identity accepts no arguments".to_owned())
-                } else {
-                    self.coordination_workspace.identity_tool(&source)
-                }
-            }
-            "coordination.send" => {
-                let Some(args) = proposal.arguments.as_object() else {
-                    self.status = "coordination.send requires object arguments".to_owned();
-                    return;
-                };
-                let allowed_keys = args
-                    .keys()
-                    .all(|key| matches!(key.as_str(), "to" | "kind" | "body"));
-                if !allowed_keys || args.len() != 3 {
-                    Err("coordination.send requires exactly to, kind and body".to_owned())
-                } else {
-                    match (
-                        args.get("to").and_then(Value::as_u64),
-                        args.get("kind").and_then(Value::as_str),
-                        args.get("body").and_then(Value::as_str),
-                    ) {
-                        (Some(to), Some(kind), Some(body)) => {
-                            let before = self.coordination_workspace.clone();
-                            match self.coordination_workspace.send(
-                                &source,
-                                to,
-                                kind,
-                                body,
-                                unix_now_ms(),
-                            ) {
-                                Ok((id, status)) => {
-                                    match self
-                                        .coordination_workspace
-                                        .save_atomic(&self.coordination_store_path())
-                                    {
-                                        Ok(()) => Ok(serde_json::json!({
-                                            "message_id":id,"status":status,
-                                            "source_conversation":source,
-                                            "target_worker":to,
-                                            "verified_by":"Chatarium local coordination authority",
-                                        })),
-                                        Err(error) => {
-                                            self.coordination_workspace = before;
-                                            Err(format!(
-                                                "coordination message persistence failed: {error}"
-                                            ))
-                                        }
-                                    }
-                                }
-                                Err(error) => Err(error),
-                            }
-                        }
-                        _ => Err("coordination.send arguments have invalid types".to_owned()),
+                "coordination.identity" => {
+                    if proposal
+                        .arguments
+                        .as_object()
+                        .is_none_or(|args| !args.is_empty())
+                    {
+                        Err("coordination.identity accepts no arguments".to_owned())
+                    } else {
+                        self.coordination_workspace.identity_tool(&source)
                     }
                 }
-            }
-            _ => Err("unknown coordination operation".to_owned()),
+                "coordination.send" => {
+                    let Some(args) = proposal.arguments.as_object() else {
+                        self.status = "coordination.send requires object arguments".to_owned();
+                        return;
+                    };
+                    let allowed_keys = args
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "to" | "kind" | "body"));
+                    if !allowed_keys || args.len() != 3 {
+                        Err("coordination.send requires exactly to, kind and body".to_owned())
+                    } else {
+                        match (
+                            args.get("to").and_then(Value::as_u64),
+                            args.get("kind").and_then(Value::as_str),
+                            args.get("body").and_then(Value::as_str),
+                        ) {
+                            (Some(to), Some(kind), Some(body)) => {
+                                let before = self.coordination_workspace.clone();
+                                match self.coordination_workspace.send(
+                                    &source,
+                                    to,
+                                    kind,
+                                    body,
+                                    unix_now_ms(),
+                                ) {
+                                    Ok((id, status)) => {
+                                        match self
+                                            .coordination_workspace
+                                            .save_atomic(&self.coordination_store_path())
+                                        {
+                                            Ok(()) => Ok(serde_json::json!({
+                                                "message_id":id,"status":status,
+                                                "source_conversation":source,
+                                                "target_worker":to,
+                                                "verified_by":"Chatarium local coordination authority",
+                                            })),
+                                            Err(error) => {
+                                                self.coordination_workspace = before;
+                                                Err(format!(
+                                                    "coordination message persistence failed: {error}"
+                                                ))
+                                            }
+                                        }
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            _ => Err("coordination.send arguments have invalid types".to_owned()),
+                        }
+                    }
+                }
+                _ => Err("unknown coordination operation".to_owned()),
             }
         };
         self.coordination_tool_steps += 1;
@@ -7171,10 +7173,15 @@ impl eframe::App for ChatariumApp {
         if self.coordination_last_queue_check.elapsed() >= Duration::from_secs(2) {
             self.coordination_last_queue_check = Instant::now();
             let before = self.coordination_workspace.clone();
-            if self.coordination_workspace.advance_rate_queues(unix_now_ms()) > 0 {
-                if let Err(error) = self.coordination_workspace.save_atomic(
-                    &self.coordination_store_path()
-                ) {
+            if self
+                .coordination_workspace
+                .advance_rate_queues(unix_now_ms())
+                > 0
+            {
+                if let Err(error) = self
+                    .coordination_workspace
+                    .save_atomic(&self.coordination_store_path())
+                {
                     self.coordination_workspace = before;
                     self.status = format!("coordination queue delivery not saved: {error}");
                 }
