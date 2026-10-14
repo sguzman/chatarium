@@ -1034,6 +1034,7 @@ struct ChatariumApp {
     coordination_ui: coordination_workspace::UiDrafts,
     coordination_window_open: bool,
     coordination_tool_steps: u32,
+    coordination_last_queue_check: Instant,
     local_conversation_rename: String,
     local_conversation_project_directory: String,
     show_archived_local_conversations: bool,
@@ -1370,6 +1371,7 @@ impl ChatariumApp {
                         coordination_ui: coordination_workspace::UiDrafts::default(),
                         coordination_window_open: false,
                         coordination_tool_steps: 0,
+                        coordination_last_queue_check: Instant::now(),
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
                         local_conversation_search_selection: None,
@@ -1614,6 +1616,7 @@ impl ChatariumApp {
             coordination_ui: coordination_workspace::UiDrafts::default(),
             coordination_window_open: false,
             coordination_tool_steps: 0,
+            coordination_last_queue_check: Instant::now(),
             show_archived_local_conversations: false,
             local_conversation_search_query: String::new(),
             local_conversation_search_selection: None,
@@ -7163,6 +7166,21 @@ impl eframe::App for ChatariumApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
+        // Only rate-limit queues auto-release; human approval and manual
+        // queues remain frozen until explicitly decided.
+        if self.coordination_last_queue_check.elapsed() >= Duration::from_secs(2) {
+            self.coordination_last_queue_check = Instant::now();
+            let before = self.coordination_workspace.clone();
+            if self.coordination_workspace.advance_rate_queues(unix_now_ms()) > 0 {
+                if let Err(error) = self.coordination_workspace.save_atomic(
+                    &self.coordination_store_path()
+                ) {
+                    self.coordination_workspace = before;
+                    self.status = format!("coordination queue delivery not saved: {error}");
+                }
+            }
+        }
+        ctx.request_repaint_after(Duration::from_secs(2));
         if ACCOUNT_MIRRORING_ENABLED {
             self.process_mirror_controller_notices();
             self.process_live_mirror_fetch_notices();
