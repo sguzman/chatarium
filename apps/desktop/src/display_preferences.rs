@@ -157,8 +157,8 @@ mod tests {
             show_transport_trace: true,
             show_delivery_history: true,
             render_markdown: false,
-            coordination_colors: Self::default().coordination_colors,
-            message_colors: Self::default().message_colors,
+            coordination_colors: DisplayPreferences::default().coordination_colors,
+            message_colors: DisplayPreferences::default().message_colors,
         };
         shown.save(&path).unwrap();
         assert_eq!(DisplayPreferences::load(&path), shown);
