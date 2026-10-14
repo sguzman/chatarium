@@ -18,6 +18,7 @@ pub const BUILTIN_PROVIDER_NAME: &str = "chatarium.builtin";
 pub const HELLO_OPERATION: &str = "hello";
 pub const TOOLS_LIST_OPERATION: &str = "tools.list";
 pub const TIME_NOW_OPERATION: &str = "time.now";
+pub const HOST_SHELL_OPERATION: &str = "shell.command";
 pub const MAX_DIRECTORY_OPERATIONS: usize = 128;
 
 /// Whether an inert registered provider/call is eligible for the restricted
@@ -34,7 +35,7 @@ pub fn supports_builtin(provider_name: &str, operation: &str) -> bool {
     provider_name == BUILTIN_PROVIDER_NAME
         && matches!(
             operation,
-            HELLO_OPERATION | TOOLS_LIST_OPERATION | TIME_NOW_OPERATION
+            HELLO_OPERATION | TOOLS_LIST_OPERATION | TIME_NOW_OPERATION | HOST_SHELL_OPERATION
         )
 }
 
@@ -58,6 +59,10 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
         (
             TIME_NOW_OPERATION,
             "Read the actual current UTC time from the local system clock",
+        ),
+        (
+            HOST_SHELL_OPERATION,
+            "Run a host command with the configured user shell, PATH and Fish configuration; unconfined host access",
         ),
     ] {
         tools.push(json!({
@@ -121,7 +126,7 @@ pub fn prepare_builtin_response(
         return prepare_time_response(call);
     }
     if call.operation.as_str() != TOOLS_LIST_OPERATION {
-        return Err("unsupported builtin tool".to_owned());
+        return Err("side-effecting host shell must use the audited asynchronous executor".to_owned());
     }
     let input = call.arguments_text.trim();
     let (legacy_id, arguments): (String, Value) = if input.starts_with("<tool_call") {

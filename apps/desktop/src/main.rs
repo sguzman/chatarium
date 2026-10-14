@@ -20,6 +20,7 @@ mod local_tool_adapter;
 mod local_tool_provider_control;
 mod markdown_inline;
 mod mcp_agent_defaults;
+mod host_shell_mcp;
 #[cfg(test)]
 mod mcp_async_tests;
 mod mcp_call_review;
@@ -300,6 +301,17 @@ enum PersistCommand {
     },
     SaveMcpAgentDefaults {
         defaults: mcp_agent_defaults::AgentDefaults,
+    },
+    SaveHostShellSettings {
+        settings: host_shell_mcp::Settings,
+    },
+    DispatchHostShell {
+        route_id: RouteId,
+    },
+    RecordHostShellOutcome {
+        call_id: ToolCallId,
+        route_id: RouteId,
+        result: Result<Value, String>,
     },
     SaveInferenceSettings {
         store: local_inference_settings::InferenceSettingsStore,
@@ -671,6 +683,10 @@ enum PersistNotice {
     BuiltinHelloDispatched {
         route_id: RouteId,
         appended_events: Vec<EventEnvelope>,
+    },
+    HostShellDispatched {
+        route_id: RouteId,
+        event: EventEnvelope,
     },
     SandboxHostChecked {
         result: Result<(), String>,
@@ -1047,6 +1063,7 @@ struct ChatariumApp {
     reader_search_hit: Option<usize>,
     inference_settings: local_inference_settings::InferenceSettingsStore,
     mcp_agent_defaults: mcp_agent_defaults::AgentDefaults,
+    host_shell_settings: host_shell_mcp::Settings,
     behavior_profiles: behavior_profile::BehaviorProfileStore,
     conversation_behavior_profile: behavior_profile::BehaviorProfile,
     topology_command_pending: bool,
@@ -1288,6 +1305,9 @@ impl ChatariumApp {
                     &data_dir.join(mcp_agent_defaults::FILE_NAME),
                 )
                 .unwrap_or_default();
+                let host_shell_settings =
+                    host_shell_mcp::Settings::load(&data_dir.join(host_shell_mcp::FILE_NAME))
+                        .unwrap_or_default();
                 let active_inference_settings = inference_settings
                     .for_conversation_with_mcp_defaults(local_conversation_id, &mcp_agent_defaults);
                 let behavior_profile_path = local_behavior_profile_path(&journal_path);
@@ -1366,6 +1386,7 @@ impl ChatariumApp {
                         reader_search_hit: None,
                         inference_settings,
                         mcp_agent_defaults,
+                        host_shell_settings,
                         behavior_profiles,
                         conversation_behavior_profile: active_behavior_profile,
                         topology_command_pending: false,
@@ -1531,6 +1552,10 @@ impl ChatariumApp {
                 .join(mcp_agent_defaults::FILE_NAME),
         )
         .unwrap_or_default();
+        let host_shell_settings = host_shell_mcp::Settings::load(
+            &journal_path.parent().unwrap_or_else(|| std::path::Path::new("."))
+                .join(host_shell_mcp::FILE_NAME),
+        ).unwrap_or_default();
         let active_inference_settings = inference_settings
             .for_conversation_with_mcp_defaults(local_conversation_id, &mcp_agent_defaults);
         let behavior_profiles = behavior_profile::BehaviorProfileStore::load(
@@ -1592,6 +1617,7 @@ impl ChatariumApp {
             reader_search_hit: None,
             inference_settings,
             mcp_agent_defaults,
+            host_shell_settings,
             behavior_profiles,
             conversation_behavior_profile: active_behavior_profile,
             topology_command_pending: false,
@@ -3681,7 +3707,15 @@ impl ChatariumApp {
                         });
                     if policy == mcp_agent_defaults::ToolPolicy::Automatic {
                         if provider_is_builtin {
-                            self.dispatch_builtin_hello(route_id);
+                            let shell_request = replay_tool_call_audit(&self.events)
+                                .ok()
+                                .and_then(|calls| calls.into_iter().find(|call| call.call_id == call_id))
+                                .is_some_and(|call| call.operation.as_str() == host_shell_mcp::OPERATION);
+                            if shell_request {
+                                self.dispatch_host_shell(route_id);
+                            } else {
+                                self.dispatch_builtin_hello(route_id);
+                            }
                         } else {
                             self.execute_approved_stdio_tool(call_id);
                         }
@@ -3711,6 +3745,13 @@ impl ChatariumApp {
                     self.events.push(event);
                     self.tool_command_pending = false;
                     self.status = format!("tool route {} policy durably updated", route_id.get());
+                }
+                PersistNotice::HostShellDispatched { route_id, event } => {
+                    self.events.push(event);
+                    self.status = format!(
+                        "host shell route {} reserved and running; result will be durably recorded",
+                        route_id.get()
+                    );
                 }
                 PersistNotice::BuiltinHelloDispatched {
                     route_id,
@@ -5580,6 +5621,44 @@ impl ChatariumApp {
             Err(error) => {
                 self.status = format!("failed to queue external tool execution: {error}");
             }
+        }
+    }
+
+    fn dispatch_host_shell(&mut self, route_id: RouteId) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot run host shell: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DispatchHostShell { route_id }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!(
+                    "validating host shell settings and durable route {} before one-shot execution",
+                    route_id.get()
+                );
+            }
+            Err(error) => self.status = format!("cannot queue host shell: {error}"),
+        }
+    }
+
+    fn save_host_shell_settings(&mut self) {
+        if let Err(error) = self.host_shell_settings.validate() {
+            self.status = format!("host shell settings invalid: {error}");
+            return;
+        }
+        let Some(tx) = &self.persist_tx else {
+            self.status = "cannot save shell settings: persistence unavailable".to_owned();
+            return;
+        };
+        if let Err(error) = tx.send(PersistCommand::SaveHostShellSettings {
+            settings: self.host_shell_settings.clone(),
+        }) {
+            self.status = format!("cannot queue shell settings save: {error}");
+        } else {
+            self.status = "shell choice and command blacklist queued for persistence".to_owned();
         }
     }
 
@@ -8700,6 +8779,26 @@ impl eframe::App for ChatariumApp {
                             } else {
                                 "MCP OFF · enable above to allow model-proposed tool calls."
                             });
+                            ui.collapsing("Host shell · Fish / Bash / Zsh / Sh", |ui| {
+                                ui.label(egui::RichText::new(
+                                    "UNRESTRICTED HOST ACCESS: commands run with your Linux user identity and Fish configuration. The blacklist is a convenience filter, NOT a security sandbox. A malicious model instruction or search result could cause damaging commands when the MCP policy is automatic."
+                                ).color(egui::Color32::from_rgb(230, 170, 104)));
+                                ui.checkbox(&mut self.host_shell_settings.enabled, "Enable host shell tool");
+                                egui::ComboBox::from_label("Shell")
+                                    .selected_text(&self.host_shell_settings.shell)
+                                    .show_ui(ui, |ui| {
+                                        for shell in ["fish", "bash", "zsh", "sh"] {
+                                            ui.selectable_value(&mut self.host_shell_settings.shell, shell.to_owned(), shell);
+                                        }
+                                    });
+                                ui.label("Blocked command names (one per line, optional):");
+                                ui.add(egui::TextEdit::multiline(&mut self.host_shell_settings.blocked_commands)
+                                    .desired_rows(4).desired_width(f32::INFINITY));
+                                if ui.button("Save host shell configuration").clicked() {
+                                    self.save_host_shell_settings();
+                                }
+                                ui.label("Agent tool: chatarium.builtin::shell.command with {\"command\":\"fish syntax\",\"cwd\":\"/absolute/path\"}. Default: Fish, no blocked commands. Change automatic/ask/disabled in Agent defaults.");
+                            });
                             ui.collapsing("Agent defaults · bootstrap / tool policies", |ui| {
                                 ui.label("Saved MCP bootstrap and exact per-tool execution permissions.");
                                 ui.checkbox(
@@ -9402,7 +9501,11 @@ impl eframe::App for ChatariumApp {
                                                                     )
                                                                 });
                                                                 if builtin_hello {
-                                                                    ui.label("Approved side-effect-free local builtin (hello or tools.list). Run separately.");
+                                                                    ui.label(if call.operation.as_str() == host_shell_mcp::OPERATION {
+                                                                        "Host shell runs as your Linux user, using your real home and PATH. This is NOT sandboxed."
+                                                                    } else {
+                                                                        "Approved local builtin. Run separately."
+                                                                    });
                                                                     if ui.add_enabled(
                                                                         matches!(
                                                                             route.gate_state,
@@ -9412,9 +9515,17 @@ impl eframe::App for ChatariumApp {
                                                                         )
                                                                             && !self.tool_command_pending
                                                                             && self.persist_tx.is_some(),
-                                                                        egui::Button::new("Run approved local builtin · once"),
+                                                                        egui::Button::new(if call.operation.as_str() == host_shell_mcp::OPERATION {
+                                                                            "Run approved host shell · once"
+                                                                        } else {
+                                                                            "Run approved local builtin · once"
+                                                                        }),
                                                                     ).clicked() {
-                                                                        self.dispatch_builtin_hello(route.request.id);
+                                                                        if call.operation.as_str() == host_shell_mcp::OPERATION {
+                                                                            self.dispatch_host_shell(route.request.id);
+                                                                        } else {
+                                                                            self.dispatch_builtin_hello(route.request.id);
+                                                                        }
                                                                     }
                                                                 } else {
                                                                     ui.label("User Allow is recorded. Inspect the exact wire request before a separate one-shot Run.");
@@ -17452,6 +17563,113 @@ fn append_builtin_hello_checked(
     Ok(store.events()[before..].to_vec())
 }
 
+fn reserve_builtin_host_shell_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+    settings: &host_shell_mcp::Settings,
+) -> Result<(ToolCallId, Value, EventEnvelope), String> {
+    let call = replay_tool_call_audit(store.events())?
+        .into_iter()
+        .find(|call| call.route_id == Some(route_id))
+        .ok_or_else(|| {
+            format!(
+                "route {} is not bound to a durable tool call",
+                route_id.get()
+            )
+        })?;
+    let provider = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|provider| provider.provider_id == call.provider_id)
+        .ok_or_else(|| {
+            format!(
+                "tool call {} references missing provider {}",
+                call.call_id.get(),
+                call.provider_id.get()
+            )
+        })?;
+    if provider.name.as_str() != local_tool_adapter::BUILTIN_PROVIDER_NAME
+        || call.operation.as_str() != host_shell_mcp::OPERATION
+    {
+        return Err("route is not an authorized builtin host shell operation".to_owned());
+    }
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or_else(|| format!("tool route {} does not exist", route_id.get()))?;
+    let allowed = match route.initial_policy {
+        RoutePolicy::Allow => {
+            route.gate_state
+                == (RouteGateState::Allowed {
+                    by: DecisionAuthority::Policy,
+                })
+                && route.latest_user_decision.is_none()
+        }
+        RoutePolicy::RequireApproval => {
+            route.gate_state
+                == (RouteGateState::Allowed {
+                    by: DecisionAuthority::User,
+                })
+                && route.latest_user_decision == Some(RouteUserDecision::Allow)
+        }
+        RoutePolicy::Deny => false,
+    };
+    if route.request.class != RouteClass::ToolCall || !allowed {
+        return Err(format!(
+            "tool route {} requires a fresh explicit user Allow or saved exact policy before builtin execution",
+            route_id.get()
+        ));
+    }
+    if replay_tool_call_outcome_audit(store.events())?
+        .iter()
+        .any(|outcome| outcome.call_id == call.call_id || outcome.route_id == route_id)
+    {
+        return Err(format!(
+            "tool route {} already has a durable terminal outcome",
+            route_id.get()
+        ));
+    }
+
+    let source_fresh = replay_local_routing_directory(store.events())?
+        .into_iter()
+        .any(|entry| {
+            entry.current_session_id == call.source_session_id
+                && entry.endpoint_id == route.request.source
+                && entry.current_session_phase.accepts_ordinary_turns()
+        });
+    if !source_fresh {
+        return Err(format!(
+            "tool route {} source session is no longer the current addressable local leaf",
+            route_id.get()
+        ));
+    }
+    if !provider
+        .endpoint_binding
+        .is_some_and(|binding| binding.endpoint_id() == route.request.destination)
+    {
+        return Err(format!(
+            "tool route {} destination no longer matches the registered provider endpoint",
+            route_id.get()
+        ));
+    }
+
+    // Parse and validate the complete command BEFORE consuming the route
+    // permit. Execution itself occurs only on a dedicated subprocess worker.
+    let args: Value = serde_json::from_str(&call.arguments_text)
+        .map_err(|e| format!("invalid host shell argument object: {e}"))?;
+    settings.validate_request(&args)?;
+    if !settings.shell_path().is_file() || !std::path::Path::new("/usr/bin/timeout").is_file() {
+        return Err("selected shell or /usr/bin/timeout is unavailable".to_owned());
+    }
+    let mut gate = route_gate_before_dispatch(&route)?;
+    let permit = gate
+        .authorize_dispatch(route_id)
+        .map_err(|error| format!("host shell route denied: {error:?}"))?;
+    record_route_dispatched(store, permit).map_err(|e| e.to_string())?;
+    let event = store.events().last().cloned()
+        .ok_or("host shell dispatch journal event missing")?;
+    Ok((call.call_id, args, event))
+}
+
 fn commit_message_with_one_shot_memory_checked(
     store: &mut impl EventStore,
     message: &AuthoredUserMessage,
@@ -20068,6 +20286,19 @@ fn persistence_worker(
                     });
                 }
             }
+            PersistCommand::SaveHostShellSettings { settings } => {
+                if let Err(error) =
+                    settings.save_atomic(&data_dir.join(host_shell_mcp::FILE_NAME))
+                {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "host shell settings save",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error,
+                    });
+                }
+            }
             PersistCommand::SaveInferenceSettings { store: settings } => {
                 if let Err(error) =
                     settings.save_atomic(&data_dir.join("local-inference-settings.json"))
@@ -20618,6 +20849,105 @@ fn persistence_worker(
                         // Unpersisted observations leave their routes unresolved.
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "tool isolated stdio outcome append (unresolved)",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::DispatchHostShell { route_id } => {
+                let prepared = host_shell_mcp::Settings::load(
+                    &data_dir.join(host_shell_mcp::FILE_NAME)
+                ).and_then(|settings| {
+                    let (call_id, args, event) =
+                        reserve_builtin_host_shell_checked(&mut store, route_id, &settings)?;
+                    Ok((call_id, args, event, settings))
+                });
+                match prepared {
+                    Ok((call_id, args, event, settings)) => {
+                        let _ = notices.send(PersistNotice::HostShellDispatched {
+                            route_id,
+                            event,
+                        });
+                        let completions = completion_tx.clone();
+                        let failures = notices.clone();
+                        let spawn = thread::Builder::new()
+                            .name(format!("chatarium-host-shell-{}", call_id.get()))
+                            .spawn(move || {
+                                let result = std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(|| {
+                                        host_shell_mcp::execute(&settings, &args)
+                                    }),
+                                );
+                                match result {
+                                    Ok(result) => {
+                                        let _ = completions.send(
+                                            PersistCommand::RecordHostShellOutcome {
+                                                call_id,
+                                                route_id,
+                                                result,
+                                            },
+                                        );
+                                    }
+                                    Err(_) => {
+                                        let _ = failures.send(PersistNotice::Failed {
+                                            operation: "host shell panicked (unresolved)",
+                                            revision: None,
+                                            request_id: None,
+                                            turn_id: None,
+                                            error: "shell worker panicked after durable dispatch; no retry".to_owned(),
+                                        });
+                                    }
+                                }
+                            });
+                        if let Err(error) = spawn {
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "host shell worker spawn (unresolved)",
+                                revision: None,
+                                request_id: None,
+                                turn_id: None,
+                                error: format!("host shell was reserved but could not spawn: {error}"),
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "host shell preflight",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::RecordHostShellOutcome { call_id, route_id, result } => {
+                let (kind, text) = match result {
+                    Ok(output) => {
+                        let formatted = chatarium_protocol::tool_envelope::format_legacy_tool_success(
+                            &format!("call_{}", call_id.get()),
+                            host_shell_mcp::OPERATION,
+                            output,
+                        );
+                        match formatted {
+                            Ok(formatted) => (ToolCallOutcomeKind::Result, formatted),
+                            Err(error) => (
+                                ToolCallOutcomeKind::Error,
+                                format!("host shell result formatting failed: {error:?}"),
+                            ),
+                        }
+                    }
+                    Err(error) => (ToolCallOutcomeKind::Error, error),
+                };
+                match append_tool_call_outcome_checked(&mut store, call_id, route_id, kind, text) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::StdioToolDispatchFinished { call_id, event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "host shell outcome journal append (unresolved)",
                             revision: None,
                             request_id: None,
                             turn_id: None,
@@ -24353,6 +24683,7 @@ mod tests {
             PersistNotice::ToolCallProposed { .. } => "tool_call_proposed",
             PersistNotice::ToolCallRoutePolicyUpdated { .. } => "tool_call_route_policy_updated",
             PersistNotice::BuiltinHelloDispatched { .. } => "builtin_hello_dispatched",
+            PersistNotice::HostShellDispatched { .. } => "host_shell_dispatched",
             PersistNotice::SandboxHostChecked { .. } => "sandbox_host_checked",
             PersistNotice::StdioToolDispatchReserved { .. } => "stdio_tool_dispatch_reserved",
             PersistNotice::StdioToolDispatchFinished { .. } => "stdio_tool_dispatch_finished",
@@ -24540,6 +24871,45 @@ mod tests {
         let final_events = store.events().len();
         assert!(reserve_activated_stdio_tool_dispatch(&mut store, call).is_err());
         assert_eq!(store.events().len(), final_events);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_host_shell_reserves_only_approved_durable_routes() {
+        use chatarium_store::MemoryEventStore;
+        let mut store = MemoryEventStore::default();
+        let proposal = mcp_agent_defaults::ModelToolRequest {
+            provider: local_tool_adapter::BUILTIN_PROVIDER_NAME.to_owned(),
+            tool: host_shell_mcp::OPERATION.to_owned(),
+            arguments: serde_json::json!({"command": "printf test"}),
+        };
+        let (_call, route, _) = append_agent_mcp_call_checked(
+            &mut store,
+            LocalConversationId::new(),
+            &proposal,
+            mcp_agent_defaults::ToolPolicy::Ask,
+        ).unwrap();
+        let settings = host_shell_mcp::Settings {
+            shell: "sh".to_owned(),
+            ..Default::default()
+        };
+        assert!(reserve_builtin_host_shell_checked(&mut store, route, &settings).is_err());
+        append_tool_call_route_user_decision_checked(
+            &mut store,
+            route,
+            RouteUserDecision::Allow,
+        ).unwrap();
+        let (call_id, args, event) =
+            reserve_builtin_host_shell_checked(&mut store, route, &settings).unwrap();
+        assert_eq!(args["command"], "printf test");
+        assert_eq!(event.kind, EventKind::RouteDispatched);
+        assert!(reserve_builtin_host_shell_checked(&mut store, route, &settings).is_err());
+        assert!(replay_tool_call_outcome_audit(store.events()).unwrap().is_empty());
+        assert_eq!(
+            replay_tool_call_audit(store.events()).unwrap()
+                .iter().find(|call| call.call_id == call_id).unwrap().route_id,
+            Some(route)
+        );
     }
 
     #[test]
