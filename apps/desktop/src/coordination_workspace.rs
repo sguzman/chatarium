@@ -38,6 +38,7 @@ pub struct Message {
     pub status: String,
     pub created_ms: u64,
     pub delivered_ms: Option<u64>,
+    pub consumed_ms: Option<u64>,
     pub note: String,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -229,7 +230,7 @@ impl Workspace {
                     || body.len() > MAX_MESSAGE
                     || !matches!(
                         status,
-                        "delivered" | "queued" | "approval" | "blocked" | "rejected"
+                        "delivered" | "consumed" | "queued" | "approval" | "blocked" | "rejected"
                     )
                     || !message_ids.insert(id)
                     || id == 0
@@ -246,6 +247,7 @@ impl Workspace {
                     status: status.to_owned(),
                     created_ms: number(m, "created_ms")?,
                     delivered_ms: m["delivered_ms"].as_u64(),
+                    consumed_ms: m["consumed_ms"].as_u64(),
                     note: required(m, "note")?.to_owned(),
                 });
             }
@@ -273,7 +275,7 @@ impl Workspace {
                 "id":c.id,"name":c.name,
                 "members":c.members.iter().map(|m|json!({"id":m.id,"conversation":m.conversation,"name":m.name,"role":m.role})).collect::<Vec<_>>(),
                 "links":c.links.iter().map(|l|json!({"from":l.from,"to":l.to,"mode":l.mode,"directives":l.directives,"reports":l.reports,"per_minute":l.per_minute})).collect::<Vec<_>>(),
-                "messages":c.messages.iter().map(|m|json!({"id":m.id,"from":m.from,"to":m.to,"kind":m.kind,"body":m.body,"status":m.status,"created_ms":m.created_ms,"delivered_ms":m.delivered_ms,"note":m.note})).collect::<Vec<_>>()
+                "messages":c.messages.iter().map(|m|json!({"id":m.id,"from":m.from,"to":m.to,"kind":m.kind,"body":m.body,"status":m.status,"created_ms":m.created_ms,"delivered_ms":m.delivered_ms,"consumed_ms":m.consumed_ms,"note":m.note})).collect::<Vec<_>>()
             })).collect::<Vec<_>>()
         });
         let bytes = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
@@ -457,6 +459,7 @@ impl Workspace {
             status: status.to_owned(),
             created_ms: now,
             delivered_ms: (status == "delivered").then_some(now),
+            consumed_ms: None,
             note: note.to_owned(),
         });
         Ok((id, status.to_owned()))
@@ -557,6 +560,64 @@ impl Workspace {
         changed
     }
 
+    /// IDs admitted to the recipient's next model context. Inspection alone never consumes.
+    /// Use the same size limits as identity_context so a truncated inbox stays pending.
+    pub fn context_delivered_ids(&self, conversation: &str) -> Vec<u64> {
+        let Some((container, worker)) = self.member_for(conversation) else { return Vec::new(); };
+        let Some(c) = self.containers.iter().find(|container_record| container_record.id == container) else {
+            return Vec::new();
+        };
+        let mut length = 0_usize;
+        let mut ids = Vec::new();
+        let candidates = c.messages.iter()
+            .filter(|message| message.to == worker && message.status == "delivered")
+            .rev().take(12).collect::<Vec<_>>();
+        for message in candidates.into_iter().rev() {
+            let sender = c.members.iter().find(|member| member.id == message.from)
+                .map(|member| member.name.as_str()).unwrap_or("Unknown");
+            let bytes = format!("INBOX #{} [{}] FROM {} (#{}) at {}: {}\\n",
+                message.id, message.kind, sender, message.from, message.created_ms, message.body).len();
+            if length + bytes > 8_000 { break; }
+            length += bytes;
+            ids.push(message.id);
+        }
+        ids
+    }
+
+    /// Transition messages admitted to an actual model dispatch to durable consumed history.
+    /// Only delivered messages owned by this conversation can transition.
+    pub fn consume_ids(&mut self, conversation: &str, ids: &[u64], now: u64) -> usize {
+        let Some((container, worker)) = self.member_for(conversation) else { return 0; };
+        let Some(c) = self.containers.iter_mut().find(|record| record.id == container) else {
+            return 0;
+        };
+        let mut changed = 0;
+        for message in &mut c.messages {
+            if message.to == worker && message.status == "delivered" && ids.contains(&message.id) {
+                message.status = "consumed".to_owned();
+                message.consumed_ms = Some(now);
+                message.note = "admitted to recipient model request; preserved in transcript".to_owned();
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Explicit human deletion of a recipient inbox record or pending queued item.
+    /// Consumed records are separately retained as transcript history and cannot be
+    /// silently erased by an inbox operation.
+    pub fn delete_message(&mut self, container: u64, id: u64) -> Result<(), String> {
+        let record = self.containers.iter_mut().find(|record| record.id == container)
+            .ok_or("container not found")?;
+        let index = record.messages.iter().position(|message| message.id == id)
+            .ok_or("message not found")?;
+        if record.messages[index].status == "consumed" {
+            return Err("consumed transcript records cannot be deleted from the inbox".to_owned());
+        }
+        record.messages.remove(index);
+        Ok(())
+    }
+
     pub fn identity_context(&self, conversation: &str) -> String {
         let Some(c) = self
             .containers
@@ -598,14 +659,8 @@ impl Workspace {
             }
             text.push_str(&line);
         }
-        let pending = c
-            .messages
-            .iter()
-            .filter(|m| m.to == w.id && m.status == "delivered")
-            .rev()
-            .take(12)
-            .collect::<Vec<_>>();
-        for m in pending.into_iter().rev() {
+        let admitted = self.context_delivered_ids(conversation);
+        for m in c.messages.iter().filter(|m| admitted.contains(&m.id)) {
             let sender = c.members.iter().find(|s| s.id == m.from).unwrap();
             let line = format!(
                 "INBOX #{} [{}] FROM {} (#{}) at {}: {}\n",
@@ -636,7 +691,9 @@ impl Workspace {
                 "to":l.to,"directives":l.directives,"reports":l.reports,"mode":l.mode,"per_minute":l.per_minute
             })).collect::<Vec<_>>(),
             "inbox":c.messages.iter().filter(|m|m.to==w.id&&m.status=="delivered")
-                .rev().take(12).map(|m|json!({"id":m.id,"sender":m.from,"kind":m.kind,"body":m.body})).collect::<Vec<_>>()
+                .rev().take(12).map(|m|json!({"id":m.id,"sender":m.from,"kind":m.kind,"body":m.body,"status":m.status})).collect::<Vec<_>>(),
+            "recent_consumed":c.messages.iter().filter(|m|m.to==w.id&&m.status=="consumed")
+                .rev().take(12).map(|m|json!({"id":m.id,"sender":m.from,"kind":m.kind,"body":m.body,"status":m.status})).collect::<Vec<_>>()
         }))
     }
     pub fn member_for(&self, conversation: &str) -> Option<(u64, u64)> {
@@ -1171,6 +1228,43 @@ mod tests {
         let b = s.attach(c, "chat-b", "Coder", "Worker").unwrap();
         (s, c, a, b)
     }
+    #[test]
+    fn delivery_read_consumption_deletion_and_reopen_have_distinct_states() {
+        let (mut s, c, a, b) = setup();
+        s.set_link(c, a, b, true, true, "allow", 12).unwrap();
+        let (message, _) = s.send("chat-a", b, "directive", "Do the test", 100).unwrap();
+        assert_eq!(s.context_delivered_ids("chat-b"), vec![message]);
+        let identity = s.identity_tool("chat-b").unwrap();
+        assert_eq!(identity["inbox"][0]["id"], message);
+        // Reading identity does NOT consume a message.
+        assert_eq!(s.context_delivered_ids("chat-b"), vec![message]);
+        assert_eq!(s.consume_ids("chat-a", &[message], 110), 0);
+        assert_eq!(s.consume_ids("chat-b", &[message], 110), 1);
+        assert_eq!(s.consume_ids("chat-b", &[message], 120), 0);
+        assert!(s.context_delivered_ids("chat-b").is_empty());
+        assert_eq!(s.identity_tool("chat-b").unwrap()["recent_consumed"][0]["id"], message);
+        assert!(s.delete_message(c, message).is_err());
+        let path = std::env::temp_dir().join(format!("chatarium-consumption-{}.json", std::process::id()));
+        s.save_atomic(&path).unwrap();
+        let reloaded = Workspace::load(&path).unwrap();
+        assert_eq!(reloaded, s);
+        assert_eq!(reloaded.containers[0].messages[0].consumed_ms, Some(110));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn pending_deletion_removes_only_selected_item_without_reusing_ids() {
+        let (mut s, c, a, b) = setup();
+        s.set_link(c, a, b, true, true, "queue", 12).unwrap();
+        let (first, _) = s.send("chat-a", b, "directive", "First", 1).unwrap();
+        let (second, _) = s.send("chat-a", b, "directive", "Second", 2).unwrap();
+        s.delete_message(c, first).unwrap();
+        assert!(s.containers[0].messages.iter().all(|m| m.id != first));
+        assert!(s.containers[0].messages.iter().any(|m| m.id == second));
+        let (third, _) = s.send("chat-a", b, "directive", "Third", 3).unwrap();
+        assert!(third > second);
+    }
+
     #[test]
     fn empty_container_first_and_worker_identity_survive_reopen() {
         let (mut s, c, a, b) = setup();
