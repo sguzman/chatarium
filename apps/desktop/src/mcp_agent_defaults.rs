@@ -487,9 +487,8 @@ mod tests {
                 .unwrap()
                 .as_nanos(),
         ));
-        let old_policy = format!(
-            "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"
-        );
+        let old_policy =
+            format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask");
         let old = json!({
             "schema": SCHEMA,
             "version": 1,
@@ -507,7 +506,10 @@ mod tests {
             Ok(ToolPolicy::Automatic)
         );
         let serialized: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(serialized["host_shell_default_version"], HOST_SHELL_DEFAULT_VERSION);
+        assert_eq!(
+            serialized["host_shell_default_version"],
+            HOST_SHELL_DEFAULT_VERSION
+        );
         assert_eq!(migrated, AgentDefaults::load(&path).unwrap());
 
         let mut explicitly_asking = migrated.clone();
@@ -532,13 +534,11 @@ mod tests {
                 .unwrap()
                 .as_nanos(),
         ));
-        let policy = format!(
-            "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"
-        )
-        .replace(
-            "chatarium.demo::shell.command = ask",
-            "chatarium.demo::shell.command = disabled",
-        );
+        let policy = format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask")
+            .replace(
+                "chatarium.demo::shell.command = ask",
+                "chatarium.demo::shell.command = disabled",
+            );
         let old = json!({
             "schema": SCHEMA,
             "version": 1,
