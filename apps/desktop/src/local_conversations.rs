@@ -190,7 +190,11 @@ impl LocalConversationCatalog {
                 .get("color")
                 .and_then(Value::as_str)
                 .filter(|value| decode_color(value).is_some())
-                .filter(|value| !entries.values().any(|entry: &LocalConversationEntry| entry.color.eq_ignore_ascii_case(value)))
+                .filter(|value| {
+                    !entries.values().any(|entry: &LocalConversationEntry| {
+                        entry.color.eq_ignore_ascii_case(value)
+                    })
+                })
                 .map(|value| value.to_ascii_uppercase())
                 .unwrap_or_else(|| allocate_color(id, &entries));
             if entries
@@ -200,8 +204,7 @@ impl LocalConversationCatalog {
                         id,
                         title,
                         color,
-                        project_directory:
-                        archived,
+                        project_directory: archived,
                         created_at_unix_ms,
                         updated_at_unix_ms,
                     },
@@ -464,8 +467,14 @@ mod tests {
             Some("First")
         );
         assert!(loaded.entry(second).is_some_and(|entry| entry.archived));
-        assert_eq!(loaded.entry(first).unwrap().color, catalog.entry(first).unwrap().color);
-        assert_ne!(loaded.entry(first).unwrap().color, loaded.entry(second).unwrap().color);
+        assert_eq!(
+            loaded.entry(first).unwrap().color,
+            catalog.entry(first).unwrap().color
+        );
+        assert_ne!(
+            loaded.entry(first).unwrap().color,
+            loaded.entry(second).unwrap().color
+        );
 
         let _ = fs::remove_file(path);
     }
@@ -514,7 +523,10 @@ mod tests {
         }
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let migrated = LocalConversationCatalog::load(&path).unwrap();
-        assert_ne!(migrated.entry(first).unwrap().color, migrated.entry(second).unwrap().color);
+        assert_ne!(
+            migrated.entry(first).unwrap().color,
+            migrated.entry(second).unwrap().color
+        );
         assert_eq!(migrated.entry(first).unwrap().accent_rgb().len(), 3);
         migrated.save_atomic(&path).unwrap();
         assert_eq!(LocalConversationCatalog::load(&path).unwrap(), migrated);
