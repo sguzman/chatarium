@@ -14816,10 +14816,8 @@ impl eframe::App for ChatariumApp {
                 (work_area.x - 24.0).max(260.0),
                 (work_area.y - 32.0).max(240.0),
             );
-            let preferred_window_size = egui::vec2(
-                max_window_size.x.min(690.0),
-                max_window_size.y.min(540.0),
-            );
+            let preferred_window_size =
+                egui::vec2(max_window_size.x.min(690.0), max_window_size.y.min(540.0));
             egui::Window::new("Chatarium coordination topology")
                 .open(&mut open)
                 .default_size(preferred_window_size)
