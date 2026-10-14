@@ -10,6 +10,9 @@ const SCHEMA: &str = "chatarium-mcp-agent-defaults";
 // Old saved files recorded the former default-off state without distinguishing
 // explicit user intent. Migrate once; subsequent saves preserve a real opt-out.
 const ACTIVATION_DEFAULT_VERSION: u64 = 2;
+// Upgrade only the exact previously generated shell-approval default, once.
+// Saved explicit 'ask', 'manual' and 'disabled' policies remain authoritative.
+const HOST_SHELL_DEFAULT_VERSION: u64 = 2;
 const MAX_PROMPT: usize = 32 * 1024;
 const PRIOR_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask";
 const READ_ONLY_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask\nchatarium.builtin::time.now = automatic";
@@ -39,7 +42,7 @@ impl Default for AgentDefaults {
                 "Never claim to have called a tool unless its actual result appears in context. ",
                 "If execution requires approval, wait for the user to approve it."
             ).to_owned(),
-            policy_rules: format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"),
+            policy_rules: format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic"),
             max_calls: 8,
             seed_new_conversations: true,
         }
@@ -173,15 +176,27 @@ impl AgentDefaults {
                 .unwrap_or(false),
         };
         settings.validate()?;
-        // An exact untouched prior built-in policy can safely gain the
-        // user-requested read-only clock. Custom authorization files are left
-        // unchanged, and any missing rule continues to require approval.
-        if settings.policy_rules == PRIOR_DEFAULT_POLICY
-            || settings.policy_rules == READ_ONLY_DEFAULT_POLICY
+        // On an existing installation, a generated shell-approval default was
+        // the wrong choice for the requested automatic Fish shell. Upgrade
+        // that exact old generated policy once. Never rewrite a customized
+        // policy, including an explicitly selected Ask/Manual/Disabled.
+        if value
+            .get("host_shell_default_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            < HOST_SHELL_DEFAULT_VERSION
         {
-            // Migrate only exact untouched defaults. An explicitly edited
-            // policy retains its user's existing authorization preferences.
-            settings.policy_rules = Self::default().policy_rules;
+            let old_shell_ask_default =
+                format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask");
+            if settings.policy_rules == old_shell_ask_default {
+                settings.policy_rules = Self::default().policy_rules;
+            } else if settings.policy_rules == PRIOR_DEFAULT_POLICY
+                || settings.policy_rules == READ_ONLY_DEFAULT_POLICY
+            {
+                // Older profiles with no host-shell permission must not gain
+                // unrestricted execution merely from a software upgrade.
+                settings.policy_rules = old_shell_ask_default;
+            }
             settings.save_atomic(path)?;
         }
         if value
@@ -216,7 +231,8 @@ impl AgentDefaults {
             "policy_rules": self.policy_rules,
             "max_calls": self.max_calls,
             "seed_new_conversations": self.seed_new_conversations,
-            "activation_default_version": ACTIVATION_DEFAULT_VERSION
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION,
+            "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION
         }))
         .map_err(|e| e.to_string())?;
         let temporary = path.with_extension("json.tmp");
@@ -371,6 +387,10 @@ mod tests {
             tool_policy(&loaded.policy_rules, "chatarium.builtin", "time.now"),
             Ok(ToolPolicy::Automatic)
         );
+        assert_eq!(
+            tool_policy(&loaded.policy_rules, "chatarium.builtin", "shell.command"),
+            Ok(ToolPolicy::Automatic)
+        );
         assert!(path.is_file());
         assert_eq!(loaded, AgentDefaults::load(&path).unwrap());
         let _ = fs::remove_file(path);
@@ -452,6 +472,94 @@ mod tests {
         assert_eq!(unchanged.policy_rules, current.policy_rules);
         assert_eq!(
             tool_policy(&unchanged.policy_rules, "chatarium.builtin", "time.now"),
+            Ok(ToolPolicy::Ask)
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn previous_generated_shell_ask_upgrades_once_but_opt_out_persists() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-host-shell-migration-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let old_policy = format!(
+            "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"
+        );
+        let old = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "bootstrap": AgentDefaults::default().bootstrap,
+            "policy_rules": old_policy,
+            "max_calls": 8,
+            "seed_new_conversations": true,
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION,
+        });
+        fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+
+        let migrated = AgentDefaults::load(&path).unwrap();
+        assert_eq!(
+            tool_policy(&migrated.policy_rules, "chatarium.builtin", "shell.command"),
+            Ok(ToolPolicy::Automatic)
+        );
+        let serialized: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(serialized["host_shell_default_version"], HOST_SHELL_DEFAULT_VERSION);
+        assert_eq!(migrated, AgentDefaults::load(&path).unwrap());
+
+        let mut explicitly_asking = migrated.clone();
+        explicitly_asking.policy_rules = old_policy;
+        explicitly_asking.save_atomic(&path).unwrap();
+        let reloaded = AgentDefaults::load(&path).unwrap();
+        assert_eq!(reloaded.policy_rules, explicitly_asking.policy_rules);
+        assert_eq!(
+            tool_policy(&reloaded.policy_rules, "chatarium.builtin", "shell.command"),
+            Ok(ToolPolicy::Ask)
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn customized_legacy_shell_policy_is_never_escalated() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-host-shell-custom-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let mut policy = format!(
+            "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = ask"
+        );
+        policy.push_str("\nchatarium.demo::shell.command = disabled");
+        // Remove the previous demo policy before adding the override so
+        // the fixture is a valid, genuinely customized exact-rule set.
+        policy = policy.replace(
+            "chatarium.demo::shell.command = ask",
+            "chatarium.demo::shell.command = disabled",
+        );
+        policy = policy.replace(
+            "\nchatarium.demo::shell.command = disabled\nchatarium.builtin::time.now",
+            "\nchatarium.builtin::time.now",
+        );
+        let old = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "bootstrap": AgentDefaults::default().bootstrap,
+            "policy_rules": policy,
+            "max_calls": 8,
+            "seed_new_conversations": true,
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION,
+        });
+        fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        let migrated = AgentDefaults::load(&path).unwrap();
+        assert_eq!(migrated.policy_rules, policy);
+        assert_eq!(
+            tool_policy(&migrated.policy_rules, "chatarium.builtin", "shell.command"),
             Ok(ToolPolicy::Ask)
         );
         let _ = fs::remove_file(path);
