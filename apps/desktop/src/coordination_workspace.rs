@@ -1103,6 +1103,10 @@ fn render_message_center(
             }
         });
 
+        // Capture read-only search strings rather than a mutable draft in the
+        // nested iterator. The row action buttons need mutable draft access.
+        let query = drafts.message_query.as_str();
+        let filter = drafts.message_filter.as_str();
         // Clone only lightweight records so queue controls can mutate the
         // workspace without borrowing the selected container.
         let mut entries = store
@@ -1123,8 +1127,8 @@ fn render_message_center(
                         &container.name,
                         source_name,
                         target_name,
-                        &drafts.message_query,
-                        &drafts.message_filter,
+                        query,
+                        filter,
                     )
                     .then(|| {
                         (
