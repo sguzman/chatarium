@@ -36,6 +36,7 @@ pub struct ProbeRun {
     pub active: Option<String>,
     pub results: Vec<ProbeResult>,
     pub status: String,
+    pub web_search_execution_confirmed: bool,
 }
 
 impl ProbeRun {
@@ -46,7 +47,24 @@ impl ProbeRun {
         self.queue = definitions();
         self.active = None;
         self.results.clear();
+        self.web_search_execution_confirmed = false;
         self.status = format!("queued {} capability probes", self.queue.len());
+    }
+
+    /// Run only the supported web-search probe for the selected model/profile.
+    /// A web-search failure cannot be masked by unrelated image/file probes.
+    pub fn start_web_search(&mut self, model: String, profile_id: Option<String>) {
+        self.model = Some(model);
+        self.profile_id = profile_id;
+        self.generated_unix_ms = None;
+        self.queue = definitions()
+            .into_iter()
+            .filter(|spec| spec.name == "web_search")
+            .collect();
+        self.active = None;
+        self.results.clear();
+        self.web_search_execution_confirmed = false;
+        self.status = "verifying real web-search execution".to_owned();
     }
 
     #[must_use]
@@ -76,6 +94,31 @@ impl ProbeRun {
             text_received: Some(text_received),
             reason: None,
         });
+    }
+
+    /// Tool declaration alone is insufficient; only the stream-observed
+    /// completed web-search call is positive capability evidence.
+    pub fn complete_web_search(&mut self, text_received: bool, executed: bool) {
+        if executed {
+            self.web_search_execution_confirmed = true;
+            self.complete_supported("web_search", text_received);
+        } else {
+            self.active = None;
+            self.results.push(ProbeResult {
+                name: "web_search".to_owned(),
+                status: "rejected".to_owned(),
+                code: Some("web_search_not_observed".to_owned()),
+                status_code: None,
+                param: None,
+                upstream_request_id: None,
+                response_shape: None,
+                text_received: Some(text_received),
+                reason: Some(
+                    "the response completed but no actual web_search_call completion was observed"
+                        .to_owned(),
+                ),
+            });
+        }
     }
 
     pub fn complete_failed(&mut self, name: &str, error: &BridgeError) {
@@ -275,6 +318,10 @@ pub fn load_report(path: &Path) -> Result<Option<ProbeRun>, String> {
         active: None,
         results,
         status: format!("loaded {} saved capability probe results", probes.len()),
+        web_search_execution_confirmed: value
+            .get("web_search_execution_confirmed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }))
 }
 
@@ -285,6 +332,7 @@ pub fn save_report(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Resul
         "generated_unix_ms": generated_unix_ms,
         "model": run.model,
         "profile_id": run.profile_id,
+        "web_search_execution_confirmed": run.web_search_execution_confirmed,
         "probes": run.results.iter().map(|result| json!({
             "name": result.name,
             "status": result.status,
@@ -388,7 +436,9 @@ fn definitions() -> VecDeque<ProbeSpec> {
         },
         ProbeSpec {
             name: "web_search",
-            input: json!("Reply with exactly WEB_SEARCH_OK. Do not search the web."),
+            input: json!(
+                "Use the web search tool to look up the official RFC 9110 HTTP Semantics publication. Identify the RFC number using the search results and answer briefly."
+            ),
             request_patch: json!({"tools": [{"type": "web_search"}]}),
         },
         ProbeSpec {
@@ -447,6 +497,25 @@ mod tests {
                 "structured_output",
             ]
         );
+    }
+
+    #[test]
+    fn targeted_web_search_probe_requires_observed_tool_completion() {
+        let mut run = ProbeRun::default();
+        run.start_web_search("gpt-6.1-sol".to_owned(), Some("profile-1".to_owned()));
+        assert_eq!(run.queue.len(), 1);
+        let next = run.next().unwrap();
+        assert_eq!(next.name, "web_search");
+        run.mark_active(next.name);
+        run.complete_web_search(true, false);
+        assert!(!run.web_search_execution_confirmed);
+        assert_eq!(run.results[0].code.as_deref(), Some("web_search_not_observed"));
+        run.start_web_search("gpt-6.1-sol".to_owned(), Some("profile-1".to_owned()));
+        let next = run.next().unwrap();
+        run.mark_active(next.name);
+        run.complete_web_search(true, true);
+        assert!(run.web_search_execution_confirmed);
+        assert_eq!(run.results[0].status, "supported");
     }
 
     #[test]

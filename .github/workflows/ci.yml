@@ -39,6 +39,9 @@ jobs:
           node --check tools/siwc-bridge/agent-activity.mjs
           node --check tools/siwc-bridge/agent-activity.test.mjs
           node --test tools/siwc-bridge/agent-activity.test.mjs
+          node --check tools/siwc-bridge/web-search-evidence.mjs
+          node --check tools/siwc-bridge/web-search-evidence.test.mjs
+          node --test tools/siwc-bridge/web-search-evidence.test.mjs
           node --check tools/siwc-bridge/test/offline-preload.mjs
           node --check tools/siwc-bridge/test/fake-devkit.mjs
           node --check tools/siwc-bridge/test/alpha-protocol.test.mjs
@@ -88,6 +91,9 @@ jobs:
           node --check tools/siwc-bridge/agent-activity.mjs
           node --check tools/siwc-bridge/agent-activity.test.mjs
           node --test tools/siwc-bridge/agent-activity.test.mjs
+          node --check tools/siwc-bridge/web-search-evidence.mjs
+          node --check tools/siwc-bridge/web-search-evidence.test.mjs
+          node --test tools/siwc-bridge/web-search-evidence.test.mjs
           node --check tools/siwc-bridge/test/offline-preload.mjs
           node --check tools/siwc-bridge/test/fake-devkit.mjs
           node --check tools/siwc-bridge/test/alpha-protocol.test.mjs

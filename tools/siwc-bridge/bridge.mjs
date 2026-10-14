@@ -9,6 +9,7 @@ import { dirname, resolve, join } from "node:path";
 import { ResponsesLane } from "./response-lane.mjs";
 import { createAgentActivityRecorder } from "./agent-activity.mjs";
 import { parseReadRetryPolicy, retryReadOnly } from "./retry-policy.mjs";
+import { observeWebSearchCompletion } from "./web-search-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
@@ -496,6 +497,9 @@ async function runWithStreamResponsePatch(patch, operation, onTransportProgress 
 async function runWithResponseProbePatch(patch, operation) {
   const originalFetch = globalThis.fetch;
   let patched = false;
+  const webSearchProbe = patch?.tools?.length === 1 &&
+    patch.tools[0]?.type === "web_search";
+  let webSearchEvidence = Promise.resolve(false);
   const probeFetch = async (input, init = {}) => {
     const url =
       typeof input === "string"
@@ -537,7 +541,7 @@ async function runWithResponseProbePatch(patch, operation) {
       );
     }
     patched = true;
-    return originalFetch(input, {
+    const response = await originalFetch(input, {
       ...init,
       body: JSON.stringify({
         ...body,
@@ -547,6 +551,12 @@ async function runWithResponseProbePatch(patch, operation) {
         stream: true,
       }),
     });
+    // Observe sanitized SSE *in parallel* with the pinned DevKit without
+    // changing the response stream consumed by the model or exporting text.
+    if (webSearchProbe) {
+      webSearchEvidence = observeWebSearchCompletion(response);
+    }
+    return response;
   };
 
   globalThis.fetch = probeFetch;
@@ -557,6 +567,9 @@ async function runWithResponseProbePatch(patch, operation) {
         "probe_not_applied",
         "Capability probe did not observe the expected Responses request.",
       );
+    }
+    if (webSearchProbe) {
+      return { ...result, web_search_executed: await webSearchEvidence };
     }
     return result;
   } finally {

@@ -4317,13 +4317,21 @@ impl ChatariumApp {
                         snapshot,
                     );
                 }
-                siwc_bridge::BridgeEvent::ResponseCompleted { request_id, text } => {
+                siwc_bridge::BridgeEvent::ResponseCompleted {
+                    request_id,
+                    text,
+                    web_search_executed,
+                } => {
                     if let Some(probe_name) =
                         capability_probes::probe_name_from_request_id(&request_id)
                     {
-                        let probe_name = probe_name.to_owned();
-                        self.capability_probe
-                            .complete_supported(&probe_name, !text.is_empty());
+                        if probe_name == "web_search" {
+                            self.capability_probe
+                                .complete_web_search(!text.is_empty(), web_search_executed);
+                        } else {
+                            self.capability_probe
+                                .complete_supported(probe_name, !text.is_empty());
+                        }
                         self.dispatch_next_capability_probe();
                         continue;
                     }
@@ -4721,6 +4729,28 @@ impl ChatariumApp {
 
         self.capability_probe
             .start(model, self.remote_session.profile_id.clone());
+        self.dispatch_next_capability_probe();
+    }
+
+    fn start_web_search_probe(&mut self) {
+        if !self.remote_connected()
+            || self.capability_probe.running()
+            || self.pending_remote_turn.is_some()
+            || self.active_remote_turn.is_some()
+        {
+            self.capability_probe.status =
+                "cannot verify web search while disconnected, busy, or already probing".to_owned();
+            return;
+        }
+        let (Some(model), Some(profile_id)) = (
+            self.selected_model.clone(),
+            self.remote_session.profile_id.clone(),
+        ) else {
+            self.capability_probe.status =
+                "web search verification needs an active model and profile identity".to_owned();
+            return;
+        };
+        self.capability_probe.start_web_search(model, Some(profile_id));
         self.dispatch_next_capability_probe();
     }
 
@@ -7226,18 +7256,18 @@ impl eframe::App for ChatariumApp {
                                         .color(egui::Color32::from_rgb(166, 139, 112)),
                                 );
                             } else if ui.button("Verify + enable web search").clicked() {
-                                // Existing suite verifies the exact signed-in account and
-                                // selected model. Never bypass or broaden its safety gate.
+                                // Only verify actual web-search execution for this
+                                // exact conversation, model, and signed-in profile.
                                 let scope = (
                                     self.local_conversation_id,
                                     self.selected_model.clone().expect("model checked"),
                                     self.remote_session.profile_id.clone().expect("profile checked"),
                                 );
-                                self.start_capability_probes();
+                                self.start_web_search_probe();
                                 if self.capability_probe.running() {
                                     self.pending_web_search_enable = Some(scope);
                                     self.capability_probe.status =
-                                        "checking this model and profile before enabling web search".to_owned();
+                                        "running one real web-search probe for this model/profile".to_owned();
                                 }
                             }
                         }

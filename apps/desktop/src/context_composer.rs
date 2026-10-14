@@ -926,10 +926,26 @@ impl CapabilityGate {
             _ => None,
         };
 
+        let web_search_evidence = match (contract, model) {
+            (Some(contract), Some(model))
+                if contract.profile_id.as_deref() == profile_id
+                    && contract.model == model =>
+            {
+                Some(contract)
+            }
+            _ => None,
+        };
         let admissions = CapabilitySlot::ALL
             .into_iter()
             .map(|slot| {
-                let state = match ready
+                // Only web search can be admitted by a focused probe without
+                // making the rest of the incomplete contract appear ready.
+                let evidence = if slot == CapabilitySlot::WebSearch {
+                    web_search_evidence
+                } else {
+                    ready
+                };
+                let state = match evidence
                     .and_then(|contract| contract.capabilities.get(slot.contract_name()))
                     .map(String::as_str)
                 {
@@ -1592,6 +1608,25 @@ mod tests {
                 .iter()
                 .all(|admission| { admission.state == CapabilityAdmissionState::BlockedContract })
         );
+    }
+
+    #[test]
+    fn focused_web_search_evidence_cannot_unlock_other_capabilities() {
+        let mut capabilities = std::collections::BTreeMap::new();
+        capabilities.insert("web_search".to_owned(), "supported".to_owned());
+        capabilities.insert("reasoning".to_owned(), "supported".to_owned());
+        let contract = LoadedContract {
+            state: "incomplete".to_owned(),
+            profile_id: Some("p".to_owned()),
+            model: "gpt-6.1-sol".to_owned(),
+            probe_generated_unix_ms: 5,
+            capabilities,
+        };
+        let gate = CapabilityGate::from_contract(Some(&contract), Some("p"), Some("gpt-6.1-sol"));
+        assert!(gate.allows(CapabilitySlot::WebSearch));
+        assert!(!gate.allows(CapabilitySlot::Reasoning));
+        let wrong = CapabilityGate::from_contract(Some(&contract), Some("p"), Some("other"));
+        assert!(!wrong.allows(CapabilitySlot::WebSearch));
     }
 
     #[test]

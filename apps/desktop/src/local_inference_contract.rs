@@ -18,6 +18,15 @@ impl LoadedContract {
     pub fn ready_for(&self, profile_id: Option<&str>, model: &str) -> bool {
         self.state == "ready" && self.profile_id.as_deref() == profile_id && self.model == model
     }
+
+    /// A real observed web-search completion can authorize *only* web search
+    /// for this exact model/profile, independent of the other eight probes.
+    #[must_use]
+    pub fn web_search_verified_for(&self, profile_id: Option<&str>, model: &str) -> bool {
+        self.profile_id.as_deref() == profile_id
+            && self.model == model
+            && self.capabilities.get("web_search").map(String::as_str) == Some("supported")
+    }
 }
 
 /// Human-readable explanation for why a capability is gated. This never
@@ -252,7 +261,15 @@ pub fn save_contract(path: &Path, run: &ProbeRun, generated_unix_ms: u64) -> Res
         },
         "empirical_capabilities": run.results.iter().map(|result| json!({
             "name": result.name,
-            "status": result.status,
+            // Historical declaration-only probes are NOT proof of a completed
+            // search. Startup regeneration downgrades those old records too.
+            "status": if result.name == "web_search"
+                && result.status == "supported"
+                && !run.web_search_execution_confirmed {
+                "unverified"
+            } else {
+                result.status.as_str()
+            },
             "code": result.code,
             "status_code": result.status_code,
             "param": result.param,
@@ -420,6 +437,31 @@ mod tests {
     }
 
     #[test]
+    fn partial_real_web_search_evidence_stays_model_scoped_and_is_not_full_suite_ready() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-web-search-contract-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let mut run = ProbeRun {
+            model: Some("gpt-6.1-sol".to_owned()),
+            profile_id: Some("profile-1".to_owned()),
+            generated_unix_ms: Some(1234),
+            web_search_execution_confirmed: true,
+            ..ProbeRun::default()
+        };
+        run.results = vec![result("web_search", "supported")];
+        assert_eq!(contract_state(&run), "incomplete");
+        save_contract(&path, &run, 5678).unwrap();
+        let loaded = load_contract(&path).unwrap().unwrap();
+        assert!(!loaded.ready_for(Some("profile-1"), "gpt-6.1-sol"));
+        assert!(loaded.web_search_verified_for(Some("profile-1"), "gpt-6.1-sol"));
+        assert!(!loaded.web_search_verified_for(Some("profile-2"), "gpt-6.1-sol"));
+        assert!(!loaded.web_search_verified_for(Some("profile-1"), "gpt-5.6-sol"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn derived_contract_keeps_fixed_and_empirical_layers_separate() {
         let path = std::env::temp_dir().join(format!(
             "chatarium-local-inference-contract-{}",
@@ -446,6 +488,10 @@ mod tests {
         assert_eq!(
             loaded.capabilities.get("reasoning").map(String::as_str),
             Some("supported")
+        );
+        assert_eq!(
+            loaded.capabilities.get("web_search").map(String::as_str),
+            Some("unverified")
         );
 
         let value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
