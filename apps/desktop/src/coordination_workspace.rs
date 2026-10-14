@@ -571,21 +571,40 @@ impl Workspace {
     /// IDs admitted to the recipient's next model context. Inspection alone never consumes.
     /// Use the same size limits as identity_context so a truncated inbox stays pending.
     pub fn context_delivered_ids(&self, conversation: &str) -> Vec<u64> {
-        let Some((container, worker)) = self.member_for(conversation) else { return Vec::new(); };
-        let Some(c) = self.containers.iter().find(|container_record| container_record.id == container) else {
+        let Some((container, worker)) = self.member_for(conversation) else {
+            return Vec::new();
+        };
+        let Some(c) = self
+            .containers
+            .iter()
+            .find(|container_record| container_record.id == container)
+        else {
             return Vec::new();
         };
         let mut length = 0_usize;
         let mut ids = Vec::new();
-        let candidates = c.messages.iter()
+        let candidates = c
+            .messages
+            .iter()
             .filter(|message| message.to == worker && message.status == "delivered")
-            .rev().take(12).collect::<Vec<_>>();
+            .rev()
+            .take(12)
+            .collect::<Vec<_>>();
         for message in candidates.into_iter().rev() {
-            let sender = c.members.iter().find(|member| member.id == message.from)
-                .map(|member| member.name.as_str()).unwrap_or("Unknown");
-            let bytes = format!("INBOX #{} [{}] FROM {} (#{}) at {}: {}\\n",
-                message.id, message.kind, sender, message.from, message.created_ms, message.body).len();
-            if length + bytes > 6_000 { break; }
+            let sender = c
+                .members
+                .iter()
+                .find(|member| member.id == message.from)
+                .map(|member| member.name.as_str())
+                .unwrap_or("Unknown");
+            let bytes = format!(
+                "INBOX #{} [{}] FROM {} (#{}) at {}: {}\\n",
+                message.id, message.kind, sender, message.from, message.created_ms, message.body
+            )
+            .len();
+            if length + bytes > 6_000 {
+                break;
+            }
             length += bytes;
             ids.push(message.id);
         }
