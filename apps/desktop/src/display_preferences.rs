@@ -23,11 +23,11 @@ impl Default for DisplayPreferences {
             show_delivery_history: false,
             render_markdown: true,
             coordination_colors: [
-                [42, 57, 88],
-                [36, 69, 62],
-                [80, 61, 38],
-                [66, 51, 83],
-                [49, 61, 67],
+                [90, 55, 27],
+                [47, 70, 55],
+                [83, 50, 70],
+                [81, 66, 29],
+                [43, 69, 76],
             ],
             message_colors: [[27, 43, 65], [26, 44, 36], [42, 31, 56], [50, 39, 26]],
         }
@@ -111,7 +111,21 @@ impl DisplayPreferences {
                         }
                     }
                 }
-                colors
+                // Migrate the original blue-led defaults, including if they were
+                // saved to disk. Explicitly customized palettes are unchanged.
+                if colors
+                    == [
+                        [42, 57, 88],
+                        [36, 69, 62],
+                        [80, 61, 38],
+                        [66, 51, 83],
+                        [49, 61, 67],
+                    ]
+                {
+                    Self::default().coordination_colors
+                } else {
+                    colors
+                }
             },
         }
     }
@@ -139,6 +153,38 @@ impl DisplayPreferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_coordination_colors_migrate_but_custom_colors_survive() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-palette-migration-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let mut preferences = DisplayPreferences::default();
+        preferences.coordination_colors = [
+            [42, 57, 88],
+            [36, 69, 62],
+            [80, 61, 38],
+            [66, 51, 83],
+            [49, 61, 67],
+        ];
+        preferences.save(&path).unwrap();
+        assert_eq!(
+            DisplayPreferences::load(&path).coordination_colors,
+            DisplayPreferences::default().coordination_colors
+        );
+        preferences.coordination_colors[0] = [12, 34, 56];
+        preferences.save(&path).unwrap();
+        assert_eq!(
+            DisplayPreferences::load(&path).coordination_colors[0],
+            [12, 34, 56]
+        );
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn defaults_hide_both_debug_surfaces_and_roundtrip() {
         let path = std::env::temp_dir().join(format!(

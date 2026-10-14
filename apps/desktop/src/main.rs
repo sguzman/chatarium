@@ -7477,6 +7477,27 @@ impl eframe::App for ChatariumApp {
                     .default_open(false)
                     .show(ui, |ui| {
                         let mut changed = false;
+                        ui.label("Coordination messages use their own colors, separately from user, agent, and MCP messages.");
+                        egui::CollapsingHeader::new("Coordination message colors")
+                            .id_salt("chatarium-coordination-message-colors")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                ui.label("Background colors for consumed coordination bubbles, by message kind.");
+                                for (index, kind) in display_preferences::DisplayPreferences::COORDINATION_KINDS.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(*kind);
+                                        changed |= ui.color_edit_button_srgb(
+                                            &mut display_preferences.coordination_colors[index]
+                                        ).changed();
+                                    });
+                                }
+                                if ui.button("Restore coordination colors").clicked() {
+                                    display_preferences.coordination_colors =
+                                        display_preferences::DisplayPreferences::default().coordination_colors;
+                                    changed = true;
+                                }
+                            });
+                        ui.separator();
                         changed |= ui.checkbox(
                             &mut display_preferences.render_markdown,
                             "Render Markdown in user and agent messages",
@@ -7508,25 +7529,6 @@ impl eframe::App for ChatariumApp {
                                 if ui.button("Restore standard message colors").clicked() {
                                     display_preferences.message_colors =
                                         display_preferences::DisplayPreferences::default().message_colors;
-                                    changed = true;
-                                }
-                            });
-                        egui::CollapsingHeader::new("Coordination message colors")
-                            .id_salt("chatarium-coordination-message-colors")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                ui.label("Background colors for consumed coordination bubbles, by message kind.");
-                                for (index, kind) in display_preferences::DisplayPreferences::COORDINATION_KINDS.iter().enumerate() {
-                                    ui.horizontal(|ui| {
-                                        ui.label(*kind);
-                                        changed |= ui.color_edit_button_srgb(
-                                            &mut display_preferences.coordination_colors[index]
-                                        ).changed();
-                                    });
-                                }
-                                if ui.button("Restore coordination colors").clicked() {
-                                    display_preferences.coordination_colors =
-                                        display_preferences::DisplayPreferences::default().coordination_colors;
                                     changed = true;
                                 }
                             });
@@ -15914,6 +15916,35 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                         }
+                        if !historical_mode {
+                            let conversation_id = self.local_conversation_id.to_string();
+                            if let Some(failed) = self.delivery.for_conversation(&conversation_id).last() {
+                                if matches!(
+                                    failed.phase,
+                                    delivery_telemetry::Phase::Failed
+                                        | delivery_telemetry::Phase::Unconfirmed
+                                ) {
+                                    egui::CollapsingHeader::new("Last request failed · inspect error")
+                                        .id_salt(("chatarium-last-request-error", self.local_conversation_id))
+                                        .default_open(true)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!("Request ID: {}", failed.request_id))
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                            ui.add(
+                                                egui::Label::new(
+                                                    failed.error.as_deref().unwrap_or(
+                                                        "The request did not complete; no transport error detail was supplied."
+                                                    ),
+                                                )
+                                                .wrap(),
+                                            );
+                                        });
+                                }
+                            }
+                        }
                         if !historical_mode && display_preferences.show_delivery_history {
                             let conversation_id = self.local_conversation_id.to_string();
                             draw_delivery_timeline(
@@ -16158,36 +16189,43 @@ fn draw_consumed_coordination_bubble(
 ) {
     let rgb = preferences.coordination_color(&message.kind);
     let fill = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+    // Reserve room for the frame's margins and stroke, even in a narrow reader.
+    // A horizontal parent layout with an inner width equal to the whole bubble
+    // previously pushed the body off the right edge of the conversation.
+    let available = ui.available_width().max(1.0);
+    let frame_width = (available * 0.88).min(900.0);
+    let inset: i8 = if frame_width < 300.0 { 10 } else { 16 };
+    let text_width = (frame_width - f32::from(inset) * 2.0 - 4.0).max(1.0);
     ui.push_id(("consumed-coordination", message.id), |ui| {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-            let width = (ui.available_width() * 0.80)
-                .clamp(200.0, 950.0)
-                .min((ui.available_width() - 47.0).max(1.0));
-            egui::Frame::default()
-                .fill(fill)
-                .stroke(egui::Stroke::new(1.5_f32, fill.gamma_multiply(1.8)))
-                .corner_radius(egui::CornerRadius::same(12))
-                .inner_margin(egui::Margin::symmetric(22, 13))
-                .show(ui, |ui| {
-                    ui.set_width(width);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Coordination {} · #{}",
-                                message.kind, message.id
-                            ))
-                            .strong()
-                            .color(egui::Color32::WHITE),
-                        );
-                        if ui.small_button("Copy").clicked() {
-                            ctx.copy_text(message.body.clone());
-                        }
-                    });
+        egui::Frame::default()
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, fill.gamma_multiply(1.7)))
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::symmetric(inset, 12))
+            .show(ui, |ui| {
+                ui.set_width(text_width);
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
+                        egui::RichText::new(format!(
+                            "Coordination {} · #{}",
+                            message.kind, message.id
+                        ))
+                        .strong()
+                        .color(egui::Color32::WHITE),
+                    );
+                    if ui.small_button("Copy").clicked() {
+                        ctx.copy_text(message.body.clone());
+                    }
+                });
+                ui.add(
+                    egui::Label::new(
                         egui::RichText::new(&message.body)
                             .color(egui::Color32::from_rgb(244, 246, 248)),
-                    );
-                    ui.label(
+                    )
+                    .wrap(),
+                );
+                ui.add(
+                    egui::Label::new(
                         egui::RichText::new(format!(
                             "From {} · consumed {} · verified coordination inbox (not authored)",
                             message.from,
@@ -16195,10 +16233,11 @@ fn draw_consumed_coordination_bubble(
                                 .unwrap_or_else(|| "time unknown".to_owned()),
                         ))
                         .size(10.0)
-                        .color(egui::Color32::from_rgb(200, 204, 214)),
-                    );
-                });
-        });
+                        .color(egui::Color32::from_rgb(220, 222, 226)),
+                    )
+                    .wrap(),
+                );
+            });
     });
 }
 
