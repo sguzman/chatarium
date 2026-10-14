@@ -16,10 +16,95 @@ const VERSION: u64 = 1;
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_PROJECT_DIRECTORY_BYTES: usize = 4096;
 
+/// Local chat accents are durable UI metadata, not part of a conversation title.
+/// The palette is spread around the hue wheel, with candidate selection maximizing
+/// distance from accents already allocated in this catalog.
+fn decode_color(hex: &str) -> Option<[u8; 3]> {
+    if hex.len() != 7 || !hex.starts_with('#') {
+        return None;
+    }
+    let value = u32::from_str_radix(&hex[1..], 16).ok()?;
+    Some([(value >> 16) as u8, (value >> 8) as u8, value as u8])
+}
+
+fn hsv_rgb(hue: f32, saturation: f32, value: f32) -> [u8; 3] {
+    let sector = hue / 60.0;
+    let chroma = value * saturation;
+    let second = chroma * (1.0 - ((sector % 2.0) - 1.0).abs());
+    let (r, g, b) = match sector as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let minimum = value - chroma;
+    [
+        ((r + minimum) * 255.0).round() as u8,
+        ((g + minimum) * 255.0).round() as u8,
+        ((b + minimum) * 255.0).round() as u8,
+    ]
+}
+
+fn allocate_color(
+    id: LocalConversationId,
+    entries: &BTreeMap<String, LocalConversationEntry>,
+) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in id.to_string().bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+    }
+    let existing = entries
+        .values()
+        .filter_map(|entry| decode_color(&entry.color))
+        .collect::<Vec<_>>();
+    let mut best = None::<([u8; 3], u32)>;
+    for attempt in 0..128_u64 {
+        let mut seed = hash ^ attempt.wrapping_mul(0x9e3779b97f4a7c15);
+        seed ^= seed >> 30;
+        seed = seed.wrapping_mul(0xbf58476d1ce4e5b9);
+        seed ^= seed >> 27;
+        seed = seed.wrapping_mul(0x94d049bb133111eb);
+        seed ^= seed >> 31;
+        let rgb = hsv_rgb(
+            (seed % 360) as f32,
+            0.66 + ((seed >> 12) % 22) as f32 / 100.0,
+            0.82 + ((seed >> 24) % 16) as f32 / 100.0,
+        );
+        if existing.contains(&rgb) {
+            continue;
+        }
+        let score = existing
+            .iter()
+            .map(|other| {
+                rgb.iter()
+                    .zip(other)
+                    .map(|(a, b)| (i32::from(*a) - i32::from(*b)).pow(2) as u32)
+                    .sum::<u32>()
+            })
+            .min()
+            .unwrap_or(u32::MAX);
+        if best.is_none_or(|(_, previous)| score > previous) {
+            best = Some((rgb, score));
+        }
+    }
+    let rgb = best.map(|(rgb, _)| rgb).unwrap_or([240, 172, 108]);
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+impl LocalConversationEntry {
+    #[must_use]
+    pub fn accent_rgb(&self) -> [u8; 3] {
+        decode_color(&self.color).unwrap_or([240, 172, 108])
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalConversationEntry {
     pub id: LocalConversationId,
     pub title: Option<String>,
+    pub color: String,
     pub project_directory: Option<String>,
     pub archived: bool,
     pub created_at_unix_ms: u64,
@@ -101,13 +186,21 @@ impl LocalConversationCatalog {
                 .get("updated_at_unix_ms")
                 .and_then(Value::as_u64)
                 .unwrap_or(created_at_unix_ms);
+            let color = object
+                .get("color")
+                .and_then(Value::as_str)
+                .filter(|value| decode_color(value).is_some())
+                .filter(|value| !entries.values().any(|entry: &LocalConversationEntry| entry.color.eq_ignore_ascii_case(value)))
+                .map(|value| value.to_ascii_uppercase())
+                .unwrap_or_else(|| allocate_color(id, &entries));
             if entries
                 .insert(
                     id.to_string(),
                     LocalConversationEntry {
                         id,
                         title,
-                        project_directory,
+                        color,
+                        project_directory:
                         archived,
                         created_at_unix_ms,
                         updated_at_unix_ms,
@@ -136,6 +229,7 @@ impl LocalConversationCatalog {
                 json!({
                     "id": entry.id.to_string(),
                     "title": entry.title,
+                    "color": entry.color,
                     "project_directory": entry.project_directory,
                     "archived": entry.archived,
                     "created_at_unix_ms": entry.created_at_unix_ms,
@@ -186,10 +280,12 @@ impl LocalConversationCatalog {
             }
             return false;
         }
+        let color = allocate_color(id, &self.entries);
         self.entries.insert(
             key,
             LocalConversationEntry {
                 id,
+                color,
                 title: derived_title.filter(|title| !title.trim().is_empty()),
                 project_directory: None,
                 archived: false,
@@ -201,11 +297,13 @@ impl LocalConversationCatalog {
     }
 
     pub fn create(&mut self, id: LocalConversationId, now_ms: u64) {
+        let color = allocate_color(id, &self.entries);
         self.entries.insert(
             id.to_string(),
             LocalConversationEntry {
                 id,
                 title: None,
+                color,
                 project_directory: None,
                 archived: false,
                 created_at_unix_ms: now_ms,
@@ -366,6 +464,8 @@ mod tests {
             Some("First")
         );
         assert!(loaded.entry(second).is_some_and(|entry| entry.archived));
+        assert_eq!(loaded.entry(first).unwrap().color, catalog.entry(first).unwrap().color);
+        assert_ne!(loaded.entry(first).unwrap().color, loaded.entry(second).unwrap().color);
 
         let _ = fs::remove_file(path);
     }
@@ -396,6 +496,28 @@ mod tests {
         );
         reloaded.set_project_directory(first, None, 5).unwrap();
         assert_eq!(reloaded.entry(first).unwrap().project_directory, None);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_catalog_colors_are_backfilled_and_stay_distinct() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(first, 1);
+        catalog.create(second, 2);
+        let path = temp_path();
+        catalog.save_atomic(&path).unwrap();
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for entry in value["conversations"].as_array_mut().unwrap() {
+            entry.as_object_mut().unwrap().remove("color");
+        }
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let migrated = LocalConversationCatalog::load(&path).unwrap();
+        assert_ne!(migrated.entry(first).unwrap().color, migrated.entry(second).unwrap().color);
+        assert_eq!(migrated.entry(first).unwrap().accent_rgb().len(), 3);
+        migrated.save_atomic(&path).unwrap();
+        assert_eq!(LocalConversationCatalog::load(&path).unwrap(), migrated);
         let _ = fs::remove_file(path);
     }
 
