@@ -7437,6 +7437,37 @@ impl eframe::App for ChatariumApp {
                 // rename fields and status labels force the outer panel wider.
                 // Recompute each frame: the splitter must still resize both ways.
                 let sidebar_width = ui.available_width();
+                // Pin global navigation above the chat sidebar scroll region.
+                ui.label(
+                    egui::RichText::new("Chatarium")
+                        .size(24.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(238, 239, 244)),
+                );
+                let coordination_pending = self
+                    .coordination_workspace
+                    .containers
+                    .iter()
+                    .flat_map(|container| container.messages.iter())
+                    .filter(|message| {
+                        matches!(message.status.as_str(), "delivered" | "queued" | "approval")
+                    })
+                    .count();
+                let coordination_title = if coordination_pending == 0 {
+                    "Coordination / messages".to_owned()
+                } else {
+                    format!("Coordination / messages · {coordination_pending} pending")
+                };
+                if ui
+                    .add_sized(
+                        [sidebar_width.max(1.0), 30.0],
+                        egui::Button::new(coordination_title),
+                    )
+                    .clicked()
+                {
+                    self.coordination_window_open = true;
+                }
+                ui.separator();
                 // Overflowing horizontal content belongs to the scroll area,
                 // not to the user-resizable panel. A vertical-only scroll area
                 // allows a long child to increase the panel's intrinsic width.
@@ -7447,12 +7478,6 @@ impl eframe::App for ChatariumApp {
                         ui.set_width(sidebar_width);
                         let sidebar_control_width = ui.available_width();
                         ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new("Chatarium")
-                                .size(24.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(238, 239, 244)),
-                        );
                         ui.label(
                             egui::RichText::new("Local-first workspace")
                                 .size(12.0)
@@ -13903,13 +13928,6 @@ impl eframe::App for ChatariumApp {
                                             .color(egui::Color32::from_rgb(139, 143, 153)),
                                     );
                                 });
-                        }
-
-                        if !historical_mode {
-                            ui.add_space(9.0);
-                            if ui.button("Coordination / messages").clicked() {
-                                self.coordination_window_open = true;
-                            }
                         }
 
                         if ACCOUNT_MIRRORING_ENABLED && !self.remote_conversation_catalog.is_empty() {
