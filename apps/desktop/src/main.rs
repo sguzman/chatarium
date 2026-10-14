@@ -1856,8 +1856,8 @@ impl ChatariumApp {
 
     fn save_current_project_directory(&mut self) {
         if self.local_conversation_busy() {
-            self.status = "finish the active turn before changing this chat's project folder"
-                .to_owned();
+            self.status =
+                "finish the active turn before changing this chat's project folder".to_owned();
             return;
         }
         if let Err(error) = self.local_conversation_catalog.set_project_directory(
