@@ -5633,7 +5633,15 @@ impl ChatariumApp {
             return;
         }
         let source = active.conversation_id.to_string();
-        let result: Result<Value, String> = match proposal.tool.as_str() {
+        let authorization = mcp_agent_defaults::tool_policy(
+            &self.mcp_agent_defaults.policy_rules,
+            &proposal.provider,
+            &proposal.tool,
+        );
+        let result: Result<Value, String> = if authorization != Ok(mcp_agent_defaults::ToolPolicy::Automatic) {
+            Err("coordination operation denied by exact MCP tool policy".to_owned())
+        } else {
+            match proposal.tool.as_str() {
             "coordination.identity" => {
                 if proposal
                     .arguments
@@ -5697,6 +5705,7 @@ impl ChatariumApp {
                 }
             }
             _ => Err("unknown coordination operation".to_owned()),
+            }
         };
         self.coordination_tool_steps += 1;
         let tool_result = match result {
