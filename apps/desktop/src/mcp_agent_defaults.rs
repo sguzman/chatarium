@@ -425,7 +425,8 @@ mod tests {
                 .as_nanos(),
         ));
         let defaults = AgentDefaults::default();
-        let old = format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic");
+        let old =
+            format!("{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic");
         let file = json!({
             "schema": SCHEMA,
             "version": 1,
@@ -439,7 +440,11 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
         let upgraded = AgentDefaults::load(&path).unwrap();
         assert_eq!(
-            tool_policy(&upgraded.policy_rules,"chatarium.builtin","coordination.send"),
+            tool_policy(
+                &upgraded.policy_rules,
+                "chatarium.builtin",
+                "coordination.send"
+            ),
             Ok(ToolPolicy::Automatic)
         );
         let mut disabled = upgraded.clone();
