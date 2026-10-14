@@ -14,9 +14,15 @@ Open **Context & inference controls → Tools / MCP → Host shell · Fish / Bas
   `host-shell-mcp.json` alongside other local Chatarium settings.
 - The policy in **Agent defaults** determines `automatic`, `ask`,
   `manual`, or `disabled` for this exact operation.
-- For untouched default policies the shell tool uses `ask` (per-call
-  approval). Customized permission files are not overwritten; you may
-  explicitly change the exact operation to `automatic` in Agent defaults.
+- The built-in host-shell tool uses `automatic` by default: its
+  commands run without per-call approval and the agent resumes with each
+  journaled result. Only the exact previously generated `ask` default is
+  migrated automatically on upgrade. Explicitly customized policies remain
+  untouched; `ask`, `manual`, and `disabled` can still be selected
+  in Agent defaults.
+- Pending tool calls already recorded under `ask` retain their original
+  route permissions and will not execute retroactively; new agent requests
+  use the updated default.
 
 Agent tool request:
 
