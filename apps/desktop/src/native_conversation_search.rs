@@ -247,7 +247,7 @@ fn hide_audited_mcp_protocol_requests(
             "MCP CALL · journaled · {}::{} ·",
             request.provider, request.tool
         );
-        let arguments = format!("Exact tool arguments:\\n{}", request.arguments);
+        let arguments = format!("Exact tool arguments:\n{}", request.arguments);
         !audited_calls.iter().any(|call| {
             call.role == super::DisplayRole::Mcp
                 && call.sequence > row.sequence
@@ -2478,13 +2478,13 @@ mod tests {
             display(super::DisplayRole::User, "try to run shell", 1),
             display(super::DisplayRole::Assistant, raw, 2),
         ];
+        let verified_text = format!(
+            "TOOL CALL\nchatarium.builtin::shell.command · call #9 · session #3\n\nExact tool arguments:\n{}",
+            serde_json::json!({"command":"echo Hello from the shell"})
+        );
         let verified = DisplayMessage {
             provenance_label: Some("MCP CALL · journaled · chatarium.builtin::shell.command · call #9 · session #3".to_owned()),
-            ..display(
-                super::DisplayRole::Mcp,
-                "TOOL CALL\\nchatarium.builtin::shell.command · call #9 · session #3\\n\\nExact tool arguments:\\n{\\"command\\":\\"echo Hello from the shell\\"}",
-                3,
-            )
+            ..display(super::DisplayRole::Mcp, &verified_text, 3)
         };
         hide_audited_mcp_protocol_requests(&mut messages, &[]);
         assert_eq!(messages.len(), 2, "unverified requests must remain visible");
