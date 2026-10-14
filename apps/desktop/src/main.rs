@@ -15869,6 +15869,23 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                         }
+                        if !historical_mode {
+                            let consumed = self.coordination_workspace.consumed_for(
+                                &self.local_conversation_id.to_string(),
+                            );
+                            if !consumed.is_empty() {
+                                ui.add_space(10.0);
+                                ui.label(egui::RichText::new("COORDINATION · CONSUMED BY THIS CHAT")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(186, 199, 220)));
+                                ui.add_space(5.0);
+                                for message in &consumed {
+                                    draw_consumed_coordination_bubble(ui, message, &display_preferences, ctx);
+                                    ui.add_space(12.0);
+                                }
+                            }
+                        }
                         if !historical_mode && display_preferences.show_delivery_history {
                             let conversation_id = self.local_conversation_id.to_string();
                             draw_delivery_timeline(
@@ -16101,6 +16118,48 @@ fn draw_delivery_timeline_details(
             });
         ui.add_space(4.0);
     }
+}
+
+/// Non-authored, durable coordination evidence rendered as its own distinct
+/// bubble. It never masquerades as an authored user message or enters the transcript context.
+fn draw_consumed_coordination_bubble(
+    ui: &mut egui::Ui,
+    message: &coordination_workspace::ConsumedDisplay,
+    preferences: &display_preferences::DisplayPreferences,
+    ctx: &egui::Context,
+) {
+    let rgb = preferences.coordination_color(&message.kind);
+    let fill = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+    ui.push_id(("consumed-coordination", message.id), |ui| {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            let width = (ui.available_width() * 0.80).clamp(200.0, 950.0)
+                .min((ui.available_width() - 47.0).max(1.0));
+            egui::Frame::default()
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.5_f32, fill.gamma_multiply(1.8)))
+                .corner_radius(egui::CornerRadius::same(12))
+                .inner_margin(egui::Margin::symmetric(22, 13))
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(
+                            format!("Coordination {} · #{}", message.kind, message.id)
+                        ).strong().color(egui::Color32::WHITE));
+                        if ui.small_button("Copy").clicked() {
+                            ctx.copy_text(message.body.clone());
+                        }
+                    });
+                    ui.label(egui::RichText::new(&message.body)
+                        .color(egui::Color32::from_rgb(244, 246, 248)));
+                    ui.label(egui::RichText::new(format!(
+                        "From {} · consumed {} · verified coordination inbox (not authored)",
+                        message.from,
+                        timestamp_display::utc_minute(message.consumed_ms as f64 / 1000.0)
+                            .unwrap_or_else(|| "time unknown".to_owned()),
+                    )).size(10.0).color(egui::Color32::from_rgb(200, 204, 214)));
+                });
+        });
+    });
 }
 
 fn draw_reader_bubble(
