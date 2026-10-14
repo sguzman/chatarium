@@ -501,7 +501,9 @@ impl Workspace {
     pub fn advance_rate_queues(&mut self, now: u64) -> usize {
         let mut changed = 0_usize;
         for c in &mut self.containers {
-            let ids = c.messages.iter()
+            let ids = c
+                .messages
+                .iter()
                 .filter(|m| m.status == "queued" && m.note.starts_with("rate limit reached"))
                 .map(|m| m.id)
                 .collect::<Vec<_>>();
@@ -509,9 +511,18 @@ impl Workspace {
                 let Some(record) = c.messages.iter().find(|m| m.id == id).cloned() else {
                     continue;
                 };
-                let link = c.links.iter().find(|l| l.from == record.from && l.to == record.to);
-                let valid = link.is_some_and(|l| l.mode == "rate_limit"
-                    && if record.kind == "directive" { l.directives } else { l.reports });
+                let link = c
+                    .links
+                    .iter()
+                    .find(|l| l.from == record.from && l.to == record.to);
+                let valid = link.is_some_and(|l| {
+                    l.mode == "rate_limit"
+                        && if record.kind == "directive" {
+                            l.directives
+                        } else {
+                            l.reports
+                        }
+                });
                 if !valid {
                     let m = c.messages.iter_mut().find(|m| m.id == id).unwrap();
                     m.status = "rejected".to_owned();
@@ -520,10 +531,16 @@ impl Workspace {
                     continue;
                 }
                 let limit = link.unwrap().per_minute as usize;
-                let within_window = c.messages.iter().filter(|m|
-                    m.from == record.from && m.to == record.to
-                        && m.delivered_ms.is_some_and(|time| now.saturating_sub(time) < 60_000)
-                ).count();
+                let within_window = c
+                    .messages
+                    .iter()
+                    .filter(|m| {
+                        m.from == record.from
+                            && m.to == record.to
+                            && m.delivered_ms
+                                .is_some_and(|time| now.saturating_sub(time) < 60_000)
+                    })
+                    .count();
                 if within_window < limit {
                     let m = c.messages.iter_mut().find(|m| m.id == id).unwrap();
                     m.status = "delivered".to_owned();
@@ -1016,9 +1033,18 @@ mod tests {
     fn rate_limited_fifo_delivery_advances_without_human_queue_release() {
         let (mut s, c, a, b) = setup();
         s.set_link(c, a, b, true, true, "rate_limit", 1).unwrap();
-        assert_eq!(s.send("chat-a", b, "directive", "one", 1_000).unwrap().1, "delivered");
-        assert_eq!(s.send("chat-a", b, "directive", "two", 1_001).unwrap().1, "queued");
-        assert_eq!(s.send("chat-a", b, "directive", "three", 1_002).unwrap().1, "queued");
+        assert_eq!(
+            s.send("chat-a", b, "directive", "one", 1_000).unwrap().1,
+            "delivered"
+        );
+        assert_eq!(
+            s.send("chat-a", b, "directive", "two", 1_001).unwrap().1,
+            "queued"
+        );
+        assert_eq!(
+            s.send("chat-a", b, "directive", "three", 1_002).unwrap().1,
+            "queued"
+        );
         assert_eq!(s.advance_rate_queues(59_999), 0);
         assert_eq!(s.advance_rate_queues(61_000), 1);
         assert_eq!(s.containers[0].messages[1].status, "delivered");
