@@ -14986,7 +14986,10 @@ impl eframe::App for ChatariumApp {
                         ctx.request_repaint();
                     }
                 }
-                Err(_) => self.status = "Coordination message refers to an invalid local chat ID".to_owned(),
+                Err(_) => {
+                    self.status =
+                        "Coordination message refers to an invalid local chat ID".to_owned()
+                }
             }
         }
         if rename_local_requested {

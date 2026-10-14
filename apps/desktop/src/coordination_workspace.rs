@@ -1053,7 +1053,11 @@ fn render_message_center(
     drafts: &mut UiDrafts,
     conversations: &[(String, String, Color32)],
 ) -> bool {
-    let total = store.containers.iter().map(|c| c.messages.len()).sum::<usize>();
+    let total = store
+        .containers
+        .iter()
+        .map(|c| c.messages.len())
+        .sum::<usize>();
     let pending = store
         .containers
         .iter()
@@ -1654,16 +1658,41 @@ mod tests {
         };
         let delivered = make("delivered", "directive");
         let consumed = make("consumed", "ack");
-        assert!(message_visible(&delivered, "Team", "Director", "Coder", "", "all"));
-        assert!(message_visible(&consumed, "Team", "Director", "Coder", "ack", "all"));
-        assert!(message_visible(&consumed, "Team", "Director", "Coder", "coder", "all"));
-        assert!(message_visible(&consumed, "Team", "Director", "Coder", "#17", "all"));
-        assert!(message_visible(&delivered, "Team", "Director", "Coder", "", "pending"));
-        assert!(!message_visible(&consumed, "Team", "Director", "Coder", "", "pending"));
-        assert!(message_visible(&consumed, "Team", "Director", "Coder", "", "consumed"));
-        assert!(!message_visible(&delivered, "Team", "Director", "Coder", "", "consumed"));
-        assert!(!message_visible(&consumed, "Team", "Director", "Coder", "", "other"));
-        assert!(message_visible(&make("blocked", "request"), "Team", "Director", "Coder", "", "other"));
+        assert!(message_visible(
+            &delivered, "Team", "Director", "Coder", "", "all"
+        ));
+        assert!(message_visible(
+            &consumed, "Team", "Director", "Coder", "ack", "all"
+        ));
+        assert!(message_visible(
+            &consumed, "Team", "Director", "Coder", "coder", "all"
+        ));
+        assert!(message_visible(
+            &consumed, "Team", "Director", "Coder", "#17", "all"
+        ));
+        assert!(message_visible(
+            &delivered, "Team", "Director", "Coder", "", "pending"
+        ));
+        assert!(!message_visible(
+            &consumed, "Team", "Director", "Coder", "", "pending"
+        ));
+        assert!(message_visible(
+            &consumed, "Team", "Director", "Coder", "", "consumed"
+        ));
+        assert!(!message_visible(
+            &delivered, "Team", "Director", "Coder", "", "consumed"
+        ));
+        assert!(!message_visible(
+            &consumed, "Team", "Director", "Coder", "", "other"
+        ));
+        assert!(message_visible(
+            &make("blocked", "request"),
+            "Team",
+            "Director",
+            "Coder",
+            "",
+            "other"
+        ));
     }
 
     #[test]
