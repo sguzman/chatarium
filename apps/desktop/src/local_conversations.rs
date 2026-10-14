@@ -382,13 +382,12 @@ mod tests {
         catalog
             .set_project_directory(first, Some(directory.display().to_string()), 3)
             .unwrap();
-        assert_eq!(
-            catalog.entry(second).unwrap().project_directory,
-            None
+        assert_eq!(catalog.entry(second).unwrap().project_directory, None);
+        assert!(
+            catalog
+                .set_project_directory(second, Some("relative-path".to_owned()), 4)
+                .is_err()
         );
-        assert!(catalog
-            .set_project_directory(second, Some("relative-path".to_owned()), 4)
-            .is_err());
         catalog.save_atomic(&path).unwrap();
         let mut reloaded = LocalConversationCatalog::load(&path).unwrap();
         assert_eq!(
