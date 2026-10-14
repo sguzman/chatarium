@@ -13463,6 +13463,8 @@ impl eframe::App for ChatariumApp {
                             let entry = &native_entries[row.catalog_index];
                             let messages = native_search_index.messages(entry.id);
                             let title = row.title.as_str();
+                            let rgb = entry.accent_rgb();
+                            let accent = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                             // A 42-character unbroken title must not force the
                             // entire resizable sidebar to its maximum width.
                             // Keep the original title as a hover explanation.
@@ -13511,7 +13513,7 @@ impl eframe::App for ChatariumApp {
                                 .stroke(egui::Stroke::new(
                                     if selected || keyboard_selected { 1.7 } else { 1.0 },
                                     if selected || keyboard_selected {
-                                        egui::Color32::from_rgb(82, 151, 235)
+                                        accent
                                     } else {
                                         egui::Color32::from_rgb(57, 72, 94)
                                     },
@@ -13525,12 +13527,9 @@ impl eframe::App for ChatariumApp {
                                     if ui
                                         .selectable_label(
                                             selected || keyboard_selected,
-                                            egui::RichText::new(format!(
-                                                "{}{}",
-                                                if selected { "● " } else { "" },
-                                                title_preview,
-                                            ))
-                                            .strong(),
+                                            egui::RichText::new(format!("● {title_preview}"))
+                                                .color(accent)
+                                                .strong(),
                                         )
                                         .on_hover_text(title)
                                         .clicked()
@@ -14822,10 +14821,16 @@ impl eframe::App for ChatariumApp {
                         .entries()
                         .iter()
                         .map(|entry| {
-                            (
-                                entry.id.to_string(),
-                                entry.title.clone().unwrap_or_else(|| entry.id.to_string()),
-                            )
+                            {
+                                let rgb = entry.accent_rgb();
+                                (
+                                    entry.id.to_string(),
+                                    entry.title.clone().filter(|s| !s.trim().is_empty())
+                                        .or_else(|| entry.project_directory.clone())
+                                        .unwrap_or_else(|| format!("Chat {}", &entry.id.to_string()[..8])),
+                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                                )
+                            }
                         })
                         .collect::<Vec<_>>();
                     let previous = self.coordination_workspace.clone();
@@ -14888,12 +14893,20 @@ impl eframe::App for ChatariumApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(conversation_title.as_str())
-                                .size(19.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(238, 239, 244)),
-                        );
+                        ui.horizontal(|ui| {
+                            if !historical_mode {
+                                if let Some(entry) = self.local_conversation_catalog.entry(self.local_conversation_id) {
+                                    let rgb = entry.accent_rgb();
+                                    ui.colored_label(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), "●");
+                                }
+                            }
+                            ui.label(
+                                egui::RichText::new(conversation_title.as_str())
+                                    .size(19.0)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(238, 239, 244)),
+                            );
+                        });
                         ui.label(
                             egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
                                 "Remote catalog item · not mirrored locally"
