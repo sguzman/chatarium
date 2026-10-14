@@ -650,7 +650,9 @@ impl Workspace {
 }
 
 fn conversation_color(conversations: &[(String, String, Color32)], id: &str) -> Color32 {
-    conversations.iter().find(|(key, _, _)| key == id)
+    conversations
+        .iter()
+        .find(|(key, _, _)| key == id)
         .map(|(_, _, color)| *color)
         .unwrap_or(Color32::from_rgb(125, 160, 190))
 }
@@ -721,17 +723,35 @@ pub fn topology_ui(ui: &mut egui::Ui, c: &Container, conversations: &[(String, S
             let color = conversation_color(conversations, &w.conversation);
             let brightness = (u32::from(color.r()) * 299
                 + u32::from(color.g()) * 587
-                + u32::from(color.b()) * 114) / 1000;
-            let text_color = if brightness > 150 { Color32::BLACK } else { Color32::WHITE };
+                + u32::from(color.b()) * 114)
+                / 1000;
+            let text_color = if brightness > 150 {
+                Color32::BLACK
+            } else {
+                Color32::WHITE
+            };
             painter.circle_filled(*p, 21.0, color);
             painter.circle_stroke(*p, 21.0, Stroke::new(2.0, Color32::WHITE));
-            painter.text(*p, Align2::CENTER_CENTER, w.id.to_string(), FontId::proportional(13.0), text_color);
-            let chat_title = conversations.iter().find(|(id, _, _)| *id == w.conversation)
-                .map(|(_, title, _)| title.as_str()).unwrap_or("missing chat");
+            painter.text(
+                *p,
+                Align2::CENTER_CENTER,
+                w.id.to_string(),
+                FontId::proportional(13.0),
+                text_color,
+            );
+            let chat_title = conversations
+                .iter()
+                .find(|(id, _, _)| *id == w.conversation)
+                .map(|(_, title, _)| title.as_str())
+                .unwrap_or("missing chat");
             painter.text(
                 Pos2::new(p.x, p.y + 31.0),
                 Align2::CENTER_CENTER,
-                format!("{} · {}", w.name, chat_title.chars().take(28).collect::<String>()),
+                format!(
+                    "{} · {}",
+                    w.name,
+                    chat_title.chars().take(28).collect::<String>()
+                ),
                 FontId::proportional(11.0),
                 color,
             );
@@ -809,8 +829,11 @@ pub fn render(
             for (id, title, color) in conversations {
                 let bound = store.member_for(id).is_some();
                 ui.add_enabled_ui(!bound, |ui| {
-                    ui.selectable_value(&mut drafts.selected_conversation, id.clone(),
-                        egui::RichText::new(format!("● {title}")).color(*color));
+                    ui.selectable_value(
+                        &mut drafts.selected_conversation,
+                        id.clone(),
+                        egui::RichText::new(format!("● {title}")).color(*color),
+                    );
                 });
             }
         });
@@ -832,9 +855,14 @@ pub fn render(
         }
     }
     let member_label = |id: u64| {
-        container.members.iter().find(|w| w.id == id)
+        container
+            .members
+            .iter()
+            .find(|w| w.id == id)
             .map(|w| {
-                let chat = conversations.iter().find(|(id, _, _)| *id == w.conversation)
+                let chat = conversations
+                    .iter()
+                    .find(|(id, _, _)| *id == w.conversation)
                     .map(|(_, title, _)| title.chars().take(32).collect::<String>())
                     .unwrap_or_else(|| "missing chat".to_owned());
                 format!("{} · {} (#{})", w.name, chat, w.id)
@@ -842,32 +870,56 @@ pub fn render(
             .unwrap_or("Select worker".to_owned())
     };
     let member_accent = |id: u64| {
-        container.members.iter().find(|w| w.id == id)
-            .map(|w| conversation_color(conversations, &w.conversation)).unwrap_or(Color32::GRAY)
+        container
+            .members
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| conversation_color(conversations, &w.conversation))
+            .unwrap_or(Color32::GRAY)
     };
     for m in &container.members {
         ui.horizontal(|ui| {
             ui.colored_label(member_accent(m.id), "●");
-            ui.label(format!("{} — {}{}", member_label(m.id), m.role,
-                if m.conversation == current { " (ACTIVE CHAT)" } else { "" }));
+            ui.label(format!(
+                "{} — {}{}",
+                member_label(m.id),
+                m.role,
+                if m.conversation == current {
+                    " (ACTIVE CHAT)"
+                } else {
+                    ""
+                }
+            ));
         });
     }
     ui.separator();
     ui.strong("Topology and authority");
     topology_ui(ui, &container, conversations);
-    ui.label("Edges configure authority; changing an edge sender does not change your active chat.");
+    ui.label(
+        "Edges configure authority; changing an edge sender does not change your active chat.",
+    );
     egui::ComboBox::from_label("Authority sender")
         .selected_text(member_label(drafts.source))
         .show_ui(ui, |ui| {
             for m in &container.members {
-                ui.selectable_value(&mut drafts.source, m.id, egui::RichText::new(format!("● {}", member_label(m.id))).color(member_accent(m.id)));
+                ui.selectable_value(
+                    &mut drafts.source,
+                    m.id,
+                    egui::RichText::new(format!("● {}", member_label(m.id)))
+                        .color(member_accent(m.id)),
+                );
             }
         });
     egui::ComboBox::from_label("Authority recipient")
         .selected_text(member_label(drafts.target))
         .show_ui(ui, |ui| {
             for m in &container.members {
-                ui.selectable_value(&mut drafts.target, m.id, egui::RichText::new(format!("● {}", member_label(m.id))).color(member_accent(m.id)));
+                ui.selectable_value(
+                    &mut drafts.target,
+                    m.id,
+                    egui::RichText::new(format!("● {}", member_label(m.id)))
+                        .color(member_accent(m.id)),
+                );
             }
         });
     ui.checkbox(&mut drafts.directives, "Can issue directives");
@@ -896,7 +948,11 @@ pub fn render(
                 dirty = true;
                 drafts.send_from = drafts.source;
                 drafts.send_to = drafts.target;
-                drafts.notice = format!("authority saved: {} → {}", member_label(drafts.source), member_label(drafts.target));
+                drafts.notice = format!(
+                    "authority saved: {} → {}",
+                    member_label(drafts.source),
+                    member_label(drafts.target)
+                );
             }
             Err(e) => drafts.notice = e,
         }
@@ -916,33 +972,45 @@ pub fn render(
     ui.strong("Send a test message");
     ui.label("Human-operated test: choose which worker speaks. Agent messages still use verified conversation identity.");
     if let Some(active) = container.members.iter().find(|m| m.conversation == current) {
-        ui.colored_label(member_accent(active.id),
-            format!("● Active conversation: {}", member_label(active.id)));
+        ui.colored_label(
+            member_accent(active.id),
+            format!("● Active conversation: {}", member_label(active.id)),
+        );
     } else {
         ui.label("The currently open conversation is not attached to this container.");
     }
     ui.horizontal(|ui| {
         ui.label("From");
         egui::ComboBox::from_id_salt("coordination-test-sender")
-            .selected_text(egui::RichText::new(format!("● {}", member_label(drafts.send_from)))
-                .color(member_accent(drafts.send_from)))
+            .selected_text(
+                egui::RichText::new(format!("● {}", member_label(drafts.send_from)))
+                    .color(member_accent(drafts.send_from)),
+            )
             .show_ui(ui, |ui| {
                 for m in &container.members {
-                    ui.selectable_value(&mut drafts.send_from, m.id,
+                    ui.selectable_value(
+                        &mut drafts.send_from,
+                        m.id,
                         egui::RichText::new(format!("● {}", member_label(m.id)))
-                            .color(member_accent(m.id)));
+                            .color(member_accent(m.id)),
+                    );
                 }
             });
         ui.label("→ To");
         egui::ComboBox::from_id_salt("coordination-test-recipient")
-            .selected_text(egui::RichText::new(format!("● {}", member_label(drafts.send_to)))
-                .color(member_accent(drafts.send_to)))
+            .selected_text(
+                egui::RichText::new(format!("● {}", member_label(drafts.send_to)))
+                    .color(member_accent(drafts.send_to)),
+            )
             .show_ui(ui, |ui| {
                 for m in &container.members {
                     if m.id != drafts.send_from {
-                        ui.selectable_value(&mut drafts.send_to, m.id,
+                        ui.selectable_value(
+                            &mut drafts.send_to,
+                            m.id,
                             egui::RichText::new(format!("● {}", member_label(m.id)))
-                                .color(member_accent(m.id)));
+                                .color(member_accent(m.id)),
+                        );
                     }
                 }
             });
@@ -956,38 +1024,73 @@ pub fn render(
         });
     let send_source = container.members.iter().find(|m| m.id == drafts.send_from);
     let send_target = container.members.iter().find(|m| m.id == drafts.send_to);
-    let route = container.links.iter().find(|l| l.from == drafts.send_from && l.to == drafts.send_to);
-    let valid_pair = send_source.is_some() && send_target.is_some()
-        && drafts.send_from != drafts.send_to;
+    let route = container
+        .links
+        .iter()
+        .find(|l| l.from == drafts.send_from && l.to == drafts.send_to);
+    let valid_pair =
+        send_source.is_some() && send_target.is_some() && drafts.send_from != drafts.send_to;
     if !valid_pair {
-        ui.colored_label(Color32::from_rgb(240, 172, 108),
-            "Select two different workers to send a message.");
+        ui.colored_label(
+            Color32::from_rgb(240, 172, 108),
+            "Select two different workers to send a message.",
+        );
     } else if let Some(link) = route {
-        let authorized = if drafts.kind == "directive" { link.directives } else { link.reports };
-        if !authorized || link.mode == "block" {
-            ui.colored_label(Color32::from_rgb(240, 172, 108),
-                "This message will be recorded as BLOCKED by authority or delivery policy.");
-        } else if link.mode == "queue" || link.mode == "approve" {
-            ui.label(format!("Delivery will wait under the {} policy.", link.mode));
+        let authorized = if drafts.kind == "directive" {
+            link.directives
         } else {
-            ui.colored_label(Color32::from_rgb(116, 201, 155), "Authorized route configured.");
+            link.reports
+        };
+        if !authorized || link.mode == "block" {
+            ui.colored_label(
+                Color32::from_rgb(240, 172, 108),
+                "This message will be recorded as BLOCKED by authority or delivery policy.",
+            );
+        } else if link.mode == "queue" || link.mode == "approve" {
+            ui.label(format!(
+                "Delivery will wait under the {} policy.",
+                link.mode
+            ));
+        } else {
+            ui.colored_label(
+                Color32::from_rgb(116, 201, 155),
+                "Authorized route configured.",
+            );
         }
     } else {
-        ui.colored_label(Color32::from_rgb(240, 172, 108),
-            "No authority edge for this direction. Sending will record a BLOCKED message.");
+        ui.colored_label(
+            Color32::from_rgb(240, 172, 108),
+            "No authority edge for this direction. Sending will record a BLOCKED message.",
+        );
     }
-    ui.add(egui::TextEdit::multiline(&mut drafts.body)
-        .hint_text("Message for the other worker")
-        .desired_rows(2)
-        .desired_width(ui.available_width()));
-    if ui.add_enabled(valid_pair && !drafts.body.trim().is_empty(),
-        egui::Button::new("Send test message")).clicked() {
+    ui.add(
+        egui::TextEdit::multiline(&mut drafts.body)
+            .hint_text("Message for the other worker")
+            .desired_rows(2)
+            .desired_width(ui.available_width()),
+    );
+    if ui
+        .add_enabled(
+            valid_pair && !drafts.body.trim().is_empty(),
+            egui::Button::new("Send test message"),
+        )
+        .clicked()
+    {
         if let Some(source) = send_source {
-            match store.send(&source.conversation, drafts.send_to, &drafts.kind, &drafts.body, now_ms()) {
+            match store.send(
+                &source.conversation,
+                drafts.send_to,
+                &drafts.kind,
+                &drafts.body,
+                now_ms(),
+            ) {
                 Ok((id, status)) => {
                     dirty = true;
-                    drafts.notice = format!("Message #{id}: {status} · {} → {}",
-                        member_label(drafts.send_from), member_label(drafts.send_to));
+                    drafts.notice = format!(
+                        "Message #{id}: {status} · {} → {}",
+                        member_label(drafts.send_from),
+                        member_label(drafts.send_to)
+                    );
                     drafts.body.clear();
                 }
                 Err(error) => drafts.notice = format!("Message not sent: {error}"),
