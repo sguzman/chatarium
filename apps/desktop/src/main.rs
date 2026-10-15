@@ -5,6 +5,7 @@ mod capability_probes;
 mod context_composer;
 mod conversation_keybindings;
 mod conversation_navigation;
+mod coordination_tool_budget;
 mod coordination_workspace;
 mod delivery_telemetry;
 mod diagnostics;
@@ -1036,7 +1037,7 @@ struct ChatariumApp {
     coordination_pending_admissions: BTreeMap<String, Vec<u64>>,
     coordination_ui: coordination_workspace::UiDrafts,
     coordination_window_open: bool,
-    coordination_tool_steps: u32,
+    coordination_tool_budget: coordination_tool_budget::Budget,
     coordination_last_queue_check: Instant,
     coordination_auto_wake_target: Option<LocalConversationId>,
     coordination_auto_wake_count: u32,
@@ -1378,7 +1379,7 @@ impl ChatariumApp {
                         coordination_pending_admissions: BTreeMap::new(),
                         coordination_ui: coordination_workspace::UiDrafts::default(),
                         coordination_window_open: false,
-                        coordination_tool_steps: 0,
+                        coordination_tool_budget: coordination_tool_budget::Budget::default(),
                         coordination_last_queue_check: Instant::now(),
                         coordination_auto_wake_target: None,
                         coordination_auto_wake_count: 0,
@@ -1628,7 +1629,7 @@ impl ChatariumApp {
             coordination_pending_admissions: BTreeMap::new(),
             coordination_ui: coordination_workspace::UiDrafts::default(),
             coordination_window_open: false,
-            coordination_tool_steps: 0,
+            coordination_tool_budget: coordination_tool_budget::Budget::default(),
             coordination_last_queue_check: Instant::now(),
             coordination_auto_wake_target: None,
             coordination_auto_wake_count: 0,
@@ -1787,7 +1788,7 @@ impl ChatariumApp {
         self.draft_revision = 0;
         self.saved_revision = 0;
         self.evidence = TurnEvidence::default();
-        self.coordination_tool_steps = 0;
+        self.coordination_tool_budget.reset();
 
         let settings = self
             .inference_settings
@@ -5877,7 +5878,7 @@ impl ChatariumApp {
             return;
         }
         let limit = self.mcp_agent_defaults.max_calls;
-        if self.coordination_tool_steps >= limit {
+        if !self.coordination_tool_budget.admit(active.turn_id, limit) {
             self.status = "coordination call limit reached for this turn".to_owned();
             self.agent_mcp_flow = None;
             return;
@@ -5959,7 +5960,6 @@ impl ChatariumApp {
                 _ => Err("unknown coordination operation".to_owned()),
             }
         };
-        self.coordination_tool_steps += 1;
         let tool_result = match result {
             Ok(value) => serde_json::json!({"ok":true,"result":value}),
             Err(error) => serde_json::json!({"ok":false,"error":error}),
@@ -5993,7 +5993,7 @@ impl ChatariumApp {
         }));
         let request_id = format!(
             "{}-coordination-{}",
-            active.turn_id, self.coordination_tool_steps
+            active.turn_id, self.coordination_tool_budget.used()
         );
         let next = PendingRemoteTurn {
             conversation_id: active.conversation_id,
