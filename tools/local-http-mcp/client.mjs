@@ -18,20 +18,43 @@ function validateRoute(url) {
   }
 }
 
-function parseSse(body, id) {
-  let event = [];
-  for (const line of body.split(/\r?\n/)) {
-    if (line === "") {
-      if (!event.length) continue;
-      const data = event.join("\n");
-      event = [];
-      const message = JSON.parse(data);
-      if (message && message.jsonrpc === "2.0" && message.id === id) return message;
-      continue;
+async function readSseJsonRpc(response, id) {
+  if (!response.body) throw new Error("MCP SSE response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let dataLines = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("MCP SSE ended before the matching JSON-RPC reply");
+      size += value.byteLength;
+      if (size > MAX_REPLY) throw new Error("MCP SSE reply exceeds 4 MiB");
+      pending += decoder.decode(value, { stream: true });
+      while (true) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        let line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (line === "") {
+          if (!dataLines.length) continue;
+          const data = dataLines.join("\n");
+          dataLines = [];
+          if (!data.trim()) continue;
+          const message = JSON.parse(data);
+          if (message?.jsonrpc === "2.0" && message.id === id) return message;
+          continue;
+        }
+        if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
     }
-    if (line.startsWith("data:")) event.push(line.slice(5).replace(/^ /, ""));
+  } finally {
+    // Stop reading after the matching response even if the SSE connection stays
+    // open for notifications/keepalives. Never wait for stream EOF.
+    await reader.cancel().catch(() => {});
   }
-  throw new Error("MCP response SSE did not contain matching JSON-RPC request ID");
 }
 
 async function boundedBody(response) {
@@ -86,14 +109,19 @@ export class LocalMcpBroker {
       const description = (await boundedBody(response)).slice(0, 500);
       throw new Error(`MCP HTTP ${response.status}: ${description}`);
     }
-    if (response.status === 202) return null;
+    if (response.status === 202) {
+      await response.body?.cancel().catch(() => {});
+      return null;
+    }
     const media = (response.headers.get("content-type") || "").toLowerCase();
-    const raw = await boundedBody(response);
-    const message = media.includes("text/event-stream")
-      ? parseSse(raw, value.id)
-      : media.includes("application/json")
-        ? JSON.parse(raw)
-        : (() => { throw new Error("Unexpected MCP response content type"); })();
+    let message;
+    if (media.includes("text/event-stream")) {
+      message = await readSseJsonRpc(response, value.id);
+    } else if (media.includes("application/json")) {
+      message = JSON.parse(await boundedBody(response));
+    } else {
+      throw new Error("Unexpected MCP response content type");
+    }
     if (!message || message.jsonrpc !== "2.0" || message.id !== value.id)
       throw new Error("MCP response request ID mismatch");
     if (message.error) throw new Error(`MCP JSON-RPC error: ${JSON.stringify(message.error).slice(0, 800)}`);
