@@ -514,7 +514,7 @@ impl TranscriptMessage {
     ) -> Self {
         let activation_turn_id = turn_id.into();
         let text = format!(
-            "[Chatarium verified coordination inbox activation — non-user-authored, user-level context]\nactivation_turn_id: {activation_turn_id}\nstarted_event: #{started_sequence}\nmessage_ids: {inbox_ids:?}\nRead and respond to the verified coordination messages in your supplied workspace identity context. Do not claim a message was sent unless Chatarium returns a verified coordination tool result. Do not repeat already processed directives.\n[/Chatarium verified coordination inbox activation]"
+            "[Chatarium verified coordination inbox activation — non-user-authored, user-level context]\nactivation_turn_id: {activation_turn_id}\nstarted_event: #{started_sequence}\nmessage_ids: {inbox_ids:?}\nRead and respond to the verified coordination messages in your supplied workspace identity context. When a directive asks you to acknowledge or report back, the answer must be sent to that worker via chatarium.builtin::coordination.send, not merely written in this chat. Request a tool call as a standalone JSON object: {\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"coordination.send\",\"arguments\":{\"to\":WORKER_ID,\"kind\":\"ack\",\"body\":\"your response\"}}}. Resolve WORKER_ID from the verified workspace identity context, and never forge a sender. Follow the configured MCP and routing permissions; if the tool is unavailable, report that the coordination response was not sent. Do not claim a message was sent unless Chatarium returns a verified coordination tool result. Do not repeat already processed directives.\n[/Chatarium verified coordination inbox activation]"
         );
         Self {
             role: TranscriptRole::User,
@@ -1236,6 +1236,7 @@ mod tests {
         assert_eq!(plan.messages.len(), 1);
         assert!(plan.messages[0].content.contains("non-user-authored"));
         assert!(plan.messages[0].content.contains("message_ids: [4, 5]"));
+        assert!(plan.messages[0].content.contains("not merely written in this chat"));
         assert!(matches!(
             plan.messages[0].source,
             ContextSource::CoordinationActivation {
