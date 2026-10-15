@@ -1236,7 +1236,11 @@ mod tests {
         assert_eq!(plan.messages.len(), 1);
         assert!(plan.messages[0].content.contains("non-user-authored"));
         assert!(plan.messages[0].content.contains("message_ids: [4, 5]"));
-        assert!(plan.messages[0].content.contains("not merely written in this chat"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not merely written in this chat")
+        );
         assert!(matches!(
             plan.messages[0].source,
             ContextSource::CoordinationActivation {
