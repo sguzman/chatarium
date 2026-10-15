@@ -107,6 +107,13 @@ impl Default for NetworkHealth {
 }
 
 impl NetworkHealth {
+    /// Allow a user-requested immediate check without overlapping probes.
+    pub fn refresh(&mut self) {
+        if self.pending_since.is_none() {
+            self.next_probe = Instant::now();
+        }
+    }
+
     pub fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(report) = self.rx.try_recv() {
             self.pending_since = None;
