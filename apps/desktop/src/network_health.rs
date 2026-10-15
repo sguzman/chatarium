@@ -40,10 +40,16 @@ fn parse_curl_result(output: &std::process::Output, elapsed: Duration) -> Outcom
         return Outcome::Failed(detail.trim().chars().take(140).collect());
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let status = text.split_whitespace().next().and_then(|value| value.parse::<u16>().ok());
+    let status = text
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<u16>().ok());
     match status {
         Some(code @ 100..=599) => Outcome::Http(code),
-        _ => Outcome::Failed(format!("No valid HTTP status after {} ms", elapsed.as_millis())),
+        _ => Outcome::Failed(format!(
+            "No valid HTTP status after {} ms",
+            elapsed.as_millis()
+        )),
     }
 }
 
@@ -58,10 +64,14 @@ fn check_https() -> Probe {
             "--silent",
             "--show-error",
             "--location",
-            "--connect-timeout", "3",
-            "--max-time", "6",
-            "--output", "/dev/null",
-            "--write-out", "%{http_code}",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "6",
+            "--output",
+            "/dev/null",
+            "--write-out",
+            "%{http_code}",
             "https://chatgpt.com/",
         ])
         .output();
@@ -126,7 +136,10 @@ impl NetworkHealth {
         }
 
         // A lost probe thread must never leave the UI permanently "checking".
-        if self.pending_since.is_some_and(|start| start.elapsed() > PROBE_TIMEOUT + Duration::from_secs(3)) {
+        if self
+            .pending_since
+            .is_some_and(|start| start.elapsed() > PROBE_TIMEOUT + Duration::from_secs(3))
+        {
             self.pending_since = None;
             self.next_probe = Instant::now() + PROBE_INTERVAL;
             self.last = Some(Probe {
@@ -143,11 +156,13 @@ impl NetworkHealth {
         if self.pending_since.is_none() && Instant::now() >= self.next_probe {
             let tx = self.tx.clone();
             let ctx = ctx.clone();
-            match thread::Builder::new().name("chatarium-https-probe".to_owned()).spawn(move || {
-                let report = check_https();
-                let _ = tx.send(report);
-                ctx.request_repaint();
-            }) {
+            match thread::Builder::new()
+                .name("chatarium-https-probe".to_owned())
+                .spawn(move || {
+                    let report = check_https();
+                    let _ = tx.send(report);
+                    ctx.request_repaint();
+                }) {
                 Ok(_) => self.pending_since = Some(Instant::now()),
                 Err(error) => {
                     self.next_probe = Instant::now() + PROBE_INTERVAL;
@@ -169,7 +184,10 @@ impl NetworkHealth {
     }
 
     pub fn display(&self) -> Display {
-        let (passed, total) = (self.history.iter().filter(|ok| **ok).count(), self.history.len());
+        let (passed, total) = (
+            self.history.iter().filter(|ok| **ok).count(),
+            self.history.len(),
+        );
         let Some(probe) = &self.last else {
             return Display {
                 label: "NETWORK: checking HTTPS…".to_owned(),
@@ -185,7 +203,9 @@ impl NetworkHealth {
                 tooltip: "The last connectivity measurement is too old to trust.".to_owned(),
             };
         }
-        let latency = probe.latency_ms.map_or_else(|| "n/a".to_owned(), |ms| format!("{ms}ms"));
+        let latency = probe
+            .latency_ms
+            .map_or_else(|| "n/a".to_owned(), |ms| format!("{ms}ms"));
         let (state, color) = match &probe.outcome {
             Outcome::Http(500..=599) => ("SERVER ERROR", egui::Color32::from_rgb(236, 139, 106)),
             Outcome::Http(400..=499) => ("HTTPS REACHED", egui::Color32::from_rgb(225, 194, 108)),
@@ -197,14 +217,19 @@ impl NetworkHealth {
             }
             Outcome::Http(_) => ("HTTPS OK", egui::Color32::from_rgb(126, 210, 156)),
             Outcome::Failed(_) => ("UNREACHABLE", egui::Color32::from_rgb(238, 119, 119)),
-            Outcome::Unavailable(_) => ("CHECK UNAVAILABLE", egui::Color32::from_rgb(225, 194, 108)),
+            Outcome::Unavailable(_) => {
+                ("CHECK UNAVAILABLE", egui::Color32::from_rgb(225, 194, 108))
+            }
         };
         let extra = match &probe.outcome {
             Outcome::Http(code) => format!("HTTP {code}"),
             Outcome::Failed(error) | Outcome::Unavailable(error) => error.clone(),
         };
         Display {
-            label: format!("NETWORK: {state} · {latency} · {passed}/{total} checks · {}s ago", age.as_secs()),
+            label: format!(
+                "NETWORK: {state} · {latency} · {passed}/{total} checks · {}s ago",
+                age.as_secs()
+            ),
             color,
             tooltip: format!(
                 "HTTPS HEAD https://chatgpt.com/ — {extra}. Measured every ~20s, with 6s timeout. This checks website reachability, not browser authentication, actual model availability, bandwidth, or delivery of a particular request. Request outcomes are shown separately."
@@ -220,14 +245,27 @@ mod tests {
     #[test]
     fn success_and_http_errors_are_distinguished() {
         let output = std::process::Output {
-            status: std::process::Command::new("rustc").arg("--version").status().unwrap(),
+            status: std::process::Command::new("rustc")
+                .arg("--version")
+                .status()
+                .unwrap(),
             stdout: b"403".to_vec(),
             stderr: Vec::new(),
         };
-        assert_eq!(parse_curl_result(&output, Duration::from_millis(100)), Outcome::Http(403));
-        let ok = Probe { outcome: Outcome::Http(403), latency_ms: Some(100), measured_at: Instant::now() };
+        assert_eq!(
+            parse_curl_result(&output, Duration::from_millis(100)),
+            Outcome::Http(403)
+        );
+        let ok = Probe {
+            outcome: Outcome::Http(403),
+            latency_ms: Some(100),
+            measured_at: Instant::now(),
+        };
         assert!(ok.is_reachable());
-        let server_error = Probe { outcome: Outcome::Http(503), ..ok };
+        let server_error = Probe {
+            outcome: Outcome::Http(503),
+            ..ok
+        };
         assert!(!server_error.is_reachable());
     }
 
