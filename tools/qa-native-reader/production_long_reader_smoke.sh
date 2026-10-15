@@ -108,7 +108,7 @@ import -window "$window" "$OUT/long-end.png"
 # Click the checkbox relative to the *observed* production content boundary,
 # never a stale absolute pixel from a different layout.
 sidebar_edge="$(python3 tools/qa-native-reader/panel_geometry.py "$OUT/long-end.png")"
-xdotool mousemove --window "$window" "$((sidebar_edge + 50))" 118 click 1
+xdotool mousemove --window "$window" "$((sidebar_edge + 50))" 139 click 1
 # Remove hover styling before comparing the persistent checkbox state.
 xdotool mousemove --window "$window" 740 250
 sleep 0.8
@@ -198,7 +198,7 @@ if end_distance > 7.0:
     )
 # The checkbox itself must visibly change in the real window; merely
 # injecting the click without entering continuous mode is not a pass.
-# Checkbox lives just below the 91px header, relative to the
+# Checkbox lives just below the 112px header, relative to the
 # dynamically allocated central panel. Catch unexpected sidebar growth too.
 sys.path.insert(0, str(Path.cwd() / "tools/qa-native-reader"))
 from panel_geometry import sidebar_edge
@@ -208,7 +208,7 @@ if abs(edge_before - edge_after) > 6:
     raise AssertionError(
         f"sidebar resized during checkbox interaction: {edge_before} -> {edge_after}"
     )
-control_rect = (edge_before + 26, 104, edge_before + 210, 138)
+control_rect = (edge_before + 26, 125, edge_before + 210, 159)
 control_delta = ImageChops.difference(
     images["end"].crop(control_rect), images["continuous-enabled"].crop(control_rect)
 )
