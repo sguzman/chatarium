@@ -191,8 +191,10 @@ impl NetworkHealth {
         if self.history.len() == MAX_HISTORY {
             self.history.pop_front();
         }
-        self.history
-            .push_back((report.api.outcome.reachable(), report.site.outcome.reachable()));
+        self.history.push_back((
+            report.api.outcome.reachable(),
+            report.site.outcome.reachable(),
+        ));
         self.pending_since = None;
         self.next_probe = Instant::now() + PROBE_INTERVAL;
         self.last = Some(report);
@@ -243,7 +245,10 @@ impl NetworkHealth {
     pub fn is_offline(&self) -> bool {
         self.last.as_ref().is_some_and(|probe| {
             probe.measured_at.elapsed() <= MAX_PROBE_AGE
-                && matches!(probe.api.outcome, Outcome::Failed(_) | Outcome::Unavailable(_))
+                && matches!(
+                    probe.api.outcome,
+                    Outcome::Failed(_) | Outcome::Unavailable(_)
+                )
         })
     }
 
