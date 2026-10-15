@@ -18,6 +18,7 @@ mod local_conversations;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
+mod local_http_mcp;
 mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
@@ -310,6 +311,15 @@ enum PersistCommand {
     },
     DispatchHostShell {
         route_id: RouteId,
+    },
+    DispatchLocalHttpMcp {
+        route_id: RouteId,
+    },
+    RecordLocalHttpMcpOutcome {
+        call_id: ToolCallId,
+        route_id: RouteId,
+        operation: String,
+        result: Result<Value, String>,
     },
     RecordHostShellOutcome {
         call_id: ToolCallId,
@@ -4090,7 +4100,7 @@ impl ChatariumApp {
                                 self.dispatch_builtin_hello(route_id);
                             }
                         } else {
-                            self.execute_approved_stdio_tool(call_id);
+                            self.execute_approved_tool(call_id);
                         }
                     } else {
                         self.status = format!(
@@ -6175,6 +6185,42 @@ impl ChatariumApp {
             Err(error) => {
                 self.status = format!("failed to queue host-readiness check: {error}");
             }
+        }
+    }
+
+    fn execute_approved_tool(&mut self, call_id: ToolCallId) {
+        let is_http = replay_tool_call_audit(&self.events)
+            .ok()
+            .and_then(|records| records.into_iter().find(|call| call.call_id == call_id))
+            .and_then(|call| {
+                replay_tool_provider_audit(&self.events).ok().and_then(|providers| {
+                    providers.into_iter().find(|provider| provider.provider_id == call.provider_id)
+                        .map(|provider| (provider.name.as_str().to_owned(), call.route_id))
+                })
+            });
+        if let Some((provider, Some(route))) = is_http {
+            if local_http_mcp::known_provider(&provider) {
+                self.dispatch_local_http_mcp(route);
+                return;
+            }
+        }
+        self.execute_approved_stdio_tool(call_id);
+    }
+
+    fn dispatch_local_http_mcp(&mut self, route_id: RouteId) {
+        if self.tool_command_pending {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            self.status = "cannot invoke localhost MCP: persistence unavailable".to_owned();
+            return;
+        };
+        match sender.send(PersistCommand::DispatchLocalHttpMcp { route_id }) {
+            Ok(()) => {
+                self.tool_command_pending = true;
+                self.status = format!("validating and reserving fixed localhost MCP route {}", route_id.get());
+            }
+            Err(error) => self.status = format!("cannot queue localhost MCP: {error}"),
         }
     }
 
@@ -10252,7 +10298,7 @@ impl eframe::App for ChatariumApp {
                                                                                             && self.persist_tx.is_some(),
                                                                                         egui::Button::new("Run approved MCP call · one shot"),
                                                                                     ).clicked() {
-                                                                                        self.execute_approved_stdio_tool(call.call_id);
+                                                                                        self.execute_approved_tool(call.call_id);
                                                                                     }
                                                                                 }
                                                                                 Err(error) => {
@@ -10411,7 +10457,7 @@ impl eframe::App for ChatariumApp {
                                                                                             ).on_hover_text(
                                                                                                 "Separate deliberate execution after provider activation and explicit ToolCall Allow. Consumes the route permanently before a sandboxed process can start. No automatic retries.",
                                                                                             ).clicked() {
-                                                                                                self.execute_approved_stdio_tool(call.call_id);
+                                                                                                self.execute_approved_tool(call.call_id);
                                                                                             }
                                                                                         }
                                                                                         Err(reason) => {
@@ -18317,7 +18363,10 @@ fn append_agent_mcp_call_checked(
     let mut registered = replay_tool_provider_audit(store.events())?
         .into_iter()
         .find(|record| record.name == provider_name);
-    if registered.is_none() && proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
+    if registered.is_none()
+        && (proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME
+            || local_http_mcp::known_provider(&proposal.provider))
+    {
         let provider_id = next_available_tool_provider_id(store.events())?;
         append_tool_provider_registration_checked(store, provider_id, provider_name.clone())?;
         let endpoint = next_available_route_endpoint_id(store.events())?;
@@ -18333,6 +18382,10 @@ fn append_agent_mcp_call_checked(
     if proposal.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
         if !local_tool_adapter::supports_builtin(&proposal.provider, &proposal.tool) {
             return Err("unrecognized builtin MCP operation".to_owned());
+        }
+    } else if local_http_mcp::known_provider(&proposal.provider) {
+        if !local_http_mcp::allowed_operation(&proposal.provider, &proposal.tool) {
+            return Err("unrecognized fixed localhost MCP operation".to_owned());
         }
     } else {
         let config = replay_tool_transport_config_audit(store.events())?
