@@ -15,10 +15,11 @@ mod host_shell_mcp;
 mod integration_journey;
 mod local_archive_search;
 mod local_conversations;
+mod local_http_mcp;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
-mod local_http_mcp;
+
 mod local_stdio_runner;
 mod local_tool_adapter;
 mod local_tool_provider_control;
@@ -6193,10 +6194,14 @@ impl ChatariumApp {
             .ok()
             .and_then(|records| records.into_iter().find(|call| call.call_id == call_id))
             .and_then(|call| {
-                replay_tool_provider_audit(&self.events).ok().and_then(|providers| {
-                    providers.into_iter().find(|provider| provider.provider_id == call.provider_id)
-                        .map(|provider| (provider.name.as_str().to_owned(), call.route_id))
-                })
+                replay_tool_provider_audit(&self.events)
+                    .ok()
+                    .and_then(|providers| {
+                        providers
+                            .into_iter()
+                            .find(|provider| provider.provider_id == call.provider_id)
+                            .map(|provider| (provider.name.as_str().to_owned(), call.route_id))
+                    })
             });
         if let Some((provider, Some(route))) = is_http {
             if local_http_mcp::known_provider(&provider) {
@@ -6218,7 +6223,10 @@ impl ChatariumApp {
         match sender.send(PersistCommand::DispatchLocalHttpMcp { route_id }) {
             Ok(()) => {
                 self.tool_command_pending = true;
-                self.status = format!("validating and reserving fixed localhost MCP route {}", route_id.get());
+                self.status = format!(
+                    "validating and reserving fixed localhost MCP route {}",
+                    route_id.get()
+                );
             }
             Err(error) => self.status = format!("cannot queue localhost MCP: {error}"),
         }
@@ -18645,7 +18653,12 @@ fn reserve_local_http_mcp_checked(
     let call = replay_tool_call_audit(store.events())?
         .into_iter()
         .find(|call| call.route_id == Some(route_id))
-        .ok_or_else(|| format!("localhost MCP route {} has no recorded tool call", route_id.get()))?;
+        .ok_or_else(|| {
+            format!(
+                "localhost MCP route {} has no recorded tool call",
+                route_id.get()
+            )
+        })?;
     let provider = replay_tool_provider_audit(store.events())?
         .into_iter()
         .find(|provider| provider.provider_id == call.provider_id)
@@ -18661,19 +18674,28 @@ fn reserve_local_http_mcp_checked(
         .ok_or("localhost MCP tool route missing")?;
     let allowed = match route.initial_policy {
         RoutePolicy::Allow => {
-            route.gate_state == RouteGateState::Allowed { by: DecisionAuthority::Policy }
+            route.gate_state
+                == RouteGateState::Allowed {
+                    by: DecisionAuthority::Policy,
+                }
                 && route.latest_user_decision.is_none()
         }
         RoutePolicy::RequireApproval => {
-            route.gate_state == RouteGateState::Allowed { by: DecisionAuthority::User }
+            route.gate_state
+                == RouteGateState::Allowed {
+                    by: DecisionAuthority::User,
+                }
                 && route.latest_user_decision == Some(RouteUserDecision::Allow)
         }
         RoutePolicy::Deny => false,
     };
     if route.request.class != RouteClass::ToolCall || !allowed {
-        return Err("localhost MCP call needs a persisted exact standing policy or user Allow".to_owned());
+        return Err(
+            "localhost MCP call needs a persisted exact standing policy or user Allow".to_owned(),
+        );
     }
-    if replay_tool_call_outcome_audit(store.events())?.iter()
+    if replay_tool_call_outcome_audit(store.events())?
+        .iter()
         .any(|outcome| outcome.call_id == call.call_id || outcome.route_id == route_id)
     {
         return Err("localhost MCP call already has a terminal observation".to_owned());
@@ -18686,7 +18708,8 @@ fn reserve_local_http_mcp_checked(
                 && entry.current_session_phase.accepts_ordinary_turns()
         })
         .ok_or("localhost MCP source conversation is no longer addressable")?;
-    if !provider.endpoint_binding
+    if !provider
+        .endpoint_binding
         .is_some_and(|binding| binding.endpoint_id() == route.request.destination)
     {
         return Err("localhost MCP route destination differs from provider endpoint".to_owned());
@@ -18697,11 +18720,23 @@ fn reserve_local_http_mcp_checked(
         return Err("localhost MCP arguments must be a bounded JSON object".to_owned());
     }
     let mut gate = route_gate_before_dispatch(&route)?;
-    let permit = gate.authorize_dispatch(route_id)
+    let permit = gate
+        .authorize_dispatch(route_id)
         .map_err(|error| format!("localhost MCP dispatch denied: {error:?}"))?;
     record_route_dispatched(store, permit).map_err(|error| error.to_string())?;
-    let event = store.events().last().cloned().ok_or("localhost MCP dispatch event missing")?;
-    Ok((call.call_id, source.conversation_id.to_string(), name, operation, args, event))
+    let event = store
+        .events()
+        .last()
+        .cloned()
+        .ok_or("localhost MCP dispatch event missing")?;
+    Ok((
+        call.call_id,
+        source.conversation_id.to_string(),
+        name,
+        operation,
+        args,
+        event,
+    ))
 }
 
 fn reserve_builtin_host_shell_checked(
@@ -22003,7 +22038,8 @@ fn persistence_worker(
             PersistCommand::DispatchLocalHttpMcp { route_id } => {
                 match reserve_local_http_mcp_checked(&mut store, route_id) {
                     Ok((call_id, conversation, provider, operation, args, event)) => {
-                        let _ = notices.send(PersistNotice::StdioToolDispatchReserved { call_id, event });
+                        let _ = notices
+                            .send(PersistNotice::StdioToolDispatchReserved { call_id, event });
                         let completions = completion_tx.clone();
                         let failures = notices.clone();
                         let launched = thread::Builder::new()
@@ -22031,38 +22067,60 @@ fn persistence_worker(
                         if let Err(error) = launched {
                             let _ = notices.send(PersistNotice::Failed {
                                 operation: "localhost MCP worker spawn (unresolved)",
-                                revision: None, request_id: None, turn_id: None,
-                                error: format!("reserved localhost MCP call could not start: {error}"),
+                                revision: None,
+                                request_id: None,
+                                turn_id: None,
+                                error: format!(
+                                    "reserved localhost MCP call could not start: {error}"
+                                ),
                             });
                         }
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
-                            operation: "localhost MCP preflight", revision: None,
-                            request_id: None, turn_id: None, error,
+                            operation: "localhost MCP preflight",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
                         });
                     }
                 }
             }
-            PersistCommand::RecordLocalHttpMcpOutcome { call_id, route_id, operation, result } => {
+            PersistCommand::RecordLocalHttpMcpOutcome {
+                call_id,
+                route_id,
+                operation,
+                result,
+            } => {
                 let (kind, text) = match result {
-                    Ok(output) => match chatarium_protocol::tool_envelope::format_legacy_tool_success(
-                        &format!("call_{}", call_id.get()), &operation, output,
-                    ) {
-                        Ok(value) => (ToolCallOutcomeKind::Result, value),
-                        Err(error) => (ToolCallOutcomeKind::Error,
-                            format!("localhost MCP result formatting rejected: {error:?}")),
-                    },
+                    Ok(output) => {
+                        match chatarium_protocol::tool_envelope::format_legacy_tool_success(
+                            &format!("call_{}", call_id.get()),
+                            &operation,
+                            output,
+                        ) {
+                            Ok(value) => (ToolCallOutcomeKind::Result, value),
+                            Err(error) => (
+                                ToolCallOutcomeKind::Error,
+                                format!("localhost MCP result formatting rejected: {error:?}"),
+                            ),
+                        }
+                    }
                     Err(error) => (ToolCallOutcomeKind::Error, error),
                 };
                 match append_tool_call_outcome_checked(&mut store, call_id, route_id, kind, text) {
                     Ok(event) => {
-                        let _ = notices.send(PersistNotice::StdioToolDispatchFinished { call_id, event });
+                        let _ = notices
+                            .send(PersistNotice::StdioToolDispatchFinished { call_id, event });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
                             operation: "localhost MCP outcome journal append (unresolved)",
-                            revision: None, request_id: None, turn_id: None, error,
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
                         });
                     }
                 }
