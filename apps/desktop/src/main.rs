@@ -3219,6 +3219,35 @@ impl ChatariumApp {
         true
     }
 
+    /// A diagnostic of the latest non-authored wake. Completion means model
+    /// output finished, not that a worker sent a separate coordination reply.
+    fn latest_coordination_wake_status(&self) -> Option<String> {
+        let conversation = self.local_conversation_id.to_string();
+        let latest = self.events.iter().rev()
+            .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
+            .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
+            .find(|payload| payload["conversation_id"].as_str() == Some(conversation.as_str()))?;
+        let request_id = latest["turn_id"].as_str()?;
+        let ids = latest["inbox_ids"].as_array()?
+            .iter().filter_map(Value::as_u64).map(|id| format!("#{id}"))
+            .collect::<Vec<_>>().join(", ");
+        let outcome = self.delivery.for_conversation(&conversation)
+            .find(|attempt| attempt.request_id == request_id)
+            .map(|attempt| match attempt.phase {
+                delivery_telemetry::Phase::Durable => "activation saved; dispatch pending",
+                delivery_telemetry::Phase::BridgeQueued => "request queued to local bridge",
+                delivery_telemetry::Phase::WireAttempted => "HTTP attempted; receipt unconfirmed",
+                delivery_telemetry::Phase::Acknowledged => "server acknowledged; awaiting model",
+                delivery_telemetry::Phase::Streaming => "model producing output",
+                delivery_telemetry::Phase::RetryScheduled => "rate-limit retry scheduled",
+                delivery_telemetry::Phase::Complete => "model replied; separate coordination reply unverified",
+                delivery_telemetry::Phase::Failed => "request failed",
+                delivery_telemetry::Phase::Unconfirmed => "delivery uncertain; not resent",
+            })
+            .unwrap_or("recorded earlier or not dispatched this session");
+        Some(format!("Last auto-wake [{ids}]: {outcome}"))
+    }
+
     /// Session-only opt-in. Recovered wake records prevent duplicate execution.
     fn maybe_wake_open_coordination_worker(&mut self) {
         if self.coordination_auto_wake_target != Some(self.local_conversation_id)
@@ -7691,6 +7720,27 @@ impl eframe::App for ChatariumApp {
                 {
                     self.coordination_auto_wake_target =
                         wake_this_chat.then_some(self.local_conversation_id);
+                }
+                if wake_this_chat {
+                    let budget = self.coordination_auto_wake_count;
+                    let tool_mode = if !self.conversation_mcp_enabled {
+                        "MCP is off; tool replies cannot run"
+                    } else if mcp_agent_defaults::tool_policy(
+                        &self.mcp_agent_defaults.policy_rules,
+                        "chatarium.builtin",
+                        "coordination.send",
+                    ) != Ok(mcp_agent_defaults::ToolPolicy::Automatic) {
+                        "Coordination.send is not automatic"
+                    } else {
+                        "Coordination send permitted by policy"
+                    };
+                    ui.label(egui::RichText::new(format!(
+                        "Auto-wake: ON · {budget}/8 this session · {tool_mode}"
+                    )).size(10.0).color(egui::Color32::from_rgb(225, 194, 108)));
+                    if let Some(status) = self.latest_coordination_wake_status() {
+                        ui.label(egui::RichText::new(status).size(10.0)
+                            .color(egui::Color32::from_rgb(186, 199, 220)));
+                    }
                 }
                 ui.separator();
                 // Overflowing horizontal content belongs to the scroll area,
@@ -16178,7 +16228,7 @@ impl eframe::App for ChatariumApp {
                             );
                             if !consumed.is_empty() {
                                 ui.add_space(10.0);
-                                ui.label(egui::RichText::new("COORDINATION · CONSUMED BY THIS CHAT")
+                                ui.label(egui::RichText::new("COORDINATION · SUBMITTED TO MODEL CONTEXT")
                                     .size(11.0)
                                     .strong()
                                     .color(egui::Color32::from_rgb(186, 199, 220)));
@@ -16500,7 +16550,7 @@ fn draw_consumed_coordination_bubble(
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(format!(
-                            "From {} · consumed {} · verified coordination inbox (not authored)",
+                            "From {} · handed to local bridge {} · model processing or reply not implied",
                             message.from,
                             timestamp_display::utc_minute(message.consumed_ms as f64 / 1000.0)
                                 .unwrap_or_else(|| "time unknown".to_owned()),
