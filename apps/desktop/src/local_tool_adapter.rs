@@ -4,6 +4,7 @@
 //! `hello -> {"message":"hello"}` smoke operation, after the separate
 //! persistence worker has validated the manually approved routing boundary.
 
+use crate::local_http_mcp;
 use chatarium_protocol::tool_envelope::{
     MAX_ENVELOPE_BYTES, format_legacy_tool_success, parse_legacy_tool_call,
 };
@@ -79,6 +80,21 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             "description": description,
             "available": true,
             "execution_permission": "exact standing policy or per-call user approval"
+        }));
+    }
+    // Two fixed localhost HTTP MCP services. This is an informational catalog:
+    // a listed operation is neither a connectivity check nor execution consent.
+    for (provider, name, description) in local_http_mcp::registered_tools() {
+        if tools.len() >= MAX_DIRECTORY_OPERATIONS {
+            return Err("MCP directory exceeds the maximum of 128 operations".to_owned());
+        }
+        tools.push(json!({
+            "provider": provider,
+            "name": name,
+            "description": description,
+            "available": true,
+            "connection": "not checked; fixed 127.0.0.1 Streamable HTTP endpoint",
+            "execution_permission": "explicit exact standing policy or per-call user approval"
         }));
     }
     for provider in providers {
