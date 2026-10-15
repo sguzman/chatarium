@@ -3223,15 +3223,24 @@ impl ChatariumApp {
     /// output finished, not that a worker sent a separate coordination reply.
     fn latest_coordination_wake_status(&self) -> Option<String> {
         let conversation = self.local_conversation_id.to_string();
-        let latest = self.events.iter().rev()
+        let latest = self
+            .events
+            .iter()
+            .rev()
             .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
             .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
             .find(|payload| payload["conversation_id"].as_str() == Some(conversation.as_str()))?;
         let request_id = latest["turn_id"].as_str()?;
-        let ids = latest["inbox_ids"].as_array()?
-            .iter().filter_map(Value::as_u64).map(|id| format!("#{id}"))
-            .collect::<Vec<_>>().join(", ");
-        let outcome = self.delivery.for_conversation(&conversation)
+        let ids = latest["inbox_ids"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_u64)
+            .map(|id| format!("#{id}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let outcome = self
+            .delivery
+            .for_conversation(&conversation)
             .find(|attempt| attempt.request_id == request_id)
             .map(|attempt| match attempt.phase {
                 delivery_telemetry::Phase::Durable => "activation saved; dispatch pending",
@@ -3240,7 +3249,9 @@ impl ChatariumApp {
                 delivery_telemetry::Phase::Acknowledged => "server acknowledged; awaiting model",
                 delivery_telemetry::Phase::Streaming => "model producing output",
                 delivery_telemetry::Phase::RetryScheduled => "rate-limit retry scheduled",
-                delivery_telemetry::Phase::Complete => "model replied; separate coordination reply unverified",
+                delivery_telemetry::Phase::Complete => {
+                    "model replied; separate coordination reply unverified"
+                }
                 delivery_telemetry::Phase::Failed => "request failed",
                 delivery_telemetry::Phase::Unconfirmed => "delivery uncertain; not resent",
             })
@@ -6022,7 +6033,8 @@ impl ChatariumApp {
         }));
         let request_id = format!(
             "{}-coordination-{}",
-            active.turn_id, self.coordination_tool_budget.used()
+            active.turn_id,
+            self.coordination_tool_budget.used()
         );
         let next = PendingRemoteTurn {
             conversation_id: active.conversation_id,
