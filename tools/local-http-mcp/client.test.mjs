@@ -36,12 +36,20 @@ before(async () => {
     }
     if (message.method === "tools/call") {
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(`: ready\n\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: {} })}\n\ndata: ${JSON.stringify({
+      res.write(`: ready\n\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: {} })}\n\ndata: ${JSON.stringify({
         jsonrpc: "2.0", id: message.id, result: {
           content: [{ type: "text", text: "ok" }],
           structuredContent: { name: message.params.name, session: req.headers["mcp-session-id"] },
         },
       })}\n\n`);
+      // The Mathematica server is allowed to keep an SSE stream alive after
+      // sending its correlated result. Do not wait for the stream to end.
+      if (message.params.name === "stream_stays_open") {
+        const timer = setTimeout(() => res.end(), 1800);
+        res.on("close", () => clearTimeout(timer));
+      } else {
+        res.end();
+      }
       return;
     }
     respond(res, { error: "unknown" }, {}, 404);
@@ -97,4 +105,18 @@ test("invalid tool arguments never reach the server", async () => {
     broker.request({ conversation_id: "chat-guard", provider: "manifoldr", method: "call",
       name: "bad/name", arguments: {} }), /Invalid MCP/);
   assert.equal(seen.filter(item => item.method === "tools/call").length, before);
+});
+
+test("SSE returns a tool response before the HTTP stream closes", async () => {
+  const broker = client();
+  const start = Date.now();
+  const reply = await broker.request({
+    conversation_id: "chat-long-sse",
+    provider: "mathematica",
+    method: "call",
+    name: "stream_stays_open",
+    arguments: {},
+  });
+  assert.equal(reply.structuredContent.name, "stream_stays_open");
+  assert.ok(Date.now() - start < 1400, "MCP tool waited for SSE connection EOF");
 });
