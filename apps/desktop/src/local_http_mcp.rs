@@ -127,7 +127,7 @@ impl Worker {
 // The mutex serializes the JSONL channel, not the GUI or journal workers.
 // Every invocation is executed on a dedicated background thread. Node keeps
 // transport sessions keyed by provider plus owning local conversation.
-static BRIDGE: OnceLock<Mutex<Worker>> = OnceLock::new();
+static BRIDGE: OnceLock<Mutex<Option<Worker>>> = OnceLock::new();
 
 pub fn invoke(
     conversation: &str,
@@ -143,14 +143,28 @@ pub fn invoke(
         return Err("MCP tool arguments must be a JSON object".to_owned());
     }
     // Initialize only for an actually approved, durably dispatched call.
-    let bridge = if let Some(bridge) = BRIDGE.get() {
-        bridge
-    } else {
-        let new = Mutex::new(Worker::new()?);
-        BRIDGE.get_or_init(|| new)
-    };
+    let bridge = BRIDGE.get_or_init(|| Mutex::new(None));
     let mut state = bridge.lock().map_err(|_| "local MCP transport lock poisoned")?;
-    state.invoke(conversation, call_key, provider, operation, arguments)
+    if state.is_none() {
+        *state = Some(Worker::new()?);
+    }
+    let result = state
+        .as_mut()
+        .ok_or("local MCP transport was not initialized")?
+        .invoke(conversation, call_key, provider, operation, arguments);
+    // A *future, separate* approved call can create a new transport after a
+    // crashed worker. Never replay the uncertain call itself.
+    if result.as_ref().err().is_some_and(|error| {
+        error.contains("MCP worker stdin")
+            || error.contains("MCP worker flush")
+            || error.contains("MCP transport read")
+            || error.contains("MCP transport exited")
+            || error.contains("MCP transport response correlation")
+            || error.contains("invalid local MCP transport response")
+    }) {
+        *state = None;
+    }
+    result
 }
 
 #[cfg(test)]
