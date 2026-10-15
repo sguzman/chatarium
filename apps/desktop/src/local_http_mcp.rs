@@ -12,14 +12,23 @@ pub const MANIFOLDR: &str = "chatarium.local.manifoldr";
 pub const MATHEMATICA: &str = "chatarium.local.mathematica";
 
 const MANIFOLDR_TOOLS: &[&str] = &[
-    "popular_markets", "trending_markets", "high_volume_markets",
-    "search_markets", "suggested_markets", "list_categories",
-    "get_category", "get_market", "get_probabilities",
+    "popular_markets",
+    "trending_markets",
+    "high_volume_markets",
+    "search_markets",
+    "suggested_markets",
+    "list_categories",
+    "get_category",
+    "get_market",
+    "get_probabilities",
 ];
 const MATHEMATICA_TOOLS: &[&str] = &[
-    "mathematica_create_session", "mathematica_execute_code",
-    "mathematica_close_session", "mathematica_list_sessions",
-    "mathematica_get_finance", "mathematica_time",
+    "mathematica_create_session",
+    "mathematica_execute_code",
+    "mathematica_close_session",
+    "mathematica_list_sessions",
+    "mathematica_get_finance",
+    "mathematica_time",
 ];
 
 pub fn known_provider(name: &str) -> bool {
@@ -36,8 +45,16 @@ pub fn allowed_operation(provider: &str, operation: &str) -> bool {
 }
 
 pub fn registered_tools() -> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
-    MANIFOLDR_TOOLS.iter().map(|&operation| (MANIFOLDR, operation, "Manifoldr read-only market data"))
-        .chain(MATHEMATICA_TOOLS.iter().map(|&operation| (MATHEMATICA, operation, "Wolfram Mathematica; executes arbitrary Wolfram code with local user privileges")))
+    MANIFOLDR_TOOLS
+        .iter()
+        .map(|&operation| (MANIFOLDR, operation, "Manifoldr read-only market data"))
+        .chain(MATHEMATICA_TOOLS.iter().map(|&operation| {
+            (
+                MATHEMATICA,
+                operation,
+                "Wolfram Mathematica; executes arbitrary Wolfram code with local user privileges",
+            )
+        }))
 }
 
 struct Worker {
@@ -60,9 +77,19 @@ impl Worker {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|error| format!("cannot start local MCP transport: {error}"))?;
-        let input = child.stdin.take().ok_or("MCP transport stdin unavailable")?;
-        let output = child.stdout.take().ok_or("MCP transport stdout unavailable")?;
-        Ok(Self { _child: child, input, output: BufReader::new(output) })
+        let input = child
+            .stdin
+            .take()
+            .ok_or("MCP transport stdin unavailable")?;
+        let output = child
+            .stdout
+            .take()
+            .ok_or("MCP transport stdout unavailable")?;
+        Ok(Self {
+            _child: child,
+            input,
+            output: BufReader::new(output),
+        })
     }
 
     fn invoke(
@@ -96,14 +123,24 @@ impl Worker {
         if data.len() > 256 * 1024 {
             return Err("local MCP request exceeds 256 KiB".to_owned());
         }
-        self.input.write_all(data.as_bytes()).map_err(|e| format!("MCP worker stdin: {e}"))?;
-        self.input.write_all(b"\n").map_err(|e| format!("MCP worker stdin: {e}"))?;
-        self.input.flush().map_err(|e| format!("MCP worker flush: {e}"))?;
+        self.input
+            .write_all(data.as_bytes())
+            .map_err(|e| format!("MCP worker stdin: {e}"))?;
+        self.input
+            .write_all(b"\n")
+            .map_err(|e| format!("MCP worker stdin: {e}"))?;
+        self.input
+            .flush()
+            .map_err(|e| format!("MCP worker flush: {e}"))?;
         let mut response = String::new();
-        let count = self.output.read_line(&mut response)
+        let count = self
+            .output
+            .read_line(&mut response)
             .map_err(|e| format!("MCP transport read: {e}"))?;
         if count == 0 {
-            return Err("local MCP transport exited; request outcome unknown; not retried".to_owned());
+            return Err(
+                "local MCP transport exited; request outcome unknown; not retried".to_owned(),
+            );
         }
         if count > 4 * 1024 * 1024 {
             return Err("local MCP transport response too large".to_owned());
@@ -114,11 +151,20 @@ impl Worker {
             return Err("local MCP transport response correlation failed; not retried".to_owned());
         }
         if value["ok"] != true {
-            return Err(value["error"].as_str().unwrap_or("MCP transport failed").to_owned());
+            return Err(value["error"]
+                .as_str()
+                .unwrap_or("MCP transport failed")
+                .to_owned());
         }
-        let result = value.get("result").cloned().ok_or("MCP response result missing")?;
+        let result = value
+            .get("result")
+            .cloned()
+            .ok_or("MCP response result missing")?;
         if result["isError"] == true {
-            return Err(format!("MCP tool error: {}", result.to_string().chars().take(1500).collect::<String>()));
+            return Err(format!(
+                "MCP tool error: {}",
+                result.to_string().chars().take(1500).collect::<String>()
+            ));
         }
         Ok(result)
     }
@@ -144,7 +190,9 @@ pub fn invoke(
     }
     // Initialize only for an actually approved, durably dispatched call.
     let bridge = BRIDGE.get_or_init(|| Mutex::new(None));
-    let mut state = bridge.lock().map_err(|_| "local MCP transport lock poisoned")?;
+    let mut state = bridge
+        .lock()
+        .map_err(|_| "local MCP transport lock poisoned")?;
     if state.is_none() {
         *state = Some(Worker::new()?);
     }
