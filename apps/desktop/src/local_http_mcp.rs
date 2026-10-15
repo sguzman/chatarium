@@ -19,7 +19,7 @@ const MANIFOLDR_TOOLS: &[&str] = &[
 const MATHEMATICA_TOOLS: &[&str] = &[
     "mathematica_create_session", "mathematica_execute_code",
     "mathematica_close_session", "mathematica_list_sessions",
-    "mathematica_get_finance",
+    "mathematica_get_finance", "mathematica_time",
 ];
 
 pub fn known_provider(name: &str) -> bool {
@@ -164,6 +164,6 @@ mod tests {
         assert!(!allowed_operation(MANIFOLDR, "bet_place"));
         assert!(!allowed_operation(MATHEMATICA, "shell.command"));
         assert!(!known_provider("chatarium.local.user-controlled-host"));
-        assert_eq!(registered_tools().count(), 14);
+        assert_eq!(registered_tools().count(), 15);
     }
 }
