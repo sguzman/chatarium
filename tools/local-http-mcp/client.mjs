@@ -6,7 +6,8 @@ export const LOCAL_SERVERS = Object.freeze({
   manifoldr: Object.freeze({ url: "http://127.0.0.1:8877/mcp", health: "http://127.0.0.1:8877/healthz" }),
 });
 const MAX_REPLY = 4 * 1024 * 1024;
-const PROTOCOL = "2025-03-26";
+const MATHEMATICA_PROTOCOL = "2025-03-26";
+const MANIFOLDR_PROTOCOL = "2025-11-25";
 
 function validateRoute(url) {
   const parsed = new URL(url);
@@ -105,15 +106,21 @@ export class LocalMcpBroker {
     return await this._post(state, url, { jsonrpc: "2.0", id, method, params });
   }
 
-  async _initialize(state, url) {
+  async _initialize(state, url, provider) {
     const result = await this._request(state, url, "initialize", {
-      protocolVersion: PROTOCOL,
+      protocolVersion: state.protocol,
       capabilities: {},
       clientInfo: { name: "chatarium-local-mcp", version: "1.0.0" },
     });
     if (!result || !result.serverInfo) throw new Error("MCP server did not initialize");
     if (typeof result.protocolVersion === "string") state.protocol = result.protocolVersion;
-    // Mathematica requires a stateful transport session. Manifoldr may run stateless.
+    // Manifoldr v0.4.0 uses stateless JSON responses. Mathematica requires
+    // a session-scoped notifications/initialized before kernel operations.
+    if (provider !== "mathematica") {
+      state.initialized = true;
+      return;
+    }
+    if (!state.sessionId) throw new Error("Mathematica MCP did not establish a transport session");
     const headers = { Accept: "application/json, text/event-stream", "Content-Type": "application/json", "MCP-Protocol-Version": state.protocol };
     if (state.sessionId) headers["Mcp-Session-Id"] = state.sessionId;
     const reply = await this.fetchImpl(url, {
@@ -133,11 +140,13 @@ export class LocalMcpBroker {
     const key = `${conversationId}: ${provider}`;
     let state = this.sessions.get(key);
     if (!state) {
-      state = { sessionId: null, nextId: 0, protocol: PROTOCOL, initialized: false };
+      state = { sessionId: null, nextId: 0,
+        protocol: provider === "manifoldr" ? MANIFOLDR_PROTOCOL : MATHEMATICA_PROTOCOL,
+        initialized: false };
       this.sessions.set(key, state);
     }
     try {
-      if (!state.initialized) await this._initialize(state, config.url);
+      if (!state.initialized) await this._initialize(state, config.url, provider);
       if (method === "list") return await this._request(state, config.url, "tools/list");
       if (method === "call") {
         if (typeof args.name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(args.name)
