@@ -21974,6 +21974,73 @@ fn persistence_worker(
                     }
                 }
             }
+            PersistCommand::DispatchLocalHttpMcp { route_id } => {
+                match reserve_local_http_mcp_checked(&mut store, route_id) {
+                    Ok((call_id, conversation, provider, operation, args, event)) => {
+                        let _ = notices.send(PersistNotice::StdioToolDispatchReserved { call_id, event });
+                        let completions = completion_tx.clone();
+                        let failures = notices.clone();
+                        let launched = thread::Builder::new()
+                            .name(format!("chatarium-local-mcp-{}", call_id.get()))
+                            .spawn(move || {
+                                let id = call_id.get().to_string();
+                                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    local_http_mcp::invoke(&conversation, &id, &provider, &operation, &args)
+                                }));
+                                match result {
+                                    Ok(result) => {
+                                        let _ = completions.send(PersistCommand::RecordLocalHttpMcpOutcome {
+                                            call_id, route_id, operation, result,
+                                        });
+                                    }
+                                    Err(_) => {
+                                        let _ = failures.send(PersistNotice::Failed {
+                                            operation: "localhost MCP worker panic (unresolved)",
+                                            revision: None, request_id: None, turn_id: None,
+                                            error: "local MCP worker panicked after durable dispatch; no retry".to_owned(),
+                                        });
+                                    }
+                                }
+                            });
+                        if let Err(error) = launched {
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "localhost MCP worker spawn (unresolved)",
+                                revision: None, request_id: None, turn_id: None,
+                                error: format!("reserved localhost MCP call could not start: {error}"),
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "localhost MCP preflight", revision: None,
+                            request_id: None, turn_id: None, error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::RecordLocalHttpMcpOutcome { call_id, route_id, operation, result } => {
+                let (kind, text) = match result {
+                    Ok(output) => match chatarium_protocol::tool_envelope::format_legacy_tool_success(
+                        &format!("call_{}", call_id.get()), &operation, output,
+                    ) {
+                        Ok(value) => (ToolCallOutcomeKind::Result, value),
+                        Err(error) => (ToolCallOutcomeKind::Error,
+                            format!("localhost MCP result formatting rejected: {error:?}")),
+                    },
+                    Err(error) => (ToolCallOutcomeKind::Error, error),
+                };
+                match append_tool_call_outcome_checked(&mut store, call_id, route_id, kind, text) {
+                    Ok(event) => {
+                        let _ = notices.send(PersistNotice::StdioToolDispatchFinished { call_id, event });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "localhost MCP outcome journal append (unresolved)",
+                            revision: None, request_id: None, turn_id: None, error,
+                        });
+                    }
+                }
+            }
             PersistCommand::DispatchHostShell { route_id } => {
                 let prepared =
                     host_shell_mcp::Settings::load(&data_dir.join(host_shell_mcp::FILE_NAME))
