@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn success_and_http_errors_are_distinguished() {
         let output = std::process::Output {
-            status: std::process::Command::new("true").status().unwrap(),
+            status: std::process::Command::new("rustc").arg("--version").status().unwrap(),
             stdout: b"403".to_vec(),
             stderr: Vec::new(),
         };
