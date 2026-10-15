@@ -18609,6 +18609,75 @@ fn append_builtin_hello_checked(
     Ok(store.events()[before..].to_vec())
 }
 
+/// Reserve exactly one already authorized localhost HTTP MCP invocation.
+/// The route is durably dispatched before any network access, with no retry
+/// after uncertainty. This is distinct from confined stdio configuration.
+fn reserve_local_http_mcp_checked(
+    store: &mut impl EventStore,
+    route_id: RouteId,
+) -> Result<(ToolCallId, String, String, String, Value, EventEnvelope), String> {
+    let call = replay_tool_call_audit(store.events())?
+        .into_iter()
+        .find(|call| call.route_id == Some(route_id))
+        .ok_or_else(|| format!("localhost MCP route {} has no recorded tool call", route_id.get()))?;
+    let provider = replay_tool_provider_audit(store.events())?
+        .into_iter()
+        .find(|provider| provider.provider_id == call.provider_id)
+        .ok_or("localhost MCP provider missing")?;
+    let name = provider.name.as_str().to_owned();
+    let operation = call.operation.as_str().to_owned();
+    if !local_http_mcp::allowed_operation(&name, &operation) {
+        return Err("tool not in fixed localhost MCP provider allowlist".to_owned());
+    }
+    let route = replay_routing_audit(store.events())?
+        .into_iter()
+        .find(|route| route.request.id == route_id)
+        .ok_or("localhost MCP tool route missing")?;
+    let allowed = match route.initial_policy {
+        RoutePolicy::Allow => {
+            route.gate_state == RouteGateState::Allowed { by: DecisionAuthority::Policy }
+                && route.latest_user_decision.is_none()
+        }
+        RoutePolicy::RequireApproval => {
+            route.gate_state == RouteGateState::Allowed { by: DecisionAuthority::User }
+                && route.latest_user_decision == Some(RouteUserDecision::Allow)
+        }
+        RoutePolicy::Deny => false,
+    };
+    if route.request.class != RouteClass::ToolCall || !allowed {
+        return Err("localhost MCP call needs a persisted exact standing policy or user Allow".to_owned());
+    }
+    if replay_tool_call_outcome_audit(store.events())?.iter()
+        .any(|outcome| outcome.call_id == call.call_id || outcome.route_id == route_id)
+    {
+        return Err("localhost MCP call already has a terminal observation".to_owned());
+    }
+    let source = replay_local_routing_directory(store.events())?
+        .into_iter()
+        .find(|entry| {
+            entry.current_session_id == call.source_session_id
+                && entry.endpoint_id == route.request.source
+                && entry.current_session_phase.accepts_ordinary_turns()
+        })
+        .ok_or("localhost MCP source conversation is no longer addressable")?;
+    if !provider.endpoint_binding
+        .is_some_and(|binding| binding.endpoint_id() == route.request.destination)
+    {
+        return Err("localhost MCP route destination differs from provider endpoint".to_owned());
+    }
+    let args: Value = serde_json::from_str(&call.arguments_text)
+        .map_err(|e| format!("invalid localhost MCP tool arguments: {e}"))?;
+    if !args.is_object() || call.arguments_text.len() > 256 * 1024 {
+        return Err("localhost MCP arguments must be a bounded JSON object".to_owned());
+    }
+    let mut gate = route_gate_before_dispatch(&route)?;
+    let permit = gate.authorize_dispatch(route_id)
+        .map_err(|error| format!("localhost MCP dispatch denied: {error:?}"))?;
+    record_route_dispatched(store, permit).map_err(|error| error.to_string())?;
+    let event = store.events().last().cloned().ok_or("localhost MCP dispatch event missing")?;
+    Ok((call.call_id, source.conversation_id.to_string(), name, operation, args, event))
+}
+
 fn reserve_builtin_host_shell_checked(
     store: &mut impl EventStore,
     route_id: RouteId,
