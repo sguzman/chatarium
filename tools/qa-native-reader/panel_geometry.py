@@ -18,16 +18,19 @@ CONTENT = (23, 27, 35)
 def sidebar_edge(image):
     if image.width < 850 or image.height < 600:
         raise AssertionError(f"unsupported native QA screenshot size: {image.size}")
-    y = 110  # Below the conversation header, inside the outlined central reader fill.
-    # The grey grab handle may sit immediately after the sidebar. Look beyond it
-    # for the main-panel fill and require an uninterrupted sidebar run before it.
-    for x in range(260, min(650, image.width - 260)):
-        if (
-            all(image.getpixel((x - offset, y)) == SIDEBAR for offset in range(1, 7))
-            and image.getpixel((x, y)) != SIDEBAR
-            and image.getpixel((x + 40, y)) == CONTENT
-        ):
-            return x
+    # Check below either compact or expanded conversation headers. The live
+    # connectivity row intentionally makes the header taller; a single y=110
+    # probe would incorrectly sample that header instead of the reader.
+    # The grey grab handle may sit immediately after the sidebar. Look beyond
+    # it for the main-panel fill and require a solid sidebar run.
+    for y in (140, 160, 190, 110):
+        for x in range(260, min(650, image.width - 260)):
+            if (
+                all(image.getpixel((x - offset, y)) == SIDEBAR for offset in range(1, 7))
+                and image.getpixel((x, y)) != SIDEBAR
+                and image.getpixel((x + 40, y)) == CONTENT
+            ):
+                return x
     raise AssertionError("cannot locate Chatarium sidebar boundary; layout changed")
 
 
