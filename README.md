@@ -23,6 +23,18 @@ See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product in
 
 A browser may be used for protocol observation or occasional authentication bootstrap, but **Chromium-per-request is not an acceptable end state**. Ordinary conversation listing, retrieval, creation, continuation, send, and response streaming must ultimately be native Chatarium operations. Hiding or backgrounding Chromium does not satisfy this requirement.
 
+## Local Mathematica and Manifoldr MCP servers
+
+Chatarium includes fixed-loopback Streamable HTTP MCP integrations for the
+user-owned Mathematica server (`127.0.0.1:8765/mcp`) and Manifoldr
+(`127.0.0.1:8877/mcp`). The servers are shared rather than launched by
+Chatarium; their MCP tool calls pass through explicit per-tool policy,
+durable routing and approval, and one-shot dispatch. Mathematica's
+transport and Wolfram kernel sessions are isolated per local conversation.
+**Unconfigured tool permissions default to Ask**, not automatic execution.
+See [local HTTP MCP integration](docs/LOCAL_HTTP_MCP.md) for the exact
+providers, tools, connection checks, limitations and security implications.
+
 ## Native MCP activity visibility
 
 The local desktop reader distinguishes **user (blue)**, **agent (green)** and
