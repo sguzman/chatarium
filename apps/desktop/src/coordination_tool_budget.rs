@@ -23,6 +23,10 @@ impl Budget {
         true
     }
 
+    pub fn used(&self) -> u32 {
+        self.used
+    }
+
     pub fn reset(&mut self) {
         self.turn = None;
         self.used = 0;
