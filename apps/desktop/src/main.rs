@@ -33,6 +33,7 @@ mod mcp_result_review;
 mod mcp_transcript;
 mod native_conversation_search;
 mod native_transcript_export;
+mod network_health;
 mod offline_reader;
 mod reader_visual_qa;
 mod response_text_provenance;
@@ -1155,6 +1156,7 @@ struct ChatariumApp {
     selected_model: Option<String>,
     slow_warning_seconds: u32,
     remote_status: String,
+    network_health: network_health::NetworkHealth,
     remote_runtime_ready: bool,
     remote_runtime_failed: bool,
     sign_in_requested: bool,
@@ -1493,6 +1495,7 @@ impl ChatariumApp {
                         slow_warning_seconds: active_inference_settings.slow_warning_seconds,
                         selected_model: active_inference_settings.model,
                         remote_status: "starting sign-in runtime…".to_owned(),
+                        network_health: network_health::NetworkHealth::default(),
                         remote_runtime_ready: false,
                         remote_runtime_failed: false,
                         sign_in_requested: false,
@@ -1744,6 +1747,7 @@ impl ChatariumApp {
             slow_warning_seconds: active_inference_settings.slow_warning_seconds,
             selected_model: active_inference_settings.model,
             remote_status: "starting sign-in runtime…".to_owned(),
+            network_health: network_health::NetworkHealth::default(),
             remote_runtime_ready: false,
             remote_runtime_failed: false,
             sign_in_requested: false,
@@ -7411,6 +7415,7 @@ impl eframe::App for ChatariumApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_notices();
+        self.network_health.poll(ctx);
         // Only rate-limit queues auto-release; human approval and manual
         // queues remain frozen until explicitly decided.
         if self.coordination_last_queue_check.elapsed() >= Duration::from_secs(2) {
@@ -15260,7 +15265,7 @@ impl eframe::App for ChatariumApp {
 
         egui::TopBottomPanel::top("conversation_header")
             .resizable(false)
-            .exact_height(91.0)
+            .exact_height(112.0)
             .frame(
                 egui::Frame::default()
                     .fill(egui::Color32::from_rgb(23, 24, 29))
@@ -15326,8 +15331,10 @@ impl eframe::App for ChatariumApp {
                                         }
                                     } else if historical_mode {
                                         "IMPORTED SNAPSHOT"
+                                    } else if connected && self.network_health.is_offline() {
+                                        "AUTHENTICATED · NETWORK DOWN"
                                     } else if connected {
-                                        "CHATGPT CONNECTED"
+                                        "CHATGPT AUTHENTICATED"
                                     } else {
                                         "LOCAL ONLY"
                                     })
@@ -15373,6 +15380,9 @@ impl eframe::App for ChatariumApp {
                         else { "● Local-only · connect ChatGPT to send".to_owned() }
                     });
                     ui.label(egui::RichText::new(label).size(10.0).color(color));
+                    let network = self.network_health.display();
+                    ui.label(egui::RichText::new(network.label).size(10.0).color(network.color))
+                        .on_hover_text(network.tooltip);
                 }
             });
 
