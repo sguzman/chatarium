@@ -10271,6 +10271,19 @@ impl eframe::App for ChatariumApp {
                                                                             self.dispatch_builtin_hello(route.request.id);
                                                                         }
                                                                     }
+                                                                } else if providers.iter().find(|provider| {
+                                                                    provider.provider_id == call.provider_id
+                                                                }).is_some_and(|provider| local_http_mcp::allowed_operation(
+                                                                    provider.name.as_str(), call.operation.as_str()
+                                                                )) {
+                                                                    ui.label("Fixed loopback Streamable HTTP MCP. An approved call uses the shared local server, not the network-isolated stdio sandbox. It may perform side effects (Mathematica executes Wolfram code).");
+                                                                    if ui.add_enabled(
+                                                                        matches!(route.gate_state, RouteGateState::Allowed { by: DecisionAuthority::User })
+                                                                            && !self.tool_command_pending && self.persist_tx.is_some(),
+                                                                        egui::Button::new("Run approved localhost MCP call · once"),
+                                                                    ).clicked() {
+                                                                        self.dispatch_local_http_mcp(route.request.id);
+                                                                    }
                                                                 } else {
                                                                     ui.label("User Allow is recorded. Inspect the exact wire request before a separate one-shot Run.");
                                                                     ui.collapsing("Review approved wire request and choose Run", |ui| {
@@ -10425,10 +10438,23 @@ impl eframe::App for ChatariumApp {
                                                                         .size(9.0),
                                                                     );
 
+                                                                    if local_http_mcp::allowed_operation(provider_label.as_str(), call.operation.as_str())
+                                                                        && route.dispatch_sequence.is_none()
+                                                                    {
+                                                                        ui.label("Known localhost MCP service · exact approval still required.");
+                                                                        if ui.add_enabled(
+                                                                            matches!(route.gate_state, RouteGateState::Allowed { by: DecisionAuthority::User })
+                                                                                && !self.tool_command_pending && self.persist_tx.is_some(),
+                                                                            egui::Button::new("Run local HTTP MCP · one shot"),
+                                                                        ).clicked() {
+                                                                            self.dispatch_local_http_mcp(route.request.id);
+                                                                        }
+                                                                    }
                                                                     if !local_tool_adapter::supports_hello(
                                                                         provider_label.as_str(),
                                                                         call.operation.as_str(),
-                                                                    ) && route.dispatch_sequence.is_none() {
+                                                                    ) && !local_http_mcp::known_provider(provider_label.as_str())
+                                                                        && route.dispatch_sequence.is_none() {
                                                                         ui.collapsing("Activation-aware MCP review and Run", |ui| {
                                                                             match preview_activated_stdio_tool_invocation(&self.events, call.call_id) {
                                                                                 Ok(preview) => {
