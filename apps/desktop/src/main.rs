@@ -15312,6 +15312,8 @@ impl eframe::App for ChatariumApp {
                                 egui::Color32::from_rgb(24, 52, 37)
                             } else if historical_mode {
                                 egui::Color32::from_rgb(39, 42, 49)
+                            } else if connected && self.network_health.is_offline() {
+                                egui::Color32::from_rgb(62, 31, 34)
                             } else if connected {
                                 egui::Color32::from_rgb(24, 52, 37)
                             } else {
@@ -15347,6 +15349,8 @@ impl eframe::App for ChatariumApp {
                                             egui::Color32::from_rgb(126, 210, 156)
                                         } else if historical_mode {
                                             egui::Color32::from_rgb(179, 184, 196)
+                                        } else if connected && self.network_health.is_offline() {
+                                            egui::Color32::from_rgb(238, 119, 119)
                                         } else if connected {
                                             egui::Color32::from_rgb(126, 210, 156)
                                         } else {
@@ -15381,8 +15385,14 @@ impl eframe::App for ChatariumApp {
                     });
                     ui.label(egui::RichText::new(label).size(10.0).color(color));
                     let network = self.network_health.display();
-                    ui.label(egui::RichText::new(network.label).size(10.0).color(network.color))
-                        .on_hover_text(network.tooltip);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(network.label).size(10.0).color(network.color))
+                            .on_hover_text(network.tooltip);
+                        if ui.small_button("Check now").on_hover_text("Run another HTTPS connectivity check without sending a model request").clicked() {
+                            self.network_health.refresh();
+                            ctx.request_repaint();
+                        }
+                    });
                 }
             });
 
