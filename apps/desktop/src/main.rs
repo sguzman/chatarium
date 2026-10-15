@@ -15396,7 +15396,7 @@ impl eframe::App for ChatariumApp {
                                     } else if historical_mode {
                                         "IMPORTED SNAPSHOT"
                                     } else if connected && self.network_health.is_offline() {
-                                        "AUTHENTICATED · NETWORK DOWN"
+                                        "AUTHENTICATED · API UNREACHABLE"
                                     } else if connected {
                                         "CHATGPT AUTHENTICATED"
                                     } else {
