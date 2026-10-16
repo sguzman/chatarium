@@ -270,13 +270,55 @@ pub struct ModelToolRequest {
 
 /// Read-only parsing. Never grant permission to a model-authored envelope.
 pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, String> {
-    if text.len() > 65536 || !text.trim_start().starts_with('{') {
+    if text.len() > 65536 {
         return Ok(None);
     }
-    // The model may place explanatory prose on the next line after a
-    // standalone tool envelope. Accept exactly one leading JSON value,
-    // preserving strict envelope validation and refusing embedded examples.
-    let candidate = text.trim_start();
+    // Prefer the documented JSON-first envelope. Some models instead emit
+    // a sentence and append the tool JSON, sometimes with no whitespace.
+    // Accept only one *terminal* envelope in that case; refuse examples,
+    // code fences, extra JSON and fragments embedded in ordinary prose.
+    let trimmed = text.trim_start();
+    let candidate = if trimmed.starts_with('{') {
+        trimmed
+    } else {
+        let marker = "\"chatarium_mcp_call\"";
+        let mut occurrences = text.match_indices(marker);
+        let Some((key_at, _)) = occurrences.next() else {
+            return Ok(None);
+        };
+        if occurrences.next().is_some() {
+            return Err("MCP response may request only one tool".to_owned());
+        }
+        let Some(object_at) = text[..key_at].rfind('{') else {
+            return Ok(None);
+        };
+        // The MCP key must be the first field of the top-level envelope.
+        if !text[object_at + 1..key_at].trim().is_empty() {
+            return Ok(None);
+        }
+        let introduction = text[..object_at].trim_end();
+        let lower = introduction.to_ascii_lowercase();
+        let explanatory_example = ["example", "sample", "hypothetical", "illustrat", "e.g.", "such as"]
+            .iter()
+            .any(|word| lower.contains(word));
+        if introduction.is_empty()
+            || !introduction
+                .chars()
+                .last()
+                .is_some_and(|ch| matches!(ch, '.' | '!' | '?'))
+            || introduction.chars().any(|ch| matches!(ch, '{' | '}' | '`'))
+            || explanatory_example
+        {
+            return Ok(None);
+        }
+        let trailing = text[object_at..].trim();
+        if serde_json::from_str::<Value>(trailing).is_err() {
+            return Ok(None);
+        }
+        trailing
+    };
+    // Existing JSON-first behavior still supports a short explanation after
+    // the tool. Prose-first requests must end with their single JSON object.
     let mut values = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
     let parsed = match values.next() {
         Some(Ok(parsed)) => parsed,
@@ -406,6 +448,46 @@ mod tests {
                 .is_none()
         );
         assert!(parse_model_tool_request(&format!("{tool}{tool}")).is_err());
+    }
+
+    #[test]
+    fn sentence_before_terminal_tool_envelope_invokes_one_tool() {
+        // Reproduce the user-observed output: the model concatenated ordinary
+        // narration directly with the tool JSON, producing no tool event.
+        let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        let sentence = "I'll discover the available tools, then test creating a Mathematica session, evaluating code, running time and finance operations, listing sessions, and closing the session.";
+        for response in [
+            format!("{sentence}{tool}"),
+            format!("{sentence}\n{tool}"),
+            format!("{sentence}\n  {tool}\n"),
+        ] {
+            let call = parse_model_tool_request(&response).unwrap().unwrap();
+            assert_eq!(call.provider, "chatarium.builtin");
+            assert_eq!(call.tool, "tools.list");
+            assert_eq!(call.arguments, json!({}));
+        }
+    }
+
+    #[test]
+    fn trailing_tool_parser_refuses_examples_fences_and_multiple_calls() {
+        let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        for prefix in [
+            "For example.",
+            "This is a sample.",
+            "A hypothetical call.",
+            "Here is a code fence. ```json\n",
+            "Quoted `chatarium_mcp_call` instruction.",
+            "We have not decided to call it:",
+        ] {
+            assert!(
+                parse_model_tool_request(&format!("{prefix}{tool}"))
+                    .unwrap()
+                    .is_none(),
+                "should not dispatch an illustrated/quoted envelope: {prefix}"
+            );
+        }
+        assert!(parse_model_tool_request(&format!("I will call the tool.{tool}{tool}")).is_err());
+        assert!(parse_model_tool_request(&format!("I will call the tool.{tool} extra")).unwrap().is_none());
     }
 
     #[test]
