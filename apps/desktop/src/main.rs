@@ -26159,6 +26159,112 @@ fn main() -> eframe::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn in_chat_mcp_status_follows_durable_approval_dispatch_and_outcome() {
+        let mut store = chatarium_store::MemoryEventStore::default();
+        let conversation = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let request = mcp_agent_defaults::ModelToolRequest {
+            provider: local_http_mcp::MATHEMATICA.to_owned(),
+            tool: "mathematica_create_session".to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let (call_id, route_id, _) = append_agent_mcp_call_checked(
+            &mut store,
+            conversation,
+            &request,
+            mcp_agent_defaults::ToolPolicy::Ask,
+        )
+        .unwrap();
+
+        let pending = project_inline_mcp_status(store.events(), conversation).unwrap();
+        assert_eq!(pending.call_id, call_id);
+        assert_eq!(pending.route_id, route_id);
+        assert_eq!(pending.stage, mcp_call_review::CallReviewStage::AwaitingDecision);
+        assert!(!pending.automatically_authorized);
+        assert!(project_inline_mcp_status(store.events(), other).is_none());
+
+        append_tool_call_route_user_decision_checked(
+            &mut store,
+            route_id,
+            RouteUserDecision::Allow,
+        )
+        .unwrap();
+        let allowed = project_inline_mcp_status(store.events(), conversation).unwrap();
+        assert_eq!(
+            allowed.stage,
+            mcp_call_review::CallReviewStage::ApprovedForSeparateReview
+        );
+        assert_eq!(allowed.successful, None);
+
+        reserve_local_http_mcp_checked(&mut store, route_id).unwrap();
+        let dispatched = project_inline_mcp_status(store.events(), conversation).unwrap();
+        assert_eq!(
+            dispatched.stage,
+            mcp_call_review::CallReviewStage::DispatchedAwaitingOutcome
+        );
+        assert_eq!(dispatched.successful, None);
+        assert!(reserve_local_http_mcp_checked(&mut store, route_id).is_err());
+
+        append_tool_call_outcome_checked(
+            &mut store,
+            call_id,
+            route_id,
+            ToolCallOutcomeKind::Result,
+            "session-created".to_owned(),
+        )
+        .unwrap();
+        let finished = project_inline_mcp_status(store.events(), conversation).unwrap();
+        assert_eq!(
+            finished.stage,
+            mcp_call_review::CallReviewStage::OutcomeRecorded
+        );
+        assert_eq!(finished.successful, Some(true));
+        assert!(project_inline_mcp_status(store.events(), other).is_none());
+    }
+
+    #[test]
+    fn in_chat_mcp_status_distinguishes_denied_and_saved_auto_permission() {
+        let conversation = LocalConversationId::new();
+        let request = mcp_agent_defaults::ModelToolRequest {
+            provider: local_http_mcp::MANIFOLDR.to_owned(),
+            tool: "search_markets".to_owned(),
+            arguments: serde_json::json!({"term":"AI"}),
+        };
+        let mut denied_store = chatarium_store::MemoryEventStore::default();
+        let (_, denied_route, _) = append_agent_mcp_call_checked(
+            &mut denied_store,
+            conversation,
+            &request,
+            mcp_agent_defaults::ToolPolicy::Ask,
+        ).unwrap();
+        append_tool_call_route_user_decision_checked(
+            &mut denied_store,
+            denied_route,
+            RouteUserDecision::Deny,
+        ).unwrap();
+        let denied = project_inline_mcp_status(denied_store.events(), conversation).unwrap();
+        assert_eq!(denied.stage, mcp_call_review::CallReviewStage::Denied);
+        assert!(reserve_local_http_mcp_checked(&mut denied_store, denied_route).is_err());
+
+        let mut authorized_store = chatarium_store::MemoryEventStore::default();
+        let (_, auto_route, _) = append_agent_mcp_call_checked(
+            &mut authorized_store,
+            conversation,
+            &request,
+            mcp_agent_defaults::ToolPolicy::Automatic,
+        ).unwrap();
+        let automatic = project_inline_mcp_status(authorized_store.events(), conversation).unwrap();
+        assert!(automatic.automatically_authorized);
+        assert_eq!(automatic.successful, None);
+        reserve_local_http_mcp_checked(&mut authorized_store, auto_route).unwrap();
+        assert_eq!(
+            project_inline_mcp_status(authorized_store.events(), conversation)
+                .unwrap().stage,
+            mcp_call_review::CallReviewStage::DispatchedAwaitingOutcome
+        );
+    }
+
     fn persist_notice_name(notice: &PersistNotice) -> &'static str {
         match notice {
             PersistNotice::DraftSaved { .. } => "draft_saved",
