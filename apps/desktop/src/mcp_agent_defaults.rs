@@ -298,9 +298,16 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
         }
         let introduction = text[..object_at].trim_end();
         let lower = introduction.to_ascii_lowercase();
-        let explanatory_example = ["example", "sample", "hypothetical", "illustrat", "e.g.", "such as"]
-            .iter()
-            .any(|word| lower.contains(word));
+        let explanatory_example = [
+            "example",
+            "sample",
+            "hypothetical",
+            "illustrat",
+            "e.g.",
+            "such as",
+        ]
+        .iter()
+        .any(|word| lower.contains(word));
         if introduction.is_empty()
             || !introduction
                 .chars()
@@ -487,7 +494,11 @@ mod tests {
             );
         }
         assert!(parse_model_tool_request(&format!("I will call the tool.{tool}{tool}")).is_err());
-        assert!(parse_model_tool_request(&format!("I will call the tool.{tool} extra")).unwrap().is_none());
+        assert!(
+            parse_model_tool_request(&format!("I will call the tool.{tool} extra"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
