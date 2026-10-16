@@ -4072,6 +4072,12 @@ impl ChatariumApp {
                     let record = replay_tool_call_audit(&self.events)
                         .ok()
                         .and_then(|calls| calls.into_iter().find(|call| call.call_id == call_id));
+                    // Follow the pending agent call in the manual review panel.
+                    // Without this, the panel stays filtered to an older provider
+                    // and makes the required Allow/Run actions hard to discover.
+                    if let Some(call) = record.as_ref() {
+                        self.tool_selected_provider = Some(call.provider_id);
+                    }
                     let provider_is_builtin = record
                         .and_then(|call| {
                             replay_tool_provider_audit(&self.events)
@@ -4105,7 +4111,7 @@ impl ChatariumApp {
                         }
                     } else {
                         self.status = format!(
-                            "MCP call {} waiting for your Allow, then Run. The assistant turn is paused.",
+                            "MCP call {} awaits approval. Expand Tools / MCP, open Tool call audit, then use NEXT MANUAL MCP CALL REVIEW: Allow this route, followed by Run. The assistant turn is paused.",
                             call_id.get(),
                         );
                     }
