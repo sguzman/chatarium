@@ -38,6 +38,35 @@ not configure or weaken the existing **network-isolated stdio** executor.
 - Tool outcomes and errors are added to the existing durable tool audit and
   admitted to the model only through Chatarium's tool-result admission process.
 
+## In-conversation approval and execution status
+
+The latest MCP call's **durable state** is shown in the conversation area,
+without opening Advanced / Tools / MCP. This status is projected from the
+journal, not inferred from the assistant's text or from server reachability.
+
+- **Requested, not executed:** An Ask-policy call presents **Allow this call**
+  and **Deny**. No HTTP call has been dispatched.
+- **Approved, not executed:** After an explicit Allow is journaled, press
+  **Run approved tool once**. This separate Run action reserves the one-shot
+  route, then dispatches the tool. Do not confuse the purple request card with
+  a completed result.
+- **Automatically authorized:** Only exact, user-saved `automatic` policies
+  use the existing automatic dispatch path. A model-proposed request cannot
+  authorize itself; unconfigured operations remain Ask.
+- **Dispatched without result:** The call may be running or its outcome may
+  be uncertain. The app never silently retries it. Following a restart it
+  does not claim the old model continuation is active.
+- **Completed or failed:** A terminal result/error is journaled and displayed
+  separately in the purple MCP activity. Chatarium attempts to admit that
+  result into the still-active agent continuation.
+
+Tool approval and execution remain guarded by Chatarium's immutable intent,
+persisted decision, route gate, at-most-once dispatch and tool-result admission.
+A Deny terminates the matching in-memory model continuation. Preflight failures
+clear the pending UI flag instead of leaving the interface indefinitely busy.
+An interrupted in-memory model continuation is **not** magically restored when
+the application reopens, even if its tool request and outcome survive.
+
 **Mathematica warning:** Wolfram Language can execute OS commands as the user
 running the Mathematica server. Its HTTP endpoint has no built-in
 authentication or TLS. Treat it like a trusted local shell, especially when
