@@ -1003,6 +1003,7 @@ struct InlineMcpStatus {
     route_id: RouteId,
     provider: String,
     operation: String,
+    arguments: String,
     stage: mcp_call_review::CallReviewStage,
     automatically_authorized: bool,
     successful: Option<bool>,
@@ -1049,6 +1050,7 @@ fn project_inline_mcp_status(
         route_id,
         provider: provider.name.as_str().to_owned(),
         operation: call.operation.as_str().to_owned(),
+        arguments: call.arguments_text.clone(),
         stage,
         automatically_authorized: route.initial_policy == RoutePolicy::Allow,
         successful,
@@ -16174,6 +16176,30 @@ impl eframe::App for ChatariumApp {
                                 .strong()
                                 .size(12.0),
                             );
+                            if matches!(
+                                call.stage,
+                                mcp_call_review::CallReviewStage::AwaitingDecision
+                                    | mcp_call_review::CallReviewStage::ApprovedForSeparateReview
+                            ) {
+                                ui.collapsing("Review exact tool arguments before approval", |ui| {
+                                    egui::ScrollArea::vertical()
+                                        .max_height(140.0)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(&call.arguments)
+                                                    .monospace()
+                                                    .size(11.0),
+                                            );
+                                        });
+                                });
+                                if call.provider == local_http_mcp::MATHEMATICA {
+                                    ui.label("Mathematica executes Wolfram code with your Linux user privileges.");
+                                } else if call.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME
+                                    && call.operation == host_shell_mcp::OPERATION
+                                {
+                                    ui.label("Host shell commands execute as your Linux user, without a sandbox.");
+                                }
+                            }
                             match call.stage {
                                 mcp_call_review::CallReviewStage::AwaitingDecision
                                     if call.automatically_authorized =>
