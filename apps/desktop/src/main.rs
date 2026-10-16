@@ -16086,17 +16086,22 @@ impl eframe::App for ChatariumApp {
                 if count == self.events.len() {
                     status
                 } else {
-                    let status = project_inline_mcp_status(&self.events, self.local_conversation_id);
-                    ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
+                    let status =
+                        project_inline_mcp_status(&self.events, self.local_conversation_id);
+                    ctx.data_mut(|data| {
+                        data.insert_temp(key, (self.events.len(), status.clone()))
+                    });
                     status
                 }
             } else {
                 let status = project_inline_mcp_status(&self.events, self.local_conversation_id);
-                ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
+                ctx.data_mut(|data| {
+                    data.insert_temp(key, (self.events.len(), status.clone()))
+                });
                 status
             }
         };
-        
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -16159,36 +16164,47 @@ impl eframe::App for ChatariumApp {
                         .inner_margin(egui::Margin::symmetric(14, 10))
                         .show(ui, |ui| {
                             ui.set_max_width(ui.available_width());
-                            ui.label(egui::RichText::new(format!(
-                                "MCP · {} :: {} · call #{}",
-                                call.provider,
-                                call.operation,
-                                call.call_id.get()
-                            )).strong().size(12.0));
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "MCP · {} :: {} · call #{}",
+                                    call.provider,
+                                    call.operation,
+                                    call.call_id.get()
+                                ))
+                                .strong()
+                                .size(12.0),
+                            );
                             match call.stage {
                                 mcp_call_review::CallReviewStage::AwaitingDecision
                                     if call.automatically_authorized =>
                                 {
-                                    ui.label("Authorized by your saved tool policy; dispatch is pending. No result recorded yet.");
+                                    ui.label(
+                                        "Authorized by your saved tool policy; dispatch is pending. No result recorded yet.",
+                                    );
                                 }
                                 mcp_call_review::CallReviewStage::AwaitingDecision => {
-                                    ui.label("Tool requested, NOT executed. Your approval is required.");
+                                    ui.label(
+                                        "Tool requested, NOT executed. Your approval is required.",
+                                    );
                                     ui.horizontal(|ui| {
                                         let enabled = !self.tool_command_pending
                                             && self.persist_tx.is_some();
-                                        if ui.add_enabled(
-                                            enabled,
-                                            egui::Button::new("Allow this call"),
-                                        ).clicked() {
+                                        if ui
+                                            .add_enabled(
+                                                enabled,
+                                                egui::Button::new("Allow this call"),
+                                            )
+                                            .clicked()
+                                        {
                                             self.decide_tool_call_route(
                                                 call.route_id,
                                                 RouteUserDecision::Allow,
                                             );
                                         }
-                                        if ui.add_enabled(
-                                            enabled,
-                                            egui::Button::new("Deny"),
-                                        ).clicked() {
+                                        if ui
+                                            .add_enabled(enabled, egui::Button::new("Deny"))
+                                            .clicked()
+                                        {
                                             self.decide_tool_call_route(
                                                 call.route_id,
                                                 RouteUserDecision::Deny,
@@ -16197,12 +16213,19 @@ impl eframe::App for ChatariumApp {
                                     });
                                 }
                                 mcp_call_review::CallReviewStage::ApprovedForSeparateReview => {
-                                    ui.label("Approved, but NOT executed yet. Run once to continue.");
-                                    if ui.add_enabled(
-                                        !self.tool_command_pending && self.persist_tx.is_some(),
-                                        egui::Button::new("Run approved tool once"),
-                                    ).clicked() {
-                                        if call.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
+                                    ui.label(
+                                        "Approved, but NOT executed yet. Run once to continue.",
+                                    );
+                                    if ui
+                                        .add_enabled(
+                                            !self.tool_command_pending && self.persist_tx.is_some(),
+                                            egui::Button::new("Run approved tool once"),
+                                        )
+                                        .clicked()
+                                    {
+                                        if call.provider
+                                            == local_tool_adapter::BUILTIN_PROVIDER_NAME
+                                        {
                                             if call.operation == host_shell_mcp::OPERATION {
                                                 self.dispatch_host_shell(call.route_id);
                                             } else {
@@ -26180,7 +26203,10 @@ mod tests {
         let pending = project_inline_mcp_status(store.events(), conversation).unwrap();
         assert_eq!(pending.call_id, call_id);
         assert_eq!(pending.route_id, route_id);
-        assert_eq!(pending.stage, mcp_call_review::CallReviewStage::AwaitingDecision);
+        assert_eq!(
+            pending.stage,
+            mcp_call_review::CallReviewStage::AwaitingDecision
+        );
         assert!(!pending.automatically_authorized);
         assert!(project_inline_mcp_status(store.events(), other).is_none());
 
@@ -26237,12 +26263,14 @@ mod tests {
             conversation,
             &request,
             mcp_agent_defaults::ToolPolicy::Ask,
-        ).unwrap();
+        )
+        .unwrap();
         append_tool_call_route_user_decision_checked(
             &mut denied_store,
             denied_route,
             RouteUserDecision::Deny,
-        ).unwrap();
+        )
+        .unwrap();
         let denied = project_inline_mcp_status(denied_store.events(), conversation).unwrap();
         assert_eq!(denied.stage, mcp_call_review::CallReviewStage::Denied);
         assert!(reserve_local_http_mcp_checked(&mut denied_store, denied_route).is_err());
@@ -26253,14 +26281,17 @@ mod tests {
             conversation,
             &request,
             mcp_agent_defaults::ToolPolicy::Automatic,
-        ).unwrap();
-        let automatic = project_inline_mcp_status(authorized_store.events(), conversation).unwrap();
+        )
+        .unwrap();
+        let automatic =
+            project_inline_mcp_status(authorized_store.events(), conversation).unwrap();
         assert!(automatic.automatically_authorized);
         assert_eq!(automatic.successful, None);
         reserve_local_http_mcp_checked(&mut authorized_store, auto_route).unwrap();
         assert_eq!(
             project_inline_mcp_status(authorized_store.events(), conversation)
-                .unwrap().stage,
+                .unwrap()
+                .stage,
             mcp_call_review::CallReviewStage::DispatchedAwaitingOutcome
         );
     }
