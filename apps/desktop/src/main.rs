@@ -995,6 +995,66 @@ struct AgentMcpFlow {
     policy: mcp_agent_defaults::ToolPolicy,
 }
 
+/// Durable, conversation-scoped status for the latest MCP request.
+/// Presentation only: buttons still use the original audited route checks.
+#[derive(Clone)]
+struct InlineMcpStatus {
+    call_id: ToolCallId,
+    route_id: RouteId,
+    provider: String,
+    operation: String,
+    stage: mcp_call_review::CallReviewStage,
+    automatically_authorized: bool,
+    successful: Option<bool>,
+}
+
+fn project_inline_mcp_status(
+    events: &[EventEnvelope],
+    conversation: LocalConversationId,
+) -> Option<InlineMcpStatus> {
+    let session = replay_local_routing_directory(events)
+        .ok()?
+        .into_iter()
+        .find(|entry| entry.conversation_id == conversation)?
+        .current_session_id;
+    let call = replay_tool_call_audit(events)
+        .ok()?
+        .into_iter()
+        .filter(|call| call.source_session_id == session)
+        .max_by_key(|call| call.recorded_sequence)?;
+    let route_id = call.route_id?;
+    let route = replay_routing_audit(events)
+        .ok()?
+        .into_iter()
+        .find(|route| route.request.id == route_id)?;
+    let provider = replay_tool_provider_audit(events)
+        .ok()?
+        .into_iter()
+        .find(|provider| provider.provider_id == call.provider_id)?;
+    let outcome = replay_tool_call_outcome_audit(events)
+        .ok()?
+        .into_iter()
+        .find(|outcome| outcome.call_id == call.call_id);
+    let successful = outcome
+        .as_ref()
+        .map(|outcome| matches!(outcome.kind, ToolCallOutcomeKind::Result));
+    let stage = mcp_call_review::classify(
+        call.route_bound_sequence.is_some(),
+        route.latest_user_decision,
+        route.dispatch_sequence.is_some(),
+        successful.is_some(),
+    );
+    Some(InlineMcpStatus {
+        call_id: call.call_id,
+        route_id,
+        provider: provider.name.as_str().to_owned(),
+        operation: call.operation.as_str().to_owned(),
+        stage,
+        automatically_authorized: route.initial_policy == RoutePolicy::Allow,
+        successful,
+    })
+}
+
 #[derive(Debug, Clone)]
 struct ActiveRemoteTurn {
     conversation_id: LocalConversationId,
@@ -4134,7 +4194,26 @@ impl ChatariumApp {
                 PersistNotice::ToolCallRoutePolicyUpdated { route_id, event } => {
                     self.events.push(event);
                     self.tool_command_pending = false;
-                    self.status = format!("tool route {} policy durably updated", route_id.get());
+                    let denied = replay_routing_audit(&self.events)
+                        .ok()
+                        .and_then(|routes| {
+                            routes.into_iter().find(|route| route.request.id == route_id)
+                        })
+                        .is_some_and(|route| {
+                            route.latest_user_decision == Some(RouteUserDecision::Deny)
+                        });
+                    if denied
+                        && self.agent_mcp_flow.as_ref().is_some_and(|flow| {
+                            flow.pending_route == Some(route_id)
+                        })
+                    {
+                        self.agent_mcp_flow = None;
+                    }
+                    self.status = if denied {
+                        format!("MCP route {} denied; tool did not execute", route_id.get())
+                    } else {
+                        format!("MCP route {} approved; select Run once in chat", route_id.get())
+                    };
                 }
                 PersistNotice::HostShellDispatched { route_id, event } => {
                     self.events.push(event);
@@ -4476,13 +4555,17 @@ impl ChatariumApp {
                     } else if operation.starts_with("local route ") {
                         self.route_policy_command_pending = false;
                     }
-                    if operation.starts_with("tool ") || operation.starts_with("agent MCP") {
-                        self.tool_command_pending = false;
-                    }
-                    if (operation.starts_with("tool ") || operation.starts_with("agent MCP"))
-                        && self.agent_mcp_flow.is_some()
+                    // Local HTTP MCP preflight, worker spawn and outcome append
+                    // failures must release the UI pending flag too. An accepted
+                    // dispatch may have executed: never retry it implicitly.
+                    if operation.starts_with("tool ")
+                        || operation.starts_with("agent MCP")
+                        || operation.starts_with("localhost MCP")
                     {
-                        self.agent_mcp_flow = None;
+                        self.tool_command_pending = false;
+                        if self.agent_mcp_flow.is_some() {
+                            self.agent_mcp_flow = None;
+                        }
                     }
                     if operation.starts_with("local memory ") {
                         self.local_memory_command_pending = false;
@@ -15989,6 +16072,31 @@ impl eframe::App for ChatariumApp {
             }
         }
 
+        // Cache the durable MCP projection by journal length, not by frame.
+        // This status remains visible after reopening a conversation, while
+        // never using a stale in-memory agent flow as execution authority.
+        let inline_mcp = if historical_mode {
+            None
+        } else {
+            let key = egui::Id::new(("inline-mcp-status", self.local_conversation_id));
+            let cached = ctx.data_mut(|data| {
+                data.get_temp::<(usize, Option<InlineMcpStatus>)>(key)
+            });
+            if let Some((count, status)) = cached {
+                if count == self.events.len() {
+                    status
+                } else {
+                    let status = project_inline_mcp_status(&self.events, self.local_conversation_id);
+                    ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
+                    status
+                }
+            } else {
+                let status = project_inline_mcp_status(&self.events, self.local_conversation_id);
+                ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
+                status
+            }
+        };
+        
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -16013,6 +16121,128 @@ impl eframe::App for ChatariumApp {
                     // A bounded, finite offset is enough to clamp to the
                     // actual bottom of realistic native conversations.
                     set_reader_scroll(ctx, reader_scroll_state_id, READER_BOTTOM_SCROLL_OFFSET);
+                }
+                // Live in-chat MCP controls. Show the actual durable stage
+                // above the transcript instead of hiding approval in Advanced.
+                if let Some(call) = inline_mcp.as_ref() {
+                    let active = self.agent_mcp_flow.as_ref().is_some_and(|flow| {
+                        flow.conversation_id == self.local_conversation_id
+                            && flow.pending_call == Some(call.call_id)
+                    });
+                    let tint = match call.stage {
+                        mcp_call_review::CallReviewStage::AwaitingDecision
+                        | mcp_call_review::CallReviewStage::ApprovedForSeparateReview => {
+                            egui::Color32::from_rgb(54, 45, 30)
+                        }
+                        mcp_call_review::CallReviewStage::DispatchedAwaitingOutcome
+                        | mcp_call_review::CallReviewStage::Unbound => {
+                            egui::Color32::from_rgb(38, 44, 59)
+                        }
+                        mcp_call_review::CallReviewStage::Denied => {
+                            egui::Color32::from_rgb(55, 37, 41)
+                        }
+                        mcp_call_review::CallReviewStage::OutcomeRecorded => {
+                            if call.successful == Some(true) {
+                                egui::Color32::from_rgb(30, 49, 39)
+                            } else {
+                                egui::Color32::from_rgb(55, 37, 41)
+                            }
+                        }
+                    };
+                    egui::Frame::default()
+                        .fill(tint)
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgb(129, 122, 105),
+                        ))
+                        .corner_radius(egui::CornerRadius::same(9))
+                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .show(ui, |ui| {
+                            ui.set_max_width(ui.available_width());
+                            ui.label(egui::RichText::new(format!(
+                                "MCP · {} :: {} · call #{}",
+                                call.provider,
+                                call.operation,
+                                call.call_id.get()
+                            )).strong().size(12.0));
+                            match call.stage {
+                                mcp_call_review::CallReviewStage::AwaitingDecision
+                                    if call.automatically_authorized =>
+                                {
+                                    ui.label("Authorized by your saved tool policy; dispatch is pending. No result recorded yet.");
+                                }
+                                mcp_call_review::CallReviewStage::AwaitingDecision => {
+                                    ui.label("Tool requested, NOT executed. Your approval is required.");
+                                    ui.horizontal(|ui| {
+                                        let enabled = !self.tool_command_pending
+                                            && self.persist_tx.is_some();
+                                        if ui.add_enabled(
+                                            enabled,
+                                            egui::Button::new("Allow this call"),
+                                        ).clicked() {
+                                            self.decide_tool_call_route(
+                                                call.route_id,
+                                                RouteUserDecision::Allow,
+                                            );
+                                        }
+                                        if ui.add_enabled(
+                                            enabled,
+                                            egui::Button::new("Deny"),
+                                        ).clicked() {
+                                            self.decide_tool_call_route(
+                                                call.route_id,
+                                                RouteUserDecision::Deny,
+                                            );
+                                        }
+                                    });
+                                }
+                                mcp_call_review::CallReviewStage::ApprovedForSeparateReview => {
+                                    ui.label("Approved, but NOT executed yet. Run once to continue.");
+                                    if ui.add_enabled(
+                                        !self.tool_command_pending && self.persist_tx.is_some(),
+                                        egui::Button::new("Run approved tool once"),
+                                    ).clicked() {
+                                        if call.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
+                                            if call.operation == host_shell_mcp::OPERATION {
+                                                self.dispatch_host_shell(call.route_id);
+                                            } else {
+                                                self.dispatch_builtin_hello(call.route_id);
+                                            }
+                                        } else {
+                                            self.execute_approved_tool(call.call_id);
+                                        }
+                                    }
+                                }
+                                mcp_call_review::CallReviewStage::DispatchedAwaitingOutcome => {
+                                    ui.label(if active {
+                                        "Dispatched; waiting for the tool result. Do not send a duplicate call."
+                                    } else {
+                                        "Dispatched, but no result recorded. Outcome is uncertain; do not retry this call."
+                                    });
+                                }
+                                mcp_call_review::CallReviewStage::OutcomeRecorded => {
+                                    ui.label(if call.successful == Some(true) {
+                                        if active {
+                                            "Tool completed. Returning the recorded result to the agent."
+                                        } else {
+                                            "Tool completed; result recorded. No active agent continuation is confirmed."
+                                        }
+                                    } else {
+                                        "Tool failed; error recorded in the purple MCP result. No automatic retry."
+                                    });
+                                }
+                                mcp_call_review::CallReviewStage::Denied => {
+                                    ui.label("Tool denied. No execution was authorized.");
+                                }
+                                mcp_call_review::CallReviewStage::Unbound => {
+                                    ui.label("Tool request recorded, but its route is not bound. No execution.");
+                                }
+                            }
+                            if self.tool_command_pending {
+                                ui.spinner();
+                            }
+                        });
+                    ui.add_space(12.0);
                 }
                 if !historical_mode && display_messages.len() > offline_reader::READER_PAGE_SIZE {
                     ui.horizontal_wrapped(|ui| {
