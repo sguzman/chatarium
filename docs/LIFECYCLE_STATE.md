@@ -212,6 +212,14 @@ durably interrupted, and terminal completion/failure/interruption is projected
 into a separate WorkerContinuationExecutionResultRecorded fact. Terminal
 continuation results do not mutate WorkerLifecycle.
 
+Transport replay for worker Continue and controller coordination now rejects any
+additional remote acceptance, stream/status/output, or competing terminal event
+after a completion, observed failure, or interruption. Terminal outcomes remain
+mutually exclusive; late or contradictory evidence fails closed rather than
+silently changing the worker result or controller synthesis after restart.
+This guard does not retry an interrupted request, infer a successful result, or
+grant an autonomous controller action.
+
 Controller-side result visibility is unified through a result inbox over
 StatusRequest results, completed Start/Resume/Stop applications, and terminal
 Continue executions. Continue results include the latest durable worker output
