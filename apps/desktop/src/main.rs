@@ -15549,7 +15549,10 @@ impl eframe::App for ChatariumApp {
                 ui.horizontal(|ui| {
                     // Reserve a dedicated right-side column for status and
                     // actions so long chat titles never overlap its controls.
-                    let title_width = (ui.available_width() - 174.0).max(80.0);
+                    let header_width = ui.available_width();
+                    let right_column_width = (header_width * 0.40).clamp(170.0, 224.0);
+                    let title_width =
+                        (header_width - right_column_width - ui.spacing().item_spacing.x).max(80.0);
                     ui.vertical(|ui| {
                         ui.set_width(title_width);
                         ui.set_max_width(title_width);
@@ -15592,6 +15595,8 @@ impl eframe::App for ChatariumApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.vertical(|ui| {
+                            ui.set_width(right_column_width);
+                            ui.set_max_width(right_column_width);
                             let connected = self.remote_connected();
                             egui::Frame::default()
                                 .fill(if selected_live_mirror {
@@ -15606,10 +15611,12 @@ impl eframe::App for ChatariumApp {
                                     egui::Color32::from_rgb(48, 42, 26)
                                 })
                                 .corner_radius(egui::CornerRadius::same(12))
-                                .inner_margin(egui::Margin::symmetric(10, 5))
+                                .inner_margin(egui::Margin::symmetric(12, 8))
                                 .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                    ui.set_width(right_column_width - 24.0);
+                                    ui.vertical_centered(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
                                             "REMOTE · NOT MIRRORED"
                                         } else if selected_live_mirror {
                                             if self.live_mirror_truncated_before {
@@ -15626,9 +15633,9 @@ impl eframe::App for ChatariumApp {
                                         } else {
                                             "LOCAL ONLY"
                                         })
-                                        .size(10.0)
-                                        .strong()
-                                        .color(
+                                            .size(11.5)
+                                            .strong()
+                                            .color(
                                             if remote_catalog_selected && !selected_live_mirror {
                                                 egui::Color32::from_rgb(225, 194, 108)
                                             } else if selected_live_mirror {
@@ -15644,14 +15651,21 @@ impl eframe::App for ChatariumApp {
                                             },
                                         ),
                                     );
+                                    });
                                 });
+                            ui.add_space(8.0);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 // One-click export of the entire selected native conversation,
                                 // including journal-verified MCP calls, results and failures.
                                 // Uses the full reader projection, not the paged/visible viewport.
                                 if !historical_mode
                                     && ui
-                                        .small_button("Copy entire chat")
+                                        .add_sized(
+                                            [right_column_width, 32.0],
+                                            egui::Button::new(
+                                                egui::RichText::new("Copy entire chat").size(12.5),
+                                            ),
+                                        )
                                         .on_hover_text(
                                             "Copy all messages and verified MCP tool activity in this chat as Markdown. The clipboard may contain private data. Not an archive backup.",
                                         )
