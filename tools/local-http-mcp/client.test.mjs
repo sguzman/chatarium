@@ -40,6 +40,10 @@ before(async () => {
         res.end();
         return;
       }
+      if (message.params.name === "null_rpc_result") {
+        respond(res, { jsonrpc: "2.0", id: message.id, result: null });
+        return;
+      }
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(`: ready\n\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: {} })}\n\ndata: ${JSON.stringify({
         jsonrpc: "2.0", id: message.id, result: {
@@ -157,6 +161,25 @@ test("HTTP 202 without a correlated result is uncertain, never success or automa
   assert.equal(all.filter(item => item.method === "initialize").length, 2);
   assert.deepEqual(all.filter(item => item.method === "tools/call").map(item => item.tool),
     ["ack_without_result", "mathematica_time"]);
+});
+
+test("HTTP 200 with a null tools/call result cannot be recorded as a success", async () => {
+  const broker = client();
+  const before = seen.length;
+  await assert.rejects(
+    broker.request({
+      conversation_id: "chat-math-null",
+      provider: "mathematica",
+      method: "call",
+      name: "null_rpc_result",
+      arguments: {},
+    }),
+    /MCP tools\/call returned no valid content array.*not retried/,
+  );
+  assert.deepEqual(
+    seen.slice(before).filter(item => item.method === "tools/call").map(item => item.tool),
+    ["null_rpc_result"],
+  );
 });
 
 test("Manifoldr probability request preserves the exact array-valued ids argument", async () => {
