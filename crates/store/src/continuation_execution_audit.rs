@@ -798,3 +798,78 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 fn invalid_data(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }
+
+#[cfg(test)]
+mod transport_integrity_tests {
+    use super::*;
+
+    fn event(turn: LocalTurnId, sequence: u64, kind: EventKind) -> EventEnvelope {
+        EventEnvelope {
+            sequence,
+            at_unix_ms: 0,
+            scope: Some(local_turn_scope(turn)),
+            kind,
+            payload: "{}".to_owned(),
+        }
+    }
+
+    #[test]
+    fn worker_continuation_terminal_outcomes_remain_distinct() {
+        let cases = [
+            (EventKind::AssistantCompletionObserved, ContinuationExecutionOutcome::Completed),
+            (EventKind::RemoteFailureObserved, ContinuationExecutionOutcome::FailedObserved),
+            (EventKind::TransportInterrupted, ContinuationExecutionOutcome::Interrupted),
+        ];
+        for (terminal_kind, expected) in cases {
+            let turn = LocalTurnId::new();
+            let events = [
+                event(turn, 1, EventKind::DispatchAttempted),
+                event(turn, 2, terminal_kind),
+            ];
+            let state = continuation_execution_transport_state(&events, turn).unwrap();
+            assert_eq!(transport_terminal_outcome(state), Some((expected, 2)));
+        }
+    }
+
+    #[test]
+    fn worker_continuation_cannot_record_conflicting_terminal_outcomes() {
+        let terminals = [
+            EventKind::AssistantCompletionObserved,
+            EventKind::RemoteFailureObserved,
+            EventKind::TransportInterrupted,
+        ];
+        for first in terminals {
+            for second in terminals {
+                let turn = LocalTurnId::new();
+                let events = [
+                    event(turn, 1, EventKind::DispatchAttempted),
+                    event(turn, 2, first),
+                    event(turn, 3, second),
+                ];
+                let error = continuation_execution_transport_state(&events, turn).unwrap_err();
+                assert!(error.contains("after terminal outcome"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn worker_continuation_rejects_late_output_and_acceptance() {
+        let late_events = [
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::AssistantStatusObserved,
+            EventKind::AssistantDeltaObserved,
+            EventKind::AssistantSnapshotObserved,
+        ];
+        for late_kind in late_events {
+            let turn = LocalTurnId::new();
+            let events = [
+                event(turn, 1, EventKind::DispatchAttempted),
+                event(turn, 2, EventKind::TransportInterrupted),
+                event(turn, 3, late_kind),
+            ];
+            let error = continuation_execution_transport_state(&events, turn).unwrap_err();
+            assert!(error.contains("after terminal outcome"), "{error}");
+        }
+    }
+}
