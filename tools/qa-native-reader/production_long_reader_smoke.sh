@@ -108,7 +108,20 @@ import -window "$window" "$OUT/long-end.png"
 # Click the checkbox relative to the *observed* production content boundary,
 # never a stale absolute pixel from a different layout.
 sidebar_edge="$(python3 tools/qa-native-reader/panel_geometry.py "$OUT/long-end.png")"
-xdotool mousemove --window "$window" "$((sidebar_edge + 50))" 139 click 1
+# Derive the real header height from the current native UI layout rather than
+# clicking a stale Y position after a header size change.
+header_height="$(python3 - <<'PY'
+from pathlib import Path
+import re
+source = Path("apps/desktop/src/main.rs").read_text()
+header = source.split('egui::TopBottomPanel::top("conversation_header")', 1)[1]
+match = re.search(r'\.exact_height\((\d+(?:\.\d+)?)\)', header[:1000])
+if match is None:
+    raise SystemExit("cannot derive native header height for X11 control test")
+print(round(float(match.group(1))))
+PY
+)"
+xdotool mousemove --window "$window" "$((sidebar_edge + 50))" "$((header_height + 27))" click 1
 # Remove hover styling before comparing the persistent checkbox state.
 xdotool mousemove --window "$window" 740 250
 sleep 0.8
@@ -133,7 +146,7 @@ xdotool key --clearmodifiers End
 sleep 0.8
 import -window "$window" "$OUT/long-continuous-resized-end.png"
 
-python3 - "$OUT" <<'PY'
+python3 - "$OUT" "$header_height" <<'PY'
 from pathlib import Path
 from PIL import Image, ImageChops
 import json
@@ -198,7 +211,7 @@ if end_distance > 7.0:
     )
 # The checkbox itself must visibly change in the real window; merely
 # injecting the click without entering continuous mode is not a pass.
-# Checkbox lives just below the 112px header, relative to the
+# Checkbox lives just below the actual header height, relative to the
 # dynamically allocated central panel. Catch unexpected sidebar growth too.
 sys.path.insert(0, str(Path.cwd() / "tools/qa-native-reader"))
 from panel_geometry import sidebar_edge
@@ -208,7 +221,8 @@ if abs(edge_before - edge_after) > 6:
     raise AssertionError(
         f"sidebar resized during checkbox interaction: {edge_before} -> {edge_after}"
     )
-control_rect = (edge_before + 26, 125, edge_before + 210, 159)
+header_height = int(sys.argv[2])
+control_rect = (edge_before + 26, header_height + 13, edge_before + 210, header_height + 47)
 control_delta = ImageChops.difference(
     images["end"].crop(control_rect), images["continuous-enabled"].crop(control_rect)
 )
