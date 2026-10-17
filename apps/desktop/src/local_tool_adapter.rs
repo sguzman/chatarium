@@ -40,6 +40,75 @@ pub fn supports_builtin(provider_name: &str, operation: &str) -> bool {
         )
 }
 
+/// Argument contracts pinned from sguzman/manifoldr v1.0.0 src/mcp.rs.
+/// These describe locally allowlisted read-only operations, not a live MCP
+/// schema fetch or any new execution authority. Refresh with server upgrades.
+fn manifoldr_input_schema(name: &str) -> Option<Value> {
+    let browse = json!({
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "term": {"type": "string", "maxLength": 500},
+        "topic_slug": {"type": "string", "maxLength": 128},
+        "contract_type": {"type": "string", "maxLength": 128},
+        "filter": {"type": "string", "maxLength": 128},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "creator_id": {"type": "string", "maxLength": 128}
+    });
+    let schema = match name {
+        "popular_markets" | "trending_markets" | "high_volume_markets" => {
+            json!({"type": "object", "properties": browse})
+        }
+        "search_markets" => {
+            let mut properties = browse;
+            properties["sort"] = json!({
+                "type": "string",
+                "enum": [
+                    "most-popular", "daily-score", "24-hour-vol", "score",
+                    "freshness-score", "newest", "liquidity", "random",
+                    "last-updated", "close-date"
+                ]
+            });
+            json!({"type": "object", "properties": properties})
+        }
+        "suggested_markets" => json!({
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                "topic_slug": {"type": "string"},
+                "contract_type": {"type": "string"}
+            }
+        }),
+        "list_categories" => json!({
+            "type": "object",
+            "properties": {"before_time": {"type": "integer"}}
+        }),
+        "get_category" => json!({
+            "type": "object",
+            "properties": {"slug": {"type": "string", "minLength": 1, "maxLength": 128}},
+            "required": ["slug"]
+        }),
+        "get_market" => json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "minLength": 1, "maxLength": 256},
+                "is_slug": {"type": "boolean"}
+            },
+            "required": ["id"]
+        }),
+        "get_probabilities" => json!({
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array", "minItems": 1, "maxItems": 100,
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["ids"]
+        }),
+        _ => return None,
+    };
+    Some(schema)
+}
+
 /// Create a bounded local MCP directory from replayed provider configuration.
 ///
 /// The directory is *informational*: activation and an operation allowlist
@@ -88,14 +157,20 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
         if tools.len() >= MAX_DIRECTORY_OPERATIONS {
             return Err("MCP directory exceeds the maximum of 128 operations".to_owned());
         }
-        tools.push(json!({
+        let mut entry = json!({
             "provider": provider,
             "name": name,
             "description": description,
             "available": true,
             "connection": "not checked; fixed 127.0.0.1 Streamable HTTP endpoint",
             "execution_permission": "explicit exact standing policy or per-call user approval"
-        }));
+        });
+        if provider == local_http_mcp::MANIFOLDR {
+            entry["inputSchema"] = manifoldr_input_schema(name)
+                .ok_or_else(|| format!("Manifoldr operation {name} has no pinned schema"))?;
+            entry["schema_source"] = json!("Chatarium-pinned Manifoldr v1.0.0 source contract; not live tools/list");
+        }
+        tools.push(entry);
     }
     for provider in providers {
         if provider.name.as_str() == BUILTIN_PROVIDER_NAME {
@@ -396,6 +471,17 @@ mod tests {
             parsed.payload["authority"],
             "discovery only, not permission to run"
         );
+        let tools = parsed.payload["tools"].as_array().unwrap();
+        let search = tools.iter().find(|tool| tool["provider"] == "chatarium.local.manifoldr" && tool["name"] == "search_markets").unwrap();
+        assert_eq!(search["inputSchema"]["properties"]["term"]["type"], "string");
+        assert_eq!(search["inputSchema"]["properties"]["limit"]["maximum"], 100);
+        let probabilities = tools.iter().find(|tool| tool["provider"] == "chatarium.local.manifoldr" && tool["name"] == "get_probabilities").unwrap();
+        assert_eq!(probabilities["inputSchema"]["required"][0], "ids");
+        assert_eq!(probabilities["inputSchema"]["properties"]["ids"]["items"]["type"], "string");
+        for tool in tools.iter().filter(|tool| tool["provider"] == "chatarium.local.manifoldr") {
+            assert!(tool["inputSchema"].is_object(), "missing exact Manifoldr tool argument contract");
+        }
+
         assert!(
             prepare_builtin_response(&call("tools.list", r#"{"x":1}"#), store.events()).is_err()
         );
