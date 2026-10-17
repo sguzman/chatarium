@@ -543,6 +543,9 @@ pub fn continuation_execution_transport_state(
                     ));
                 }
             }
+            EventKind::AssistantStatusObserved => {
+                require_dispatch(state, execution_turn_id, event.sequence)?;
+            }
             EventKind::AssistantDeltaObserved | EventKind::AssistantSnapshotObserved => {
                 require_dispatch(state, execution_turn_id, event.sequence)?;
                 state.latest_output_sequence = Some(event.sequence);
