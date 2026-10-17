@@ -7770,10 +7770,7 @@ impl eframe::App for ChatariumApp {
         let header_conversation_title = if historical_mode {
             conversation_title.clone()
         } else {
-            expanded_native_conversation_header_title(
-                &conversation_title,
-                local_display_messages,
-            )
+            expanded_native_conversation_header_title(&conversation_title, local_display_messages)
         };
         let mut select_local_requested: Option<LocalConversationId> = None;
         let mut create_local_requested = false;
