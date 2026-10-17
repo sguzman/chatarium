@@ -117,6 +117,37 @@ pub fn tool_policy(rules: &str, provider: &str, operation: &str) -> Result<ToolP
     Ok(matching.unwrap_or(ToolPolicy::Ask))
 }
 
+/// Edit exactly one named policy without affecting unrelated permissions.
+/// The result remains a draft until the user explicitly saves MCP defaults.
+pub fn set_tool_policy_rule(
+    rules: &str,
+    provider: &str,
+    operation: &str,
+    selected: ToolPolicy,
+) -> String {
+    let target = format!("{provider}::{operation}");
+    let replacement = format!("{target} = {}", selected.name());
+    let mut found = false;
+    let mut lines = Vec::new();
+    for line in rules.lines() {
+        if line
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim() == target)
+        {
+            if !found {
+                lines.push(replacement.clone());
+                found = true;
+            }
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    if !found {
+        lines.push(replacement);
+    }
+    lines.join("\n")
+}
+
 impl AgentDefaults {
     pub fn validate(&self) -> Result<(), String> {
         if self.bootstrap.len() > MAX_PROMPT
@@ -859,6 +890,39 @@ mod tests {
             ),
             Ok(ToolPolicy::Ask)
         );
+    }
+
+    #[test]
+    fn policy_dropdown_changes_only_selected_named_tool() {
+        let original = AgentDefaults::default().policy_rules;
+        let updated = set_tool_policy_rule(
+            &original,
+            crate::local_http_mcp::MATHEMATICA,
+            "mathematica_execute_code",
+            ToolPolicy::Ask,
+        );
+        assert_eq!(
+            tool_policy(&updated, crate::local_http_mcp::MATHEMATICA, "mathematica_execute_code"),
+            Ok(ToolPolicy::Ask)
+        );
+        assert_eq!(
+            tool_policy(&updated, crate::local_http_mcp::MATHEMATICA, "mathematica_close_session"),
+            Ok(ToolPolicy::Automatic)
+        );
+        assert_eq!(
+            tool_policy(&updated, crate::local_http_mcp::MANIFOLDR, "search_markets"),
+            Ok(ToolPolicy::Automatic)
+        );
+        let restored = set_tool_policy_rule(
+            &updated,
+            crate::local_http_mcp::MATHEMATICA,
+            "mathematica_execute_code",
+            ToolPolicy::Automatic,
+        );
+        assert_eq!(restored, original);
+        let mut settings = AgentDefaults::default();
+        settings.policy_rules = updated;
+        settings.validate().unwrap();
     }
 
     #[test]
