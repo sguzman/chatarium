@@ -835,8 +835,7 @@ mod transport_integrity_tests {
     fn controller_coordination_status_requires_prior_dispatch() {
         let turn = LocalTurnId::new();
         let before_dispatch = [event(turn, 1, EventKind::AssistantStatusObserved)];
-        let error =
-            controller_coordination_transport_state(&before_dispatch, turn).unwrap_err();
+        let error = controller_coordination_transport_state(&before_dispatch, turn).unwrap_err();
         assert!(error.contains("before dispatch"), "{error}");
 
         let dispatched = [
