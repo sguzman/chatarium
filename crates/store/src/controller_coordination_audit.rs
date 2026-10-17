@@ -424,6 +424,9 @@ pub fn controller_coordination_transport_state(
                     ));
                 }
             }
+            EventKind::AssistantStatusObserved => {
+                require_dispatch(state, coordination_turn_id, event.sequence)?;
+            }
             EventKind::AssistantDeltaObserved | EventKind::AssistantSnapshotObserved => {
                 require_dispatch(state, coordination_turn_id, event.sequence)?;
                 state.latest_output_sequence = Some(event.sequence);
