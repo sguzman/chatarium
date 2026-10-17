@@ -35,6 +35,11 @@ before(async () => {
       return;
     }
     if (message.method === "tools/call") {
+      if (message.params.name === "ack_without_result") {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(`: ready\n\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: {} })}\n\ndata: ${JSON.stringify({
         jsonrpc: "2.0", id: message.id, result: {
@@ -119,6 +124,39 @@ test("SSE returns a tool response before the HTTP stream closes", async () => {
   });
   assert.equal(reply.structuredContent.name, "stream_stays_open");
   assert.ok(Date.now() - start < 1400, "MCP tool waited for SSE connection EOF");
+});
+
+test("HTTP 202 without a correlated result is uncertain, never success or automatic replay", async () => {
+  const broker = client();
+  const before = seen.length;
+  await assert.rejects(
+    broker.request({
+      conversation_id: "chat-math-202",
+      provider: "mathematica",
+      method: "call",
+      name: "ack_without_result",
+      arguments: {},
+    }),
+    /MCP HTTP 202.*outcome unknown.*not retried/,
+  );
+  const firstAttempt = seen.slice(before);
+  assert.equal(firstAttempt.filter(item => item.method === "tools/call").length, 1);
+  assert.equal(firstAttempt.filter(item => item.method === "initialize").length, 1);
+
+  // A separately authorized next call may start a fresh transport session;
+  // the ambiguous original call is never retried.
+  const recovered = await broker.request({
+    conversation_id: "chat-math-202",
+    provider: "mathematica",
+    method: "call",
+    name: "mathematica_time",
+    arguments: {},
+  });
+  const all = seen.slice(before);
+  assert.equal(recovered.structuredContent.name, "mathematica_time");
+  assert.equal(all.filter(item => item.method === "initialize").length, 2);
+  assert.deepEqual(all.filter(item => item.method === "tools/call").map(item => item.tool),
+    ["ack_without_result", "mathematica_time"]);
 });
 
 test("Manifoldr probability request preserves the exact array-valued ids argument", async () => {
