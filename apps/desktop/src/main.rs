@@ -4199,22 +4199,28 @@ impl ChatariumApp {
                     let denied = replay_routing_audit(&self.events)
                         .ok()
                         .and_then(|routes| {
-                            routes.into_iter().find(|route| route.request.id == route_id)
+                            routes
+                                .into_iter()
+                                .find(|route| route.request.id == route_id)
                         })
                         .is_some_and(|route| {
                             route.latest_user_decision == Some(RouteUserDecision::Deny)
                         });
                     if denied
-                        && self.agent_mcp_flow.as_ref().is_some_and(|flow| {
-                            flow.pending_route == Some(route_id)
-                        })
+                        && self
+                            .agent_mcp_flow
+                            .as_ref()
+                            .is_some_and(|flow| flow.pending_route == Some(route_id))
                     {
                         self.agent_mcp_flow = None;
                     }
                     self.status = if denied {
                         format!("MCP route {} denied; tool did not execute", route_id.get())
                     } else {
-                        format!("MCP route {} approved; select Run once in chat", route_id.get())
+                        format!(
+                            "MCP route {} approved; select Run once in chat",
+                            route_id.get()
+                        )
                     };
                 }
                 PersistNotice::HostShellDispatched { route_id, event } => {
@@ -16116,25 +16122,20 @@ impl eframe::App for ChatariumApp {
             None
         } else {
             let key = egui::Id::new(("inline-mcp-status", self.local_conversation_id));
-            let cached = ctx.data_mut(|data| {
-                data.get_temp::<(usize, Option<InlineMcpStatus>)>(key)
-            });
+            let cached =
+                ctx.data_mut(|data| data.get_temp::<(usize, Option<InlineMcpStatus>)>(key));
             if let Some((count, status)) = cached {
                 if count == self.events.len() {
                     status
                 } else {
                     let status =
                         project_inline_mcp_status(&self.events, self.local_conversation_id);
-                    ctx.data_mut(|data| {
-                        data.insert_temp(key, (self.events.len(), status.clone()))
-                    });
+                    ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
                     status
                 }
             } else {
                 let status = project_inline_mcp_status(&self.events, self.local_conversation_id);
-                ctx.data_mut(|data| {
-                    data.insert_temp(key, (self.events.len(), status.clone()))
-                });
+                ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
                 status
             }
         };
@@ -26389,8 +26390,7 @@ mod tests {
             mcp_agent_defaults::ToolPolicy::Automatic,
         )
         .unwrap();
-        let automatic =
-            project_inline_mcp_status(authorized_store.events(), conversation).unwrap();
+        let automatic = project_inline_mcp_status(authorized_store.events(), conversation).unwrap();
         assert!(automatic.automatically_authorized);
         assert_eq!(automatic.successful, None);
         reserve_local_http_mcp_checked(&mut authorized_store, auto_route).unwrap();
