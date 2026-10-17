@@ -15580,6 +15580,27 @@ impl eframe::App for ChatariumApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // One-click export of the entire selected native conversation,
+                        // including journal-verified MCP calls, results and failures.
+                        // Uses the full reader projection, not the paged/visible viewport.
+                        if !historical_mode
+                            && ui
+                                .small_button("Copy entire chat")
+                                .on_hover_text(
+                                    "Copy all messages and verified MCP tool activity in this chat as Markdown. The clipboard may contain private data. Not an archive backup.",
+                                )
+                                .clicked()
+                        {
+                            ctx.copy_text(native_transcript_export::markdown(
+                                self.local_conversation_id,
+                                &local_conversation_title,
+                                local_display_messages,
+                            ));
+                            self.status = format!(
+                                "copied entire chat ({} messages, including MCP activity)",
+                                local_display_messages.len(),
+                            );
+                        }
                         let connected = self.remote_connected();
                         egui::Frame::default()
                             .fill(if selected_live_mirror {
