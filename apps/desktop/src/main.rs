@@ -15547,7 +15547,12 @@ impl eframe::App for ChatariumApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    // Reserve a dedicated right-side column for status and
+                    // actions so long chat titles never overlap its controls.
+                    let title_width = (ui.available_width() - 174.0).max(80.0);
                     ui.vertical(|ui| {
+                        ui.set_width(title_width);
+                        ui.set_max_width(title_width);
                         ui.horizontal(|ui| {
                             if !historical_mode {
                                 if let Some(entry) = self.local_conversation_catalog.entry(self.local_conversation_id) {
@@ -15555,14 +15560,17 @@ impl eframe::App for ChatariumApp {
                                     ui.colored_label(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), "●");
                                 }
                             }
-                            ui.label(
-                                egui::RichText::new(conversation_title.as_str())
-                                    .size(19.0)
-                                    .strong()
-                                    .color(egui::Color32::from_rgb(238, 239, 244)),
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(conversation_title.as_str())
+                                        .size(19.0)
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(238, 239, 244)),
+                                )
+                                .truncate(),
                             );
                         });
-                        ui.label(
+                        ui.add(egui::Label::new(
                             egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
                                 "Remote catalog item · not mirrored locally"
                             } else if selected_live_mirror {
@@ -15576,31 +15584,11 @@ impl eframe::App for ChatariumApp {
                             })
                             .size(11.0)
                             .color(egui::Color32::from_rgb(139, 143, 153)),
-                        );
+                        ).truncate());
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // One-click export of the entire selected native conversation,
-                        // including journal-verified MCP calls, results and failures.
-                        // Uses the full reader projection, not the paged/visible viewport.
-                        if !historical_mode
-                            && ui
-                                .small_button("Copy entire chat")
-                                .on_hover_text(
-                                    "Copy all messages and verified MCP tool activity in this chat as Markdown. The clipboard may contain private data. Not an archive backup.",
-                                )
-                                .clicked()
-                        {
-                            ctx.copy_text(native_transcript_export::markdown(
-                                self.local_conversation_id,
-                                &local_conversation_title,
-                                local_display_messages,
-                            ));
-                            self.status = format!(
-                                "copied entire chat ({} messages, including MCP activity)",
-                                local_display_messages.len(),
-                            );
-                        }
+                        ui.vertical(|ui| {
                         let connected = self.remote_connected();
                         egui::Frame::default()
                             .fill(if selected_live_mirror {
@@ -15654,6 +15642,31 @@ impl eframe::App for ChatariumApp {
                                     ),
                                 );
                             });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // One-click export of the entire selected native conversation,
+                            // including journal-verified MCP calls, results and failures.
+                            // Uses the full reader projection, not the paged/visible viewport.
+                            if !historical_mode
+                            && ui
+                            .small_button("Copy entire chat")
+                            .on_hover_text(
+                            "Copy all messages and verified MCP tool activity in this chat as Markdown. The clipboard may contain private data. Not an archive backup.",
+                            )
+                            .clicked()
+                            {
+                            ctx.copy_text(native_transcript_export::markdown(
+                            self.local_conversation_id,
+                            &local_conversation_title,
+                            local_display_messages,
+                            ));
+                            self.status = format!(
+                            "copied entire chat ({} messages, including MCP activity)",
+                            local_display_messages.len(),
+                            );
+                            }
+                            
+                            });
+                        });
                     });
                 });
                 if !historical_mode {
