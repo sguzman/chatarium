@@ -16104,6 +16104,12 @@ impl eframe::App for ChatariumApp {
             }
         };
 
+        // Collect MCP commands while drawing. Mutating Chatarium from inside
+        // the reader closure conflicts with its borrowed transcript messages.
+        // Dispatch only after the entire central panel has finished rendering.
+        let mut inline_mcp_decision: Option<(RouteId, RouteUserDecision)> = None;
+        let mut inline_mcp_run: Option<(ToolCallId, RouteId)> = None;
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -16253,19 +16259,15 @@ impl eframe::App for ChatariumApp {
                                             )
                                             .clicked()
                                         {
-                                            self.decide_tool_call_route(
-                                                call.route_id,
-                                                RouteUserDecision::Allow,
-                                            );
+                                            inline_mcp_decision =
+                                                Some((call.route_id, RouteUserDecision::Allow));
                                         }
                                         if ui
                                             .add_enabled(enabled, egui::Button::new("Deny"))
                                             .clicked()
                                         {
-                                            self.decide_tool_call_route(
-                                                call.route_id,
-                                                RouteUserDecision::Deny,
-                                            );
+                                            inline_mcp_decision =
+                                                Some((call.route_id, RouteUserDecision::Deny));
                                         }
                                     });
                                 }
@@ -16280,17 +16282,7 @@ impl eframe::App for ChatariumApp {
                                         )
                                         .clicked()
                                     {
-                                        if call.provider
-                                            == local_tool_adapter::BUILTIN_PROVIDER_NAME
-                                        {
-                                            if call.operation == host_shell_mcp::OPERATION {
-                                                self.dispatch_host_shell(call.route_id);
-                                            } else {
-                                                self.dispatch_builtin_hello(call.route_id);
-                                            }
-                                        } else {
-                                            self.execute_approved_tool(call.call_id);
-                                        }
+                                        inline_mcp_run = Some((call.call_id, call.route_id));
                                     }
                                 }
                                 mcp_call_review::CallReviewStage::DispatchedAwaitingOutcome => {
@@ -16688,6 +16680,28 @@ impl eframe::App for ChatariumApp {
                     });
                 reader_output_offset = Some(reader_output.state.offset.y);
             });
+
+        // The UI callback no longer owns any borrowed conversation messages.
+        // Invoke only the action clicked in this frame; all durable gate checks
+        // and one-shot dispatch reservations still occur in their normal path.
+        if let Some((route_id, decision)) = inline_mcp_decision {
+            self.decide_tool_call_route(route_id, decision);
+        } else if let Some((call_id, route_id)) = inline_mcp_run {
+            if let Some(call) = inline_mcp
+                .as_ref()
+                .filter(|call| call.call_id == call_id && call.route_id == route_id)
+            {
+                if call.provider == local_tool_adapter::BUILTIN_PROVIDER_NAME {
+                    if call.operation == host_shell_mcp::OPERATION {
+                        self.dispatch_host_shell(route_id);
+                    } else {
+                        self.dispatch_builtin_hello(route_id);
+                    }
+                } else {
+                    self.execute_approved_tool(call_id);
+                }
+            }
+        }
 
         if reader_window.virtualized {
             if let Some(offset) = reader_output_offset {
