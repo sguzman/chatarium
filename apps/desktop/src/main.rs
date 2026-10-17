@@ -15539,7 +15539,7 @@ impl eframe::App for ChatariumApp {
 
         egui::TopBottomPanel::top("conversation_header")
             .resizable(false)
-            .exact_height(112.0)
+            .exact_height(142.0)
             .frame(
                 egui::Frame::default()
                     .fill(egui::Color32::from_rgb(23, 24, 29))
