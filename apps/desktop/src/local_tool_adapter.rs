@@ -168,7 +168,8 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
         if provider == local_http_mcp::MANIFOLDR {
             entry["inputSchema"] = manifoldr_input_schema(name)
                 .ok_or_else(|| format!("Manifoldr operation {name} has no pinned schema"))?;
-            entry["schema_source"] = json!("Chatarium-pinned Manifoldr v1.0.0 source contract; not live tools/list");
+            entry["schema_source"] =
+                json!("Chatarium-pinned Manifoldr v1.0.0 source contract; not live tools/list");
         }
         tools.push(entry);
     }
@@ -472,14 +473,37 @@ mod tests {
             "discovery only, not permission to run"
         );
         let tools = parsed.payload["tools"].as_array().unwrap();
-        let search = tools.iter().find(|tool| tool["provider"] == "chatarium.local.manifoldr" && tool["name"] == "search_markets").unwrap();
-        assert_eq!(search["inputSchema"]["properties"]["term"]["type"], "string");
+        let search = tools
+            .iter()
+            .find(|tool| {
+                tool["provider"] == "chatarium.local.manifoldr" && tool["name"] == "search_markets"
+            })
+            .unwrap();
+        assert_eq!(
+            search["inputSchema"]["properties"]["term"]["type"],
+            "string"
+        );
         assert_eq!(search["inputSchema"]["properties"]["limit"]["maximum"], 100);
-        let probabilities = tools.iter().find(|tool| tool["provider"] == "chatarium.local.manifoldr" && tool["name"] == "get_probabilities").unwrap();
+        let probabilities = tools
+            .iter()
+            .find(|tool| {
+                tool["provider"] == "chatarium.local.manifoldr"
+                    && tool["name"] == "get_probabilities"
+            })
+            .unwrap();
         assert_eq!(probabilities["inputSchema"]["required"][0], "ids");
-        assert_eq!(probabilities["inputSchema"]["properties"]["ids"]["items"]["type"], "string");
-        for tool in tools.iter().filter(|tool| tool["provider"] == "chatarium.local.manifoldr") {
-            assert!(tool["inputSchema"].is_object(), "missing exact Manifoldr tool argument contract");
+        assert_eq!(
+            probabilities["inputSchema"]["properties"]["ids"]["items"]["type"],
+            "string"
+        );
+        for tool in tools
+            .iter()
+            .filter(|tool| tool["provider"] == "chatarium.local.manifoldr")
+        {
+            assert!(
+                tool["inputSchema"].is_object(),
+                "missing exact Manifoldr tool argument contract"
+            );
         }
 
         assert!(
