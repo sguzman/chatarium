@@ -175,7 +175,10 @@ export class LocalMcpBroker {
     }
     if (response.status === 202) {
       await response.body?.cancel().catch(() => {});
-      return null;
+      // 202 acknowledges receipt, not completion. In particular, a tools/call
+      // may already have executed remotely. Never journal a null result as
+      // success and never replay this request to guess the outcome.
+      throw new Error("MCP HTTP 202 returned no correlated JSON-RPC result; outcome unknown; not retried");
     }
     const media = (response.headers.get("content-type") || "").toLowerCase();
     let message;
