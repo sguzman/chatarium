@@ -819,9 +819,18 @@ mod transport_integrity_tests {
     #[test]
     fn worker_continuation_terminal_outcomes_remain_distinct() {
         let cases = [
-            (EventKind::AssistantCompletionObserved, ContinuationExecutionOutcome::Completed),
-            (EventKind::RemoteFailureObserved, ContinuationExecutionOutcome::FailedObserved),
-            (EventKind::TransportInterrupted, ContinuationExecutionOutcome::Interrupted),
+            (
+                EventKind::AssistantCompletionObserved,
+                ContinuationExecutionOutcome::Completed,
+            ),
+            (
+                EventKind::RemoteFailureObserved,
+                ContinuationExecutionOutcome::FailedObserved,
+            ),
+            (
+                EventKind::TransportInterrupted,
+                ContinuationExecutionOutcome::Interrupted,
+            ),
         ];
         for (terminal_kind, expected) in cases {
             let turn = LocalTurnId::new();
