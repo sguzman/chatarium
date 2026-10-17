@@ -333,19 +333,40 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
     };
     let suffix = &candidate[values.byte_offset()..];
     if !suffix.trim().is_empty() {
-        // Some model responses append a sentence directly after the final
-        // closing brace, without a newline. This is still a valid *single*
-        // leading tool request when the suffix starts with prose. Keep
-        // rejecting inline examples separated by a space and extra JSON
-        // envelopes, which could otherwise silently execute a second call.
         let after_whitespace = suffix.trim_start();
-        if after_whitespace.starts_with('{') || after_whitespace.starts_with('[') {
-            return Err("MCP response may request only one tool".to_owned());
-        }
-        let separated_by_newline = suffix.starts_with('\n') || suffix.starts_with("\r\n");
-        let immediately_followed_by_prose = suffix.chars().next().is_some_and(char::is_alphabetic);
-        if !separated_by_newline && !immediately_followed_by_prose {
-            return Ok(None);
+        if after_whitespace.starts_with('{') {
+            // A model can repeat the exact same envelope back-to-back (even
+            // with no separator). One identical duplicate is *one* proposal,
+            // never two executions. Reject differing or additional requests.
+            // Prose-first responses still require one terminal envelope.
+            if !trimmed.starts_with('{') || candidate != trimmed {
+                return Err("MCP response may request only one tool".to_owned());
+            }
+            let mut duplicate_values = serde_json::Deserializer::from_str(after_whitespace)
+                .into_iter::<Value>();
+            let duplicate = match duplicate_values.next() {
+                Some(Ok(value)) => value,
+                _ => return Err("MCP response contains malformed second tool JSON".to_owned()),
+            };
+            if !after_whitespace[duplicate_values.byte_offset()..].trim().is_empty() {
+                return Err("MCP response may request only one tool".to_owned());
+            }
+            if duplicate != parsed {
+                return Err("MCP response contains different tool requests".to_owned());
+            }
+        } else {
+            // Continue accepting a plain explanation after JSON-first output.
+            // An extra array or a second tool envelope is never interpreted
+            // as permission to perform an additional operation.
+            if after_whitespace.starts_with('[') {
+                return Err("MCP response may request only one tool".to_owned());
+            }
+            let separated_by_newline = suffix.starts_with('\n') || suffix.starts_with("\r\n");
+            let immediately_followed_by_prose =
+                suffix.chars().next().is_some_and(char::is_alphabetic);
+            if !separated_by_newline && !immediately_followed_by_prose {
+                return Ok(None);
+            }
         }
     }
     let Some(top) = parsed.as_object() else {
@@ -454,7 +475,8 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(parse_model_tool_request(&format!("{tool}{tool}")).is_err());
+        let duplicate = parse_model_tool_request(&format!("{tool}{tool}")).unwrap().unwrap();
+        assert_eq!(duplicate.tool, "tools.list");
     }
 
     #[test]
@@ -502,9 +524,31 @@ mod tests {
     }
 
     #[test]
-    fn multiple_leading_envelopes_are_rejected_not_queued() {
-        let one = "{\"chatarium_mcp_call\":{\"provider\":\"chatarium.builtin\",\"tool\":\"tools.list\",\"arguments\":{}}}";
-        assert!(parse_model_tool_request(&format!("{one}\n{one}")).is_err());
+    fn identical_repeated_mcp_envelopes_are_deduplicated_as_one_proposal() {
+        // Screenshot regression: the model accidentally emitted two copies
+        // with no whitespace, so Chatarium previously produced no purple call.
+        let one = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        for response in [
+            format!("{one}{one}"),
+            format!("{one}\n{one}"),
+            format!("{one}\n  {one}\n"),
+        ] {
+            let request = parse_model_tool_request(&response).unwrap().unwrap();
+            assert_eq!(request.provider, "chatarium.builtin");
+            assert_eq!(request.tool, "tools.list");
+            assert_eq!(request.arguments, json!({}));
+        }
+    }
+
+    #[test]
+    fn conflicting_or_additional_mcp_envelopes_are_never_queued() {
+        let one = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        let different = r#"{"chatarium_mcp_call":{"provider":"chatarium.local.mathematica","tool":"mathematica_create_session","arguments":{}}}"#;
+        assert!(parse_model_tool_request(&format!("{one}{different}")).is_err());
+        assert!(parse_model_tool_request(&format!("{one}{one}{one}")).is_err());
+        assert!(parse_model_tool_request(&format!("{one}{one} extra")).is_err());
+        assert!(parse_model_tool_request(&format!("{one}{{")).is_err());
+        assert!(parse_model_tool_request(&format!("{one}[1]")).is_err());
     }
 
     #[test]
