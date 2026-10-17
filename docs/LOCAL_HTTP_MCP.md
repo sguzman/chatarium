@@ -62,8 +62,11 @@ journal, not inferred from the assistant's text or from server reachability.
   rules for the two fixed localhost services. A model request cannot
   authorize itself; unrelated unconfigured operations remain Ask.
 - **Dispatched without result:** The call may be running or its outcome may
-  be uncertain. The app never silently retries it. Following a restart it
-  does not claim the old model continuation is active.
+  be uncertain. HTTP 202 without a correlated JSON-RPC response, or HTTP 200
+  with a null/malformed `tools/call` result, fails explicitly as an unknown
+  outcome rather than recording an empty success. The app never silently
+  retries it. Following a restart it does not claim the old model continuation
+  is active.
 - **Completed or failed:** A terminal result/error is journaled and displayed
   separately in the purple MCP activity. Chatarium attempts to admit that
   result into the still-active agent continuation.
