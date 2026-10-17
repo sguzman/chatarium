@@ -9655,6 +9655,41 @@ impl eframe::App for ChatariumApp {
                                         .desired_width(f32::INFINITY),
                                 );
                                 ui.label("Requested policies · provider::operation = automatic|ask|manual|disabled");
+                                ui.collapsing("Local HTTP tools · automatic by default · editable", |ui| {
+                                    ui.label("Change an individual policy, then press Save MCP defaults. Mathematica code can run with your Linux user privileges.");
+                                    for (provider, operation, _) in local_http_mcp::registered_tools() {
+                                        let current = mcp_agent_defaults::tool_policy(
+                                            &self.mcp_agent_defaults.policy_rules,
+                                            provider,
+                                            operation,
+                                        ).unwrap_or(mcp_agent_defaults::ToolPolicy::Ask);
+                                        let mut selected = current;
+                                        ui.horizontal(|ui| {
+                                            ui.label(operation);
+                                            egui::ComboBox::from_id_salt(("local-http-policy", provider, operation))
+                                                .selected_text(selected.name())
+                                                .show_ui(ui, |ui| {
+                                                    for policy in [
+                                                        mcp_agent_defaults::ToolPolicy::Automatic,
+                                                        mcp_agent_defaults::ToolPolicy::Ask,
+                                                        mcp_agent_defaults::ToolPolicy::Manual,
+                                                        mcp_agent_defaults::ToolPolicy::Disabled,
+                                                    ] {
+                                                        ui.selectable_value(&mut selected, policy, policy.name());
+                                                    }
+                                                });
+                                        });
+                                        if selected != current {
+                                            self.mcp_agent_defaults.policy_rules =
+                                                mcp_agent_defaults::set_tool_policy_rule(
+                                                    &self.mcp_agent_defaults.policy_rules,
+                                                    provider,
+                                                    operation,
+                                                    selected,
+                                                );
+                                        }
+                                    }
+                                });
                                 ui.add(
                                     egui::TextEdit::multiline(&mut self.mcp_agent_defaults.policy_rules)
                                         .desired_rows(4)
