@@ -786,9 +786,18 @@ mod transport_integrity_tests {
     #[test]
     fn distinct_controller_coordination_terminal_outcomes_replay_normally() {
         let cases = [
-            (EventKind::AssistantCompletionObserved, ControllerCoordinationOutcome::Completed),
-            (EventKind::RemoteFailureObserved, ControllerCoordinationOutcome::FailedObserved),
-            (EventKind::TransportInterrupted, ControllerCoordinationOutcome::Interrupted),
+            (
+                EventKind::AssistantCompletionObserved,
+                ControllerCoordinationOutcome::Completed,
+            ),
+            (
+                EventKind::RemoteFailureObserved,
+                ControllerCoordinationOutcome::FailedObserved,
+            ),
+            (
+                EventKind::TransportInterrupted,
+                ControllerCoordinationOutcome::Interrupted,
+            ),
         ];
         for (terminal_kind, expected) in cases {
             let turn = LocalTurnId::new();
