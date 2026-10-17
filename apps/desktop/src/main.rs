@@ -29978,7 +29978,7 @@ mod tests {
 
     #[test]
     fn full_header_title_expands_default_sidebar_preview_without_renaming_it() {
-        let text = "Verify the repaired Manifoldr MCP probability operation.\\n\\nDiscover the tools and return actual results.";
+        let text = "Verify the repaired Manifoldr MCP probability operation.\n\nDiscover the tools and return actual results.";
         let messages = [DisplayMessage {
             role: DisplayRole::User,
             text: text.to_owned(),
