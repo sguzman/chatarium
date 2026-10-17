@@ -292,11 +292,7 @@ impl Workspace {
         }
         let wake_leases = root
             .get("wake_leases")
-            .map(|value| {
-                value
-                    .as_array()
-                    .ok_or("wake_leases must be an array")
-            })
+            .map(|value| value.as_array().ok_or("wake_leases must be an array"))
             .transpose()?;
         let mut leases = Vec::new();
         let mut owners = std::collections::BTreeSet::new();
@@ -331,9 +327,9 @@ impl Workspace {
                 for id in claimed {
                     let id = id.as_u64().ok_or("invalid wake claim ID")?;
                     if !unique.insert(id)
-                        || !containers.iter().any(|c| {
-                            c.messages.iter().any(|m| m.id == id && m.to == worker)
-                        })
+                        || !containers
+                            .iter()
+                            .any(|c| c.messages.iter().any(|m| m.id == id && m.to == worker))
                     {
                         return Err("wake claim references duplicate or foreign message".to_owned());
                     }
@@ -2349,9 +2345,7 @@ mod tests {
         assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
         workspace.decide(container, pending, true, 110).unwrap();
         assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(pending));
-        workspace
-            .validate_wake_claim("chat-b", pending)
-            .unwrap();
+        workspace.validate_wake_claim("chat-b", pending).unwrap();
         workspace
             .set_link(container, director, worker, false, false, "block", 12)
             .unwrap();
@@ -2369,11 +2363,12 @@ mod tests {
             .unwrap()
             .0;
         assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
-        assert!(workspace
-            .containers[0]
-            .messages
-            .iter()
-            .any(|message| message.id == report && message.status == "delivered"));
+        assert!(
+            workspace.containers[0]
+                .messages
+                .iter()
+                .any(|message| message.id == report && message.status == "delivered")
+        );
     }
 
     #[test]
