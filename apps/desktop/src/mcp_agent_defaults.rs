@@ -387,8 +387,31 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
             return Ok(None);
         }
         let trailing = text[object_at..].trim();
-        if serde_json::from_str::<Value>(trailing).is_err() {
+        let mut first = serde_json::Deserializer::from_str(trailing).into_iter::<Value>();
+        if !matches!(first.next(), Some(Ok(_))) {
             return Ok(None);
+        }
+        let remainder = &trailing[first.byte_offset()..];
+        if !remainder.trim().is_empty() {
+            // Observed live regression: the agent put a single tool envelope
+            // between a brief intention and a *post-call waiting report*.
+            // Do not treat arbitrary prose after embedded JSON as authority.
+            // Accept only an explicit, newline-delimited "no result yet"
+            // status, with no second JSON, braces, or fenced examples.
+            let status = remainder.trim();
+            let lower_status = status.to_ascii_lowercase();
+            let waiting_for_result =
+                (lower_status.contains("no tool result") && lower_status.contains("available"))
+                    || (lower_status.contains("waiting for")
+                        && lower_status.contains("tool result"));
+            if !(remainder.starts_with('\n') || remainder.starts_with("\r\n"))
+                || status.len() > 4096
+                || status.contains(['{', '}'])
+                || status.contains("```")
+                || !waiting_for_result
+            {
+                return Ok(None);
+            }
         }
         trailing
     };
@@ -598,6 +621,42 @@ mod tests {
             assert_eq!(call.provider, "chatarium.builtin");
             assert_eq!(call.tool, "tools.list");
             assert_eq!(call.arguments, json!({}));
+        }
+    }
+
+    #[test]
+    fn manifoldr_retest_request_embedded_between_intention_and_waiting_report() {
+        // Live screenshot, Oct 17: the agent *said* it had issued discovery,
+        // but no purple tool event appeared because prose followed the JSON.
+        let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        let intention = "I'll discover the tools and schemas, then run each read-only call in sequence. Chatarium controls permissions; if it requires approval, I'll wait rather than bypass it.";
+        let waiting = "The discovery request has been issued, but no tool result is available in this conversation. I cannot verify schemas or proceed with dependent calls without that result.\n| Step | Status |\n| Discover Manifoldr tools | Pending tool result |\n| list_categories | Not run |";
+        let answer = format!("{intention}\n{tool}\n{waiting}");
+        let call = parse_model_tool_request(&answer).unwrap().unwrap();
+        assert_eq!(call.provider, "chatarium.builtin");
+        assert_eq!(call.tool, "tools.list");
+        assert_eq!(call.arguments, json!({}));
+    }
+
+    #[test]
+    fn embedded_tool_envelope_never_authorizes_general_prose_examples_or_second_payload() {
+        let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        let waiting = "The discovery request was issued, but no tool result is available.";
+        for response in [
+            format!("For example.\n{tool}\n{waiting}"),
+            format!("I will discover the tools.\n```json\n{tool}\n```\n{waiting}"),
+            format!("I will discover the tools.\n{tool}\nOperation completed successfully."),
+            format!("I will discover the tools.\n{tool} {waiting}"),
+            format!("I will discover the tools.\n{tool}\n{waiting} {{}}"),
+            format!("I will discover the tools.\n{tool}\n{waiting}\n```"),
+            format!("I will discover the tools.\n{tool}\n{waiting}\n{tool}"),
+        ] {
+            assert!(
+                parse_model_tool_request(&response)
+                    .map(|call| call.is_none())
+                    .unwrap_or(true),
+                "unsafe embedded tool invocation should not be dispatched: {response}"
+            );
         }
     }
 
