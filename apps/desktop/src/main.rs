@@ -15570,8 +15570,9 @@ impl eframe::App for ChatariumApp {
                                 .truncate(),
                             );
                         });
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
                                 "Remote catalog item · not mirrored locally"
                             } else if selected_live_mirror {
                                 "Local durable mirror · read-only"
@@ -15582,89 +15583,90 @@ impl eframe::App for ChatariumApp {
                             } else {
                                 "Durable on this machine · connect ChatGPT to enable remote turns"
                             })
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                        ).truncate());
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            )
+                            .truncate(),
+                        );
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.vertical(|ui| {
-                        let connected = self.remote_connected();
-                        egui::Frame::default()
-                            .fill(if selected_live_mirror {
-                                egui::Color32::from_rgb(24, 52, 37)
-                            } else if historical_mode {
-                                egui::Color32::from_rgb(39, 42, 49)
-                            } else if connected && self.network_health.is_offline() {
-                                egui::Color32::from_rgb(62, 31, 34)
-                            } else if connected {
-                                egui::Color32::from_rgb(24, 52, 37)
-                            } else {
-                                egui::Color32::from_rgb(48, 42, 26)
-                            })
-                            .corner_radius(egui::CornerRadius::same(12))
-                            .inner_margin(egui::Margin::symmetric(10, 5))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
-                                        "REMOTE · NOT MIRRORED"
-                                    } else if selected_live_mirror {
-                                        if self.live_mirror_truncated_before {
-                                            "MIRRORED LOCALLY · PARTIAL"
-                                        } else {
-                                            "MIRRORED LOCALLY"
-                                        }
-                                    } else if historical_mode {
-                                        "IMPORTED SNAPSHOT"
-                                    } else if connected && self.network_health.is_offline() {
-                                        "AUTHENTICATED · API UNREACHABLE"
-                                    } else if connected {
-                                        "CHATGPT AUTHENTICATED"
-                                    } else {
-                                        "LOCAL ONLY"
-                                    })
-                                    .size(10.0)
-                                    .strong()
-                                    .color(
-                                        if remote_catalog_selected && !selected_live_mirror {
-                                            egui::Color32::from_rgb(225, 194, 108)
+                            let connected = self.remote_connected();
+                            egui::Frame::default()
+                                .fill(if selected_live_mirror {
+                                    egui::Color32::from_rgb(24, 52, 37)
+                                } else if historical_mode {
+                                    egui::Color32::from_rgb(39, 42, 49)
+                                } else if connected && self.network_health.is_offline() {
+                                    egui::Color32::from_rgb(62, 31, 34)
+                                } else if connected {
+                                    egui::Color32::from_rgb(24, 52, 37)
+                                } else {
+                                    egui::Color32::from_rgb(48, 42, 26)
+                                })
+                                .corner_radius(egui::CornerRadius::same(12))
+                                .inner_margin(egui::Margin::symmetric(10, 5))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(if remote_catalog_selected && !selected_live_mirror {
+                                            "REMOTE · NOT MIRRORED"
                                         } else if selected_live_mirror {
-                                            egui::Color32::from_rgb(126, 210, 156)
+                                            if self.live_mirror_truncated_before {
+                                                "MIRRORED LOCALLY · PARTIAL"
+                                            } else {
+                                                "MIRRORED LOCALLY"
+                                            }
                                         } else if historical_mode {
-                                            egui::Color32::from_rgb(179, 184, 196)
+                                            "IMPORTED SNAPSHOT"
                                         } else if connected && self.network_health.is_offline() {
-                                            egui::Color32::from_rgb(238, 119, 119)
+                                            "AUTHENTICATED · API UNREACHABLE"
                                         } else if connected {
-                                            egui::Color32::from_rgb(126, 210, 156)
+                                            "CHATGPT AUTHENTICATED"
                                         } else {
-                                            egui::Color32::from_rgb(225, 194, 108)
-                                        },
-                                    ),
-                                );
-                            });
+                                            "LOCAL ONLY"
+                                        })
+                                        .size(10.0)
+                                        .strong()
+                                        .color(
+                                            if remote_catalog_selected && !selected_live_mirror {
+                                                egui::Color32::from_rgb(225, 194, 108)
+                                            } else if selected_live_mirror {
+                                                egui::Color32::from_rgb(126, 210, 156)
+                                            } else if historical_mode {
+                                                egui::Color32::from_rgb(179, 184, 196)
+                                            } else if connected && self.network_health.is_offline() {
+                                                egui::Color32::from_rgb(238, 119, 119)
+                                            } else if connected {
+                                                egui::Color32::from_rgb(126, 210, 156)
+                                            } else {
+                                                egui::Color32::from_rgb(225, 194, 108)
+                                            },
+                                        ),
+                                    );
+                                });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // One-click export of the entire selected native conversation,
-                            // including journal-verified MCP calls, results and failures.
-                            // Uses the full reader projection, not the paged/visible viewport.
-                            if !historical_mode
-                            && ui
-                            .small_button("Copy entire chat")
-                            .on_hover_text(
-                            "Copy all messages and verified MCP tool activity in this chat as Markdown. The clipboard may contain private data. Not an archive backup.",
-                            )
-                            .clicked()
-                            {
-                            ctx.copy_text(native_transcript_export::markdown(
-                            self.local_conversation_id,
-                            &local_conversation_title,
-                            local_display_messages,
-                            ));
-                            self.status = format!(
-                            "copied entire chat ({} messages, including MCP activity)",
-                            local_display_messages.len(),
-                            );
-                            }
-                            
+                                // One-click export of the entire selected native conversation,
+                                // including journal-verified MCP calls, results and failures.
+                                // Uses the full reader projection, not the paged/visible viewport.
+                                if !historical_mode
+                                    && ui
+                                        .small_button("Copy entire chat")
+                                        .on_hover_text(
+                                            "Copy all messages and verified MCP tool activity in this chat as Markdown. The clipboard may contain private data. Not an archive backup.",
+                                        )
+                                        .clicked()
+                                {
+                                    ctx.copy_text(native_transcript_export::markdown(
+                                        self.local_conversation_id,
+                                        &local_conversation_title,
+                                        local_display_messages,
+                                    ));
+                                    self.status = format!(
+                                        "copied entire chat ({} messages, including MCP activity)",
+                                        local_display_messages.len(),
+                                    );
+                                }
                             });
                         });
                     });
