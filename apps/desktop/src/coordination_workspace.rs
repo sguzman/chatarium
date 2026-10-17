@@ -1948,10 +1948,8 @@ mod tests {
         assert_eq!(first.1, "delivered");
         assert_eq!(second.1, "queued");
 
-        let path = std::env::temp_dir().join(format!(
-            "chatarium-rate-fifo-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("chatarium-rate-fifo-{}.json", std::process::id()));
         workspace.save_atomic(&path).unwrap();
         let mut restored = Workspace::load(&path).unwrap();
         let _ = fs::remove_file(path);
@@ -1968,8 +1966,7 @@ mod tests {
         assert_eq!(restored.advance_rate_queues(121_000), 1);
         assert_eq!(restored.containers[0].messages[2].status, "delivered");
         assert_eq!(
-            restored
-                .containers[0]
+            restored.containers[0]
                 .messages
                 .iter()
                 .map(|message| message.id)
