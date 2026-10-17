@@ -406,7 +406,8 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
                         && lower_status.contains("tool result"));
             if !(remainder.starts_with('\n') || remainder.starts_with("\r\n"))
                 || status.len() > 4096
-                || status.contains(['{', '}'])
+                || status.contains('{')
+                || status.contains('}')
                 || status.contains("```")
                 || !waiting_for_result
             {
