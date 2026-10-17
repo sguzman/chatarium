@@ -251,6 +251,10 @@ export class LocalMcpBroker {
         const result = await this._request(state, config.url, "tools/call", {
           name: args.name, arguments: args.arguments,
         });
+        if (!result || typeof result !== "object" || Array.isArray(result)
+            || !Array.isArray(result.content)) {
+          throw new Error("MCP tools/call returned no valid content array; outcome unknown; not retried");
+        }
         return provider === "manifoldr" ? boundManifoldrResult(args.name, result) : result;
       }
       throw new Error("Unsupported MCP operation");
