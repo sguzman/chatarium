@@ -856,6 +856,27 @@ mod transport_integrity_tests {
     }
 
     #[test]
+    fn worker_continuation_status_requires_prior_dispatch() {
+        let turn = LocalTurnId::new();
+        let before_dispatch = [event(turn, 1, EventKind::AssistantStatusObserved)];
+        let error =
+            continuation_execution_transport_state(&before_dispatch, turn).unwrap_err();
+        assert!(error.contains("before dispatch"), "{error}");
+
+        let dispatched = [
+            event(turn, 1, EventKind::DispatchAttempted),
+            event(turn, 2, EventKind::AssistantStatusObserved),
+            event(turn, 3, EventKind::AssistantCompletionObserved),
+        ];
+        let state = continuation_execution_transport_state(&dispatched, turn).unwrap();
+        assert_eq!(state.latest_output_sequence, Some(3));
+        assert_eq!(
+            transport_terminal_outcome(state),
+            Some((ContinuationExecutionOutcome::Completed, 3))
+        );
+    }
+
+    #[test]
     fn worker_continuation_rejects_late_output_and_acceptance() {
         let late_events = [
             EventKind::RemoteAcceptanceObserved,
