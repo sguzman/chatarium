@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SCHEMA: &str = "chatarium-coordination-workspace";
 const MAX_MESSAGE: usize = 8192;
 const MAX_FILE: usize = 16 * 1024 * 1024;
+const MAX_WAKE_ALLOWANCE: u32 = 8;
+const MAX_WAKE_CLAIMS: usize = 256;
 pub const FILE_NAME: &str = "coordination-workspace.json";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,9 +51,20 @@ pub struct Container {
     pub links: Vec<Link>,
     pub messages: Vec<Message>,
 }
+/// Operator-issued, finite permission to select delivered coordination work.
+/// A claim is durable intent only: it never starts inference or authorizes tools.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WakeLease {
+    pub conversation: String,
+    pub remaining: u32,
+    pub active_message_id: Option<u64>,
+    pub claimed_message_ids: Vec<u64>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Workspace {
     pub containers: Vec<Container>,
+    pub wake_leases: Vec<WakeLease>,
     next_id: u64,
 }
 
@@ -146,6 +159,7 @@ impl Workspace {
         if !path.exists() {
             return Ok(Self {
                 containers: Vec::new(),
+                wake_leases: Vec::new(),
                 next_id: 1,
             });
         }
@@ -276,18 +290,88 @@ impl Workspace {
                 messages,
             });
         }
+        let wake_leases = root
+            .get("wake_leases")
+            .map(|value| {
+                value
+                    .as_array()
+                    .ok_or("wake_leases must be an array")
+            })
+            .transpose()?;
+        let mut leases = Vec::new();
+        let mut owners = std::collections::BTreeSet::new();
+        if let Some(entries) = wake_leases {
+            for entry in entries {
+                let conversation = clean_label(required(entry, "conversation")?, 128)?;
+                let remaining = u32::try_from(number(entry, "remaining")?)
+                    .map_err(|_| "invalid wake allowance")?;
+                if remaining > MAX_WAKE_ALLOWANCE
+                    || !conversations.contains(&conversation)
+                    || !owners.insert(conversation.clone())
+                {
+                    return Err("invalid wake lease owner or allowance".to_owned());
+                }
+                let claimed = entry["claimed_message_ids"]
+                    .as_array()
+                    .ok_or("missing wake claim history")?;
+                if claimed.len() > MAX_WAKE_CLAIMS {
+                    return Err("wake claim history exceeds its bound".to_owned());
+                }
+                let (_, worker) = containers
+                    .iter()
+                    .find_map(|c| {
+                        c.members
+                            .iter()
+                            .find(|m| m.conversation == conversation)
+                            .map(|m| (c, m.id))
+                    })
+                    .ok_or("wake lease references unknown worker")?;
+                let mut claimed_ids = Vec::new();
+                let mut unique = std::collections::BTreeSet::new();
+                for id in claimed {
+                    let id = id.as_u64().ok_or("invalid wake claim ID")?;
+                    if !unique.insert(id)
+                        || !containers.iter().any(|c| {
+                            c.messages.iter().any(|m| m.id == id && m.to == worker)
+                        })
+                    {
+                        return Err("wake claim references duplicate or foreign message".to_owned());
+                    }
+                    claimed_ids.push(id);
+                }
+                let active = match entry.get("active_message_id") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(value.as_u64().ok_or("invalid active wake claim")?),
+                };
+                if active.is_some_and(|id| !unique.contains(&id)) {
+                    return Err("active wake claim is absent from durable claim history".to_owned());
+                }
+                leases.push(WakeLease {
+                    conversation,
+                    remaining,
+                    active_message_id: active,
+                    claimed_message_ids: claimed_ids,
+                });
+            }
+        }
         let next_id = number(&root, "next_id")?;
         if next_id == 0 || next_id <= largest {
             return Err("coordination ID sequence cannot be reused".to_owned());
         }
         Ok(Self {
             containers,
+            wake_leases: leases,
             next_id,
         })
     }
     pub fn save_atomic(&self, path: &Path) -> Result<(), String> {
         let root = json!({
             "schema": SCHEMA,"version":1,"next_id":self.next_id,
+            "wake_leases": self.wake_leases.iter().map(|lease| json!({
+                "conversation":lease.conversation,"remaining":lease.remaining,
+                "active_message_id":lease.active_message_id,
+                "claimed_message_ids":lease.claimed_message_ids,
+            })).collect::<Vec<_>>(),
             "containers":self.containers.iter().map(|c| json!({
                 "id":c.id,"name":c.name,
                 "members":c.members.iter().map(|m|json!({"id":m.id,"conversation":m.conversation,"name":m.name,"role":m.role})).collect::<Vec<_>>(),
@@ -706,6 +790,181 @@ impl Workspace {
         // cannot be bypassed by deleting delivered inbox entries.
         message.body.clear();
         message.note = "deleted from inbox by human".to_owned();
+        Ok(())
+    }
+
+    /// Called only by a trusted operator control, never by model-generated
+    /// coordination.send content. Grant a finite *total* number of claims.
+    pub fn grant_wake_lease(&mut self, conversation: &str, allowance: u32) -> Result<(), String> {
+        if allowance == 0 || allowance > MAX_WAKE_ALLOWANCE {
+            return Err("wake allowance must be between 1 and 8".to_owned());
+        }
+        if self.member_for(conversation).is_none() {
+            return Err("wake lease owner is not a coordination worker".to_owned());
+        }
+        if let Some(lease) = self
+            .wake_leases
+            .iter_mut()
+            .find(|lease| lease.conversation == conversation)
+        {
+            if lease.active_message_id.is_some()
+                || lease.claimed_message_ids.len() + allowance as usize > MAX_WAKE_CLAIMS
+            {
+                return Err("wake claim is active or history has reached its bound".to_owned());
+            }
+            lease.remaining = allowance;
+        } else {
+            self.wake_leases.push(WakeLease {
+                conversation: conversation.to_owned(),
+                remaining: allowance,
+                active_message_id: None,
+                claimed_message_ids: Vec::new(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Stop future wake claims. An already claimed message stays in history
+    /// and can never be silently replayed after stop or restart.
+    pub fn stop_wake_lease(&mut self, conversation: &str) -> Result<(), String> {
+        if self.member_for(conversation).is_none() {
+            return Err("wake lease owner is not a coordination worker".to_owned());
+        }
+        if let Some(lease) = self
+            .wake_leases
+            .iter_mut()
+            .find(|lease| lease.conversation == conversation)
+        {
+            lease.remaining = 0;
+            lease.active_message_id = None;
+        }
+        Ok(())
+    }
+
+    /// Dispatch-time revalidation: the claim must remain active and its
+    /// original sender must still hold directive authority over the recipient.
+    /// A queued/approval route is eligible only after explicit release.
+    pub fn validate_wake_claim(&self, conversation: &str, message_id: u64) -> Result<(), String> {
+        let lease = self
+            .wake_leases
+            .iter()
+            .find(|lease| lease.conversation == conversation)
+            .ok_or("no wake lease")?;
+        if lease.active_message_id != Some(message_id) {
+            return Err("wake claim is not active".to_owned());
+        }
+        let (container_id, worker) = self
+            .member_for(conversation)
+            .ok_or("wake claim owner is not a worker")?;
+        let c = self
+            .containers
+            .iter()
+            .find(|c| c.id == container_id)
+            .ok_or("wake claim container missing")?;
+        let message = c
+            .messages
+            .iter()
+            .find(|message| message.id == message_id && message.to == worker)
+            .ok_or("wake claim message missing")?;
+        if message.status != "delivered" || message.kind != "directive" {
+            return Err("wake claim message is not a delivered directive".to_owned());
+        }
+        let authorized = Self::route_for(c, message.from, worker).is_some_and(|(edge, _)| {
+            edge.directives
+                && match edge.mode.as_str() {
+                    "allow" | "rate_limit" => true,
+                    "queue" | "approve" => message.note == "released by human operator",
+                    _ => false,
+                }
+        });
+        if !authorized {
+            return Err("wake claim sender authority was revoked or needs approval".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Reserve one eligible incoming directive; nothing is executed here.
+    /// Caller must durably save the workspace before any inference dispatch.
+    /// Active claims survive restart and must never be automatically replayed.
+    pub fn claim_next_wake(&mut self, conversation: &str) -> Result<Option<u64>, String> {
+        let Some(index) = self
+            .wake_leases
+            .iter()
+            .position(|lease| lease.conversation == conversation)
+        else {
+            return Ok(None);
+        };
+        let lease = &self.wake_leases[index];
+        if lease.remaining == 0 || lease.active_message_id.is_some() {
+            return Ok(None);
+        }
+        if lease.claimed_message_ids.len() >= MAX_WAKE_CLAIMS {
+            return Err("wake claim history has reached its bound".to_owned());
+        }
+        let (container_id, worker) = self
+            .member_for(conversation)
+            .ok_or("wake claim owner is not a worker")?;
+        let mut pending = self
+            .containers
+            .iter()
+            .find(|c| c.id == container_id)
+            .ok_or("wake claim container missing")?
+            .messages
+            .iter()
+            .filter(|message| message.to == worker && message.status == "delivered")
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        pending.sort_unstable();
+        let next = pending.into_iter().find(|message_id| {
+            !self.wake_leases[index]
+                .claimed_message_ids
+                .contains(message_id)
+                && self.wake_message_is_authorized(conversation, *message_id)
+        });
+        if let Some(message_id) = next {
+            let lease = &mut self.wake_leases[index];
+            lease.remaining -= 1;
+            lease.active_message_id = Some(message_id);
+            lease.claimed_message_ids.push(message_id);
+        }
+        Ok(next)
+    }
+
+    fn wake_message_is_authorized(&self, conversation: &str, message_id: u64) -> bool {
+        let Some((container_id, worker)) = self.member_for(conversation) else {
+            return false;
+        };
+        let Some(container) = self.containers.iter().find(|c| c.id == container_id) else {
+            return false;
+        };
+        let Some(message) = container.messages.iter().find(|m| m.id == message_id) else {
+            return false;
+        };
+        if message.to != worker || message.status != "delivered" || message.kind != "directive" {
+            return false;
+        }
+        Self::route_for(container, message.from, worker).is_some_and(|(edge, _)| {
+            edge.directives
+                && match edge.mode.as_str() {
+                    "allow" | "rate_limit" => true,
+                    "queue" | "approve" => message.note == "released by human operator",
+                    _ => false,
+                }
+        })
+    }
+
+    /// Close one claim after the external dispatcher has durably recorded its
+    /// terminal outcome. Failure/stop does not refund allowance or replay work.
+    pub fn finish_wake_claim(&mut self, conversation: &str, message_id: u64) -> Result<(), String> {
+        let lease = self
+            .wake_leases
+            .iter_mut()
+            .find(|lease| lease.conversation == conversation)
+            .ok_or("no wake lease")?;
+        if lease.active_message_id != Some(message_id) {
+            return Err("wake claim is not active".to_owned());
+        }
+        lease.active_message_id = None;
         Ok(())
     }
 
@@ -2033,6 +2292,111 @@ mod tests {
 
         fs::write(&path, original.to_string()).unwrap();
         assert_eq!(Workspace::load(&path).unwrap(), workspace);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn wake_is_default_off_bounded_and_restart_safe() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, true, "allow", 12)
+            .unwrap();
+        let first = workspace
+            .send("chat-a", worker, "directive", "First task", 100)
+            .unwrap()
+            .0;
+        let second = workspace
+            .send("chat-a", worker, "directive", "Second task", 101)
+            .unwrap()
+            .0;
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
+        assert!(workspace.grant_wake_lease("chat-b", 0).is_err());
+        assert!(workspace.grant_wake_lease("chat-b", 9).is_err());
+        workspace.grant_wake_lease("chat-b", 2).unwrap();
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(first));
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
+        workspace.validate_wake_claim("chat-b", first).unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-wake-restart-{}.json",
+            std::process::id()
+        ));
+        workspace.save_atomic(&path).unwrap();
+        let mut restored = Workspace::load(&path).unwrap();
+        let _ = fs::remove_file(path);
+        assert_eq!(restored, workspace);
+        assert_eq!(restored.claim_next_wake("chat-b").unwrap(), None);
+        restored.finish_wake_claim("chat-b", first).unwrap();
+        assert_eq!(restored.claim_next_wake("chat-b").unwrap(), Some(second));
+        restored.finish_wake_claim("chat-b", second).unwrap();
+        assert_eq!(restored.claim_next_wake("chat-b").unwrap(), None);
+        // Re-arming cannot duplicate a previously claimed, undelivered turn.
+        restored.grant_wake_lease("chat-b", 1).unwrap();
+        assert_eq!(restored.claim_next_wake("chat-b").unwrap(), None);
+    }
+
+    #[test]
+    fn wake_revalidates_authority_and_stop_cannot_replay_claimed_work() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, true, "approve", 12)
+            .unwrap();
+        let pending = workspace
+            .send("chat-a", worker, "directive", "Await approval", 100)
+            .unwrap()
+            .0;
+        workspace.grant_wake_lease("chat-b", 2).unwrap();
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
+        workspace.decide(container, pending, true, 110).unwrap();
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(pending));
+        workspace
+            .validate_wake_claim("chat-b", pending)
+            .unwrap();
+        workspace
+            .set_link(container, director, worker, false, false, "block", 12)
+            .unwrap();
+        assert!(workspace.validate_wake_claim("chat-b", pending).is_err());
+        workspace.stop_wake_lease("chat-b").unwrap();
+        assert!(workspace.validate_wake_claim("chat-b", pending).is_err());
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
+        workspace
+            .set_link(container, director, worker, true, true, "allow", 12)
+            .unwrap();
+        workspace.grant_wake_lease("chat-b", 1).unwrap();
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
+        let report = workspace
+            .send("chat-a", worker, "report", "Non-command", 120)
+            .unwrap()
+            .0;
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), None);
+        assert!(workspace
+            .containers[0]
+            .messages
+            .iter()
+            .any(|message| message.id == report && message.status == "delivered"));
+    }
+
+    #[test]
+    fn malformed_wake_claim_history_fails_closed_on_reopen() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, true, "allow", 12)
+            .unwrap();
+        let first = workspace
+            .send("chat-a", worker, "directive", "Task", 100)
+            .unwrap()
+            .0;
+        workspace.grant_wake_lease("chat-b", 1).unwrap();
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(first));
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-wake-validation-{}.json",
+            std::process::id()
+        ));
+        workspace.save_atomic(&path).unwrap();
+        let mut root: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        root["wake_leases"][0]["claimed_message_ids"] = json!([first, first]);
+        fs::write(&path, root.to_string()).unwrap();
+        assert!(Workspace::load(&path).is_err());
         let _ = fs::remove_file(path);
     }
 

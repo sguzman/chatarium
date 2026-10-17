@@ -38,6 +38,13 @@ Reload rejects duplicate conversation ownership across containers and reuse of a
 - Revoke authority while a message waits; release must reject revoked permission.
 - Restart and verify container, identities, graph, queues, message history and inbox persist.
 
+
+## Opt-in worker wake lease (dispatcher boundary)
+
+The workspace now persists a default-off, operator-issued `WakeLease` for an existing member conversation. The lease allows at most **8** eligible directive claims per grant, permits only **one active claim** at a time, and remembers claimed message IDs (up to 256) across restarts. `claim_next_wake` selects a previously delivered, currently authorized directive in message-ID order; it does **not** invoke inference, approve a route, change transcript authorship, or consume a delivered inbox item. Denied, pending approval, rate-queued, and report messages cannot be claimed.
+
+`validate_wake_claim` rechecks current sender directive authority immediately before any future dispatch. `stop_wake_lease` cancels remaining permission and invalidates an outstanding claim without refunding it or retrying that message. A claimed message does not silently restart after a crash. The surrounding dispatcher must first durably save the claim and then durably record the remote result before calling `finish_wake_claim`; the existing local chat inference path is **not yet wired** to these methods. No UI switch or autonomous model execution is claimed at this stage. Grant/stop authority remains an operator-facing integration responsibility; model-provided message bodies cannot grant a lease.
+
 ## Scope limit
 
 This initial workspace does NOT autonomously wake an idle receiving chat or spawn its next model turn when a message arrives. Messages are available in the recipient's next normal inference turn. Do not call this a complete autonomous multi-agent execution engine yet.
