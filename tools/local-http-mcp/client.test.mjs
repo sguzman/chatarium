@@ -121,6 +121,28 @@ test("SSE returns a tool response before the HTTP stream closes", async () => {
   assert.ok(Date.now() - start < 1400, "MCP tool waited for SSE connection EOF");
 });
 
+test("Manifoldr probability request preserves the exact array-valued ids argument", async () => {
+  // Regression for the live one-market request that previously failed downstream.
+  // This mock verifies that Chatarium never serializes ids into a scalar string.
+  // Actual Manifold REST compatibility is tested by the independent service.
+  const broker = client();
+  const ids = ["market-actual-id"];
+  const before = seen.length;
+  const result = await broker.request({
+    conversation_id: "probabilities-arg-regression",
+    provider: "manifoldr",
+    method: "call",
+    name: "get_probabilities",
+    arguments: { ids },
+  });
+  const calls = seen.slice(before).filter(item => item.method === "tools/call");
+  assert.equal(calls.length, 1, "one model proposal must create only one MCP tool call");
+  assert.equal(calls[0].tool, "get_probabilities");
+  assert.deepEqual(calls[0].args, { ids: ["market-actual-id"] });
+  assert.equal(result.structuredContent.name, "get_probabilities");
+  assert.deepEqual(ids, ["market-actual-id"]);
+});
+
 test("oversized Manifoldr categories are an explicitly partial, bounded preview", () => {
   const categories = Array.from({ length: 300 }, (_, index) => ({
     id: `category-${index}`,
