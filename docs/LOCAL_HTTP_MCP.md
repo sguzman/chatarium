@@ -30,11 +30,18 @@ not configure or weaken the existing **network-isolated stdio** executor.
   named operation allowlist, model tool policy, durable route/Allow decision,
   and **separate one-shot Run** boundary. The route is reserved durably
   before any HTTP call. Unknown network outcomes are not retried.
-- By default **unconfigured exact policies are Ask**, *not Automatic*.
-  Users must approve the proposed route and click the separate localhost MCP
-  Run button. Explicit user-authored standing rules for individual tools may
-  be changed in Chatarium's MCP settings; never create permissions by parsing
-  model output or treating a successful server health check as authorization.
+- All **15 fixed, code-allowlisted local HTTP operations** (six Mathematica and
+  nine Manifoldr) now receive explicit **Automatic** policies by default.
+  These exact grants are stored in `mcp-agent-defaults.json` before execution.
+  An upgrade adds only missing fixed-tool rules and **preserves any existing**
+  `ask`, `manual`, `disabled`, or `automatic` setting. Rules changed after
+  migration are never silently reset on later restarts.
+- To change a tool: **Advanced → Tools / MCP → Agent defaults → Local HTTP tools**,
+  choose Automatic / Ask / Manual / Disabled for the operation, then
+  **Save MCP defaults**. The raw policy editor remains available.
+  Operations of unknown or third-party providers without exact saved
+  authorization still default to Ask. A model-generated request or healthy
+  server can never grant itself permission.
 - Tool outcomes and errors are added to the existing durable tool audit and
   admitted to the model only through Chatarium's tool-result admission process.
 
@@ -50,9 +57,10 @@ journal, not inferred from the assistant's text or from server reachability.
   **Run approved tool once**. This separate Run action reserves the one-shot
   route, then dispatches the tool. Do not confuse the purple request card with
   a completed result.
-- **Automatically authorized:** Only exact, user-saved `automatic` policies
-  use the existing automatic dispatch path. A model-proposed request cannot
-  authorize itself; unconfigured operations remain Ask.
+- **Automatically authorized:** Only exact, persisted `automatic` policies
+  use the existing automatic dispatch path. This includes the default saved
+  rules for the two fixed localhost services. A model request cannot
+  authorize itself; unrelated unconfigured operations remain Ask.
 - **Dispatched without result:** The call may be running or its outcome may
   be uncertain. The app never silently retries it. Following a restart it
   does not claim the old model continuation is active.
@@ -71,7 +79,10 @@ the application reopens, even if its tool request and outcome survive.
 running the Mathematica server. Its HTTP endpoint has no built-in
 authentication or TLS. Treat it like a trusted local shell, especially when
 considering standing automatic permissions or exposing the daemon to LAN.
-No Mathematica operation is pre-authorized in Chatarium.
+The six fixed Mathematica operations are now pre-authorized by the user's
+saved Automatic defaults, including arbitrary Wolfram code execution.
+Choose **Ask** or **Disabled** for any operation if you do not want
+unattended execution. The change requires explicit saving in Chatarium.
 
 Manifoldr exposes only the nine documented **public, read-only** tools. Its
 server cannot place bets, sell positions or cancel orders through MCP.
