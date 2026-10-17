@@ -1,5 +1,7 @@
-//! Explicit local-only export of a native conversation's visible messages.
-//! Does not read tool outputs, hidden reasoning, imported mirrors or drafts.
+//! Explicit local-only export of the current conversation's full visible projection.
+//! Includes already journal-verified MCP call/results and agent activity when
+//! supplied by the reader. Never fetches hidden or unverified tool output,
+//! hidden reasoning, imported mirrors, or unsent drafts.
 
 use super::{DisplayMessage, DisplayRole};
 use chatarium_core::LocalConversationId;
@@ -194,6 +196,44 @@ mod tests {
         assert_eq!(value["message_count"], 0);
         assert!(value["messages"].as_array().unwrap().is_empty());
         assert!(markdown(owner, "", &[]).contains("No visible messages recorded."));
+    }
+
+    #[test]
+    fn copy_entire_chat_includes_early_messages_and_verified_mcp_errors() {
+        // The header button receives the unpaged native projection: export
+        // must not take only the current viewport or omit purple tool rows.
+        let owner = LocalConversationId::new();
+        let oldest = "early message ".repeat(200);
+        let messages = [
+            visible(DisplayRole::User, &oldest, 1),
+            visible(DisplayRole::Assistant, "I will ask the tool", 2),
+            visible(
+                DisplayRole::Mcp,
+                "TOOL CALL\\nchatarium.local.manifoldr::get_probabilities",
+                3,
+            ),
+            visible(
+                DisplayRole::Mcp,
+                "TOOL ERROR\\nHTTP 400: Expected array, received string",
+                4,
+            ),
+            visible(DisplayRole::Activity, "Request finished with tool error", 5),
+            visible(DisplayRole::Assistant, "This operation failed", 6),
+        ];
+        let markdown = markdown(owner, "Probability regression", &messages);
+        assert!(markdown.contains(&oldest));
+        assert!(markdown.contains("## 3. MCP tool · event #3"));
+        assert!(markdown.contains("## 4. MCP tool · event #4"));
+        assert!(markdown.contains("HTTP 400: Expected array, received string"));
+        assert!(markdown.contains("## 5. Agent activity · event #5"));
+        assert!(markdown.contains("## 6. Assistant · event #6"));
+
+        let json = json_value(owner, "Probability regression", &messages);
+        assert_eq!(json["message_count"], 6);
+        assert_eq!(json["messages"][0]["text"], oldest);
+        assert_eq!(json["messages"][3]["role"], "mcp_tool");
+        assert_eq!(json["messages"][3]["event_sequence"], 4);
+        assert_eq!(json["messages"][4]["role"], "agent_activity");
     }
 
     #[test]
