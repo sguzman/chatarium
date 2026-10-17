@@ -214,7 +214,9 @@ continuation results do not mutate WorkerLifecycle.
 
 Transport replay for worker Continue and controller coordination now rejects any
 additional remote acceptance, stream/status/output, or competing terminal event
-after a completion, observed failure, or interruption. Terminal outcomes remain
+after a completion, observed failure, or interruption. Status observations also
+require a prior dispatch, just like other remote evidence; they cannot create
+unattributed activity for a turn that was never sent. Terminal outcomes remain
 mutually exclusive; late or contradictory evidence fails closed rather than
 silently changing the worker result or controller synthesis after restart.
 This guard does not retry an interrupted request, infer a successful result, or
