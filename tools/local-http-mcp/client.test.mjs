@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { LocalMcpBroker } from "./client.mjs";
+import { LocalMcpBroker, boundManifoldrResult } from "./client.mjs";
 
 let server;
 let port;
@@ -119,4 +119,47 @@ test("SSE returns a tool response before the HTTP stream closes", async () => {
   });
   assert.equal(reply.structuredContent.name, "stream_stays_open");
   assert.ok(Date.now() - start < 1400, "MCP tool waited for SSE connection EOF");
+});
+
+test("oversized Manifoldr categories are an explicitly partial, bounded preview", () => {
+  const categories = Array.from({ length: 300 }, (_, index) => ({
+    id: `category-${index}`,
+    name: `Category ${index}`,
+    description: "topic description ".repeat(25),
+  }));
+  const original = {
+    isError: false,
+    content: [{ type: "text", text: JSON.stringify({ data: categories }) }],
+    structuredContent: { data: categories },
+  };
+  const projected = boundManifoldrResult("list_categories", original);
+  const meta = projected.structuredContent._chatarium_projection;
+  assert.equal(meta.kind, "bounded-preview");
+  assert.equal(meta.original_entries, categories.length);
+  assert.ok(meta.included_entries > 0 && meta.included_entries < categories.length);
+  assert.equal(meta.omitted_entries, categories.length - meta.included_entries);
+  assert.equal(meta.complete, false);
+  assert.deepEqual(projected.structuredContent.data, categories.slice(0, meta.included_entries));
+  assert.ok(Buffer.byteLength(JSON.stringify({ ok: true, result: projected }, null, 2)) <= 40 * 1024);
+  assert.equal(original.structuredContent.data.length, 300, "projection must not mutate source");
+});
+
+test("small Manifoldr results pass unchanged and oversized unknown results fail explicitly", () => {
+  const small = { content: [{ type: "text", text: "ok" }], structuredContent: { data: [1] } };
+  assert.equal(boundManifoldrResult("search_markets", small), small);
+  const unstructured = { content: [{ type: "text", text: "x".repeat(100_000) }] };
+  assert.throws(() => boundManifoldrResult("list_categories", unstructured), /cannot be safely projected/);
+});
+
+test("oversized single-market descriptions do not hide real IDs or imply completeness", () => {
+  const raw = { isError: false, structuredContent: { data: {
+    id: "real-market-id", question: "Will this test pass?", probability: 0.42,
+    description: "large description ".repeat(15_000), url: "https://manifold.markets/example",
+  } }, content: [{ type: "text", text: "large ".repeat(30_000) }] };
+  const projected = boundManifoldrResult("get_market", raw);
+  assert.equal(projected.structuredContent.data.id, "real-market-id");
+  assert.equal(projected.structuredContent.data.probability, 0.42);
+  assert.equal(projected.structuredContent._chatarium_projection.complete, false);
+  assert.ok(projected.structuredContent._chatarium_projection.omitted_entries > 0);
+  assert.equal(projected.structuredContent.data.description, undefined);
 });
