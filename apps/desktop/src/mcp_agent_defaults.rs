@@ -282,8 +282,7 @@ impl AgentDefaults {
             .unwrap_or(1)
             < LOCAL_HTTP_DEFAULT_VERSION
         {
-            settings.policy_rules =
-                append_missing_local_http_defaults(&settings.policy_rules);
+            settings.policy_rules = append_missing_local_http_defaults(&settings.policy_rules);
             settings.save_atomic(path)?;
         }
         if value
@@ -411,13 +410,16 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
             if !trimmed.starts_with('{') || candidate != trimmed {
                 return Err("MCP response may request only one tool".to_owned());
             }
-            let mut duplicate_values = serde_json::Deserializer::from_str(after_whitespace)
-                .into_iter::<Value>();
+            let mut duplicate_values =
+                serde_json::Deserializer::from_str(after_whitespace).into_iter::<Value>();
             let duplicate = match duplicate_values.next() {
                 Some(Ok(value)) => value,
                 _ => return Err("MCP response contains malformed second tool JSON".to_owned()),
             };
-            if !after_whitespace[duplicate_values.byte_offset()..].trim().is_empty() {
+            if !after_whitespace[duplicate_values.byte_offset()..]
+                .trim()
+                .is_empty()
+            {
                 return Err("MCP response may request only one tool".to_owned());
             }
             if duplicate != parsed {
@@ -544,7 +546,9 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let duplicate = parse_model_tool_request(&format!("{tool}{tool}")).unwrap().unwrap();
+        let duplicate = parse_model_tool_request(&format!("{tool}{tool}"))
+            .unwrap()
+            .unwrap();
         assert_eq!(duplicate.tool, "tools.list");
     }
 
@@ -902,11 +906,19 @@ mod tests {
             ToolPolicy::Ask,
         );
         assert_eq!(
-            tool_policy(&updated, crate::local_http_mcp::MATHEMATICA, "mathematica_execute_code"),
+            tool_policy(
+                &updated,
+                crate::local_http_mcp::MATHEMATICA,
+                "mathematica_execute_code"
+            ),
             Ok(ToolPolicy::Ask)
         );
         assert_eq!(
-            tool_policy(&updated, crate::local_http_mcp::MATHEMATICA, "mathematica_close_session"),
+            tool_policy(
+                &updated,
+                crate::local_http_mcp::MATHEMATICA,
+                "mathematica_close_session"
+            ),
             Ok(ToolPolicy::Automatic)
         );
         assert_eq!(
@@ -955,14 +967,48 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let upgraded = AgentDefaults::load(&path).unwrap();
-        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_execute_code"), Ok(ToolPolicy::Ask));
-        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_close_session"), Ok(ToolPolicy::Disabled));
-        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MANIFOLDR, "get_market"), Ok(ToolPolicy::Manual));
-        assert_eq!(tool_policy(&upgraded.policy_rules, "third.party", "operation"), Ok(ToolPolicy::Ask));
-        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_create_session"), Ok(ToolPolicy::Automatic));
+        assert_eq!(
+            tool_policy(
+                &upgraded.policy_rules,
+                crate::local_http_mcp::MATHEMATICA,
+                "mathematica_execute_code"
+            ),
+            Ok(ToolPolicy::Ask)
+        );
+        assert_eq!(
+            tool_policy(
+                &upgraded.policy_rules,
+                crate::local_http_mcp::MATHEMATICA,
+                "mathematica_close_session"
+            ),
+            Ok(ToolPolicy::Disabled)
+        );
+        assert_eq!(
+            tool_policy(
+                &upgraded.policy_rules,
+                crate::local_http_mcp::MANIFOLDR,
+                "get_market"
+            ),
+            Ok(ToolPolicy::Manual)
+        );
+        assert_eq!(
+            tool_policy(&upgraded.policy_rules, "third.party", "operation"),
+            Ok(ToolPolicy::Ask)
+        );
+        assert_eq!(
+            tool_policy(
+                &upgraded.policy_rules,
+                crate::local_http_mcp::MATHEMATICA,
+                "mathematica_create_session"
+            ),
+            Ok(ToolPolicy::Automatic)
+        );
         assert_eq!(upgraded, AgentDefaults::load(&path).unwrap());
         let disk: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(disk["local_http_default_version"], LOCAL_HTTP_DEFAULT_VERSION);
+        assert_eq!(
+            disk["local_http_default_version"],
+            LOCAL_HTTP_DEFAULT_VERSION
+        );
 
         // User changes after migration persist across every later restart.
         let mut opt_out = upgraded.clone();
@@ -973,7 +1019,14 @@ mod tests {
         opt_out.save_atomic(&path).unwrap();
         let reloaded = AgentDefaults::load(&path).unwrap();
         assert_eq!(reloaded, opt_out);
-        assert_eq!(tool_policy(&reloaded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_create_session"), Ok(ToolPolicy::Disabled));
+        assert_eq!(
+            tool_policy(
+                &reloaded.policy_rules,
+                crate::local_http_mcp::MATHEMATICA,
+                "mathematica_create_session"
+            ),
+            Ok(ToolPolicy::Disabled)
+        );
         let _ = fs::remove_file(path);
     }
 
