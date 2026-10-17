@@ -161,6 +161,9 @@ impl Workspace {
         }
         let mut containers = Vec::new();
         let mut ids = std::collections::BTreeSet::new();
+        // Allocation is workspace-wide, including containers, members and
+        // messages. Conversation identity is also unique across containers.
+        let mut conversations = std::collections::BTreeSet::new();
         let mut largest = 0_u64;
         for c in root["containers"]
             .as_array()
@@ -174,13 +177,13 @@ impl Workspace {
             let name = clean_label(required(c, "name")?, 128)?;
             let mut members = Vec::new();
             let mut member_ids = std::collections::BTreeSet::new();
-            let mut local_ids = std::collections::BTreeSet::new();
             for m in c["members"].as_array().ok_or("missing members")? {
                 let worker_id = number(m, "id")?;
                 let conversation = clean_label(required(m, "conversation")?, 128)?;
                 if worker_id == 0
+                    || !ids.insert(worker_id)
                     || !member_ids.insert(worker_id)
-                    || !local_ids.insert(conversation.clone())
+                    || !conversations.insert(conversation.clone())
                 {
                     return Err("duplicate worker or conversation membership".to_owned());
                 }
@@ -221,7 +224,6 @@ impl Workspace {
                 });
             }
             let mut messages = Vec::new();
-            let mut message_ids = std::collections::BTreeSet::new();
             for m in c["messages"]
                 .as_array()
                 .ok_or("missing coordination messages")?
@@ -247,7 +249,7 @@ impl Workspace {
                             | "rejected"
                             | "deleted"
                     )
-                    || !message_ids.insert(id)
+                    || !ids.insert(id)
                     || id == 0
                 {
                     return Err("invalid or duplicate coordination message".to_owned());
@@ -472,12 +474,27 @@ impl Workspace {
                 })
                 .count()
         });
+        // A fresh send cannot overtake an older automatically rate-limited
+        // message merely because the delivery window has reopened. The
+        // existing queue pump will release the oldest eligible message first.
+        let rate_backlog = route.as_ref().is_some_and(|(l, _)| {
+            l.mode == "rate_limit"
+                && c.messages.iter().any(|message| {
+                    message.from == from
+                        && message.to == to
+                        && message.status == "queued"
+                        && message.note.starts_with("rate limit reached")
+                })
+        });
         let (status, note) = match route.as_ref() {
             None => ("blocked", "no authorized authority or message edge"),
             Some(_) if !authorized => ("blocked", "message kind not authorized on this edge"),
             Some((l, _)) if l.mode == "block" => ("blocked", "edge policy blocks delivery"),
             Some((l, _)) if l.mode == "queue" => ("queued", "awaiting manual queue release"),
             Some((l, _)) if l.mode == "approve" => ("approval", "awaiting human approval"),
+            Some((l, _)) if l.mode == "rate_limit" && rate_backlog => {
+                ("queued", "rate limit reached; queued behind older messages")
+            }
             Some((l, _))
                 if l.mode == "rate_limit"
                     && (l.per_minute == 0 || recent >= l.per_minute as usize) =>
@@ -546,12 +563,14 @@ impl Workspace {
     pub fn advance_rate_queues(&mut self, now: u64) -> usize {
         let mut changed = 0_usize;
         for c in &mut self.containers {
-            let ids = c
+            let mut ids = c
                 .messages
                 .iter()
                 .filter(|m| m.status == "queued" && m.note.starts_with("rate limit reached"))
                 .map(|m| m.id)
                 .collect::<Vec<_>>();
+            // IDs are allocated in send order, independent of archive row order.
+            ids.sort_unstable();
             for id in ids {
                 let Some(record) = c.messages.iter().find(|m| m.id == id).cloned() else {
                     continue;
@@ -1912,6 +1931,112 @@ mod tests {
         assert_eq!(s.containers[0].messages[2].status, "queued");
         assert_eq!(s.advance_rate_queues(121_000), 1);
         assert_eq!(s.containers[0].messages[2].status, "delivered");
+    }
+
+    #[test]
+    fn new_rate_limited_messages_cannot_overtake_queued_work_after_restart() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, true, "rate_limit", 1)
+            .unwrap();
+        let first = workspace
+            .send("chat-a", worker, "directive", "first", 1_000)
+            .unwrap();
+        let second = workspace
+            .send("chat-a", worker, "directive", "second", 1_001)
+            .unwrap();
+        assert_eq!(first.1, "delivered");
+        assert_eq!(second.1, "queued");
+
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-rate-fifo-{}.json",
+            std::process::id()
+        ));
+        workspace.save_atomic(&path).unwrap();
+        let mut restored = Workspace::load(&path).unwrap();
+        let _ = fs::remove_file(path);
+
+        // A new message arrives just as the first delivery expires. It must
+        // join the backlog, not take the newly available delivery slot.
+        let third = restored
+            .send("chat-a", worker, "directive", "third", 61_000)
+            .unwrap();
+        assert_eq!(third.1, "queued");
+        assert_eq!(restored.advance_rate_queues(61_000), 1);
+        assert_eq!(restored.containers[0].messages[1].status, "delivered");
+        assert_eq!(restored.containers[0].messages[2].status, "queued");
+        assert_eq!(restored.advance_rate_queues(121_000), 1);
+        assert_eq!(restored.containers[0].messages[2].status, "delivered");
+        assert_eq!(
+            restored
+                .containers[0]
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![first.0, second.0, third.0]
+        );
+    }
+
+    #[test]
+    fn archive_rejects_ambiguous_conversation_owners_and_reused_global_ids() {
+        let (mut workspace, first_container, first_member, _) = setup();
+        let other_container = workspace.create_container("Other").unwrap();
+        workspace
+            .attach(other_container, "chat-c", "Researcher", "Worker")
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-global-identity-{}.json",
+            std::process::id()
+        ));
+        workspace.save_atomic(&path).unwrap();
+        let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+
+        let mut duplicate_conversation = original.clone();
+        duplicate_conversation["containers"][1]["members"][0]["conversation"] = json!("chat-a");
+        fs::write(&path, duplicate_conversation.to_string()).unwrap();
+        assert!(
+            Workspace::load(&path)
+                .unwrap_err()
+                .contains("duplicate worker or conversation membership")
+        );
+
+        let mut duplicate_member = original.clone();
+        duplicate_member["containers"][1]["members"][0]["id"] = json!(first_member);
+        fs::write(&path, duplicate_member.to_string()).unwrap();
+        assert!(
+            Workspace::load(&path)
+                .unwrap_err()
+                .contains("duplicate worker or conversation membership")
+        );
+
+        let mut duplicate_message = original.clone();
+        // A valid message minted by the normal allocator must not be allowed
+        // to impersonate an existing container identity after a file edit.
+        let sender = workspace.member_for("chat-a").unwrap().1;
+        let recipient = workspace.member_for("chat-b").unwrap().1;
+        duplicate_message["containers"][0]["messages"] = json!([{
+            "id": first_container,
+            "from": sender,
+            "to": recipient,
+            "kind": "report",
+            "body": "collision",
+            "status": "blocked",
+            "created_ms": 1,
+            "delivered_ms": null,
+            "consumed_ms": null,
+            "note": "fixture"
+        }]);
+        fs::write(&path, duplicate_message.to_string()).unwrap();
+        assert!(
+            Workspace::load(&path)
+                .unwrap_err()
+                .contains("invalid or duplicate coordination message")
+        );
+
+        fs::write(&path, original.to_string()).unwrap();
+        assert_eq!(Workspace::load(&path).unwrap(), workspace);
+        let _ = fs::remove_file(path);
     }
 
     #[test]

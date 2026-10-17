@@ -24,6 +24,8 @@ Delivered worker messages are inserted as labeled coordination context on the re
 
 The local workspace file is coordination-workspace.json beside Chatarium's journal. Writes use atomic replacement. The workspace file includes immutable message IDs, origin, destination, message kind, timestamps, current delivery status, and decision notes, including blocked attempts. This is a separate persistence surface from the append-only session and controller lifecycle audit.
 
+Reload rejects duplicate conversation ownership across containers and reuse of any globally allocated container, worker, or message ID. The automatic rate-limit queue preserves send-order FIFO even when capacity opens just before another message is sent or after a restart. Manual approvals and explicit edge blocks are not bypassed.
+
 ## QA matrix
 
 - Create an empty container, then attach two local chats.
