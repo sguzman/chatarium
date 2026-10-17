@@ -765,3 +765,78 @@ mod output_contract_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod transport_integrity_tests {
+    use super::*;
+
+    fn event(turn: LocalTurnId, sequence: u64, kind: EventKind) -> EventEnvelope {
+        EventEnvelope {
+            sequence,
+            at_unix_ms: 0,
+            scope: Some(local_turn_scope(turn)),
+            kind,
+            payload: "{}".to_owned(),
+        }
+    }
+
+    #[test]
+    fn distinct_controller_coordination_terminal_outcomes_replay_normally() {
+        let cases = [
+            (EventKind::AssistantCompletionObserved, ControllerCoordinationOutcome::Completed),
+            (EventKind::RemoteFailureObserved, ControllerCoordinationOutcome::FailedObserved),
+            (EventKind::TransportInterrupted, ControllerCoordinationOutcome::Interrupted),
+        ];
+        for (terminal_kind, expected) in cases {
+            let turn = LocalTurnId::new();
+            let events = [
+                event(turn, 1, EventKind::DispatchAttempted),
+                event(turn, 2, terminal_kind),
+            ];
+            let state = controller_coordination_transport_state(&events, turn).unwrap();
+            assert_eq!(coordination_terminal_outcome(state), Some((expected, 2)));
+        }
+    }
+
+    #[test]
+    fn conflicting_controller_coordination_terminals_fail_closed() {
+        let terminals = [
+            EventKind::AssistantCompletionObserved,
+            EventKind::RemoteFailureObserved,
+            EventKind::TransportInterrupted,
+        ];
+        for first in terminals {
+            for second in terminals {
+                let turn = LocalTurnId::new();
+                let events = [
+                    event(turn, 1, EventKind::DispatchAttempted),
+                    event(turn, 2, first),
+                    event(turn, 3, second),
+                ];
+                let error = controller_coordination_transport_state(&events, turn).unwrap_err();
+                assert!(error.contains("after terminal outcome"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn controller_coordination_cannot_stream_or_accept_after_terminal() {
+        let late_events = [
+            EventKind::RemoteAcceptanceObserved,
+            EventKind::AssistantStreamStarted,
+            EventKind::AssistantStatusObserved,
+            EventKind::AssistantDeltaObserved,
+            EventKind::AssistantSnapshotObserved,
+        ];
+        for late_kind in late_events {
+            let turn = LocalTurnId::new();
+            let events = [
+                event(turn, 1, EventKind::DispatchAttempted),
+                event(turn, 2, EventKind::AssistantCompletionObserved),
+                event(turn, 3, late_kind),
+            ];
+            let error = controller_coordination_transport_state(&events, turn).unwrap_err();
+            assert!(error.contains("after terminal outcome"), "{error}");
+        }
+    }
+}
