@@ -76,6 +76,70 @@ async function boundedBody(response) {
   return Buffer.concat(parts.map(part => Buffer.from(part))).toString("utf8");
 }
 
+// A provider can return a legitimate response larger than the legacy 64 KiB
+// Chatarium agent envelope, including duplicated text and structuredContent.
+// Preserve the complete source entries we do include, explicitly disclose every
+// omitted entry/field, and never turn an oversized response into a silent success.
+export function boundManifoldrResult(operation, result) {
+  const LIMIT = 40 * 1024; // pretty-printed bytes, with headroom for the agent envelope
+  const size = value => Buffer.byteLength(JSON.stringify({ ok: true, result: value }, null, 2));
+  if (size(result) <= LIMIT) return result;
+  if (result?.isError || !result?.structuredContent ||
+      !Object.hasOwn(result.structuredContent, "data")) {
+    throw new Error("Manifoldr result exceeds the agent context limit and cannot be safely projected");
+  }
+  const original = result.structuredContent.data;
+  if (original === null || typeof original !== "object") {
+    throw new Error("Oversized Manifoldr result has no projectable structured data");
+  }
+  const array = Array.isArray(original);
+  const preview = array ? [] : {};
+  const originalKeys = array ? original.length : Object.keys(original).length;
+  const meta = {
+    kind: "bounded-preview",
+    operation,
+    original_entries: originalKeys,
+    included_entries: 0,
+    omitted_entries: originalKeys,
+    complete: false,
+    warning: "Chatarium projected an oversized Manifoldr result; missing entries are NOT negative results.",
+  };
+  const projected = {
+    isError: false,
+    content: [{ type: "text", text: "Chatarium bounded Manifoldr preview. Check structuredContent._chatarium_projection for omission counts." }],
+    structuredContent: { data: preview, _chatarium_projection: meta },
+  };
+  const entries = array
+    ? original.map((value, index) => [index, value])
+    : Object.entries(original).sort(([a], [b]) => {
+        // Keep stable market identifiers and values before long descriptive text.
+        const priority = ["id", "question", "slug", "url", "probability", "outcomeType", "isResolved"];
+        return (priority.indexOf(a) < 0 ? 100 : priority.indexOf(a)) -
+          (priority.indexOf(b) < 0 ? 100 : priority.indexOf(b));
+      });
+  for (const [key, value] of entries) {
+    if (array) preview.push(value);
+    else preview[key] = value;
+    meta.included_entries++;
+    meta.omitted_entries--;
+    meta.complete = meta.omitted_entries === 0;
+    if (size(projected) > LIMIT) {
+      if (array) preview.pop();
+      else delete preview[key];
+      meta.included_entries--;
+      meta.omitted_entries++;
+      meta.complete = false;
+      // Arrays retain a true prefix. Objects can omit a huge field and still
+      // keep subsequent small fields, always with an explicit incompleteness marker.
+      if (array) break;
+    }
+  }
+  if (size(projected) > LIMIT) {
+    throw new Error("Manifoldr bounded preview still exceeds the agent context limit");
+  }
+  return projected;
+}
+
 export class LocalMcpBroker {
   constructor({ routes = LOCAL_SERVERS, fetchImpl = globalThis.fetch, timeoutMs = 120000 } = {}) {
     for (const { url } of Object.values(routes)) validateRoute(url);
@@ -181,9 +245,10 @@ export class LocalMcpBroker {
             || !args.arguments || typeof args.arguments !== "object" || Array.isArray(args.arguments))
           throw new Error("Invalid MCP tool name or JSON-object arguments");
         // One attempt only. Transport timeout may be an unknown-outcome mutation.
-        return await this._request(state, config.url, "tools/call", {
+        const result = await this._request(state, config.url, "tools/call", {
           name: args.name, arguments: args.arguments,
         });
+        return provider === "manifoldr" ? boundManifoldrResult(args.name, result) : result;
       }
       throw new Error("Unsupported MCP operation");
     } catch (error) {
