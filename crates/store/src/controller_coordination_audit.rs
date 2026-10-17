@@ -823,6 +823,27 @@ mod transport_integrity_tests {
     }
 
     #[test]
+    fn controller_coordination_status_requires_prior_dispatch() {
+        let turn = LocalTurnId::new();
+        let before_dispatch = [event(turn, 1, EventKind::AssistantStatusObserved)];
+        let error =
+            controller_coordination_transport_state(&before_dispatch, turn).unwrap_err();
+        assert!(error.contains("before dispatch"), "{error}");
+
+        let dispatched = [
+            event(turn, 1, EventKind::DispatchAttempted),
+            event(turn, 2, EventKind::AssistantStatusObserved),
+            event(turn, 3, EventKind::AssistantCompletionObserved),
+        ];
+        let state = controller_coordination_transport_state(&dispatched, turn).unwrap();
+        assert_eq!(state.latest_output_sequence, Some(3));
+        assert_eq!(
+            coordination_terminal_outcome(state),
+            Some((ControllerCoordinationOutcome::Completed, 3))
+        );
+    }
+
+    #[test]
     fn controller_coordination_cannot_stream_or_accept_after_terminal() {
         let late_events = [
             EventKind::RemoteAcceptanceObserved,
