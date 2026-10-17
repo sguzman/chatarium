@@ -371,6 +371,28 @@ pub fn controller_coordination_transport_state(
             ));
         }
 
+        // A terminal remote observation is final for this non-authored turn.
+        // Never accept late streamed output or a competing terminal outcome:
+        // otherwise recovery could silently select one conflicting result.
+        if state.is_terminal()
+            && matches!(
+                event.kind,
+                EventKind::RemoteAcceptanceObserved
+                    | EventKind::AssistantStreamStarted
+                    | EventKind::AssistantStatusObserved
+                    | EventKind::AssistantDeltaObserved
+                    | EventKind::AssistantSnapshotObserved
+                    | EventKind::AssistantCompletionObserved
+                    | EventKind::RemoteFailureObserved
+                    | EventKind::TransportInterrupted
+            )
+        {
+            return Err(format!(
+                "controller coordination turn {} has transport observation at sequence {} after terminal outcome",
+                coordination_turn_id, event.sequence
+            ));
+        }
+
         match event.kind {
             EventKind::DispatchAttempted => {
                 if state.dispatch_sequence.replace(event.sequence).is_some() {
