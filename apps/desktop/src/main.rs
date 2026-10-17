@@ -16129,6 +16129,37 @@ impl eframe::App for ChatariumApp {
                     // actual bottom of realistic native conversations.
                     set_reader_scroll(ctx, reader_scroll_state_id, READER_BOTTOM_SCROLL_OFFSET);
                 }
+                // A rejected model-authored MCP envelope has no route, no
+                // purple card and no approval prompt. Explain that fact in the
+                // conversation instead of hiding it in advanced status logs.
+                if !historical_mode {
+                    if let Some(problem) = self
+                        .status
+                        .strip_prefix("Malformed agent MCP proposal rejected: ")
+                    {
+                        egui::Frame::default()
+                            .fill(egui::Color32::from_rgb(56, 35, 39))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                egui::Color32::from_rgb(181, 103, 107),
+                            ))
+                            .corner_radius(egui::CornerRadius::same(9))
+                            .inner_margin(egui::Margin::symmetric(14, 10))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "MCP request rejected before execution",
+                                    )
+                                    .strong(),
+                                );
+                                ui.label(problem);
+                                ui.label(
+                                    "Nothing was dispatched. No approval prompt exists for this response.",
+                                );
+                            });
+                        ui.add_space(12.0);
+                    }
+                }
                 // Live in-chat MCP controls. Show the actual durable stage
                 // above the transcript instead of hiding approval in Advanced.
                 if let Some(call) = inline_mcp.as_ref() {
