@@ -400,10 +400,9 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
             // status, with no second JSON, braces, or fenced examples.
             let status = remainder.trim();
             let lower_status = status.to_ascii_lowercase();
-            let waiting_for_result =
-                (lower_status.contains("no tool result") && lower_status.contains("available"))
-                    || (lower_status.contains("waiting for")
-                        && lower_status.contains("tool result"));
+            let waiting_for_result = (lower_status.contains("no tool result")
+                && lower_status.contains("available"))
+                || (lower_status.contains("waiting for") && lower_status.contains("tool result"));
             if !(remainder.starts_with('\n') || remainder.starts_with("\r\n"))
                 || status.len() > 4096
                 || status.contains('{')
