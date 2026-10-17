@@ -435,7 +435,12 @@ pub fn parse_model_tool_request(text: &str) -> Result<Option<ModelToolRequest>, 
             let separated_by_newline = suffix.starts_with('\n') || suffix.starts_with("\r\n");
             let immediately_followed_by_prose =
                 suffix.chars().next().is_some_and(char::is_alphabetic);
-            if !separated_by_newline && !immediately_followed_by_prose {
+            // The remote model may append the literal " yield?" after a
+            // complete MCP JSON envelope. This is a non-executable handoff
+            // marker, not a second tool call. Accept only the exact token:
+            // arbitrary prose after a space is still rejected.
+            let explicit_yield_marker = after_whitespace.trim_end() == "yield?";
+            if !separated_by_newline && !immediately_followed_by_prose && !explicit_yield_marker {
                 return Ok(None);
             }
         }
@@ -550,6 +555,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(duplicate.tool, "tools.list");
+    }
+
+    #[test]
+    fn mcp_json_with_spaced_yield_marker_still_invokes_one_tool() {
+        // Screenshot regression (2026-10-17): the model emitted the correct
+        // tools.list JSON followed by " yield?". No purple MCP call appeared.
+        let tool = r#"{"chatarium_mcp_call":{"provider":"chatarium.builtin","tool":"tools.list","arguments":{}}}"#;
+        for response in [
+            format!("{tool} yield?"),
+            format!("{tool} yield?   "),
+            format!("{tool}\n yield?"),
+        ] {
+            let call = parse_model_tool_request(&response).unwrap().unwrap();
+            assert_eq!(call.provider, "chatarium.builtin");
+            assert_eq!(call.tool, "tools.list");
+            assert_eq!(call.arguments, json!({}));
+        }
+        // Whitespace-prefixed arbitrary prose and extra tool instructions
+        // remain non-executable.
+        for response in [
+            format!("{tool} extra"),
+            format!("{tool} yield? and also execute code"),
+            format!("{tool} `yield?`"),
+        ] {
+            assert!(parse_model_tool_request(&response).unwrap().is_none());
+        }
     }
 
     #[test]
