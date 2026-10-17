@@ -490,6 +490,28 @@ pub fn continuation_execution_transport_state(
             ));
         }
 
+        // A terminal remote outcome closes this execution turn. A second
+        // terminal event or late output must not rewrite the result that the
+        // controller consumes after restart.
+        if state.is_terminal()
+            && matches!(
+                event.kind,
+                EventKind::RemoteAcceptanceObserved
+                    | EventKind::AssistantStreamStarted
+                    | EventKind::AssistantStatusObserved
+                    | EventKind::AssistantDeltaObserved
+                    | EventKind::AssistantSnapshotObserved
+                    | EventKind::AssistantCompletionObserved
+                    | EventKind::RemoteFailureObserved
+                    | EventKind::TransportInterrupted
+            )
+        {
+            return Err(format!(
+                "continuation turn {} has transport observation at sequence {} after terminal outcome",
+                execution_turn_id, event.sequence
+            ));
+        }
+
         match event.kind {
             EventKind::DispatchAttempted => {
                 if state.dispatch_sequence.replace(event.sequence).is_some() {
