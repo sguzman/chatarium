@@ -14,6 +14,9 @@ const ACTIVATION_DEFAULT_VERSION: u64 = 2;
 // Saved explicit 'ask', 'manual' and 'disabled' policies remain authoritative.
 const HOST_SHELL_DEFAULT_VERSION: u64 = 2;
 const COORDINATION_DEFAULT_VERSION: u64 = 2;
+// Opt-in request for this personal Chatarium workspace: fixed built-in HTTP
+// providers run by default. Stamp once; preserve later per-tool user choices.
+const LOCAL_HTTP_DEFAULT_VERSION: u64 = 2;
 const MAX_PROMPT: usize = 32 * 1024;
 const PRIOR_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask";
 const READ_ONLY_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask\nchatarium.builtin::time.now = automatic";
@@ -43,9 +46,9 @@ impl Default for AgentDefaults {
                 "Never claim to have called a tool unless its actual result appears in context. ",
                 "If execution requires approval, wait for the user to approve it."
             ).to_owned(),
-            policy_rules: format!(
+            policy_rules: append_missing_local_http_defaults(&format!(
                 "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic\n                 chatarium.builtin::coordination.identity = automatic\n                 chatarium.builtin::coordination.send = automatic"
-            ),
+            )),
             max_calls: 8,
             seed_new_conversations: true,
         }
@@ -69,6 +72,27 @@ impl ToolPolicy {
         }
     }
 }
+/// Append explicit persisted automatic rules only for the two fixed,
+/// code-owned localhost providers. Existing exact user rules take priority.
+/// Never add a wildcard or authorize an unrecognized external stdio provider.
+fn append_missing_local_http_defaults(rules: &str) -> String {
+    let mut updated = rules.to_owned();
+    for (provider, operation, _) in crate::local_http_mcp::registered_tools() {
+        let target = format!("{provider}::{operation}");
+        let already_set = rules
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .any(|(name, _)| name.trim() == target);
+        if !already_set {
+            if !updated.is_empty() && !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            updated.push_str(&format!("{target} = automatic"));
+        }
+    }
+    updated
+}
+
 /// Policy is resolved by exact provider + operation names. Wildcards and
 /// inferred permissions are forbidden; no matching rule means Ask.
 pub fn tool_policy(rules: &str, provider: &str, operation: &str) -> Result<ToolPolicy, String> {
@@ -218,6 +242,19 @@ impl AgentDefaults {
             }
             settings.save_atomic(path)?;
         }
+        // Upgrade existing saved installations once, without overriding
+        // any explicit Ask, Manual, Disabled or Automatic rule. The updated
+        // policy is written to disk *before* an agent can run with it.
+        if value
+            .get("local_http_default_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            < LOCAL_HTTP_DEFAULT_VERSION
+        {
+            settings.policy_rules =
+                append_missing_local_http_defaults(&settings.policy_rules);
+            settings.save_atomic(path)?;
+        }
         if value
             .get("activation_default_version")
             .and_then(Value::as_u64)
@@ -252,7 +289,8 @@ impl AgentDefaults {
             "seed_new_conversations": self.seed_new_conversations,
             "activation_default_version": ACTIVATION_DEFAULT_VERSION,
             "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION,
-            "coordination_default_version": COORDINATION_DEFAULT_VERSION
+            "coordination_default_version": COORDINATION_DEFAULT_VERSION,
+            "local_http_default_version": LOCAL_HTTP_DEFAULT_VERSION
         }))
         .map_err(|e| e.to_string())?;
         let temporary = path.with_extension("json.tmp");
@@ -790,11 +828,88 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
         let migrated = AgentDefaults::load(&path).unwrap();
-        assert_eq!(migrated.policy_rules, policy);
+        assert!(migrated.policy_rules.starts_with(&policy));
         assert_eq!(
             tool_policy(&migrated.policy_rules, "chatarium.builtin", "shell.command"),
             Ok(ToolPolicy::Ask)
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn fixed_http_tools_are_automatically_authorized_by_fresh_persisted_defaults() {
+        let defaults = AgentDefaults::default();
+        defaults.validate().unwrap();
+        for (provider, operation, _) in crate::local_http_mcp::registered_tools() {
+            assert_eq!(
+                tool_policy(&defaults.policy_rules, provider, operation),
+                Ok(ToolPolicy::Automatic),
+                "{provider}::{operation} must be explicitly saved as automatic"
+            );
+        }
+        assert_eq!(
+            tool_policy(&defaults.policy_rules, "external.unknown", "execute"),
+            Ok(ToolPolicy::Ask)
+        );
+        assert_eq!(
+            tool_policy(
+                &defaults.policy_rules,
+                crate::local_http_mcp::MATHEMATICA,
+                "unregistered_operation"
+            ),
+            Ok(ToolPolicy::Ask)
+        );
+    }
+
+    #[test]
+    fn fixed_http_policy_migration_preserves_existing_choices_and_new_opt_out() {
+        let path = std::env::temp_dir().join(format!(
+            "chatarium-http-auto-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let old_rules = format!(
+            "{READ_ONLY_DEFAULT_POLICY}\n\
+             chatarium.local.mathematica::mathematica_execute_code = ask\n\
+             chatarium.local.mathematica::mathematica_close_session = disabled\n\
+             chatarium.local.manifoldr::get_market = manual\n\
+             third.party::operation = ask"
+        );
+        let legacy = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "bootstrap": AgentDefaults::default().bootstrap,
+            "policy_rules": old_rules,
+            "max_calls": 8,
+            "seed_new_conversations": true,
+            "activation_default_version": ACTIVATION_DEFAULT_VERSION,
+            "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION,
+            "coordination_default_version": COORDINATION_DEFAULT_VERSION
+        });
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let upgraded = AgentDefaults::load(&path).unwrap();
+        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_execute_code"), Ok(ToolPolicy::Ask));
+        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_close_session"), Ok(ToolPolicy::Disabled));
+        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MANIFOLDR, "get_market"), Ok(ToolPolicy::Manual));
+        assert_eq!(tool_policy(&upgraded.policy_rules, "third.party", "operation"), Ok(ToolPolicy::Ask));
+        assert_eq!(tool_policy(&upgraded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_create_session"), Ok(ToolPolicy::Automatic));
+        assert_eq!(upgraded, AgentDefaults::load(&path).unwrap());
+        let disk: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk["local_http_default_version"], LOCAL_HTTP_DEFAULT_VERSION);
+
+        // User changes after migration persist across every later restart.
+        let mut opt_out = upgraded.clone();
+        opt_out.policy_rules = opt_out.policy_rules.replace(
+            "chatarium.local.mathematica::mathematica_create_session = automatic",
+            "chatarium.local.mathematica::mathematica_create_session = disabled",
+        );
+        opt_out.save_atomic(&path).unwrap();
+        let reloaded = AgentDefaults::load(&path).unwrap();
+        assert_eq!(reloaded, opt_out);
+        assert_eq!(tool_policy(&reloaded.policy_rules, crate::local_http_mcp::MATHEMATICA, "mathematica_create_session"), Ok(ToolPolicy::Disabled));
         let _ = fs::remove_file(path);
     }
 
