@@ -111,6 +111,31 @@ by the Mathematica daemon's MCP transport session. Closing a Wolfram session
 frees a kernel slot. Restarting either service invalidates the MCP/Wolfram
 sessions: never assume a previous ID survives restart.
 
+## Bounded Manifoldr agent results and argument schemas
+
+The informational builtin `tools.list` now includes pinned `inputSchema`
+definitions for the nine fixed Manifoldr tools, based on the read-only
+Manifoldr v1.0.0 `src/mcp.rs` argument structs. Each schema states its
+source; it is **not** a live call to the provider's `tools/list` endpoint
+and is not execution permission. Review these contracts when upgrading
+Manifoldr. Required arguments include `get_market: {id}`,
+`get_probabilities: {ids: [id]}` and `get_category: {slug}`.
+
+Manifoldr can return more data than Chatarium's 64 KiB legacy agent result
+envelope can represent, notably for `list_categories` and long market
+descriptions. The loopback adapter now returns a bounded structured preview
+when the original MCP result would overflow that limit. The preview preserves
+whole included entries and reports the source count, included count, omitted
+count and `complete` flag under `structuredContent._chatarium_projection`.
+For object results, individual oversized fields can be omitted; omitted
+fields count toward the incomplete preview. The redundant provider text
+is replaced with an explicit preview notice. No missing category/market/field
+may be interpreted as absent from Manifoldr. Small results pass through
+unchanged. An oversized unstructured response still fails explicitly instead
+of inventing a partial result. This projection is agent-facing, **not** an
+archival copy of the original response. It does not relax HTTP size limits,
+tool authority or at-most-once dispatch.
+
 ## Deployment and diagnostics
 
 Expected user units, when installed by the separate projects:
