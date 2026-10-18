@@ -17,6 +17,16 @@ const COORDINATION_DEFAULT_VERSION: u64 = 2;
 // Opt-in request for this personal Chatarium workspace: fixed built-in HTTP
 // providers run by default. Stamp once; preserve later per-tool user choices.
 const LOCAL_HTTP_DEFAULT_VERSION: u64 = 3;
+const MEMORY_GUIDANCE_VERSION: u64 = 2;
+const MEMORY_GUIDANCE: &str = concat!(
+    "\nOpenViking memory discipline: Search relevant scoped memories when older decisions ",
+    "or project context matter, not on every trivial turn. Verify repository facts ",
+    "against their authoritative sources. At significant milestones, identify decisions, ",
+    "completed work, corrections and next actions in a concise checkpoint without ",
+    "duplicating transcripts or storing secrets. Do not claim a memory write succeeded ",
+    "without a verified tool result. Host-owned automatic checkpoints are separate ",
+    "from model tool requests; never invent authority or cross conversation boundaries."
+);
 const MAX_PROMPT: usize = 32 * 1024;
 const PRIOR_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask";
 const READ_ONLY_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask\nchatarium.builtin::time.now = automatic";
@@ -32,7 +42,7 @@ pub struct AgentDefaults {
 impl Default for AgentDefaults {
     fn default() -> Self {
         Self {
-            bootstrap: concat!(
+            bootstrap: [concat!(
                 "Chatarium provides locally controlled MCP tools. When tool invocation ",
                 "is enabled by the runtime, request exactly one tool with a standalone ",
                 "JSON object of this shape:\n",
@@ -45,7 +55,7 @@ impl Default for AgentDefaults {
                 "to this same conversation turn and resumes you automatically. ",
                 "Never claim to have called a tool unless its actual result appears in context. ",
                 "If execution requires approval, wait for the user to approve it."
-            ).to_owned(),
+            ), MEMORY_GUIDANCE].concat(),
             policy_rules: append_missing_local_http_defaults(&format!(
                 "{READ_ONLY_DEFAULT_POLICY}\nchatarium.builtin::shell.command = automatic\n                 chatarium.builtin::coordination.identity = automatic\n                 chatarium.builtin::coordination.send = automatic"
             )),
@@ -290,6 +300,23 @@ impl AgentDefaults {
             settings.policy_rules = append_missing_local_http_defaults(&settings.policy_rules);
             settings.save_atomic(path)?;
         }
+        // Migrate only the exact generated bootstrap. A customized prompt is
+        // not silently rewritten by a software upgrade.
+        if value
+            .get("memory_guidance_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            < MEMORY_GUIDANCE_VERSION
+        {
+            let generated = Self::default().bootstrap;
+            let prior_generated = generated
+                .strip_suffix(MEMORY_GUIDANCE)
+                .expect("default bootstrap includes memory guidance");
+            if settings.bootstrap == prior_generated {
+                settings.bootstrap = generated;
+            }
+            settings.save_atomic(path)?;
+        }
         if value
             .get("activation_default_version")
             .and_then(Value::as_u64)
@@ -325,7 +352,8 @@ impl AgentDefaults {
             "activation_default_version": ACTIVATION_DEFAULT_VERSION,
             "host_shell_default_version": HOST_SHELL_DEFAULT_VERSION,
             "coordination_default_version": COORDINATION_DEFAULT_VERSION,
-            "local_http_default_version": LOCAL_HTTP_DEFAULT_VERSION
+            "local_http_default_version": LOCAL_HTTP_DEFAULT_VERSION,
+            "memory_guidance_version": MEMORY_GUIDANCE_VERSION
         }))
         .map_err(|e| e.to_string())?;
         let temporary = path.with_extension("json.tmp");
