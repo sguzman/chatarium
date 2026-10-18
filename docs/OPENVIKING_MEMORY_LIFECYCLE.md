@@ -1,6 +1,8 @@
 # OpenViking memory lifecycle for Chatarium
 
-Status: **approved implementation design; integration not yet implemented**.
+Status: **in progress**. Fixed scoped MCP transport implemented; automatic
+checkpoint triggers, durable outbox, bounded context assembly, and live
+OpenViking verification still pending.
 The user must not have to remind an agent to save memories. Merely offering
 an MCP tool or adding an agent prompt is not completion of this feature.
 
@@ -19,8 +21,8 @@ remain the source of current code, issues, and documentation. The journal
 remains the source of conversation truth. Memory entries are compact
 navigation and historical evidence, not privileged instructions.
 
-The installation was reported ready externally. Chatarium has **not**
-connected to or authenticated against this host in this implementation;
+The installation was reported ready externally. Chatarium has a mock-tested fixed MCP adapter but has **not**
+connected to or authenticated against this host in a live test;
 the actual installed server's `tools/list` and authentication mode must be
 verified before enabling provider operations. A localhost URL is not proof
 that authentication is disabled.
@@ -154,5 +156,6 @@ exact reviewed operations and worker-specific scopes.
 4. Connect background workers only after independent scope and authority
    tests; verify an authenticated end-to-end session and inspect Studio.
 
-This document records a design contract, **not a claim that automatic
-OpenViking checkpointing works in today's Chatarium build**.
+This document records a design contract and the first transport slice,
+**not a claim that automatic OpenViking checkpointing works in today's
+Chatarium build**.
