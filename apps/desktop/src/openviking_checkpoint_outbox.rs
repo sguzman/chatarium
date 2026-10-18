@@ -1,7 +1,7 @@
 //! Durable, metadata-only requests for automatic OpenViking checkpoints.
 //! No transcript or credentials are copied into this file. Generating a
 //! checkpoint and sending it are deliberately separate, audited operations.
-use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::{fs, path::Path};
 
 pub const FILE_NAME: &str = "openviking-checkpoint-outbox.json";
@@ -9,8 +9,7 @@ const SCHEMA: &str = "chatarium-openviking-checkpoint-outbox";
 const MAX_ITEMS: usize = 4096;
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub conversation_id: String,
     pub turn_id: String,
@@ -18,8 +17,7 @@ pub struct Entry {
     pub state: State,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     PendingSummary,
     Ready,
@@ -28,8 +26,30 @@ pub enum State {
     Uncertain,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl State {
+    fn name(self) -> &'static str {
+        match self {
+            Self::PendingSummary => "pending_summary",
+            Self::Ready => "ready",
+            Self::Dispatched => "dispatched",
+            Self::Confirmed => "confirmed",
+            Self::Uncertain => "uncertain",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pending_summary" => Ok(Self::PendingSummary),
+            "ready" => Ok(Self::Ready),
+            "dispatched" => Ok(Self::Dispatched),
+            "confirmed" => Ok(Self::Confirmed),
+            "uncertain" => Ok(Self::Uncertain),
+            _ => Err("invalid checkpoint state".to_owned()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outbox {
     schema: String,
     version: u32,
@@ -63,8 +83,59 @@ impl Outbox {
         if bytes.len() > MAX_FILE_BYTES {
             return Err("checkpoint outbox exceeds file limit".to_owned());
         }
-        let outbox: Self =
-            serde_json::from_slice(&bytes).map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
+        let root = value.as_object().ok_or("checkpoint outbox root is not an object")?;
+        if root.len() != 3
+            || root.get("schema").and_then(Value::as_str) != Some(SCHEMA)
+            || root.get("version").and_then(Value::as_u64) != Some(1)
+        {
+            return Err("invalid checkpoint outbox schema".to_owned());
+        }
+        let items = root
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or("checkpoint outbox entries are missing")?;
+        if items.len() > MAX_ITEMS {
+            return Err("checkpoint outbox exceeds entry limit".to_owned());
+        }
+        let mut entries = Vec::with_capacity(items.len());
+        for item in items {
+            let obj = item.as_object().ok_or("checkpoint entry is not an object")?;
+            if obj.len() != 4 {
+                return Err("checkpoint entry contains unexpected fields".to_owned());
+            }
+            let conversation_id = obj
+                .get("conversation_id")
+                .and_then(Value::as_str)
+                .ok_or("checkpoint owner identity missing")?
+                .to_owned();
+            let turn_id = obj
+                .get("turn_id")
+                .and_then(Value::as_str)
+                .ok_or("checkpoint turn identity missing")?
+                .to_owned();
+            let completed_sequence = obj
+                .get("completed_sequence")
+                .and_then(Value::as_u64)
+                .ok_or("checkpoint event sequence missing")?;
+            let state = State::parse(
+                obj.get("state")
+                    .and_then(Value::as_str)
+                    .ok_or("checkpoint state missing")?,
+            )?;
+            entries.push(Entry {
+                conversation_id,
+                turn_id,
+                completed_sequence,
+                state,
+            });
+        }
+        let outbox = Self {
+            schema: SCHEMA.to_owned(),
+            version: 1,
+            entries,
+        };
         outbox.validate()?;
         Ok(outbox)
     }
@@ -92,7 +163,24 @@ impl Outbox {
 
     fn save_atomic(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
-        let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        let entries = self
+            .entries
+            .iter()
+            .map(|entry| {
+                json!({
+                    "conversation_id": entry.conversation_id,
+                    "turn_id": entry.turn_id,
+                    "completed_sequence": entry.completed_sequence,
+                    "state": entry.state.name(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let bytes = serde_json::to_vec_pretty(&json!({
+            "schema": self.schema,
+            "version": self.version,
+            "entries": entries,
+        }))
+        .map_err(|e| e.to_string())?;
         if bytes.len() > MAX_FILE_BYTES {
             return Err("checkpoint outbox exceeds file limit".to_owned());
         }
