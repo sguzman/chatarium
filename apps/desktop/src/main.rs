@@ -30912,6 +30912,92 @@ mod tests {
     }
 
     #[test]
+    fn restart_reconciles_committed_memory_work_without_bulk_importing_old_transcripts() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-memory-recovery-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("journal.jsonl");
+        let outbox_path = root.join(openviking_checkpoint_outbox::FILE_NAME);
+        let mut store = JsonlEventStore::open(&path).unwrap();
+
+        let old = AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "A historical exchange must not be exported on first setup.",
+        );
+        commit_user_message(&mut store, &old).unwrap();
+        let substantial = "This is a completed technical milestone with verified decisions.             Earlier attempts were checked against actual source material and a working test             validated the durable implementation. Future tasks remain open for review.";
+        store.append_scoped(
+            Some(local_turn_scope(old.turn_id)),
+            EventKind::AssistantCompletionObserved,
+            remote_turn_payload(old.turn_id, "historic", None, Some(substantial), None),
+        )
+        .unwrap();
+
+        // Initial activation writes its high-water mark; no retroactive export.
+        assert_eq!(reconcile_checkpoint_outbox(&store, &outbox_path), Ok(0));
+        assert_eq!(
+            openviking_checkpoint_outbox::Outbox::load(&outbox_path)
+                .unwrap()
+                .pending_count(),
+            0
+        );
+
+        let active = AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "Implement the next milestone and store context.",
+        );
+        commit_user_message(&mut store, &active).unwrap();
+        store.append_scoped(
+            Some(local_turn_scope(active.turn_id)),
+            EventKind::AssistantCompletionObserved,
+            remote_turn_payload(active.turn_id, "new", None, Some(substantial), None),
+        )
+        .unwrap();
+
+        // Deliberately do not enqueue a checkpoint here; simulate a crash
+        // after the completion journal was flushed and before queue dispatch.
+        drop(store);
+        let reopened = JsonlEventStore::open(&path).unwrap();
+        assert_eq!(reconcile_checkpoint_outbox(&reopened, &outbox_path), Ok(1));
+        let queued = openviking_checkpoint_outbox::Outbox::load(&outbox_path).unwrap();
+        assert_eq!(queued.pending_count(), 1);
+        assert_eq!(queued.entries()[0].conversation_id, active.conversation_id.to_string());
+        assert_eq!(queued.entries()[0].turn_id, active.turn_id.to_string());
+        assert_eq!(reconcile_checkpoint_outbox(&reopened, &outbox_path), Ok(0));
+
+        let unowned = LocalTurnId::new();
+        let mut unowned_store = JsonlEventStore::open(&path).unwrap();
+        unowned_store
+            .append_scoped(
+                Some(local_turn_scope(unowned)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(unowned, "unowned", None, Some(substantial), None),
+            )
+            .unwrap();
+        assert_eq!(reconcile_checkpoint_outbox(&unowned_store, &outbox_path), Ok(0));
+        assert_eq!(
+            openviking_checkpoint_outbox::Outbox::load(&outbox_path)
+                .unwrap()
+                .pending_count(),
+            1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn context_composer_uses_durable_transcript_order() {
         let messages = vec![
             DisplayMessage {
