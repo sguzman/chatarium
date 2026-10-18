@@ -610,6 +610,7 @@ enum PersistNotice {
         skipped: bool,
     },
     OpenVikingMemoryWriteFinished {
+        conversation_id: String,
         confirmed: bool,
     },
     DraftSaved {
@@ -3752,13 +3753,18 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
-                PersistNotice::OpenVikingMemoryWriteFinished { confirmed } => {
-                    self.status = if confirmed {
-                        "OpenViking memory checkpoint saved and verified by read-back".to_owned()
-                    } else {
-                        "OpenViking checkpoint write uncertain; not automatically repeated"
-                            .to_owned()
-                    };
+                PersistNotice::OpenVikingMemoryWriteFinished {
+                    conversation_id,
+                    confirmed,
+                } => {
+                    if self.local_conversation_id.to_string() == conversation_id {
+                        self.status = if confirmed {
+                            "OpenViking memory checkpoint saved and verified by read-back".to_owned()
+                        } else {
+                            "OpenViking checkpoint write uncertain; not automatically repeated"
+                                .to_owned()
+                        };
+                    }
                 }
                 PersistNotice::OpenVikingMemorySummarySaved {
                     conversation_id,
@@ -5021,6 +5027,7 @@ impl ChatariumApp {
     /// an active human/worker turn. The original transcript remains untouched.
     fn maybe_generate_openviking_summary(&mut self) {
         if self.persist_tx.is_none()
+            || std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0")
             || self.openviking_summary_in_flight.is_some()
             || !self.remote_connected()
             || self.local_conversation_busy()
@@ -5635,6 +5642,9 @@ impl ChatariumApp {
                     }
                 }
                 siwc_bridge::BridgeEvent::RuntimeUnavailable(detail) => {
+                    if let Some(attempt) = self.openviking_summary_in_flight.take() {
+                        self.openviking_summary_blocked.insert(attempt.request_id);
+                    }
                     if self.capability_probe.running() {
                         self.capability_probe.abort(&detail);
                         self.finish_capability_probes();
@@ -22718,8 +22728,10 @@ fn persistence_worker(
                     });
                 match persisted {
                     Ok(_) => {
-                        let _ = notices
-                            .send(PersistNotice::OpenVikingMemoryWriteFinished { confirmed });
+                        let _ = notices.send(PersistNotice::OpenVikingMemoryWriteFinished {
+                            conversation_id,
+                            confirmed,
+                        });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
