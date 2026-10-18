@@ -3795,6 +3795,61 @@ impl ChatariumApp {
                             .pending_remote_turn
                             .take()
                             .expect("checked pending remote turn");
+                        // The operator may stop or revoke authority after the
+                        // DispatchAttempted journal event but before the bridge
+                        // command actually leaves this process. Recheck at the
+                        // final send boundary, not only during context assembly.
+                        let wake_start = self
+                            .events
+                            .iter()
+                            .rev()
+                            .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
+                            .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
+                            .find(|value| {
+                                value["turn_id"].as_str() == Some(turn_id.to_string().as_str())
+                            });
+                        if let Some(start) = wake_start {
+                            let allowed = start["inbox_ids"]
+                                .as_array()
+                                .and_then(|ids| {
+                                    (ids.len() == 1).then(|| ids[0].as_u64()).flatten()
+                                })
+                                .is_some_and(|message_id| {
+                                    self.coordination_auto_wake_target
+                                        == Some(pending.conversation_id)
+                                        && self
+                                            .coordination_workspace
+                                            .wake_dispatch_envelope(
+                                                &pending.conversation_id.to_string(),
+                                                message_id,
+                                            )
+                                            .is_ok()
+                                });
+                            if !allowed {
+                                self.coordination_pending_admissions.remove(&pending.request_id);
+                                self.delivery.error(
+                                    &pending.request_id,
+                                    delivery_telemetry::Phase::Failed,
+                                    "wake disarmed or sender authority revoked before bridge send"
+                                        .to_owned(),
+                                );
+                                let interrupted = remote_turn_payload(
+                                    turn_id,
+                                    &pending.request_id,
+                                    Some(&pending.model),
+                                    None,
+                                    Some("wake denied before bridge send; no network request issued"),
+                                );
+                                let _ = self.queue_turn_event(
+                                    turn_id,
+                                    EventKind::TransportInterrupted,
+                                    interrupted,
+                                );
+                                self.status =
+                                    "coordination wake stopped before remote send".to_owned();
+                                continue;
+                            }
+                        }
                         let command = siwc_bridge::BridgeCommand::StreamResponse {
                             request_id: pending.request_id.clone(),
                             model: pending.model.clone(),
