@@ -439,7 +439,6 @@ mod tests {
     }
 }
 
-
 /// Explicit, directed local permission to share a source conversation's
 /// verified checkpoints with one other conversation bound to the same project.
 /// A project-folder binding alone NEVER enables cross-conversation recall.
@@ -491,7 +490,9 @@ impl ProjectMemoryGrants {
         {
             return Err("unsupported project memory permission schema".to_owned());
         }
-        let raw_grants = value.get("grants").and_then(Value::as_array)
+        let raw_grants = value
+            .get("grants")
+            .and_then(Value::as_array)
             .ok_or("project memory permission list missing")?;
         if raw_grants.len() > MAX_PROJECT_GRANTS {
             return Err("too many project memory grants".to_owned());
@@ -500,12 +501,19 @@ impl ProjectMemoryGrants {
         let mut seen = std::collections::BTreeSet::new();
         for raw in raw_grants {
             let source = chatarium_core::LocalConversationId::from_str(
-                raw.get("source").and_then(Value::as_str).ok_or("grant source missing")?,
-            ).map_err(|error| format!("invalid grant source: {error}"))?;
+                raw.get("source")
+                    .and_then(Value::as_str)
+                    .ok_or("grant source missing")?,
+            )
+            .map_err(|error| format!("invalid grant source: {error}"))?;
             let destination = chatarium_core::LocalConversationId::from_str(
-                raw.get("destination").and_then(Value::as_str).ok_or("grant destination missing")?,
-            ).map_err(|error| format!("invalid grant destination: {error}"))?;
-            let project_directory = raw.get("project_directory")
+                raw.get("destination")
+                    .and_then(Value::as_str)
+                    .ok_or("grant destination missing")?,
+            )
+            .map_err(|error| format!("invalid grant destination: {error}"))?;
+            let project_directory = raw
+                .get("project_directory")
                 .and_then(Value::as_str)
                 .ok_or("grant project directory missing")?;
             if source == destination
@@ -527,16 +535,23 @@ impl ProjectMemoryGrants {
     }
 
     pub fn save_atomic(&self, path: &std::path::Path) -> Result<(), String> {
-        let grants = self.grants.iter().map(|grant| json!({
-            "source": grant.source.to_string(),
-            "destination": grant.destination.to_string(),
-            "project_directory": grant.project_directory,
-        })).collect::<Vec<_>>();
+        let grants = self
+            .grants
+            .iter()
+            .map(|grant| {
+                json!({
+                    "source": grant.source.to_string(),
+                    "destination": grant.destination.to_string(),
+                    "project_directory": grant.project_directory,
+                })
+            })
+            .collect::<Vec<_>>();
         let bytes = serde_json::to_vec_pretty(&json!({
             "schema": PROJECT_GRANTS_SCHEMA,
             "version": 1,
             "grants": grants,
-        })).map_err(|error| format!("project memory permission serialization: {error}"))?;
+        }))
+        .map_err(|error| format!("project memory permission serialization: {error}"))?;
         if bytes.len() > MAX_PROJECT_GRANTS_FILE_BYTES {
             return Err("project memory permissions exceed file limit".to_owned());
         }
@@ -567,7 +582,8 @@ impl ProjectMemoryGrants {
         if canonical_bound_project(catalog, destination).as_deref() != Some(&project) {
             return Err("destination conversation belongs to a different project".to_owned());
         }
-        self.grants.retain(|grant| !(grant.source == source && grant.destination == destination));
+        self.grants
+            .retain(|grant| !(grant.source == source && grant.destination == destination));
         if self.grants.len() >= MAX_PROJECT_GRANTS {
             return Err("project memory grant limit reached".to_owned());
         }
@@ -586,7 +602,8 @@ impl ProjectMemoryGrants {
         destination: chatarium_core::LocalConversationId,
     ) -> bool {
         let old_len = self.grants.len();
-        self.grants.retain(|grant| !(grant.source == source && grant.destination == destination));
+        self.grants
+            .retain(|grant| !(grant.source == source && grant.destination == destination));
         self.grants.len() != old_len
     }
 
@@ -623,7 +640,9 @@ fn confirmed_project_sources<'a>(
         {
             continue;
         }
-        let Ok(source) = entry.conversation_id.parse::<chatarium_core::LocalConversationId>()
+        let Ok(source) = entry
+            .conversation_id
+            .parse::<chatarium_core::LocalConversationId>()
         else {
             continue;
         };
@@ -657,10 +676,13 @@ pub fn retrieve_confirmed_for_project(
     for entry in sources {
         let owner = entry.conversation_id.as_str();
         let path = crate::openviking_checkpoint_outbox::Outbox::summary_path(
-            outbox_path, owner, &entry.turn_id,
+            outbox_path,
+            owner,
+            &entry.turn_id,
         )?;
         let size = std::fs::metadata(&path)
-            .map_err(|error| format!("project checkpoint metadata: {error}"))?.len();
+            .map_err(|error| format!("project checkpoint metadata: {error}"))?
+            .len();
         if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
             return Err("invalid project checkpoint summary size".to_owned());
         }
@@ -678,7 +700,8 @@ pub fn retrieve_confirmed_for_project(
             return Err("project checkpoint source identity mismatch".to_owned());
         }
         // Re-check authorization at dispatch, not just at earlier selection.
-        let source = owner.parse::<chatarium_core::LocalConversationId>()
+        let source = owner
+            .parse::<chatarium_core::LocalConversationId>()
             .map_err(|error| format!("invalid project checkpoint owner: {error}"))?;
         if !permissions.allows(catalog, source, destination) {
             return Err("project memory sharing grant is no longer valid".to_owned());
@@ -720,8 +743,12 @@ mod project_scope_tests {
         catalog.create(first, 1);
         catalog.create(second, 2);
         let directory = std::env::current_dir().unwrap().display().to_string();
-        catalog.set_project_directory(first, Some(directory.clone()), 3).unwrap();
-        catalog.set_project_directory(second, Some(directory), 4).unwrap();
+        catalog
+            .set_project_directory(first, Some(directory.clone()), 3)
+            .unwrap();
+        catalog
+            .set_project_directory(second, Some(directory), 4)
+            .unwrap();
         let mut permissions = ProjectMemoryGrants::default();
         assert!(!permissions.allows(&catalog, first, second));
         permissions.grant(&catalog, first, second).unwrap();
@@ -739,11 +766,17 @@ mod project_scope_tests {
         catalog.create(first, 1);
         catalog.create(second, 2);
         let directory = std::env::current_dir().unwrap().display().to_string();
-        catalog.set_project_directory(first, Some(directory.clone()), 3).unwrap();
-        catalog.set_project_directory(second, Some(directory), 4).unwrap();
+        catalog
+            .set_project_directory(first, Some(directory.clone()), 3)
+            .unwrap();
+        catalog
+            .set_project_directory(second, Some(directory), 4)
+            .unwrap();
         let mut permissions = ProjectMemoryGrants::default();
         permissions.grant(&catalog, first, second).unwrap();
-        catalog.set_project_directory(second, Some(std::env::temp_dir().display().to_string()), 5).unwrap();
+        catalog
+            .set_project_directory(second, Some(std::env::temp_dir().display().to_string()), 5)
+            .unwrap();
         assert!(!permissions.allows(&catalog, first, second));
         assert!(permissions.grant(&catalog, first, second).is_err());
     }
@@ -756,16 +789,26 @@ mod project_scope_tests {
         let mut catalog = LocalConversationCatalog::default();
         for (id, n) in [(first, 1), (second, 2), (third, 3)] {
             catalog.create(id, n);
-            catalog.set_project_directory(
-                id, Some(std::env::current_dir().unwrap().display().to_string()), n + 10,
-            ).unwrap();
+            catalog
+                .set_project_directory(
+                    id,
+                    Some(std::env::current_dir().unwrap().display().to_string()),
+                    n + 10,
+                )
+                .unwrap();
         }
         let mut permissions = ProjectMemoryGrants::default();
         permissions.grant(&catalog, first, third).unwrap();
         let mut outbox = Outbox::default();
         // Selection checks only durable state; remote calls are not needed.
-        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("chatarium-project-scope-{}-{nonce}", std::process::id()));
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-project-scope-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
         outbox.activate_durable(&path, 0).unwrap();
@@ -777,10 +820,23 @@ mod project_scope_tests {
         ] {
             let owner = owner.to_string();
             outbox.enqueue_durable(&path, &owner, turn, seq).unwrap();
-            outbox.save_summary_durable(&path, &owner, turn, seq, "summary").unwrap();
+            outbox
+                .save_summary_durable(&path, &owner, turn, seq, "summary")
+                .unwrap();
             if confirmed {
-                outbox.transition_durable(&path, &owner, turn, seq, State::Ready, State::Dispatched).unwrap();
-                outbox.transition_durable(&path, &owner, turn, seq, State::Dispatched, State::Confirmed).unwrap();
+                outbox
+                    .transition_durable(&path, &owner, turn, seq, State::Ready, State::Dispatched)
+                    .unwrap();
+                outbox
+                    .transition_durable(
+                        &path,
+                        &owner,
+                        turn,
+                        seq,
+                        State::Dispatched,
+                        State::Confirmed,
+                    )
+                    .unwrap();
             }
         }
         let chosen = confirmed_project_sources(&outbox, &catalog, &permissions, third);
@@ -797,12 +853,22 @@ mod project_scope_tests {
         catalog.create(first, 1);
         catalog.create(second, 2);
         for id in [first, second] {
-            catalog.set_project_directory(
-                id, Some(std::env::current_dir().unwrap().display().to_string()), 3,
-            ).unwrap();
+            catalog
+                .set_project_directory(
+                    id,
+                    Some(std::env::current_dir().unwrap().display().to_string()),
+                    3,
+                )
+                .unwrap();
         }
-        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("chatarium-project-grants-{}-{nonce}", std::process::id()));
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-project-grants-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join(PROJECT_MEMORY_GRANTS_FILE_NAME);
         let mut grants = ProjectMemoryGrants::default();
