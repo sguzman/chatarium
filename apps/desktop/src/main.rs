@@ -3933,8 +3933,8 @@ impl ChatariumApp {
         }
         let destination = self.local_conversation_id;
         if self
-                .openviking_project_retrieval_cache
-                .contains_key(&destination)
+            .openviking_project_retrieval_cache
+            .contains_key(&destination)
             || self
                 .openviking_project_retrieval_in_flight
                 .contains(&destination)
@@ -3947,7 +3947,10 @@ impl ChatariumApp {
         }
         // Scope checks may canonicalize project paths. Skip them on frames
         // where the cached result, in-flight read or backoff already suffices.
-        if !self.project_memory_grants.has_sources(&self.local_conversation_catalog, destination) {
+        if !self
+            .project_memory_grants
+            .has_sources(&self.local_conversation_catalog, destination)
+        {
             return;
         }
         let Some(sender) = &self.persist_tx else {
