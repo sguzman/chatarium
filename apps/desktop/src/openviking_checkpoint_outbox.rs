@@ -2,7 +2,7 @@
 //! No transcript or credentials are copied into this file. Generating a
 //! checkpoint and sending it are deliberately separate, audited operations.
 use serde_json::{Value, json};
-use std::{fs, path::Path};
+use std::{fs, path::{Path, PathBuf}};
 
 pub const FILE_NAME: &str = "openviking-checkpoint-outbox.json";
 const SCHEMA: &str = "chatarium-openviking-checkpoint-outbox";
@@ -24,6 +24,7 @@ pub enum State {
     Dispatched,
     Confirmed,
     Uncertain,
+    Skipped,
 }
 
 impl State {
@@ -34,6 +35,7 @@ impl State {
             Self::Dispatched => "dispatched",
             Self::Confirmed => "confirmed",
             Self::Uncertain => "uncertain",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -44,6 +46,7 @@ impl State {
             "dispatched" => Ok(Self::Dispatched),
             "confirmed" => Ok(Self::Confirmed),
             "uncertain" => Ok(Self::Uncertain),
+            "skipped" => Ok(Self::Skipped),
             _ => Err("invalid checkpoint state".to_owned()),
         }
     }
@@ -275,6 +278,134 @@ impl Outbox {
             .count()
     }
 
+    /// List pending requests; the scheduler may inspect this snapshot but
+    /// only the persistence worker mutates the queue.
+    pub fn pending_summaries(&self) -> impl Iterator<Item = &Entry> {
+        self.entries.iter().filter(|item| item.state == State::PendingSummary)
+    }
+
+    pub fn summary_path(outbox_path: &Path, conversation: &str, turn: &str) -> Result<PathBuf, String> {
+        if !identity_valid(conversation) || !identity_valid(turn) {
+            return Err("invalid OpenViking checkpoint path identity".to_owned());
+        }
+        let parent = outbox_path.parent().ok_or("OpenViking outbox parent missing")?;
+        Ok(parent
+            .join("openviking-checkpoint-summaries")
+            .join(conversation)
+            .join(format!("{turn}.md")))
+    }
+
+    pub fn save_summary_durable(
+        &mut self,
+        outbox_path: &Path,
+        conversation: &str,
+        turn: &str,
+        completed_sequence: u64,
+        summary: &str,
+    ) -> Result<bool, String> {
+        let summary = summary.trim();
+        if summary == "NO_MEMORY" {
+            return self.transition_durable(
+                outbox_path,
+                conversation,
+                turn,
+                completed_sequence,
+                State::PendingSummary,
+                State::Skipped,
+            );
+        }
+        if summary.is_empty()
+            || summary.len() > 8192
+            || summary.chars().any(|ch| ch == '\0' || (ch.is_control() && ch != '\n' && ch != '\t'))
+        {
+            return Err("checkpoint summary empty, too large or contains control characters".to_owned());
+        }
+        let exists = self.entries.iter().any(|entry| {
+            entry.conversation_id == conversation
+                && entry.turn_id == turn
+                && entry.completed_sequence == completed_sequence
+                && entry.state == State::PendingSummary
+        });
+        if !exists {
+            return Err("checkpoint summary has no matching pending source".to_owned());
+        }
+        let file = Self::summary_path(outbox_path, conversation, turn)?;
+        let body = format!(
+            "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {turn}\nSource journal sequence: {completed_sequence}\n\n{summary}\n"
+        );
+        let parent = file.parent().ok_or("checkpoint summary directory missing")?;
+        fs::create_dir_all(parent).map_err(|e| format!("summary directory: {e}"))?;
+        if file.exists() {
+            let existing = fs::read_to_string(&file)
+                .map_err(|e| format!("cannot inspect existing summary: {e}"))?;
+            if existing != body {
+                return Err("different summary already stored for this source; refusing overwrite".to_owned());
+            }
+        } else {
+            use std::io::Write;
+            let mut dest = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file)
+                .map_err(|e| format!("cannot create checkpoint summary: {e}"))?;
+            dest.write_all(body.as_bytes())
+                .and_then(|()| dest.sync_all())
+                .map_err(|e| format!("cannot persist checkpoint summary: {e}"))?;
+        }
+        self.transition_durable(
+            outbox_path,
+            conversation,
+            turn,
+            completed_sequence,
+            State::PendingSummary,
+            State::Ready,
+        )
+    }
+
+    pub fn transition_durable(
+        &mut self,
+        path: &Path,
+        conversation: &str,
+        turn: &str,
+        completed_sequence: u64,
+        expected: State,
+        next: State,
+    ) -> Result<bool, String> {
+        let mut updated = self.clone();
+        let entry = updated.entries.iter_mut().find(|entry| {
+            entry.conversation_id == conversation
+                && entry.turn_id == turn
+                && entry.completed_sequence == completed_sequence
+        })
+        .ok_or("checkpoint transition has no matching source")?;
+        if entry.state == next {
+            return Ok(false);
+        }
+        if entry.state != expected {
+            return Err("checkpoint state transition conflicts with persisted state".to_owned());
+        }
+        let allowed = matches!(
+            (expected, next),
+            (State::PendingSummary, State::Ready)
+                | (State::PendingSummary, State::Skipped)
+                | (State::Ready, State::Dispatched)
+                | (State::Dispatched, State::Confirmed)
+                | (State::Dispatched, State::Uncertain)
+                | (State::Uncertain, State::Confirmed)
+        );
+        if !allowed {
+            return Err("checkpoint state transition is not permitted".to_owned());
+        }
+        entry.state = next;
+        updated.save_atomic(path)?;
+        *self = updated;
+        Ok(true)
+    }
+
+    pub fn ready_entries(&self) -> impl Iterator<Item = &Entry> {
+        self.entries.iter().filter(|entry| entry.state == State::Ready)
+    }
+
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
@@ -331,6 +462,65 @@ mod tests {
         );
         assert_eq!(queue.pending_count(), 0);
         let _ = fs::remove_file(parent);
+    }
+
+    #[test]
+    fn saved_checkpoint_body_is_separate_from_metadata_and_is_create_only() {
+        let path = test_path("summary");
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, "chat-abc", "turn-123", 6).unwrap();
+        let summary = "Committed a fix for archive pagination, with the relevant source commit linked.";
+        assert!(outbox
+            .save_summary_durable(&path, "chat-abc", "turn-123", 6, summary)
+            .unwrap());
+        assert_eq!(outbox.entries()[0].state, State::Ready);
+        assert_eq!(outbox.ready_entries().count(), 1);
+        let file = Outbox::summary_path(&path, "chat-abc", "turn-123").unwrap();
+        assert!(fs::read_to_string(&file).unwrap().contains(summary));
+        assert!(!fs::read_to_string(&path).unwrap().contains(summary));
+        assert!(outbox
+            .save_summary_durable(&path, "chat-abc", "turn-123", 6, "other")
+            .is_err());
+        assert!(outbox
+            .transition_durable(
+                &path,
+                "chat-abc",
+                "turn-123",
+                6,
+                State::Ready,
+                State::Dispatched,
+            )
+            .unwrap());
+        let reloaded = Outbox::load(&path).unwrap();
+        assert_eq!(reloaded.entries()[0].state, State::Dispatched);
+        assert!(outbox
+            .transition_durable(
+                &path,
+                "chat-abc",
+                "turn-123",
+                6,
+                State::Ready,
+                State::Confirmed,
+            )
+            .is_err());
+        let _ = fs::remove_file(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn no_memory_skips_without_creating_external_write_or_file() {
+        let path = test_path("skip");
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, "chat-abc", "turn-124", 7).unwrap();
+        outbox
+            .save_summary_durable(&path, "chat-abc", "turn-124", 7, "NO_MEMORY")
+            .unwrap();
+        assert_eq!(outbox.entries()[0].state, State::Skipped);
+        assert_eq!(outbox.ready_entries().count(), 0);
+        assert!(!Outbox::summary_path(&path, "chat-abc", "turn-124").unwrap().exists());
+        let _ = fs::remove_file(path);
     }
 
     #[test]
