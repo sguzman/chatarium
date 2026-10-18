@@ -22208,8 +22208,7 @@ fn checkpoint_owner_for_turn(
         if event.kind != EventKind::UserMessageCommitted {
             continue;
         }
-        let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
-            decode_user_message_commit(event)
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) = decode_user_message_commit(event)
         else {
             continue;
         };
@@ -22249,7 +22248,9 @@ fn reconcile_checkpoint_outbox(
     let mut outbox = openviking_checkpoint_outbox::Outbox::load(path)?;
     let journal_high_water = store.events().last().map_or(0, |event| event.sequence);
     outbox.activate_durable(path, journal_high_water)?;
-    let boundary = outbox.started_after_sequence().unwrap_or(journal_high_water);
+    let boundary = outbox
+        .started_after_sequence()
+        .unwrap_or(journal_high_water);
     // Build a unique-owner index once, and fail closed if two authored
     // conversations ever claim the same turn. No O(history^2) replay.
     let mut owners = BTreeMap::<String, Option<LocalConversationId>>::new();
@@ -22257,8 +22258,7 @@ fn reconcile_checkpoint_outbox(
         if event.kind != EventKind::UserMessageCommitted {
             continue;
         }
-        let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
-            decode_user_message_commit(event)
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) = decode_user_message_commit(event)
         else {
             continue;
         };
@@ -22287,12 +22287,7 @@ fn reconcile_checkpoint_outbox(
         let Some(Some(owner)) = owners.get(scope) else {
             continue;
         };
-        if outbox.enqueue_durable(
-            path,
-            &owner.to_string(),
-            turn_string,
-            event.sequence,
-        )? {
+        if outbox.enqueue_durable(path, &owner.to_string(), turn_string, event.sequence)? {
             recovered += 1;
         }
     }
@@ -22313,8 +22308,7 @@ fn persistence_worker(
             store.events().len()
         ),
     );
-    let checkpoint_outbox_path =
-        data_dir.join(openviking_checkpoint_outbox::FILE_NAME);
+    let checkpoint_outbox_path = data_dir.join(openviking_checkpoint_outbox::FILE_NAME);
     if let Err(error) = reconcile_checkpoint_outbox(&store, &checkpoint_outbox_path) {
         let _ = notices.send(PersistNotice::Failed {
             operation: "automatic memory checkpoint startup reconciliation",
@@ -22338,7 +22332,10 @@ fn persistence_worker(
                     checkpoint_owner_for_turn(store.events(), turn_id) == Some(conversation_id);
                 let result = (|| -> Result<Option<usize>, String> {
                     if !owner_verified {
-                        return Err("checkpoint turn is not uniquely owned by the requesting conversation".to_owned());
+                        return Err(
+                            "checkpoint turn is not uniquely owned by the requesting conversation"
+                                .to_owned(),
+                        );
                     }
                     let event =
                         source.ok_or("checkpoint requested before durable model completion")?;
@@ -22348,7 +22345,9 @@ fn persistence_worker(
                     let path = &checkpoint_outbox_path;
                     let mut outbox = openviking_checkpoint_outbox::Outbox::load(path)?;
                     if outbox.started_after_sequence().is_none() {
-                        return Err("checkpoint outbox has no durable activation boundary".to_owned());
+                        return Err(
+                            "checkpoint outbox has no durable activation boundary".to_owned()
+                        );
                     }
                     outbox.enqueue_durable(
                         path,
@@ -30937,12 +30936,13 @@ mod tests {
         );
         commit_user_message(&mut store, &old).unwrap();
         let substantial = "This is a completed technical milestone with verified decisions.             Earlier attempts were checked against actual source material and a working test             validated the durable implementation. Future tasks remain open for review.";
-        store.append_scoped(
-            Some(local_turn_scope(old.turn_id)),
-            EventKind::AssistantCompletionObserved,
-            remote_turn_payload(old.turn_id, "historic", None, Some(substantial), None),
-        )
-        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(old.turn_id)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(old.turn_id, "historic", None, Some(substantial), None),
+            )
+            .unwrap();
 
         // Initial activation writes its high-water mark; no retroactive export.
         assert_eq!(reconcile_checkpoint_outbox(&store, &outbox_path), Ok(0));
@@ -30960,12 +30960,13 @@ mod tests {
             "Implement the next milestone and store context.",
         );
         commit_user_message(&mut store, &active).unwrap();
-        store.append_scoped(
-            Some(local_turn_scope(active.turn_id)),
-            EventKind::AssistantCompletionObserved,
-            remote_turn_payload(active.turn_id, "new", None, Some(substantial), None),
-        )
-        .unwrap();
+        store
+            .append_scoped(
+                Some(local_turn_scope(active.turn_id)),
+                EventKind::AssistantCompletionObserved,
+                remote_turn_payload(active.turn_id, "new", None, Some(substantial), None),
+            )
+            .unwrap();
 
         // Deliberately do not enqueue a checkpoint here; simulate a crash
         // after the completion journal was flushed and before queue dispatch.
@@ -30974,7 +30975,10 @@ mod tests {
         assert_eq!(reconcile_checkpoint_outbox(&reopened, &outbox_path), Ok(1));
         let queued = openviking_checkpoint_outbox::Outbox::load(&outbox_path).unwrap();
         assert_eq!(queued.pending_count(), 1);
-        assert_eq!(queued.entries()[0].conversation_id, active.conversation_id.to_string());
+        assert_eq!(
+            queued.entries()[0].conversation_id,
+            active.conversation_id.to_string()
+        );
         assert_eq!(queued.entries()[0].turn_id, active.turn_id.to_string());
         assert_eq!(reconcile_checkpoint_outbox(&reopened, &outbox_path), Ok(0));
 
@@ -30987,7 +30991,10 @@ mod tests {
                 remote_turn_payload(unowned, "unowned", None, Some(substantial), None),
             )
             .unwrap();
-        assert_eq!(reconcile_checkpoint_outbox(&unowned_store, &outbox_path), Ok(0));
+        assert_eq!(
+            reconcile_checkpoint_outbox(&unowned_store, &outbox_path),
+            Ok(0)
+        );
         assert_eq!(
             openviking_checkpoint_outbox::Outbox::load(&outbox_path)
                 .unwrap()
