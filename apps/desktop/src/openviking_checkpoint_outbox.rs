@@ -53,6 +53,9 @@ impl State {
 pub struct Outbox {
     schema: String,
     version: u32,
+    // Baseline before any new completion can be appended. Older conversations
+    // are not bulk exported on first installation.
+    started_after_sequence: Option<u64>,
     entries: Vec<Entry>,
 }
 
@@ -61,6 +64,7 @@ impl Default for Outbox {
         Self {
             schema: SCHEMA.to_owned(),
             version: 1,
+            started_after_sequence: None,
             entries: Vec::new(),
         }
     }
@@ -88,7 +92,8 @@ impl Outbox {
         let root = value
             .as_object()
             .ok_or("checkpoint outbox root is not an object")?;
-        if root.len() != 3
+        if !(3..=4).contains(&root.len())
+            || (root.len() == 4 && !root.contains_key("started_after_sequence"))
             || root.get("schema").and_then(Value::as_str) != Some(SCHEMA)
             || root.get("version").and_then(Value::as_u64) != Some(1)
         {
@@ -135,9 +140,18 @@ impl Outbox {
                 state,
             });
         }
+        let started_after_sequence = match root.get("started_after_sequence") {
+            Some(value) if !value.is_null() => Some(
+                value
+                    .as_u64()
+                    .ok_or("checkpoint baseline must be an integer")?,
+            ),
+            _ => None,
+        };
         let outbox = Self {
             schema: SCHEMA.to_owned(),
             version: 1,
+            started_after_sequence,
             entries,
         };
         outbox.validate()?;
@@ -182,6 +196,7 @@ impl Outbox {
         let bytes = serde_json::to_vec_pretty(&json!({
             "schema": self.schema,
             "version": self.version,
+            "started_after_sequence": self.started_after_sequence,
             "entries": entries,
         }))
         .map_err(|e| e.to_string())?;
@@ -200,6 +215,23 @@ impl Outbox {
         fs::rename(&temporary, path)
             .map_err(|e| format!("checkpoint outbox atomic rename: {e}"))?;
         Ok(())
+    }
+
+    /// Initialize a durable first-run boundary before consuming new model
+    /// completions. An existing file's checkpoint records are preserved.
+    pub fn activate_durable(&mut self, path: &Path, journal_high_water: u64) -> Result<(), String> {
+        if self.started_after_sequence.is_some() {
+            return Ok(());
+        }
+        let mut changed = self.clone();
+        changed.started_after_sequence = Some(journal_high_water);
+        changed.save_atomic(path)?;
+        *self = changed;
+        Ok(())
+    }
+
+    pub fn started_after_sequence(&self) -> Option<u64> {
+        self.started_after_sequence
     }
 
     /// Persist a memory-processing intent, not a successful memory write.
