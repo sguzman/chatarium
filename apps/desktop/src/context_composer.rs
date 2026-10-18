@@ -861,7 +861,12 @@ impl ContextPlan {
             .map(|(index, _)| index)
             .skip(16)
             .collect::<Vec<_>>();
-        for index in recent.into_iter().chain(checkpoints).chain(other).chain(older) {
+        for index in recent
+            .into_iter()
+            .chain(checkpoints)
+            .chain(other)
+            .chain(older)
+        {
             if chosen[index] {
                 continue;
             }
@@ -1747,8 +1752,7 @@ mod tests {
                 source_conversation_id: "owner".to_owned(),
                 source_turn_id: "turn-3".to_owned(),
                 source_journal_sequence: 3,
-                uri: "viking://~/chatarium/conversations/owner/checkpoints/turn-3.md"
-                    .to_owned(),
+                uri: "viking://~/chatarium/conversations/owner/checkpoints/turn-3.md".to_owned(),
             },
         });
         let all = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript);
@@ -1756,7 +1760,12 @@ mod tests {
         assert!(bounded.size.utf8_bytes <= 1700);
         assert!(bounded.size.utf8_bytes < all.size.utf8_bytes);
         assert!(bounded.size.omitted_items > 0);
-        assert!(bounded.messages.iter().any(|m| m.content.contains("event 30:")));
+        assert!(
+            bounded
+                .messages
+                .iter()
+                .any(|m| m.content.contains("event 30:"))
+        );
         assert_eq!(bounded.openviking_checkpoint_count(), 1);
         assert!(bounded.inventory.iter().any(|item| {
             item.decision == InclusionDecision::ExcludedByBudget

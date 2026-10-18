@@ -4012,7 +4012,8 @@ impl ChatariumApp {
                             ) {
                                 Ok(plan) => plan,
                                 Err(error) => {
-                                    self.status = format!("cannot compose bounded outgoing context: {error}");
+                                    self.status =
+                                        format!("cannot compose bounded outgoing context: {error}");
                                     continue;
                                 }
                             };
