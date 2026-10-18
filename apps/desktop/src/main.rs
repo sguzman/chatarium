@@ -22820,9 +22820,7 @@ fn persistence_worker(
             let uncertain = outbox
                 .entries()
                 .iter()
-                .filter(|entry| {
-                    entry.state == openviking_checkpoint_outbox::State::Uncertain
-                })
+                .filter(|entry| entry.state == openviking_checkpoint_outbox::State::Uncertain)
                 .take(8)
                 .cloned()
                 .collect::<Vec<_>>();
@@ -22839,12 +22837,15 @@ fn persistence_worker(
                                 &entry.turn_id,
                                 entry.completed_sequence,
                             );
-                            if tx.send(PersistCommand::RecordOpenVikingUncertainReadback {
-                                conversation_id: entry.conversation_id,
-                                turn_id: entry.turn_id,
-                                completed_sequence: entry.completed_sequence,
-                                result,
-                            }).is_err() {
+                            if tx
+                                .send(PersistCommand::RecordOpenVikingUncertainReadback {
+                                    conversation_id: entry.conversation_id,
+                                    turn_id: entry.turn_id,
+                                    completed_sequence: entry.completed_sequence,
+                                    result,
+                                })
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -22874,19 +22875,17 @@ fn persistence_worker(
                 if result != Ok(true) {
                     continue;
                 }
-                let confirmed = openviking_checkpoint_outbox::Outbox::load(
-                    &checkpoint_outbox_path,
-                )
-                .and_then(|mut outbox| {
-                    outbox.transition_durable(
-                        &checkpoint_outbox_path,
-                        &conversation_id,
-                        &turn_id,
-                        completed_sequence,
-                        openviking_checkpoint_outbox::State::Uncertain,
-                        openviking_checkpoint_outbox::State::Confirmed,
-                    )
-                });
+                let confirmed = openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)
+                    .and_then(|mut outbox| {
+                        outbox.transition_durable(
+                            &checkpoint_outbox_path,
+                            &conversation_id,
+                            &turn_id,
+                            completed_sequence,
+                            openviking_checkpoint_outbox::State::Uncertain,
+                            openviking_checkpoint_outbox::State::Confirmed,
+                        )
+                    });
                 match confirmed {
                     Ok(true) => {
                         let _ = notices.send(PersistNotice::OpenVikingMemoryWriteFinished {

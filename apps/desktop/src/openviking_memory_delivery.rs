@@ -97,11 +97,8 @@ fn verify_uncertain_with_read(
     if completed_sequence == 0 {
         return Err("invalid uncertain checkpoint source sequence".to_owned());
     }
-    let file = crate::openviking_checkpoint_outbox::Outbox::summary_path(
-        outbox_path,
-        conversation,
-        turn,
-    )?;
+    let file =
+        crate::openviking_checkpoint_outbox::Outbox::summary_path(outbox_path, conversation, turn)?;
     let size = std::fs::metadata(&file)
         .map_err(|e| format!("uncertain checkpoint summary metadata: {e}"))?
         .len();
@@ -343,27 +340,75 @@ mod tests {
         let path = dir.join(crate::openviking_checkpoint_outbox::FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
-        outbox.enqueue_durable(&path, "owner", "turn-1", 12).unwrap();
-        outbox.save_summary_durable(&path, "owner", "turn-1", 12, "Durable fact").unwrap();
-        outbox.transition_durable(&path, "owner", "turn-1", 12, State::Ready, State::Dispatched).unwrap();
-        outbox.transition_durable(&path, "owner", "turn-1", 12, State::Dispatched, State::Uncertain).unwrap();
+        outbox
+            .enqueue_durable(&path, "owner", "turn-1", 12)
+            .unwrap();
+        outbox
+            .save_summary_durable(&path, "owner", "turn-1", 12, "Durable fact")
+            .unwrap();
+        outbox
+            .transition_durable(
+                &path,
+                "owner",
+                "turn-1",
+                12,
+                State::Ready,
+                State::Dispatched,
+            )
+            .unwrap();
+        outbox
+            .transition_durable(
+                &path,
+                "owner",
+                "turn-1",
+                12,
+                State::Dispatched,
+                State::Uncertain,
+            )
+            .unwrap();
         let source = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
         let content = std::fs::read_to_string(&source).unwrap();
-        assert!(verify_uncertain_with_read(&path, "owner", "turn-1", 12, |uri| {
-            assert_eq!(uri, "viking://~/chatarium/conversations/owner/checkpoints/turn-1.md");
-            Ok(json!({"content":[{"type":"text","text":content}]}))
-        }).unwrap());
-        assert!(!verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
-            Ok(json!({"content":[{"type":"text","text":"different"}]}))
-        }).unwrap());
-        assert!(verify_uncertain_with_read(&path, "foreign", "turn-1", 12, |_| {
-            panic!("remote read must not run for foreign source")
-        }).is_err());
+        assert!(
+            verify_uncertain_with_read(&path, "owner", "turn-1", 12, |uri| {
+                assert_eq!(
+                    uri,
+                    "viking://~/chatarium/conversations/owner/checkpoints/turn-1.md"
+                );
+                Ok(json!({"content":[{"type":"text","text":content}]}))
+            })
+            .unwrap()
+        );
+        assert!(
+            !verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
+                Ok(json!({"content":[{"type":"text","text":"different"}]}))
+            })
+            .unwrap()
+        );
+        assert!(
+            verify_uncertain_with_read(&path, "foreign", "turn-1", 12, |_| {
+                panic!("remote read must not run for foreign source")
+            })
+            .is_err()
+        );
         std::fs::write(&source, "tampered body").unwrap();
-        assert!(verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
-            panic!("remote read must not run for corrupted source")
-        }).is_err());
-        assert!(outbox.transition_durable(&path, "owner", "turn-1", 12, State::Uncertain, State::Confirmed).unwrap());
+        assert!(
+            verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
+                panic!("remote read must not run for corrupted source")
+            })
+            .is_err()
+        );
+        assert!(
+            outbox
+                .transition_durable(
+                    &path,
+                    "owner",
+                    "turn-1",
+                    12,
+                    State::Uncertain,
+                    State::Confirmed
+                )
+                .unwrap()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
