@@ -3759,7 +3759,8 @@ impl ChatariumApp {
                 } => {
                     if self.local_conversation_id.to_string() == conversation_id {
                         self.status = if confirmed {
-                            "OpenViking memory checkpoint saved and verified by read-back".to_owned()
+                            "OpenViking memory checkpoint saved and verified by read-back"
+                                .to_owned()
                         } else {
                             "OpenViking checkpoint write uncertain; not automatically repeated"
                                 .to_owned()
