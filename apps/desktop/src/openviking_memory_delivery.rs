@@ -607,7 +607,7 @@ impl ProjectMemoryGrants {
         self.grants.len() != old_len
     }
 
-    fn allows(
+    pub fn allows(
         &self,
         catalog: &crate::local_conversations::LocalConversationCatalog,
         source: chatarium_core::LocalConversationId,
@@ -622,6 +622,18 @@ impl ProjectMemoryGrants {
                     && grant.destination == destination
                     && grant.project_directory == source_project
             })
+    }
+
+    /// Does this destination have any currently valid, explicitly granted
+    /// source? Project-folder equality alone is insufficient.
+    pub fn has_sources(
+        &self,
+        catalog: &crate::local_conversations::LocalConversationCatalog,
+        destination: chatarium_core::LocalConversationId,
+    ) -> bool {
+        self.grants.iter().any(|grant| {
+            grant.destination == destination && self.allows(catalog, grant.source, destination)
+        })
     }
 }
 
