@@ -61,7 +61,6 @@ pub struct WakeLease {
     pub claimed_message_ids: Vec<u64>,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WakeDispatchEnvelope {
     pub recipient_conversation: String,
@@ -2469,20 +2468,21 @@ mod tests {
         assert!(!serialized.contains("later directive 19"));
 
         let mut reopened = Workspace::load(&path).unwrap();
-        assert_eq!(reopened.claim_next_wake_durable(&path, "chat-b").unwrap(), None);
         assert_eq!(
-            reopened
-                .wake_dispatch_envelope("chat-b", target)
-                .unwrap(),
+            reopened.claim_next_wake_durable(&path, "chat-b").unwrap(),
+            None
+        );
+        assert_eq!(
+            reopened.wake_dispatch_envelope("chat-b", target).unwrap(),
             envelope
         );
-        reopened
-            .stop_wake_lease_durable(&path, "chat-b")
-            .unwrap();
-        assert!(Workspace::load(&path)
-            .unwrap()
-            .wake_dispatch_envelope("chat-b", target)
-            .is_err());
+        reopened.stop_wake_lease_durable(&path, "chat-b").unwrap();
+        assert!(
+            Workspace::load(&path)
+                .unwrap()
+                .wake_dispatch_envelope("chat-b", target)
+                .is_err()
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -2505,9 +2505,11 @@ mod tests {
         fs::write(&missing_parent, b"not a directory").unwrap();
         let blocked = missing_parent.join("workspace.json");
         let snapshot = workspace.clone();
-        assert!(workspace
-            .claim_next_wake_durable(&blocked, "chat-b")
-            .is_err());
+        assert!(
+            workspace
+                .claim_next_wake_durable(&blocked, "chat-b")
+                .is_err()
+        );
         assert_eq!(workspace, snapshot);
         assert_eq!(workspace.wake_leases[0].remaining, 1);
         assert_eq!(workspace.wake_leases[0].active_message_id, None);
