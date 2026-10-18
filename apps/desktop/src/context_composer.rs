@@ -463,6 +463,41 @@ impl TranscriptMessage {
         })
     }
 
+    /// Admit a cross-conversation checkpoint only when a currently valid
+    /// directed project grant authorizes this exact source and destination.
+    /// Caller freezes the result at Send; this method performs no network I/O.
+    pub fn verified_project_openviking_checkpoint(
+        checkpoint: &crate::openviking_memory_delivery::RetrievedCheckpoint,
+        destination: chatarium_core::LocalConversationId,
+        catalog: &crate::local_conversations::LocalConversationCatalog,
+        grants: &crate::openviking_memory_delivery::ProjectMemoryGrants,
+    ) -> Result<Self, String> {
+        let source = checkpoint
+            .source_conversation_id
+            .parse::<chatarium_core::LocalConversationId>()
+            .map_err(|_| "invalid project checkpoint source conversation")?;
+        if source == destination || !grants.allows(catalog, source, destination) {
+            return Err("project checkpoint lacks a current directed grant".to_owned());
+        }
+        let expected_header = format!(
+            "# Chatarium memory checkpoint\n\nConversation: {}\nTurn: {}\nSource journal sequence: {}\n\n",
+            checkpoint.source_conversation_id,
+            checkpoint.source_turn_id,
+            checkpoint.source_journal_sequence,
+        );
+        if !checkpoint.text.starts_with(&expected_header) {
+            return Err("project checkpoint durable source header mismatch".to_owned());
+        }
+        let mut evidence =
+            Self::verified_openviking_checkpoint(checkpoint, &checkpoint.source_conversation_id)?;
+        evidence.text = evidence.text.replacen(
+            "[Chatarium OpenViking checkpoint",
+            "[Chatarium explicitly granted project-shared OpenViking checkpoint",
+            1,
+        );
+        Ok(evidence)
+    }
+
     #[must_use]
     pub fn controller_continuation(
         control_id: u64,
@@ -2138,5 +2173,58 @@ mod tests {
             plan.input_json(),
             json!([{"role": "user", "content": "hello"}])
         );
+    }
+}
+
+#[cfg(test)]
+mod project_checkpoint_admission_tests {
+    use super::*;
+
+    #[test]
+    fn cross_conversation_admission_requires_a_current_directed_grant() {
+        let source = chatarium_core::LocalConversationId::new();
+        let destination = chatarium_core::LocalConversationId::new();
+        let foreign = chatarium_core::LocalConversationId::new();
+        let mut catalog = crate::local_conversations::LocalConversationCatalog::default();
+        for (id, n) in [(source, 1), (destination, 2), (foreign, 3)] {
+            catalog.create(id, n);
+            catalog.set_project_directory(
+                id,
+                Some(std::env::current_dir().unwrap().display().to_string()),
+                n,
+            ).unwrap();
+        }
+        let checkpoint = crate::openviking_memory_delivery::RetrievedCheckpoint {
+            source_conversation_id: source.to_string(),
+            source_turn_id: "turn-1".to_owned(),
+            source_journal_sequence: 9,
+            uri: crate::openviking_memory_delivery::checkpoint_uri(
+                &source.to_string(), "turn-1",
+            ).unwrap(),
+            text: format!(
+                "# Chatarium memory checkpoint\n\nConversation: {source}\nTurn: turn-1\nSource journal sequence: 9\n\nThe project uses Rust."
+            ),
+        };
+        let mut grants = crate::openviking_memory_delivery::ProjectMemoryGrants::default();
+        assert!(TranscriptMessage::verified_project_openviking_checkpoint(
+            &checkpoint, destination, &catalog, &grants,
+        ).is_err());
+        grants.grant(&catalog, source, destination).unwrap();
+        let admitted = TranscriptMessage::verified_project_openviking_checkpoint(
+            &checkpoint, destination, &catalog, &grants,
+        ).unwrap();
+        assert!(admitted.text.contains("explicitly granted project-shared"));
+        assert!(TranscriptMessage::verified_project_openviking_checkpoint(
+            &checkpoint, foreign, &catalog, &grants,
+        ).is_err());
+        let mut tampered = checkpoint.clone();
+        tampered.text = "other conversation's data".to_owned();
+        assert!(TranscriptMessage::verified_project_openviking_checkpoint(
+            &tampered, destination, &catalog, &grants,
+        ).is_err());
+        grants.revoke(source, destination);
+        assert!(TranscriptMessage::verified_project_openviking_checkpoint(
+            &checkpoint, destination, &catalog, &grants,
+        ).is_err());
     }
 }
