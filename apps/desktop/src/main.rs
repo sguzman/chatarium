@@ -17,10 +17,10 @@ mod integration_journey;
 mod local_archive_search;
 mod local_conversations;
 mod local_http_mcp;
-mod openviking_checkpoint_outbox;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
+mod openviking_checkpoint_outbox;
 
 mod local_stdio_runner;
 mod local_tool_adapter;
@@ -22223,7 +22223,8 @@ fn persistence_worker(
                         && event.scope == Some(local_turn_scope(turn_id))
                 });
                 let result = (|| -> Result<Option<usize>, String> {
-                    let event = source.ok_or("checkpoint requested before durable model completion")?;
+                    let event =
+                        source.ok_or("checkpoint requested before durable model completion")?;
                     let payload: Value = serde_json::from_str(&event.payload)
                         .map_err(|e| format!("checkpoint terminal evidence invalid: {e}"))?;
                     let text = payload["text"]
@@ -30729,13 +30730,7 @@ mod tests {
             .send(PersistCommand::AppendTurnEvent {
                 turn_id: message.turn_id,
                 kind: EventKind::DispatchAttempted,
-                payload: remote_turn_payload(
-                    message.turn_id,
-                    "request",
-                    Some("model"),
-                    None,
-                    None,
-                ),
+                payload: remote_turn_payload(message.turn_id, "request", Some("model"), None, None),
             })
             .unwrap();
         assert!(matches!(
@@ -30787,7 +30782,10 @@ mod tests {
         let path = root.join(openviking_checkpoint_outbox::FILE_NAME);
         let restored = openviking_checkpoint_outbox::Outbox::load(&path).unwrap();
         assert_eq!(restored.pending_count(), 1);
-        assert_eq!(restored.entries()[0].conversation_id, message.conversation_id.to_string());
+        assert_eq!(
+            restored.entries()[0].conversation_id,
+            message.conversation_id.to_string()
+        );
         assert_eq!(restored.entries()[0].turn_id, message.turn_id.to_string());
         let outbox_text = fs::read_to_string(&path).unwrap();
         assert!(!outbox_text.contains(private_response));

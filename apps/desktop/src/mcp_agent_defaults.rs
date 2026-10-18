@@ -999,8 +999,7 @@ mod tests {
         let defaults = AgentDefaults::default();
         defaults.validate().unwrap();
         for (provider, operation, _) in crate::local_http_mcp::registered_tools() {
-            let expected = if provider == crate::local_http_mcp::OPENVIKING
-                && operation == "write"
+            let expected = if provider == crate::local_http_mcp::OPENVIKING && operation == "write"
             {
                 ToolPolicy::Ask
             } else {

@@ -63,8 +63,8 @@ impl Outbox {
         if bytes.len() > MAX_FILE_BYTES {
             return Err("checkpoint outbox exceeds file limit".to_owned());
         }
-        let outbox: Self = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
+        let outbox: Self =
+            serde_json::from_slice(&bytes).map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
         outbox.validate()?;
         Ok(outbox)
     }
@@ -97,8 +97,7 @@ impl Outbox {
             return Err("checkpoint outbox exceeds file limit".to_owned());
         }
         let parent = path.parent().ok_or("checkpoint outbox parent missing")?;
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("checkpoint outbox directory: {e}"))?;
+        fs::create_dir_all(parent).map_err(|e| format!("checkpoint outbox directory: {e}"))?;
         let temporary = path.with_extension("json.tmp");
         let mut file = fs::File::create(&temporary)
             .map_err(|e| format!("checkpoint outbox temporary file: {e}"))?;
@@ -120,15 +119,14 @@ impl Outbox {
         turn_id: &str,
         completed_sequence: u64,
     ) -> Result<bool, String> {
-        if !identity_valid(conversation_id)
-            || !identity_valid(turn_id)
-            || completed_sequence == 0
-        {
+        if !identity_valid(conversation_id) || !identity_valid(turn_id) || completed_sequence == 0 {
             return Err("invalid checkpoint source identity".to_owned());
         }
-        if self.entries.iter().any(|entry| {
-            entry.conversation_id == conversation_id && entry.turn_id == turn_id
-        }) {
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.conversation_id == conversation_id && entry.turn_id == turn_id)
+        {
             return Ok(false);
         }
         if self.entries.len() >= MAX_ITEMS {
@@ -177,8 +175,16 @@ mod tests {
     fn restart_recovers_one_exact_pending_source_without_transcript_body() {
         let path = test_path("restart");
         let mut queue = Outbox::default();
-        assert!(queue.enqueue_durable(&path, "conversation-1", "turn-1", 51).unwrap());
-        assert!(!queue.enqueue_durable(&path, "conversation-1", "turn-1", 52).unwrap());
+        assert!(
+            queue
+                .enqueue_durable(&path, "conversation-1", "turn-1", 51)
+                .unwrap()
+        );
+        assert!(
+            !queue
+                .enqueue_durable(&path, "conversation-1", "turn-1", 52)
+                .unwrap()
+        );
         let reopened = Outbox::load(&path).unwrap();
         assert_eq!(reopened.pending_count(), 1);
         assert_eq!(reopened.entries()[0].completed_sequence, 51);
@@ -194,7 +200,11 @@ mod tests {
         fs::write(&parent, "not a directory").unwrap();
         let path = parent.join(FILE_NAME);
         let mut queue = Outbox::default();
-        assert!(queue.enqueue_durable(&path, "conversation-1", "turn-1", 51).is_err());
+        assert!(
+            queue
+                .enqueue_durable(&path, "conversation-1", "turn-1", 51)
+                .is_err()
+        );
         assert_eq!(queue.pending_count(), 0);
         let _ = fs::remove_file(parent);
     }
