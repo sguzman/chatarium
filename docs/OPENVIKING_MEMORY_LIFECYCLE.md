@@ -3,8 +3,9 @@
 Status: **in progress**. Fixed scoped MCP transport, host-triggered
 checkpoint detection, bounded model summarization, a private durable outbox,
 create-only OpenViking writes and exact read-back verification are implemented.
-Live verification against the user's running server and automatic
-retrieval/context compaction are still pending.
+A bounded, confirmed-checkpoint retrieval reader is implemented but is not
+automatically invoked or admitted to model context yet. Live verification
+against the user's running server and context compaction remain pending.
 The user must not have to remind an agent to save memories. Merely offering
 an MCP tool or adding an agent prompt is not completion of this feature.
 
@@ -72,9 +73,9 @@ assistant/user message bodies, credentials or external MCP writes. A
 duplicate same-turn request does not generate another entry. If writing
 the outbox fails, the worker reports an error rather than claiming a saved
 checkpoint. The original journal remains intact; a crash after a
-successful enqueue preserves the request, but a crash between terminal
-journal append and outbox enqueue can still lose that enqueue. Reconciliation
-from journal on restart is not yet implemented.
+successful enqueue preserves the request, and restart reconciliation scans journal completions to recover a request
+that fell into the gap between terminal append and outbox enqueue. The first
+enabled run uses a durable high-water baseline to avoid mass historical export.
 
 A pending outbox entry is **not** a stored memory. Chatarium now runs a
 bounded separate summarization inference when idle, using at most eight
@@ -117,6 +118,28 @@ current pipeline cannot yet solve large-model-context exhaustion by
 itself. It adds separate bounded summarization inference requests and
 should be measured for added usage and latency before enabling broader
 memory scopes.
+
+## Landed: scoped read-back retrieval (not yet automatically injected)
+
+`apps/desktop/src/openviking_memory_delivery.rs` now provides
+`retrieve_confirmed_for_conversation`, a host-owned read path for a single
+conversation's newest **confirmed** checkpoint entries. It loads the durable
+outbox, rejects foreign-conversation and non-confirmed records, selects at
+most three entries ordered newest first, and caps whole-message retrieval
+at 12 KiB total. It never truncates a checkpoint to fit a budget.
+
+Each selected checkpoint is read by exact `viking://` URI, then compared
+byte-for-byte with the local durable summary that was previously verified at
+write time. Missing local evidence, oversized data, errors and remote drift
+fail closed rather than being admitted as trusted history. Returned values
+retain source conversation, source turn, source journal sequence and URI.
+
+**Important:** this is a testable retrieval primitive, not automatic
+context injection. It must only be called on a background worker. Later work
+must implement automatic request scheduling, provenance-marked context
+admission, topic relevance, explicit cross-conversation/project grants,
+context budgeting and compaction. The initial reader intentionally does not
+search other conversation namespaces even when sharing OpenViking storage.
 
 ## What to save
 
