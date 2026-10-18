@@ -1,4 +1,4 @@
-//! Two explicit user-owned loopback MCP endpoints, never an arbitrary URL proxy.
+//! Three explicit user-owned loopback MCP endpoints, never an arbitrary URL proxy.
 //! The persistent Node transport keeps Mathematica MCP sessions per conversation.
 use serde_json::{Value, json};
 use std::{
@@ -10,6 +10,8 @@ use std::{
 
 pub const MANIFOLDR: &str = "chatarium.local.manifoldr";
 pub const MATHEMATICA: &str = "chatarium.local.mathematica";
+pub const OPENVIKING: &str = "chatarium.local.openviking";
+const OPENVIKING_TOOLS: &[&str] = &["find", "search", "read", "write"];
 
 const MANIFOLDR_TOOLS: &[&str] = &[
     "popular_markets",
@@ -32,13 +34,14 @@ const MATHEMATICA_TOOLS: &[&str] = &[
 ];
 
 pub fn known_provider(name: &str) -> bool {
-    matches!(name, MANIFOLDR | MATHEMATICA)
+    matches!(name, MANIFOLDR | MATHEMATICA | OPENVIKING)
 }
 
 pub fn allowed_operation(provider: &str, operation: &str) -> bool {
     let allowed: &[&str] = match provider {
         MANIFOLDR => MANIFOLDR_TOOLS,
         MATHEMATICA => MATHEMATICA_TOOLS,
+        OPENVIKING => OPENVIKING_TOOLS,
         _ => return false,
     };
     allowed.contains(&operation)
@@ -54,6 +57,9 @@ pub fn registered_tools() -> impl Iterator<Item = (&'static str, &'static str, &
                 operation,
                 "Wolfram Mathematica; executes arbitrary Wolfram code with local user privileges",
             )
+        }))
+        .chain(OPENVIKING_TOOLS.iter().map(|&operation| {
+            (OPENVIKING, operation, "Scoped OpenViking memory; write creates new checkpoints only")
         }))
 }
 
@@ -109,6 +115,7 @@ impl Worker {
         let provider_key = match provider {
             MANIFOLDR => "manifoldr",
             MATHEMATICA => "mathematica",
+            OPENVIKING => "openviking",
             _ => return Err("unknown local MCP provider".to_owned()),
         };
         let request = json!({
@@ -226,6 +233,13 @@ mod tests {
         assert!(!allowed_operation(MANIFOLDR, "bet_place"));
         assert!(!allowed_operation(MATHEMATICA, "shell.command"));
         assert!(!known_provider("chatarium.local.user-controlled-host"));
-        assert_eq!(registered_tools().count(), 15);
+        assert!(known_provider(OPENVIKING));
+        for operation in ["find", "search", "read", "write"] {
+            assert!(allowed_operation(OPENVIKING, operation));
+        }
+        for operation in ["forget", "remember", "add_resource", "edit", "set_acl"] {
+            assert!(!allowed_operation(OPENVIKING, operation));
+        }
+        assert_eq!(registered_tools().count(), 19);
     }
 }
