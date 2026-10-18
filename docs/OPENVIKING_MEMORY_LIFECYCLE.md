@@ -3,9 +3,11 @@
 Status: **in progress**. Fixed scoped MCP transport, host-triggered
 checkpoint detection, bounded model summarization, a private durable outbox,
 create-only OpenViking writes and exact read-back verification are implemented.
-A bounded, confirmed-checkpoint retrieval reader is implemented but is not
-automatically invoked or admitted to model context yet. Live verification
-against the user's running server and context compaction remain pending.
+Confirmed checkpoint retrieval now automatically prefetches for the active
+conversation on a background worker and freezes provenance-marked evidence
+into authored Send context. Live verification against the user's running server,
+relevance-aware cross-conversation retrieval and context compaction remain
+pending.
 The user must not have to remind an agent to save memories. Merely offering
 an MCP tool or adding an agent prompt is not completion of this feature.
 
@@ -119,7 +121,7 @@ itself. It adds separate bounded summarization inference requests and
 should be measured for added usage and latency before enabling broader
 memory scopes.
 
-## Landed: scoped read-back retrieval (not yet automatically injected)
+## Landed: scoped read-back retrieval and automatic current-chat admission
 
 `apps/desktop/src/openviking_memory_delivery.rs` now provides
 `retrieve_confirmed_for_conversation`, a host-owned read path for a single
@@ -134,12 +136,22 @@ write time. Missing local evidence, oversized data, errors and remote drift
 fail closed rather than being admitted as trusted history. Returned values
 retain source conversation, source turn, source journal sequence and URI.
 
-**Important:** this is a testable retrieval primitive, not automatic
-context injection. It must only be called on a background worker. Later work
-must implement automatic request scheduling, provenance-marked context
-admission, topic relevance, explicit cross-conversation/project grants,
-context budgeting and compaction. The initial reader intentionally does not
-search other conversation namespaces even when sharing OpenViking storage.
+Chatarium now schedules this read automatically for the active local
+conversation, outside the UI thread. A per-conversation cache and in-flight
+claim prevent repeated fetches every frame; failures preserve ordinary chat
+operation and are retried after a bounded delay. When a new checkpoint is
+confirmed, the cache is invalidated, including reads that were already in
+flight. Authored Send freezes verified memories with the other scoped context
+sources; the exact-request inspector uses the same cache and Context Composer.
+Memories remain **user-level historical evidence**, with the source URI, owner,
+turn and journal sequence visible in its provenance. The original journal is
+untouched.
+
+**Still missing:** topic-relevant selection, explicitly granted
+cross-conversation/project recall, lifecycle compaction and end-to-end testing
+against the user's actual running service. The initial reader intentionally
+does not search other conversation namespaces even when sharing OpenViking
+storage. This does not yet solve long-conversation context exhaustion.
 
 ## What to save
 

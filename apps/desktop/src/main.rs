@@ -14345,6 +14345,21 @@ impl eframe::App for ChatariumApp {
                                     );
                                 }
                             }
+                            // Mirror the frozen Send composition using the same
+                            // verified background cache; never perform MCP I/O in preview.
+                            if let Some(checkpoints) = self
+                                .openviking_retrieval_cache
+                                .get(&self.local_conversation_id)
+                            {
+                                for checkpoint in checkpoints {
+                                    if let Ok(memory) = context_composer::TranscriptMessage::verified_openviking_checkpoint(
+                                        checkpoint,
+                                        &self.local_conversation_id.to_string(),
+                                    ) {
+                                        transcript.push(memory);
+                                    }
+                                }
+                            }
                             let selected_one_shot = self
                                 .local_memory_one_shot_selections
                                 .get(&self.local_conversation_id)
@@ -14424,7 +14439,7 @@ impl eframe::App for ChatariumApp {
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted tool result{} · {} admitted local memor{} · {} next-request-only memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
+                                    "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted tool result{} · {} admitted local memor{} · {} verified OpenViking checkpoint{} · {} next-request-only memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
                                     context_plan.durable_transcript_count(),
                                     if context_plan.durable_transcript_count() == 1 { "" } else { "s" },
                                     context_plan.routed_context_count(),
@@ -14433,6 +14448,8 @@ impl eframe::App for ChatariumApp {
                                     if context_plan.tool_result_count() == 1 { "" } else { "s" },
                                     context_plan.local_memory_count(),
                                     if context_plan.local_memory_count() == 1 { "y" } else { "ies" },
+                                    context_plan.openviking_checkpoint_count(),
+                                    if context_plan.openviking_checkpoint_count() == 1 { "" } else { "s" },
                                     context_plan.local_memory_one_shot_count(),
                                     if context_plan.local_memory_one_shot_count() == 1 { "y" } else { "ies" },
                                     context_plan.controller_worker_result_count(),
