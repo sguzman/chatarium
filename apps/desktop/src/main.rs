@@ -22250,37 +22250,47 @@ fn reconcile_checkpoint_outbox(
     let journal_high_water = store.events().last().map_or(0, |event| event.sequence);
     outbox.activate_durable(path, journal_high_water)?;
     let boundary = outbox.started_after_sequence().unwrap_or(journal_high_water);
+    // Build a unique-owner index once, and fail closed if two authored
+    // conversations ever claim the same turn. No O(history^2) replay.
+    let mut owners = BTreeMap::<String, Option<LocalConversationId>>::new();
+    for event in store.events() {
+        if event.kind != EventKind::UserMessageCommitted {
+            continue;
+        }
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+            decode_user_message_commit(event)
+        else {
+            continue;
+        };
+        match owners.entry(local_turn_scope(message.turn_id)) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(Some(message.conversation_id));
+            }
+            std::collections::btree_map::Entry::Occupied(mut slot) => {
+                if slot.get() != &Some(message.conversation_id) {
+                    slot.insert(None);
+                }
+            }
+        }
+    }
     let mut recovered = 0;
     for event in store.events() {
         if event.sequence <= boundary || !checkpoint_completion_eligible(event) {
             continue;
         }
-        let Some(turn_string) = event.scope.as_deref().and_then(|value| value.strip_prefix("local-turn:")) else {
+        let Some(scope) = event.scope.as_deref() else {
             continue;
         };
-        // Scope encoding belongs to Chatarium, not an untrusted model claim.
-        // Resolve an exact typed authored source before queuing anything.
-        let Some(message) = store.events().iter().find_map(|source| {
-            let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
-                decode_user_message_commit(source)
-            else {
-                return None;
-            };
-            (local_turn_scope(message.turn_id) == event.scope.clone().unwrap_or_default())
-                .then_some(message)
-        }) else {
+        let Some(turn_string) = scope.strip_prefix("local-turn:") else {
             continue;
         };
-        if checkpoint_owner_for_turn(store.events(), message.turn_id)
-            != Some(message.conversation_id)
-        {
+        let Some(Some(owner)) = owners.get(scope) else {
             continue;
-        }
-        let _ = turn_string;
+        };
         if outbox.enqueue_durable(
             path,
-            &message.conversation_id.to_string(),
-            &message.turn_id.to_string(),
+            &owner.to_string(),
+            turn_string,
             event.sequence,
         )? {
             recovered += 1;
