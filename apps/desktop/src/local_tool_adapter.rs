@@ -109,6 +109,60 @@ fn manifoldr_input_schema(name: &str) -> Option<Value> {
     Some(schema)
 }
 
+/// Contract from OpenViking v0.5.0 MCP tools, narrowed by Chatarium.
+/// Models see the shapes; the Node transport independently enforces owner
+/// identity, directory boundaries, small limits and create-only semantics.
+fn openviking_input_schema(name: &str) -> Option<Value> {
+    let uri = json!({
+        "type": "string",
+        "description": "Must be under viking://~/chatarium/conversations/<ACTIVE_CONVERSATION_ID>; no other conversation IDs"
+    });
+    let query = json!({"type": "string", "minLength": 1, "maxLength": 512});
+    let limit = json!({"type": "integer", "minimum": 1, "maximum": 5});
+    Some(match name {
+        "find" => json!({
+            "type": "object",
+            "properties": {"query": query, "target_uri": uri,
+                "limit": limit, "min_score": {"type": "number", "minimum": 0, "maximum": 1}},
+            "required": ["query", "target_uri"],
+            "additionalProperties": false
+        }),
+        "search" => json!({
+            "type": "object",
+            "properties": {"query": query, "target_uri": uri,
+                "limit": limit, "mode": {"const": "list"},
+                "min_score": {"type": "number", "minimum": 0, "maximum": 1}},
+            "required": ["query", "target_uri"],
+            "additionalProperties": false
+        }),
+        "read" => json!({
+            "type": "object",
+            "properties": {
+                "uris": {"oneOf": [uri,
+                    {"type": "array", "minItems": 1, "maxItems": 3,
+                     "items": uri}]},
+                "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+            },
+            "required": ["uris"],
+            "additionalProperties": false
+        }),
+        "write" => json!({
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description":
+                    "Create a new viking://~/chatarium/conversations/<ACTIVE_CONVERSATION_ID>/checkpoints/<id>.md file"},
+                "content": {"type": "string", "minLength": 1, "maxLength": 16384},
+                "mode": {"const": "create"},
+                "wait": {"type": "boolean"}
+            },
+            "required": ["uri", "content", "mode"],
+            "additionalProperties": false
+        }),
+        _ => return None,
+    })
+}
+
 /// Create a bounded local MCP directory from replayed provider configuration.
 ///
 /// The directory is *informational*: activation and an operation allowlist
@@ -151,7 +205,7 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
             "execution_permission": "exact standing policy or per-call user approval"
         }));
     }
-    // Two fixed localhost HTTP MCP services. This is an informational catalog:
+    // Three fixed localhost HTTP MCP services. This is an informational catalog:
     // a listed operation is neither a connectivity check nor execution consent.
     for (provider, name, description) in local_http_mcp::registered_tools() {
         if tools.len() >= MAX_DIRECTORY_OPERATIONS {
@@ -170,6 +224,11 @@ pub fn local_tool_directory(events: &[EventEnvelope]) -> Result<Value, String> {
                 .ok_or_else(|| format!("Manifoldr operation {name} has no pinned schema"))?;
             entry["schema_source"] =
                 json!("Chatarium-pinned Manifoldr v1.0.0 source contract; not live tools/list");
+        } else if provider == local_http_mcp::OPENVIKING {
+            entry["inputSchema"] = openviking_input_schema(name)
+                .ok_or_else(|| format!("OpenViking operation {name} has no pinned schema"))?;
+            entry["schema_source"] =
+                json!("Chatarium-scoped OpenViking v0.5.0 source contract; not live tools/list");
         }
         tools.push(entry);
     }
@@ -505,6 +564,25 @@ mod tests {
                 "missing exact Manifoldr tool argument contract"
             );
         }
+        let openviking = tools
+            .iter()
+            .filter(|tool| tool["provider"] == "chatarium.local.openviking")
+            .collect::<Vec<_>>();
+        assert_eq!(openviking.len(), 4);
+        for tool in &openviking {
+            assert!(tool["inputSchema"].is_object());
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+        }
+        let write = openviking
+            .iter()
+            .find(|tool| tool["name"] == "write")
+            .unwrap();
+        assert_eq!(write["inputSchema"]["properties"]["mode"]["const"], "create");
+        let find = openviking
+            .iter()
+            .find(|tool| tool["name"] == "find")
+            .unwrap();
+        assert_eq!(find["inputSchema"]["properties"]["limit"]["maximum"], 5);
 
         assert!(
             prepare_builtin_response(&call("tools.list", r#"{"x":1}"#), store.events()).is_err()
