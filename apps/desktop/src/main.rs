@@ -5229,11 +5229,44 @@ impl ChatariumApp {
             else {
                 continue;
             };
-            let input = openviking_memory_summary::request_input(
+            // Keep the rolling memory chain ordered: do not summarize a
+            // later turn while an older checkpoint is still being generated
+            // or awaiting a definitive external write for this conversation.
+            if outbox.entries().iter().any(|older| {
+                older.conversation_id == entry.conversation_id
+                    && older.completed_sequence < entry.completed_sequence
+                    && matches!(
+                        older.state,
+                        openviking_checkpoint_outbox::State::PendingSummary
+                            | openviking_checkpoint_outbox::State::Ready
+                            | openviking_checkpoint_outbox::State::Dispatched
+                    )
+                    && !self.openviking_summary_blocked.contains(&format!(
+                        "openviking-summary:{}:{}",
+                        older.conversation_id, older.turn_id
+                    ))
+            }) {
+                continue;
+            }
+            let prior = match openviking_memory_summary::newest_confirmed_prior(
+                &outbox,
+                &path,
+                &entry.conversation_id,
+                entry.completed_sequence,
+            ) {
+                Ok(prior) => prior,
+                Err(error) => {
+                    self.openviking_summary_blocked.insert(key);
+                    self.status = format!("OpenViking prior summary rejected: {error}");
+                    continue;
+                }
+            };
+            let input = openviking_memory_summary::request_input_with_prior(
                 &entry.conversation_id,
                 &entry.turn_id,
                 entry.completed_sequence,
                 &source,
+                prior.as_ref(),
             );
             let request = siwc_bridge::BridgeCommand::StreamResponse {
                 request_id: key.clone(),
