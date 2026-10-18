@@ -302,6 +302,9 @@ impl ControllerControlAction {
 }
 
 enum PersistCommand {
+    RetrieveConfirmedOpenViking {
+        conversation_id: LocalConversationId,
+    },
     SaveOpenVikingMemorySummary {
         conversation_id: LocalConversationId,
         turn_id: LocalTurnId,
@@ -604,6 +607,10 @@ enum PersistCommand {
 }
 
 enum PersistNotice {
+    OpenVikingRetrievalFinished {
+        conversation_id: LocalConversationId,
+        result: Result<Vec<openviking_memory_delivery::RetrievedCheckpoint>, String>,
+    },
     OpenVikingMemorySummarySaved {
         conversation_id: LocalConversationId,
         turn_id: LocalTurnId,
@@ -1284,6 +1291,11 @@ struct ChatariumApp {
     openviking_summary_last_attempt: Option<Instant>,
     openviking_write_last_attempt: Option<Instant>,
     openviking_summary_blocked: HashSet<String>,
+    openviking_retrieval_cache:
+        BTreeMap<LocalConversationId, Vec<openviking_memory_delivery::RetrievedCheckpoint>>,
+    openviking_retrieval_in_flight: HashSet<LocalConversationId>,
+    openviking_retrieval_retry_after: BTreeMap<LocalConversationId, Instant>,
+    openviking_retrieval_stale: HashSet<LocalConversationId>,
     commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
     delivery: delivery_telemetry::Timeline,
 }
@@ -1627,6 +1639,10 @@ impl ChatariumApp {
                         openviking_summary_last_attempt: None,
                         openviking_write_last_attempt: None,
                         openviking_summary_blocked: HashSet::new(),
+                        openviking_retrieval_cache: BTreeMap::new(),
+                        openviking_retrieval_in_flight: HashSet::new(),
+                        openviking_retrieval_retry_after: BTreeMap::new(),
+                        openviking_retrieval_stale: HashSet::new(),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
                     },
@@ -1883,6 +1899,10 @@ impl ChatariumApp {
             openviking_summary_last_attempt: None,
             openviking_write_last_attempt: None,
             openviking_summary_blocked: HashSet::new(),
+            openviking_retrieval_cache: BTreeMap::new(),
+            openviking_retrieval_in_flight: HashSet::new(),
+            openviking_retrieval_retry_after: BTreeMap::new(),
+            openviking_retrieval_stale: HashSet::new(),
             commit_remote_intents: BTreeMap::new(),
             delivery: delivery_telemetry::Timeline::default(),
         }
@@ -3217,7 +3237,7 @@ impl ChatariumApp {
                         return;
                     }
                 };
-                let local_memory_context = match admitted_local_memory_messages(
+                let mut local_memory_context = match admitted_local_memory_messages(
                     &self.events,
                     self.local_conversation_id,
                 ) {
@@ -3227,6 +3247,24 @@ impl ChatariumApp {
                         return;
                     }
                 };
+                // Freeze the already verified, strictly same-conversation
+                // OpenViking evidence at Send click alongside local admissions.
+                // A later background result cannot mutate this request.
+                if let Some(checkpoints) = self
+                    .openviking_retrieval_cache
+                    .get(&self.local_conversation_id)
+                {
+                    for checkpoint in checkpoints {
+                        if let Ok(message) =
+                            context_composer::TranscriptMessage::verified_openviking_checkpoint(
+                                checkpoint,
+                                &self.local_conversation_id.to_string(),
+                            )
+                        {
+                            local_memory_context.push(message);
+                        }
+                    }
+                }
                 let selected_one_shot = self
                     .local_memory_one_shot_selections
                     .get(&self.local_conversation_id)
@@ -3744,6 +3782,35 @@ impl ChatariumApp {
         }
     }
 
+    /// Prefetch only this conversation's confirmed memories in the worker.
+    /// No MCP network operation may run on the egui thread.
+    fn maybe_retrieve_openviking_context(&mut self) {
+        if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
+            return;
+        }
+        let owner = self.local_conversation_id;
+        if self.openviking_retrieval_cache.contains_key(&owner)
+            || self.openviking_retrieval_in_flight.contains(&owner)
+            || self
+                .openviking_retrieval_retry_after
+                .get(&owner)
+                .is_some_and(|next| Instant::now() < *next)
+        {
+            return;
+        }
+        let Some(sender) = &self.persist_tx else {
+            return;
+        };
+        if sender
+            .send(PersistCommand::RetrieveConfirmedOpenViking {
+                conversation_id: owner,
+            })
+            .is_ok()
+        {
+            self.openviking_retrieval_in_flight.insert(owner);
+        }
+    }
+
     fn process_notices(&mut self) {
         let notices = self
             .notice_rx
@@ -3753,10 +3820,61 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
+                PersistNotice::OpenVikingRetrievalFinished {
+                    conversation_id,
+                    result,
+                } => {
+                    self.openviking_retrieval_in_flight.remove(&conversation_id);
+                    if self.openviking_retrieval_stale.remove(&conversation_id) {
+                        // A checkpoint was confirmed while this read was in
+                        // flight; its old snapshot cannot refresh the cache.
+                        self.openviking_retrieval_cache.remove(&conversation_id);
+                        self.openviking_retrieval_retry_after.remove(&conversation_id);
+                        continue;
+                    }
+                    match result {
+                        Ok(checkpoints) => {
+                            self.openviking_retrieval_cache
+                                .insert(conversation_id, checkpoints);
+                            self.openviking_retrieval_retry_after.remove(&conversation_id);
+                        }
+                        Err(error) => {
+                            // The conversation remains usable. Retry after a
+                            // bounded delay rather than on every UI frame.
+                            self.openviking_retrieval_retry_after.insert(
+                                conversation_id,
+                                Instant::now() + Duration::from_secs(300),
+                            );
+                            if conversation_id == self.local_conversation_id {
+                                self.status = format!(
+                                    "OpenViking retrieval unavailable; continuing without memory: {error}"
+                                );
+                            }
+                        }
+                    }
+                }
                 PersistNotice::OpenVikingMemoryWriteFinished {
                     conversation_id,
                     confirmed,
                 } => {
+                    if confirmed {
+                        // Invalidate any conversation cache affected by the
+                        // newly confirmed immutable checkpoint.
+                        let affected = self
+                            .openviking_retrieval_cache
+                            .keys()
+                            .chain(self.openviking_retrieval_in_flight.iter())
+                            .copied()
+                            .filter(|id| id.to_string() == conversation_id)
+                            .collect::<Vec<_>>();
+                        for owner in affected {
+                            self.openviking_retrieval_cache.remove(&owner);
+                            self.openviking_retrieval_retry_after.remove(&owner);
+                            if self.openviking_retrieval_in_flight.contains(&owner) {
+                                self.openviking_retrieval_stale.insert(owner);
+                            }
+                        }
+                    }
                     if self.local_conversation_id.to_string() == conversation_id {
                         self.status = if confirmed {
                             "OpenViking memory checkpoint saved and verified by read-back"
@@ -8189,6 +8307,7 @@ impl eframe::App for ChatariumApp {
         self.maybe_wake_open_coordination_worker();
         self.maybe_dispatch_ready_openviking_write();
         self.maybe_generate_openviking_summary();
+        self.maybe_retrieve_openviking_context();
         // Visibility preferences are local-only and never mutate the durable
         // audit. Cache them in egui state to avoid disk reads each frame.
         let display_preferences_path = self.journal_path.with_file_name("display-preferences.json");
@@ -22602,6 +22721,29 @@ fn persistence_worker(
     }
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::RetrieveConfirmedOpenViking { conversation_id } => {
+                let outbox_path = checkpoint_outbox_path.clone();
+                let sender = notices.clone();
+                let spawned = thread::Builder::new()
+                    .name("chatarium-openviking-retrieve".to_owned())
+                    .spawn(move || {
+                        let result =
+                            openviking_memory_delivery::retrieve_confirmed_for_conversation(
+                                &outbox_path,
+                                &conversation_id.to_string(),
+                            );
+                        let _ = sender.send(PersistNotice::OpenVikingRetrievalFinished {
+                            conversation_id,
+                            result,
+                        });
+                    });
+                if let Err(error) = spawned {
+                    let _ = notices.send(PersistNotice::OpenVikingRetrievalFinished {
+                        conversation_id,
+                        result: Err(format!("cannot launch OpenViking read worker: {error}")),
+                    });
+                }
+            }
             PersistCommand::DispatchOpenVikingReadyWrite => {
                 if openviking_write_active {
                     continue;
@@ -27480,6 +27622,7 @@ mod tests {
 
     fn persist_notice_name(notice: &PersistNotice) -> &'static str {
         match notice {
+            PersistNotice::OpenVikingRetrievalFinished { .. } => "openviking_retrieval_finished",
             PersistNotice::OpenVikingMemorySummarySaved { .. } => "openviking_summary_saved",
             PersistNotice::OpenVikingMemoryWriteFinished { .. } => "openviking_write_finished",
             PersistNotice::DraftSaved { .. } => "draft_saved",
