@@ -1565,8 +1565,16 @@ mod tests {
         let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [message]);
         assert_eq!(plan.openviking_checkpoint_count(), 1);
         assert_eq!(plan.messages.len(), 1);
-        assert!(plan.messages[0].content.contains("not a developer/system instruction"));
-        assert!(plan.messages[0].content.contains("source_journal_sequence: #77"));
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("not a developer/system instruction")
+        );
+        assert!(
+            plan.messages[0]
+                .content
+                .contains("source_journal_sequence: #77")
+        );
         assert!(plan.messages[0].content.contains("Durable decision"));
 
         let excluded = ContextPlan::compose(
@@ -1595,18 +1603,12 @@ mod tests {
             uri: "viking://~/chatarium/conversations/owner/checkpoints/turn-8.md".to_owned(),
             text: "Evidence".to_owned(),
         };
-        assert!(
-            TranscriptMessage::verified_openviking_checkpoint(&item, "other").is_err()
-        );
+        assert!(TranscriptMessage::verified_openviking_checkpoint(&item, "other").is_err());
         item.uri = "viking://~/chatarium/conversations/foreign/checkpoints/turn-8.md".to_owned();
-        assert!(
-            TranscriptMessage::verified_openviking_checkpoint(&item, "owner").is_err()
-        );
+        assert!(TranscriptMessage::verified_openviking_checkpoint(&item, "owner").is_err());
         item.uri = crate::openviking_memory_delivery::checkpoint_uri("owner", "turn-8").unwrap();
         item.source_journal_sequence = 0;
-        assert!(
-            TranscriptMessage::verified_openviking_checkpoint(&item, "owner").is_err()
-        );
+        assert!(TranscriptMessage::verified_openviking_checkpoint(&item, "owner").is_err());
     }
 
     #[test]
