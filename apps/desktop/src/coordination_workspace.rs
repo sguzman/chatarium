@@ -908,6 +908,31 @@ impl Workspace {
         Ok(())
     }
 
+    /// A read-only scheduling hint; claim and network dispatch recheck policy.
+    pub fn next_eligible_wake_id(&self, conversation: &str) -> Option<u64> {
+        let lease = self.wake_leases.iter().find(|lease| lease.conversation == conversation)?;
+        if lease.remaining == 0
+            || lease.active_message_id.is_some()
+            || lease.claimed_message_ids.len() >= MAX_WAKE_CLAIMS
+        {
+            return None;
+        }
+        let (container_id, worker) = self.member_for(conversation)?;
+        self.containers
+            .iter()
+            .find(|container| container.id == container_id)?
+            .messages
+            .iter()
+            .filter(|message| {
+                message.to == worker
+                    && message.status == "delivered"
+                    && !lease.claimed_message_ids.contains(&message.id)
+                    && self.wake_message_is_authorized(conversation, message.id)
+            })
+            .map(|message| message.id)
+            .min()
+    }
+
     /// Reserve one eligible incoming directive; nothing is executed here.
     /// Caller must durably save the workspace before any inference dispatch.
     /// Active claims survive restart and must never be automatically replayed.
@@ -919,33 +944,10 @@ impl Workspace {
         else {
             return Ok(None);
         };
-        let lease = &self.wake_leases[index];
-        if lease.remaining == 0 || lease.active_message_id.is_some() {
-            return Ok(None);
-        }
-        if lease.claimed_message_ids.len() >= MAX_WAKE_CLAIMS {
+        if self.wake_leases[index].claimed_message_ids.len() >= MAX_WAKE_CLAIMS {
             return Err("wake claim history has reached its bound".to_owned());
         }
-        let (container_id, worker) = self
-            .member_for(conversation)
-            .ok_or("wake claim owner is not a worker")?;
-        let mut pending = self
-            .containers
-            .iter()
-            .find(|c| c.id == container_id)
-            .ok_or("wake claim container missing")?
-            .messages
-            .iter()
-            .filter(|message| message.to == worker && message.status == "delivered")
-            .map(|message| message.id)
-            .collect::<Vec<_>>();
-        pending.sort_unstable();
-        let next = pending.into_iter().find(|message_id| {
-            !self.wake_leases[index]
-                .claimed_message_ids
-                .contains(message_id)
-                && self.wake_message_is_authorized(conversation, *message_id)
-        });
+        let next = self.next_eligible_wake_id(conversation);
         if let Some(message_id) = next {
             let lease = &mut self.wake_leases[index];
             lease.remaining -= 1;
@@ -2515,6 +2517,41 @@ mod tests {
         assert_eq!(workspace.wake_leases[0].active_message_id, None);
         assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(target));
         let _ = fs::remove_file(missing_parent);
+    }
+
+    #[test]
+    fn wake_scheduler_only_sees_authorized_unclaimed_directives() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, true, "allow", 12)
+            .unwrap();
+        let first = workspace
+            .send("chat-a", worker, "directive", "First", 1)
+            .unwrap()
+            .0;
+        workspace
+            .send("chat-a", worker, "report", "Not a directive", 2)
+            .unwrap();
+        workspace.grant_wake_lease("chat-b", 2).unwrap();
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), Some(first));
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(first));
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), None);
+        workspace.finish_wake_claim("chat-b", first).unwrap();
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), None);
+        let later = workspace
+            .send("chat-a", worker, "directive", "Second", 3)
+            .unwrap()
+            .0;
+        workspace
+            .set_link(container, director, worker, false, false, "block", 12)
+            .unwrap();
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), None);
+        workspace
+            .set_link(container, director, worker, true, true, "allow", 12)
+            .unwrap();
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), Some(later));
+        workspace.stop_wake_lease("chat-b").unwrap();
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), None);
     }
 
     #[test]
