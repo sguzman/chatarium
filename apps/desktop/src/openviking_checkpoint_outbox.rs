@@ -402,6 +402,31 @@ impl Outbox {
         Ok(true)
     }
 
+    /// A process crash during an outbound write leaves an unknown result.
+    /// Recover conservatively; never reissue the same create automatically.
+    pub fn recover_interrupted_dispatches_durable(
+        &mut self,
+        path: &Path,
+    ) -> Result<usize, String> {
+        let count = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == State::Dispatched)
+            .count();
+        if count == 0 {
+            return Ok(0);
+        }
+        let mut updated = self.clone();
+        for entry in &mut updated.entries {
+            if entry.state == State::Dispatched {
+                entry.state = State::Uncertain;
+            }
+        }
+        updated.save_atomic(path)?;
+        *self = updated;
+        Ok(count)
+    }
+
     pub fn ready_entries(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|entry| entry.state == State::Ready)
     }
@@ -494,6 +519,10 @@ mod tests {
             .unwrap());
         let reloaded = Outbox::load(&path).unwrap();
         assert_eq!(reloaded.entries()[0].state, State::Dispatched);
+        let mut recovered = reloaded;
+        assert_eq!(recovered.recover_interrupted_dispatches_durable(&path), Ok(1));
+        assert_eq!(recovered.entries()[0].state, State::Uncertain);
+        assert_eq!(recovered.recover_interrupted_dispatches_durable(&path), Ok(0));
         assert!(outbox
             .transition_durable(
                 &path,
