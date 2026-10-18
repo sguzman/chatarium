@@ -163,6 +163,7 @@ pub fn capture(
                 "composition_reason": match inventory_decisions.get(&item.call_id) {
                     Some(InclusionDecision::Included) => "included",
                     Some(InclusionDecision::ExcludedByPolicy) => "excluded_by_policy",
+                    Some(InclusionDecision::ExcludedByBudget) => "excluded_by_budget",
                     Some(InclusionDecision::OmittedEmpty) => "omitted_empty",
                     None => "not_selected_for_dispatch",
                 },
@@ -282,6 +283,7 @@ impl DispatchTransportTrace {
 pub enum ToolCompositionReason {
     Included,
     ExcludedByPolicy,
+    ExcludedByBudget,
     OmittedEmpty,
     NotSelectedForDispatch,
 }
@@ -291,6 +293,7 @@ impl ToolCompositionReason {
         match self {
             Self::Included => "included",
             Self::ExcludedByPolicy => "excluded_by_policy",
+            Self::ExcludedByBudget => "excluded_by_budget",
             Self::OmittedEmpty => "omitted_empty",
             Self::NotSelectedForDispatch => "not_selected_for_dispatch",
         }
@@ -300,6 +303,7 @@ impl ToolCompositionReason {
         match value {
             "included" => Some(Self::Included),
             "excluded_by_policy" => Some(Self::ExcludedByPolicy),
+            "excluded_by_budget" => Some(Self::ExcludedByBudget),
             "omitted_empty" => Some(Self::OmittedEmpty),
             "not_selected_for_dispatch" => Some(Self::NotSelectedForDispatch),
             _ => None,
