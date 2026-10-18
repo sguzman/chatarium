@@ -38,8 +38,8 @@ export function validateOpenVikingArguments(name, args, conversationId) {
     throw new Error("Unsupported or malformed OpenViking operation");
   if (name === "find" || name === "search") {
     const optional = name === "search" ? ["limit", "min_score", "mode"] : ["limit", "min_score"];
-    if (!exactKeys(args, ["query", "target_uri"], optional) || !queryValid(args.query)
-        || !scopedUri(args.target_uri, conversationId) || (args.limit !== undefined && !limitValid(args.limit, 5))
+    if (!exactKeys(args, ["query", "target_uri", "limit"], optional) || !queryValid(args.query)
+        || !scopedUri(args.target_uri, conversationId) || !limitValid(args.limit, 5)
         || (args.min_score !== undefined && (typeof args.min_score !== "number"
            || args.min_score < 0 || args.min_score > 1))
         || (name === "search" && args.mode !== undefined && args.mode !== "list"))
@@ -48,11 +48,11 @@ export function validateOpenVikingArguments(name, args, conversationId) {
   }
   if (name === "read") {
     const uris = typeof args.uris === "string" ? [args.uris] : args.uris;
-    if (!exactKeys(args, ["uris"], ["offset", "limit"]) || !Array.isArray(uris)
+    if (!exactKeys(args, ["uris", "limit"], ["offset"]) || !Array.isArray(uris)
         || !limitValid(uris.length, 3) || !uris.every(uri => scopedUri(uri, conversationId))
         || (args.offset !== undefined && (!Number.isSafeInteger(args.offset)
           || args.offset < 0 || args.offset > 100000))
-        || (args.limit !== undefined && !limitValid(args.limit, 100)))
+        || !limitValid(args.limit, 100))
       throw new Error("OpenViking read must be scoped to three bounded Chatarium paths");
     return;
   }
