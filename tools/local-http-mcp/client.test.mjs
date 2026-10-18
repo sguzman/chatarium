@@ -268,6 +268,30 @@ test("OpenViking scoped retrieval and create-only checkpoint reach the MCP serve
   assert.equal(calls[1].args.mode, "create");
 });
 
+test("granted project checkpoint read must use source-owned transport session", async () => {
+  const source = "project-source", destination = "project-destination";
+  const uri = `viking://~/chatarium/conversations/${source}/checkpoints/verified-turn.md`;
+  const args = { uris: uri, limit: 100 };
+  const broker = client();
+  const before = seen.filter(x => x.method === "tools/call").length;
+  // The transport cannot and should not authorize a destination identity to
+  // read a source URI. Only the Rust host's explicitly granted retrieval path
+  // selects the source identity before entering this adapter.
+  assert.throws(() => validateOpenVikingArguments("read", args, destination), /scoped/);
+  await assert.rejects(broker.request({ conversation_id: destination,
+    provider: "openviking", method: "call", name: "read", arguments: args }), /scoped/);
+  assert.equal(seen.filter(x => x.method === "tools/call").length, before);
+  assert.doesNotThrow(() => validateOpenVikingArguments("read", args, source));
+  const result = await broker.request({ conversation_id: source,
+    provider: "openviking", method: "call", name: "read", arguments: args });
+  assert.equal(result.structuredContent.name, "read");
+  const calls = seen.filter(x => x.method === "tools/call").slice(before);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tool, "read");
+  assert.equal(calls[0].args.uris, uri);
+  assert.equal(calls[0].args.limit, 100);
+});
+
 test("OpenViking invalid scopes, context-mode searches, and overwrites fail before tools/call", async () => {
   const failures = [
     ["find", { query: "anything" }],
