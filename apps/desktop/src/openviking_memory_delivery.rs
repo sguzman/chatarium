@@ -67,6 +67,59 @@ pub fn deliver_create_once(conversation: &str, turn: &str, content: &str) -> Res
     Ok(())
 }
 
+/// A crash-uncertain write may already exist remotely. Read, compare with
+/// the immutable local source, and NEVER retry its create operation.
+pub fn verify_uncertain_read_only(
+    outbox_path: &std::path::Path,
+    conversation: &str,
+    turn: &str,
+    completed_sequence: u64,
+) -> Result<bool, String> {
+    verify_uncertain_with_read(outbox_path, conversation, turn, completed_sequence, |uri| {
+        local_http_mcp::invoke(
+            conversation,
+            &format!("memory-recover-read:{conversation}:{turn}"),
+            local_http_mcp::OPENVIKING,
+            "read",
+            &json!({"uris": uri, "limit": 100}),
+        )
+    })
+}
+
+fn verify_uncertain_with_read(
+    outbox_path: &std::path::Path,
+    conversation: &str,
+    turn: &str,
+    completed_sequence: u64,
+    read: impl FnOnce(&str) -> Result<Value, String>,
+) -> Result<bool, String> {
+    let uri = checkpoint_uri(conversation, turn)?;
+    if completed_sequence == 0 {
+        return Err("invalid uncertain checkpoint source sequence".to_owned());
+    }
+    let file = crate::openviking_checkpoint_outbox::Outbox::summary_path(
+        outbox_path,
+        conversation,
+        turn,
+    )?;
+    let size = std::fs::metadata(&file)
+        .map_err(|e| format!("uncertain checkpoint summary metadata: {e}"))?
+        .len();
+    if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
+        return Err("uncertain checkpoint summary size invalid".to_owned());
+    }
+    let expected = std::fs::read_to_string(&file)
+        .map_err(|e| format!("uncertain checkpoint source unreadable: {e}"))?;
+    if expected.len() != size as usize
+        || !expected.starts_with(&format!(
+            "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {turn}\nSource journal sequence: {completed_sequence}\n\n"
+        ))
+    {
+        return Err("uncertain checkpoint source identity mismatch".to_owned());
+    }
+    read(&uri).map(|remote| readback_matches(&remote, &expected))
+}
+
 /// A verified, in-scope checkpoint. This is evidence for later context admission,
 /// not a system/developer message or a replacement for the journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +325,45 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![5, 4, 3]
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn uncertain_checkpoint_recovery_reads_only_and_confirms_exact_bytes() {
+        use crate::openviking_checkpoint_outbox::{Outbox, State};
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "chatarium-readonly-memory-recovery-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, "owner", "turn-1", 12).unwrap();
+        outbox.save_summary_durable(&path, "owner", "turn-1", 12, "Durable fact").unwrap();
+        outbox.transition_durable(&path, "owner", "turn-1", 12, State::Ready, State::Dispatched).unwrap();
+        outbox.transition_durable(&path, "owner", "turn-1", 12, State::Dispatched, State::Uncertain).unwrap();
+        let source = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
+        let content = std::fs::read_to_string(&source).unwrap();
+        assert!(verify_uncertain_with_read(&path, "owner", "turn-1", 12, |uri| {
+            assert_eq!(uri, "viking://~/chatarium/conversations/owner/checkpoints/turn-1.md");
+            Ok(json!({"content":[{"type":"text","text":content}]}))
+        }).unwrap());
+        assert!(!verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
+            Ok(json!({"content":[{"type":"text","text":"different"}]}))
+        }).unwrap());
+        assert!(verify_uncertain_with_read(&path, "foreign", "turn-1", 12, |_| {
+            panic!("remote read must not run for foreign source")
+        }).is_err());
+        std::fs::write(&source, "tampered body").unwrap();
+        assert!(verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
+            panic!("remote read must not run for corrupted source")
+        }).is_err());
+        assert!(outbox.transition_durable(&path, "owner", "turn-1", 12, State::Uncertain, State::Confirmed).unwrap());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
