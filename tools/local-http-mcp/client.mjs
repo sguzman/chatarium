@@ -13,11 +13,12 @@ const OPENVIKING_PROTOCOL = "2025-03-26";
 
 // Scope is enforced in the transport, not inferred from model instructions.
 // Do not expose other agents' memory, skills, resources or private user data.
-const MEMORY_ROOT = "viking://~/chatarium";
+const MEMORY_ROOT = "viking://~/chatarium/conversations/";
 const MEMORY_TOOLS = new Set(["find", "search", "read", "write"]);
-function scopedUri(uri) {
-  if (typeof uri !== "string" || !uri.startsWith(MEMORY_ROOT)) return false;
-  const remainder = uri.slice(MEMORY_ROOT.length);
+function scopedUri(uri, conversationId) {
+  const prefix = MEMORY_ROOT + conversationId;
+  if (typeof uri !== "string" || !uri.startsWith(prefix)) return false;
+  const remainder = uri.slice(prefix.length);
   if (remainder !== "" && !remainder.startsWith("/")) return false;
   if (remainder.length > 512 || /[?#%\\]/.test(remainder)) return false;
   return remainder === "" || remainder.split("/").slice(1).every(part =>
@@ -29,13 +30,16 @@ function exactKeys(args, required, optional = []) {
 }
 function queryValid(q) { return typeof q === "string" && q.trim().length > 0 && q.length <= 512; }
 function limitValid(n, max) { return Number.isSafeInteger(n) && n >= 1 && n <= max; }
-export function validateOpenVikingArguments(name, args) {
+export function validateOpenVikingArguments(name, args, conversationId) {
+  if (typeof conversationId !== "string"
+      || !/^[0-9A-Za-z_-]{1,128}$/.test(conversationId))
+    throw new Error("Invalid Chatarium conversation identity for OpenViking");
   if (!MEMORY_TOOLS.has(name) || !args || typeof args !== "object" || Array.isArray(args))
     throw new Error("Unsupported or malformed OpenViking operation");
   if (name === "find" || name === "search") {
     const optional = name === "search" ? ["limit", "min_score", "mode"] : ["limit", "min_score"];
     if (!exactKeys(args, ["query", "target_uri"], optional) || !queryValid(args.query)
-        || !scopedUri(args.target_uri) || (args.limit !== undefined && !limitValid(args.limit, 5))
+        || !scopedUri(args.target_uri, conversationId) || (args.limit !== undefined && !limitValid(args.limit, 5))
         || (args.min_score !== undefined && (typeof args.min_score !== "number"
            || args.min_score < 0 || args.min_score > 1))
         || (name === "search" && args.mode !== undefined && args.mode !== "list"))
@@ -45,7 +49,7 @@ export function validateOpenVikingArguments(name, args) {
   if (name === "read") {
     const uris = typeof args.uris === "string" ? [args.uris] : args.uris;
     if (!exactKeys(args, ["uris"], ["offset", "limit"]) || !Array.isArray(uris)
-        || !limitValid(uris.length, 3) || !uris.every(scopedUri)
+        || !limitValid(uris.length, 3) || !uris.every(uri => scopedUri(uri, conversationId))
         || (args.offset !== undefined && (!Number.isSafeInteger(args.offset)
           || args.offset < 0 || args.offset > 100000))
         || (args.limit !== undefined && !limitValid(args.limit, 100)))
@@ -55,7 +59,7 @@ export function validateOpenVikingArguments(name, args) {
   // The installed v0.5.0 server's mode=create fails if the file exists.
   // The model cannot overwrite existing memories or set ACLs.
   if (!exactKeys(args, ["uri", "content", "mode"], ["wait"])
-      || !scopedUri(args.uri)
+      || !scopedUri(args.uri, conversationId)
       || !/^viking:\/\/~\/chatarium\/conversations\/[a-zA-Z0-9_-]+\/checkpoints\/[a-zA-Z0-9._-]+\.md$/.test(args.uri)
       || args.mode !== "create" || typeof args.content !== "string"
       || args.content.trim().length === 0 || Buffer.byteLength(args.content) > 16384
@@ -309,7 +313,7 @@ export class LocalMcpBroker {
         if (typeof args.name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(args.name)
             || !args.arguments || typeof args.arguments !== "object" || Array.isArray(args.arguments))
           throw new Error("Invalid MCP tool name or JSON-object arguments");
-        if (provider === "openviking") validateOpenVikingArguments(args.name, args.arguments);
+        if (provider === "openviking") validateOpenVikingArguments(args.name, args.arguments, conversationId);
         // One attempt only. Transport timeout may be an unknown-outcome mutation.
         const result = await this._request(state, config.url, "tools/call", {
           name: args.name, arguments: args.arguments,
@@ -318,6 +322,9 @@ export class LocalMcpBroker {
             || !Array.isArray(result.content)) {
           throw new Error("MCP tools/call returned no valid content array; outcome unknown; not retried");
         }
+        if (provider === "openviking"
+            && Buffer.byteLength(JSON.stringify(result)) > 32 * 1024)
+          throw new Error("OpenViking MCP result exceeds bounded agent context; narrow your query");
         return provider === "manifoldr" ? boundManifoldrResult(args.name, result) : result;
       }
       throw new Error("Unsupported MCP operation");
