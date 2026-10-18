@@ -995,14 +995,21 @@ mod tests {
     }
 
     #[test]
-    fn fixed_http_tools_are_automatically_authorized_by_fresh_persisted_defaults() {
+    fn fixed_http_defaults_keep_memory_writes_approval_gated() {
         let defaults = AgentDefaults::default();
         defaults.validate().unwrap();
         for (provider, operation, _) in crate::local_http_mcp::registered_tools() {
+            let expected = if provider == crate::local_http_mcp::OPENVIKING
+                && operation == "write"
+            {
+                ToolPolicy::Ask
+            } else {
+                ToolPolicy::Automatic
+            };
             assert_eq!(
                 tool_policy(&defaults.policy_rules, provider, operation),
-                Ok(ToolPolicy::Automatic),
-                "{provider}::{operation} must be explicitly saved as automatic"
+                Ok(expected),
+                "{provider}::{operation} must have its exact saved permission"
             );
         }
         assert_eq!(
