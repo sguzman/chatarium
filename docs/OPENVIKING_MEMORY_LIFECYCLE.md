@@ -327,9 +327,14 @@ match the locally persisted checkpoint with its owner, turn and journal-sequence
 header, within the 12 KiB shared retrieval budget. Foreign, unconfirmed,
 uncertain, mismatched, oversized and unbound entries are excluded or rejected.
 
-**This is a backend foundation, not a claim that sharing is enabled in live
-chat:** there is not yet a UI action to review and persist the grant, nor a
-background project retrieval scheduler and context-admission integration.
-The existing conversation-only retrieval remains the runtime default until
-that approval path is connected and tested. Live validation against the
-user's running OpenViking instance is still pending.
+**Native integration implemented on the development branch:** under
+**Manage selected chat → OpenViking project memory (opt-in)**, the operator can
+explicitly allow or revoke read access from a same-project source conversation.
+The application persists the directed grant, prefetches permitted confirmed
+checkpoints on a background worker, invalidates stale caches after permission
+or checkpoint changes, and rechecks grants at exact Send/inspector composition.
+A fresh conversation still has no sharing enabled by default.
+
+Live validation against the user's running OpenViking instance and complete
+cross-chat permission QA remain pending. Changes are not yet merged into
+the default branch.
