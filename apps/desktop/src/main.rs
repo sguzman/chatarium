@@ -312,6 +312,12 @@ enum PersistCommand {
         summary: String,
     },
     DispatchOpenVikingReadyWrite,
+    RecordOpenVikingUncertainReadback {
+        conversation_id: String,
+        turn_id: String,
+        completed_sequence: u64,
+        result: Result<bool, String>,
+    },
     RecordOpenVikingWriteOutcome {
         conversation_id: String,
         turn_id: String,
@@ -22806,8 +22812,100 @@ fn persistence_worker(
             });
         }
     }
+    // Recover only a small bounded set of crash-uncertain writes. Never
+    // reissue create: the background worker performs exact read-only checks,
+    // and ONLY the persistence worker may transition an entry to Confirmed.
+    if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() != Ok("0") {
+        if let Ok(outbox) = openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path) {
+            let uncertain = outbox
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    entry.state == openviking_checkpoint_outbox::State::Uncertain
+                })
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>();
+            if !uncertain.is_empty() {
+                let path = checkpoint_outbox_path.clone();
+                let tx = completion_tx.clone();
+                if let Err(error) = thread::Builder::new()
+                    .name("chatarium-openviking-recover-read".to_owned())
+                    .spawn(move || {
+                        for entry in uncertain {
+                            let result = openviking_memory_delivery::verify_uncertain_read_only(
+                                &path,
+                                &entry.conversation_id,
+                                &entry.turn_id,
+                                entry.completed_sequence,
+                            );
+                            if tx.send(PersistCommand::RecordOpenVikingUncertainReadback {
+                                conversation_id: entry.conversation_id,
+                                turn_id: entry.turn_id,
+                                completed_sequence: entry.completed_sequence,
+                                result,
+                            }).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                {
+                    let _ = notices.send(PersistNotice::Failed {
+                        operation: "OpenViking read-only crash recovery worker",
+                        revision: None,
+                        request_id: None,
+                        turn_id: None,
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+    }
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::RecordOpenVikingUncertainReadback {
+                conversation_id,
+                turn_id,
+                completed_sequence,
+                result,
+            } => {
+                // Mismatch, missing file, or network failure proves nothing.
+                // In all such cases leave the durable state Uncertain.
+                if result != Ok(true) {
+                    continue;
+                }
+                let confirmed = openviking_checkpoint_outbox::Outbox::load(
+                    &checkpoint_outbox_path,
+                )
+                .and_then(|mut outbox| {
+                    outbox.transition_durable(
+                        &checkpoint_outbox_path,
+                        &conversation_id,
+                        &turn_id,
+                        completed_sequence,
+                        openviking_checkpoint_outbox::State::Uncertain,
+                        openviking_checkpoint_outbox::State::Confirmed,
+                    )
+                });
+                match confirmed {
+                    Ok(true) => {
+                        let _ = notices.send(PersistNotice::OpenVikingMemoryWriteFinished {
+                            conversation_id,
+                            confirmed: true,
+                        });
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "OpenViking read-only state confirmation",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::RetrieveConfirmedOpenViking { conversation_id } => {
                 let outbox_path = checkpoint_outbox_path.clone();
                 let sender = notices.clone();
