@@ -8150,6 +8150,11 @@ impl eframe::App for ChatariumApp {
                     .on_hover_text("Arm this individual worker. Its saved lease can wake it when another chat is selected; other workers require their own opt-in.")
                     .changed()
                 {
+                    // Revocation must fail closed even if the workspace disk
+                    // write fails: a stop must immediately block dispatch.
+                    if !wake_this_chat {
+                        self.coordination_auto_wake_targets.remove(&self.local_conversation_id);
+                    }
                     let path = self.coordination_store_path();
                     let outcome = if wake_this_chat {
                         self.coordination_workspace.grant_wake_lease_durable(
@@ -8167,12 +8172,14 @@ impl eframe::App for ChatariumApp {
                         Ok(()) => {
                             if wake_this_chat {
                                 self.coordination_auto_wake_targets.insert(self.local_conversation_id);
-                            } else {
-                                self.coordination_auto_wake_targets.remove(&self.local_conversation_id);
                             }
                         }
                         Err(error) => {
-                            self.status = format!("coordination wake permission not saved: {error}");
+                            self.status = if wake_this_chat {
+                                format!("coordination wake permission not saved: {error}")
+                            } else {
+                                format!("worker auto-wake stopped locally; durable stop failed: {error}")
+                            };
                         }
                     }
                 }
@@ -8200,19 +8207,18 @@ impl eframe::App for ChatariumApp {
                 if !self.coordination_auto_wake_targets.is_empty()
                     && ui.small_button("Stop all worker auto-wakes").clicked()
                 {
+                    // Disarm every worker before touching disk. A failed
+                    // durable stop can never leave automatic inference enabled.
+                    let targets = std::mem::take(&mut self.coordination_auto_wake_targets);
                     let path = self.coordination_store_path();
-                    let targets = self.coordination_auto_wake_targets.iter().copied().collect::<Vec<_>>();
                     for target in targets {
-                        match self.coordination_workspace.stop_wake_lease_durable(
+                        if let Err(error) = self.coordination_workspace.stop_wake_lease_durable(
                             &path,
                             &target.to_string(),
                         ) {
-                            Ok(()) => {
-                                self.coordination_auto_wake_targets.remove(&target);
-                            }
-                            Err(error) => {
-                                self.status = format!("wake stop not saved for {target}: {error}");
-                            }
+                            self.status = format!(
+                                "worker auto-wakes stopped locally; durable stop failed for {target}: {error}"
+                            );
                         }
                     }
                 }
