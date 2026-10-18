@@ -1,8 +1,9 @@
 # OpenViking memory lifecycle for Chatarium
 
-Status: **in progress**. Fixed scoped MCP transport implemented; automatic
-checkpoint triggers, durable outbox, bounded context assembly, and live
-OpenViking verification still pending.
+Status: **in progress**. Fixed scoped MCP transport, model memory guidance,
+metadata-only automatic checkpoint triggers, and a durable pending-summary
+outbox are implemented. Summary generation, host-authorized OpenViking writes,
+bounded retrieval/context compaction, and live verification are still pending.
 The user must not have to remind an agent to save memories. Merely offering
 an MCP tool or adding an agent prompt is not completion of this feature.
 
@@ -54,6 +55,32 @@ Each trigger must record its outcome: queued, generating, ready, dispatched,
 confirmed, failed, or **uncertain**. Do not report a checkpoint saved solely
 because an instruction was generated or a transport call was queued. Never
 blindly retry an ambiguous external write.
+
+## Landed: automatic metadata-only checkpoint scheduling
+
+After a **normal, non-tool** assistant completion, Chatarium queues a
+`QueueMemoryCheckpoint` request on the same persistence channel as its
+terminal journal event. The worker checks that the corresponding completion
+is already durable and contains at least 160 non-whitespace characters,
+then atomically appends a metadata-only record to
+`openviking-checkpoint-outbox.json` under Chatarium's own data directory.
+
+The durable record contains only the owning conversation ID, turn ID,
+terminal journal sequence and `pending_summary` state. It contains no
+assistant/user message bodies, credentials or external MCP writes. A
+duplicate same-turn request does not generate another entry. If writing
+the outbox fails, the worker reports an error rather than claiming a saved
+checkpoint. The original journal remains intact; a crash after a
+successful enqueue preserves the request, but a crash between terminal
+journal append and outbox enqueue can still lose that enqueue. Reconciliation
+from journal on restart is not yet implemented.
+
+This is **automatic scheduling**, not yet automatic memory preservation in
+OpenViking. Pending summary requests are not themselves useful memories.
+The summarization and confirmed create-only MCP write stages must be
+implemented and verified before the integration is considered complete.
+There is a hard outbox entry limit, and the queue does not silently discard
+pending items when full.
 
 ## What to save
 
