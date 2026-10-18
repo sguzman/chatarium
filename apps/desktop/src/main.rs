@@ -17,6 +17,7 @@ mod integration_journey;
 mod local_archive_search;
 mod local_conversations;
 mod local_http_mcp;
+mod openviking_checkpoint_outbox;
 mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
@@ -317,6 +318,10 @@ enum PersistCommand {
     DispatchLocalHttpMcp {
         route_id: RouteId,
     },
+    QueueMemoryCheckpoint {
+        conversation_id: LocalConversationId,
+        turn_id: LocalTurnId,
+    },
     RecordLocalHttpMcpOutcome {
         call_id: ToolCallId,
         route_id: RouteId,
@@ -602,6 +607,10 @@ enum PersistNotice {
     },
     AgentActivityAppended {
         event: EventEnvelope,
+    },
+    MemoryCheckpointQueued {
+        conversation_id: LocalConversationId,
+        pending_count: usize,
     },
     HistoricalConversationLoaded {
         local_conversation_id: LocalConversationId,
@@ -3883,6 +3892,16 @@ impl ChatariumApp {
                 PersistNotice::AgentActivityAppended { event } => {
                     self.events.push(event);
                 }
+                PersistNotice::MemoryCheckpointQueued {
+                    conversation_id,
+                    pending_count,
+                } => {
+                    if conversation_id == self.local_conversation_id {
+                        self.status = format!(
+                            "memory checkpoint queued locally; {pending_count} awaiting summarization"
+                        );
+                    }
+                }
                 PersistNotice::TurnEventAppended {
                     turn_id,
                     kind,
@@ -5225,7 +5244,17 @@ impl ChatariumApp {
                             self.status = "Assistant produced an MCP proposal, but tool execution is not enabled for this conversation. No tool was dispatched.".to_owned();
                         }
                         Ok(None) => {
-                            // Ordinary final assistant message ends this chain.
+                            // The completion journal command precedes this
+                            // checkpoint intent on the same persistence queue.
+                            // No user reminder or model-authored MCP call needed.
+                            // Do not queue a checkpoint from intermediate tool
+                            // proposals or unknown remote outcomes.
+                            if let Some(sender) = &self.persist_tx {
+                                let _ = sender.send(PersistCommand::QueueMemoryCheckpoint {
+                                    conversation_id: active.conversation_id,
+                                    turn_id: active.turn_id,
+                                });
+                            }
                             self.agent_mcp_flow = None;
                         }
                         Err(error) => {
@@ -22185,6 +22214,55 @@ fn persistence_worker(
     );
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::QueueMemoryCheckpoint {
+                conversation_id,
+                turn_id,
+            } => {
+                let source = store.events().iter().rev().find(|event| {
+                    event.kind == EventKind::AssistantCompletionObserved
+                        && event.scope == Some(local_turn_scope(turn_id))
+                });
+                let result = (|| -> Result<Option<usize>, String> {
+                    let event = source.ok_or("checkpoint requested before durable model completion")?;
+                    let payload: Value = serde_json::from_str(&event.payload)
+                        .map_err(|e| format!("checkpoint terminal evidence invalid: {e}"))?;
+                    let text = payload["text"]
+                        .as_str()
+                        .ok_or("checkpoint completion has no assistant text")?;
+                    // Skip short conversational acknowledgements. The future
+                    // summary stage will filter non-durable longer outcomes.
+                    if text.trim().chars().count() < 160 {
+                        return Ok(None);
+                    }
+                    let path = data_dir.join(openviking_checkpoint_outbox::FILE_NAME);
+                    let mut outbox = openviking_checkpoint_outbox::Outbox::load(&path)?;
+                    outbox.enqueue_durable(
+                        &path,
+                        &conversation_id.to_string(),
+                        &turn_id.to_string(),
+                        event.sequence,
+                    )?;
+                    Ok(Some(outbox.pending_count()))
+                })();
+                match result {
+                    Ok(Some(pending_count)) => {
+                        let _ = notices.send(PersistNotice::MemoryCheckpointQueued {
+                            conversation_id,
+                            pending_count,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "automatic memory checkpoint outbox",
+                            revision: None,
+                            request_id: None,
+                            turn_id: Some(turn_id),
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::SaveMcpAgentDefaults { defaults } => {
                 if let Err(error) =
                     defaults.save_atomic(&data_dir.join(mcp_agent_defaults::FILE_NAME))
@@ -26827,6 +26905,7 @@ mod tests {
             PersistNotice::MessageCommitted { .. } => "message_committed",
             PersistNotice::TurnEventAppended { .. } => "turn_event_appended",
             PersistNotice::AgentActivityAppended { .. } => "agent_activity_appended",
+            PersistNotice::MemoryCheckpointQueued { .. } => "memory_checkpoint_queued",
             PersistNotice::HistoricalConversationLoaded { .. } => "historical_loaded",
             PersistNotice::HistoricalConversationLoadFailed { .. } => "historical_load_failed",
             PersistNotice::LiveConversationLoaded { .. } => "live_loaded",
