@@ -3752,6 +3752,13 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
+                PersistNotice::OpenVikingMemoryWriteFinished { confirmed } => {
+                    self.status = if confirmed {
+                        "OpenViking memory checkpoint saved and verified by read-back".to_owned()
+                    } else {
+                        "OpenViking checkpoint write uncertain; not automatically repeated".to_owned()
+                    };
+                }
                 PersistNotice::OpenVikingMemorySummarySaved {
                     conversation_id,
                     turn_id,
@@ -3766,8 +3773,15 @@ impl ChatariumApp {
                         self.status = if skipped {
                             "OpenViking checkpoint skipped: nothing durable to retain".to_owned()
                         } else {
-                            "OpenViking summary durable locally; external write still pending".to_owned()
+                            "OpenViking summary durable locally; scheduling verified external write".to_owned()
                         };
+                    }
+                    if !skipped
+                        && std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() != Ok("0")
+                    {
+                        if let Some(sender) = &self.persist_tx {
+                            let _ = sender.send(PersistCommand::DispatchOpenVikingReadyWrite);
+                        }
                     }
                 }
                 PersistNotice::DraftSaved {
@@ -4969,6 +4983,31 @@ impl ChatariumApp {
             "durable"
         } else {
             "saving…"
+        }
+    }
+
+    /// Flush ready summaries even without model sign-in. The persistence
+    /// worker alone claims each write. Uncertain writes are never replayed.
+    fn maybe_dispatch_ready_openviking_write(&mut self) {
+        if self.persist_tx.is_none()
+            || std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0")
+            || self.openviking_write_last_attempt.is_some_and(|when| {
+                when.elapsed() < Duration::from_secs(30)
+            })
+        {
+            return;
+        }
+        self.openviking_write_last_attempt = Some(Instant::now());
+        let path = self
+            .journal_path
+            .with_file_name(openviking_checkpoint_outbox::FILE_NAME);
+        let Ok(outbox) = openviking_checkpoint_outbox::Outbox::load(&path) else {
+            return;
+        };
+        if outbox.ready_entries().next().is_some() {
+            if let Some(sender) = &self.persist_tx {
+                let _ = sender.send(PersistCommand::DispatchOpenVikingReadyWrite);
+            }
         }
     }
 
@@ -8114,6 +8153,7 @@ impl eframe::App for ChatariumApp {
         self.process_remote_notices();
         self.process_due_delivery_retry();
         self.maybe_wake_open_coordination_worker();
+        self.maybe_dispatch_ready_openviking_write();
         self.maybe_generate_openviking_summary();
         // Visibility preferences are local-only and never mutate the durable
         // audit. Cache them in egui state to avoid disk reads each frame.
@@ -27250,6 +27290,7 @@ mod tests {
     fn persist_notice_name(notice: &PersistNotice) -> &'static str {
         match notice {
             PersistNotice::OpenVikingMemorySummarySaved { .. } => "openviking_summary_saved",
+            PersistNotice::OpenVikingMemoryWriteFinished { .. } => "openviking_write_finished",
             PersistNotice::DraftSaved { .. } => "draft_saved",
             PersistNotice::MessageCommitted { .. } => "message_committed",
             PersistNotice::TurnEventAppended { .. } => "turn_event_appended",
