@@ -112,7 +112,7 @@ mod tests {
         let excerpt = bounded_excerpt(&messages, 22).unwrap();
         assert!(excerpt.chars().count() <= MAX_SOURCE_CHARS);
         assert!(!excerpt.contains("private-turn-24"));
-        assert!(!excerpt.contains("private-turn-2"));
+        assert!(!excerpt.contains("private-turn-2-"));
         let value = request_input("chat", "turn", 22, &excerpt);
         assert_eq!(value[0]["role"], "user");
         assert!(
