@@ -16,7 +16,7 @@ const HOST_SHELL_DEFAULT_VERSION: u64 = 2;
 const COORDINATION_DEFAULT_VERSION: u64 = 2;
 // Opt-in request for this personal Chatarium workspace: fixed built-in HTTP
 // providers run by default. Stamp once; preserve later per-tool user choices.
-const LOCAL_HTTP_DEFAULT_VERSION: u64 = 2;
+const LOCAL_HTTP_DEFAULT_VERSION: u64 = 3;
 const MAX_PROMPT: usize = 32 * 1024;
 const PRIOR_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask";
 const READ_ONLY_DEFAULT_POLICY: &str = "chatarium.builtin::tools.list = automatic\nchatarium.builtin::hello = automatic\nchatarium.demo::shell.command = ask\nchatarium.builtin::time.now = automatic";
@@ -72,8 +72,8 @@ impl ToolPolicy {
         }
     }
 }
-/// Append explicit persisted automatic rules only for the two fixed,
-/// code-owned localhost providers. Existing exact user rules take priority.
+/// Append exact fixed-provider rules. OpenViking reads are automatic, but
+/// memory writes default to Ask. Existing exact user rules take priority.
 /// Never add a wildcard or authorize an unrecognized external stdio provider.
 fn append_missing_local_http_defaults(rules: &str) -> String {
     let mut updated = rules.to_owned();
@@ -87,7 +87,12 @@ fn append_missing_local_http_defaults(rules: &str) -> String {
             if !updated.is_empty() && !updated.ends_with('\n') {
                 updated.push('\n');
             }
-            updated.push_str(&format!("{target} = automatic"));
+            let mode = if provider == crate::local_http_mcp::OPENVIKING && operation == "write" {
+                "ask"
+            } else {
+                "automatic"
+            };
+            updated.push_str(&format!("{target} = {mode}"));
         }
     }
     updated
