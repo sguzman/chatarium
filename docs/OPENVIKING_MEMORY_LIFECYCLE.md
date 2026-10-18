@@ -338,3 +338,32 @@ A fresh conversation still has no sharing enabled by default.
 Live validation against the user's running OpenViking instance and complete
 cross-chat permission QA remain pending. Changes are not yet merged into
 the default branch.
+
+
+## Opt-in live-service diagnostic harness
+
+The local QA agent can run the production fixed-loopback MCP transport
+metadata-only probe with:
+
+    node tools/local-http-mcp/openviking-live-probe.mjs --read-only
+
+This establishes an MCP session and lists advertised tools through the pinned
+127.0.0.1:1933/mcp route. It does not read or write personal memory. The
+CHATARIUM_OPENVIKING_API_KEY environment variable is supported for servers
+requiring authentication. Never commit or print the key.
+
+A separate explicitly selected one-shot write test uses:
+
+    node tools/local-http-mcp/openviking-live-probe.mjs --create-synthetic-checkpoint
+
+This first confirms the tools/list contract, then creates ONE new, uniquely
+named checkpoint within a dedicated synthetic QA conversation namespace.
+It reads back the exact URI and verifies byte-for-byte content. This synthetic
+file is PERSISTENT; no delete, overwrite or retry of uncertain writes occurs.
+The probe never alters a real chat, journal or existing checkpoint. GitHub CI
+must never run write mode against the user's host. No automatic live writes.
+
+The probe tests the installed transport, not the complete automatic
+summarization, outbox, grants and Send-context pipeline. That broader live
+integration remains unverified, and should be tested by the local QA agent,
+not by demanding that the user manually operate a test harness.

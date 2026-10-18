@@ -59,6 +59,7 @@ jobs:
           node --check tools/local-http-mcp/client.mjs
           node --check tools/local-http-mcp/worker.mjs
           node --test tools/local-http-mcp/client.test.mjs
+          node --test tools/local-http-mcp/openviking-live-probe.test.mjs
       - name: Build pinned Sign in with ChatGPT DevKit
         run: |
           node tools/siwc-bridge/bootstrap.mjs
@@ -116,6 +117,7 @@ jobs:
           node --check tools/local-http-mcp/client.mjs
           node --check tools/local-http-mcp/worker.mjs
           node --test tools/local-http-mcp/client.test.mjs
+          node --test tools/local-http-mcp/openviking-live-probe.test.mjs
       - name: Install pnpm fallback harness
         run: npm install --global pnpm@10.18.3
       - name: Build pinned Sign in with ChatGPT DevKit without system npm
