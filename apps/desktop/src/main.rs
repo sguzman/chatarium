@@ -3811,9 +3811,7 @@ impl ChatariumApp {
                         if let Some(start) = wake_start {
                             let allowed = start["inbox_ids"]
                                 .as_array()
-                                .and_then(|ids| {
-                                    (ids.len() == 1).then(|| ids[0].as_u64()).flatten()
-                                })
+                                .and_then(|ids| (ids.len() == 1).then(|| ids[0].as_u64()).flatten())
                                 .is_some_and(|message_id| {
                                     self.coordination_auto_wake_target
                                         == Some(pending.conversation_id)
@@ -3826,7 +3824,8 @@ impl ChatariumApp {
                                             .is_ok()
                                 });
                             if !allowed {
-                                self.coordination_pending_admissions.remove(&pending.request_id);
+                                self.coordination_pending_admissions
+                                    .remove(&pending.request_id);
                                 self.delivery.error(
                                     &pending.request_id,
                                     delivery_telemetry::Phase::Failed,
@@ -3838,7 +3837,9 @@ impl ChatariumApp {
                                     &pending.request_id,
                                     Some(&pending.model),
                                     None,
-                                    Some("wake denied before bridge send; no network request issued"),
+                                    Some(
+                                        "wake denied before bridge send; no network request issued",
+                                    ),
                                 );
                                 let _ = self.queue_turn_event(
                                     turn_id,
