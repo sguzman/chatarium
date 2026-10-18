@@ -279,3 +279,14 @@ should be introduced as a hidden extension of the manual memory authority model.
 The active local-first product frontier now moves to the first MCP/tool
 integration substrate. Memory should evolve further only when a concrete
 dogfooding need justifies another explicit boundary.
+
+## Planned OpenViking integration
+
+The user has approved a separate, **host-enforced** automatic checkpoint
+lifecycle using their existing OpenViking service. It is specified in
+[OPENVIKING_MEMORY_LIFECYCLE.md](OPENVIKING_MEMORY_LIFECYCLE.md).
+A plain MCP connection and custom agent instructions are **not** sufficient:
+Chatarium must trigger checkpoints, persist their pending state and verify
+writes without expecting the user to prompt the agent to remember.
+This integration is not yet implemented; the manual memory invariants above
+remain in force until it passes the documented acceptance tests.
