@@ -21,6 +21,7 @@ mod local_inference_contract;
 mod local_inference_settings;
 mod local_stdio_host_diagnostics;
 mod openviking_checkpoint_outbox;
+mod openviking_memory_delivery;
 mod openviking_memory_summary;
 
 mod local_stdio_runner;
@@ -306,6 +307,13 @@ enum PersistCommand {
         turn_id: LocalTurnId,
         completed_sequence: u64,
         summary: String,
+    },
+    DispatchOpenVikingReadyWrite,
+    RecordOpenVikingWriteOutcome {
+        conversation_id: String,
+        turn_id: String,
+        completed_sequence: u64,
+        result: Result<(), String>,
     },
     ProposeAgentMcpCall {
         turn_id: LocalTurnId,
@@ -600,6 +608,9 @@ enum PersistNotice {
         conversation_id: LocalConversationId,
         turn_id: LocalTurnId,
         skipped: bool,
+    },
+    OpenVikingMemoryWriteFinished {
+        confirmed: bool,
     },
     DraftSaved {
         conversation_id: LocalConversationId,
@@ -1270,6 +1281,7 @@ struct ChatariumApp {
     agent_mcp_flow: Option<AgentMcpFlow>,
     openviking_summary_in_flight: Option<OpenVikingSummaryAttempt>,
     openviking_summary_last_attempt: Option<Instant>,
+    openviking_write_last_attempt: Option<Instant>,
     openviking_summary_blocked: HashSet<String>,
     commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
     delivery: delivery_telemetry::Timeline,
@@ -1612,6 +1624,7 @@ impl ChatariumApp {
                         agent_mcp_flow: None,
                         openviking_summary_in_flight: None,
                         openviking_summary_last_attempt: None,
+            openviking_write_last_attempt: None,
                         openviking_summary_blocked: HashSet::new(),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
@@ -1867,6 +1880,7 @@ impl ChatariumApp {
             agent_mcp_flow: None,
             openviking_summary_in_flight: None,
             openviking_summary_last_attempt: None,
+            openviking_write_last_attempt: None,
             openviking_summary_blocked: HashSet::new(),
             commit_remote_intents: BTreeMap::new(),
             delivery: delivery_telemetry::Timeline::default(),
