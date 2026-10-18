@@ -272,8 +272,10 @@ test("OpenViking invalid scopes, context-mode searches, and overwrites fail befo
   const failures = [
     ["find", { query: "anything" }],
     ["find", { query: "anything", target_uri: "viking://agent/skills" }],
+    ["find", { query: "anything", target_uri: "viking://~/chatarium/conversations/chat-other" }],
     ["search", { query: "anything", target_uri: "viking://~/chatarium", mode: "context" }],
     ["read", { uris: "viking://~/secrets/token" }],
+    ["read", { uris: "viking://~/chatarium/conversations/chat-other/private.md" }],
     ["read", { uris: "viking://~/chatarium", limit: -1 }],
     ["read", { uris: Array(4).fill("viking://~/chatarium") }],
     ["write", { uri: "viking://~/chatarium/conversations/chat-a/checkpoints/1.md",
@@ -288,7 +290,7 @@ test("OpenViking invalid scopes, context-mode searches, and overwrites fail befo
   ];
   const broker = client(), before = seen.filter(x => x.method === "tools/call").length;
   for (const [name, args] of failures) {
-    assert.throws(() => validateOpenVikingArguments(name, args), /OpenViking|scoped/);
+    assert.throws(() => validateOpenVikingArguments(name, args, "chat-guard"), /OpenViking|scoped/);
     await assert.rejects(broker.request({ conversation_id: "chat-guard",
       provider: "openviking", method: "call", name, arguments: args }), /OpenViking/);
   }
@@ -307,7 +309,7 @@ test("OpenViking API key is never sent to another provider", async () => {
        return fetch(url, init);
      } });
   await broker.request({ conversation_id: "c1", provider: "openviking",
-    method: "call", name: "read", arguments: { uris: "viking://~/chatarium/test.md", limit: 10 } });
+    method: "call", name: "read", arguments: { uris: "viking://~/chatarium/conversations/c1/test.md", limit: 10 } });
   await broker.request({ conversation_id: "c1", provider: "manifoldr", method: "list" });
   assert.equal(headers.filter(h => h.key).length, 2);
   assert.ok(headers.filter(h => h.key).every(h => h.key === "example-secret-not-real"));
