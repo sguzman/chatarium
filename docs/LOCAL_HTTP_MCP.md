@@ -1,4 +1,4 @@
-# Two fixed local Streamable HTTP MCP servers
+# Three fixed local Streamable HTTP MCP servers
 
 Chatarium supports these **user-run**, explicitly trusted loopback services. It
 does **not** start additional daemon copies or search the LAN for servers.
@@ -7,6 +7,7 @@ does **not** start additional daemon copies or search the LAN for servers.
 | --- | --- | --- | --- |
 | `chatarium.local.mathematica` | `http://127.0.0.1:8765/mcp` | `http://127.0.0.1:8765/healthz` | [sguzman/mathematica-mcp](https://github.com/sguzman/mathematica-mcp) |
 | `chatarium.local.manifoldr` | `http://127.0.0.1:8877/mcp` | `http://127.0.0.1:8877/healthz` | [sguzman/manifoldr](https://github.com/sguzman/manifoldr) |
+| `chatarium.local.openviking` | `http://127.0.0.1:1933/mcp` | `http://127.0.0.1:1933/health` | [volcengine/OpenViking v0.5.0](https://github.com/volcengine/OpenViking) |
 
 These ports and paths come from the **current server repositories** (Mathematica
 v1.0.0 and Manifoldr v0.4.0). A service bound **only to its LAN IP** will not
@@ -168,3 +169,39 @@ The tool transport is implemented by `tools/local-http-mcp/client.mjs`,
 checkout, the Node worker script is found relative to Chatarium's source
 directory. An independently packaged binary needs an explicit installation
 layout for that worker; installed-binary portability is not yet certified.
+
+## OpenViking integration: fixed, scoped transport
+
+Chatarium reuses the existing OpenViking service at
+`http://127.0.0.1:1933/mcp`; it never installs or starts another memory
+daemon. Supported tools: `find`, `search`, `read`, and `write`.
+This is the **first transport slice**, not yet automatic memory checkpointing.
+
+The transport permits only `viking://~/chatarium` paths. Semantic
+`find` and list-mode `search` require an explicit `target_uri` in that
+namespace and at most five results. `read` permits at most three scoped
+URIs and a maximum of 100 text lines per call. `write` permits only
+`mode: "create"` (fail if already exists), no ACL override, no append or
+replace, and a <=16 KiB Markdown checkpoint at
+`viking://~/chatarium/conversations/<conversation>/checkpoints/<id>.md`.
+Broad `remember`, `forget`, `edit`, resource import, skill and ACL
+operations remain blocked by the fixed allowlist.
+
+Scoped reads default to saved Automatic policy, while `write` defaults
+to Ask. A model cannot self-authorize durable checkpoint writes, and no
+agent tool proposal is yet an automatic host lifecycle trigger. See
+[OpenViking memory lifecycle](OPENVIKING_MEMORY_LIFECYCLE.md).
+
+The initial MCP protocol is `2025-03-26`, using the stateless FastMCP
+transport found in OpenViking **v0.5.0**. Authenticated installations
+can supply `CHATARIUM_OPENVIKING_API_KEY` as a **process environment
+variable**. That header goes only to the OpenViking endpoint. Do not
+commit keys or send them in prompts. Dev-mode installs may not need a
+key; localhost itself does not disable authentication. `/health`
+reports reachability, not an authenticated MCP tool round trip.
+
+The Chatarium agent's local memory permissions do not restrict other
+OpenViking clients sharing the same credentials. Enforce genuine
+cross-user boundaries using the service's own ACLs. The adapter is
+covered by mocked transport tests in CI; it has **not** yet been tested
+against the user's running service.
