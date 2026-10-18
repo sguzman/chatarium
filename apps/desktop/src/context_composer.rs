@@ -1785,7 +1785,7 @@ mod tests {
         let transcript = [
             TranscriptMessage::durable(TranscriptRole::User, "u".repeat(180), 1),
             TranscriptMessage::durable(TranscriptRole::Assistant, "assistant", 2),
-            TranscriptMessage::durable(TranscriptRole::User, "current", 3),
+            TranscriptMessage::durable(TranscriptRole::User, "current".repeat(120), 3),
         ];
         let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript);
         assert!(plan.within_utf8_budget(100).is_err());
