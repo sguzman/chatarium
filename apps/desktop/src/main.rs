@@ -3332,7 +3332,8 @@ impl ChatariumApp {
         Some(format!("Last auto-wake [{ids}]: {outcome}"))
     }
 
-    /// Session-only opt-in. Recovered wake records prevent duplicate execution.
+    /// Operator-armed only for this open chat. Each incoming directive must
+    /// receive a durable, at-most-once claim before a model turn is journaled.
     fn maybe_wake_open_coordination_worker(&mut self) {
         if self.coordination_auto_wake_target != Some(self.local_conversation_id)
             || self.selected_historical_conversation.is_some()
@@ -3354,26 +3355,22 @@ impl ChatariumApp {
         {
             return;
         }
-        let started = self
-            .events
-            .iter()
-            .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
-            .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
-            .filter(|json| json["conversation_id"].as_str() == Some(conversation.as_str()))
-            .filter_map(|json| json["inbox_ids"].as_array().cloned())
-            .flatten()
-            .filter_map(|value| value.as_u64())
-            .collect::<HashSet<_>>();
-        let inbox_ids = self
+        let path = self.coordination_store_path();
+        let claim = match self
             .coordination_workspace
-            .context_delivered_ids(&conversation)
-            .into_iter()
-            .filter(|id| !started.contains(id))
-            .take(8)
-            .collect::<Vec<_>>();
-        if inbox_ids.is_empty() {
-            return;
-        }
+            .claim_next_wake_durable(&path, &conversation)
+        {
+            Ok(Some(claim)) => claim,
+            Ok(None) => return,
+            Err(error) => {
+                self.status = format!("coordination wake claim not saved: {error}");
+                self.coordination_auto_wake_target = None;
+                return;
+            }
+        };
+        // The saved claim remains spent if journal delivery becomes uncertain.
+        // It is never silently replayed or reissued as a second remote request.
+        let inbox_ids = vec![claim.message_id];
         let turn_id = LocalTurnId::new();
         let payload = serde_json::json!({
             "schema": "chatarium-coordination-activation",
@@ -3394,6 +3391,7 @@ impl ChatariumApp {
             );
         } else {
             self.coordination_pending_wake = None;
+            self.coordination_auto_wake_target = None;
         }
     }
 
@@ -3402,10 +3400,29 @@ impl ChatariumApp {
         else {
             return;
         };
-        if pending_id != turn_id || conversation_id != self.local_conversation_id {
-            self.status = "coordination wake target changed; dispatch denied".to_owned();
+        if pending_id != turn_id
+            || conversation_id != self.local_conversation_id
+            || self.coordination_auto_wake_target != Some(conversation_id)
+        {
+            self.status = "coordination wake target changed or disarmed; dispatch denied".to_owned();
             return;
         }
+        let [message_id] = inbox_ids.as_slice() else {
+            self.status = "coordination wake requires exactly one claimed directive".to_owned();
+            return;
+        };
+        // Delivery permission and source identity must still be valid now,
+        // after the activation event was durably appended.
+        let exact = match self.coordination_workspace.wake_dispatch_envelope(
+            &conversation_id.to_string(),
+            *message_id,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = format!("coordination wake authority denied: {error}");
+                return;
+            }
+        };
         if self.pending_remote_turn.is_some()
             || self.active_remote_turn.is_some()
             || !self.remote_connected()
@@ -3447,13 +3464,17 @@ impl ChatariumApp {
             }
         }
         transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
-        transcript.push(
-            context_composer::TranscriptMessage::coordination_activation(
-                turn_id.to_string(),
-                start.sequence,
-                inbox_ids.clone(),
-            ),
+        let mut activation = context_composer::TranscriptMessage::coordination_activation(
+            turn_id.to_string(),
+            start.sequence,
+            inbox_ids.clone(),
         );
+        // User-level context, never a developer/system instruction. This
+        // includes the exact claimed directive even when the regular inbox
+        // preview has excluded it because later messages filled that window.
+        activation.text.push_str("\n\n");
+        activation.text.push_str(&exact.model_context());
+        transcript.push(activation);
         let mut developer = self.conversation_developer_context.clone();
         developer.push_str(
             &self
@@ -3514,6 +3535,44 @@ impl ChatariumApp {
             self.coordination_pending_admissions
                 .remove(&turn_id.to_string());
             self.pending_remote_turn = None;
+        }
+    }
+
+    /// Terminal evidence has already been appended to the main event journal
+    /// when this method runs. Only now may an active, saved wake claim be
+    /// cleared; an unknown transport outcome still consumes its allowance.
+    fn finish_durable_coordination_wake(&mut self, turn_id: LocalTurnId) {
+        let wake = self
+            .events
+            .iter()
+            .rev()
+            .filter(|event| event.kind == EventKind::CoordinationActivationStarted)
+            .filter_map(|event| serde_json::from_str::<Value>(&event.payload).ok())
+            .find(|value| value["turn_id"].as_str() == Some(turn_id.to_string().as_str()));
+        let Some(wake) = wake else {
+            return;
+        };
+        let (Some(conversation), Some(message_id)) = (
+            wake["conversation_id"].as_str(),
+            wake["inbox_ids"].as_array().and_then(|ids| {
+                (ids.len() == 1).then(|| ids[0].as_u64()).flatten()
+            }),
+        ) else {
+            return;
+        };
+        if !self.coordination_workspace.wake_leases.iter().any(|lease| {
+            lease.conversation == conversation && lease.active_message_id == Some(message_id)
+        }) {
+            return;
+        }
+        let path = self.coordination_store_path();
+        if let Err(error) = self.coordination_workspace.finish_wake_claim_durable(
+            &path,
+            conversation,
+            message_id,
+        ) {
+            self.status = format!("coordination wake terminal saved but claim not closed: {error}");
+            self.coordination_auto_wake_target = None;
         }
     }
 
@@ -3715,6 +3774,14 @@ impl ChatariumApp {
                     event,
                 } => {
                     self.events.push(event.clone());
+                    if matches!(
+                        kind,
+                        EventKind::AssistantCompletionObserved
+                            | EventKind::RemoteFailureObserved
+                            | EventKind::TransportInterrupted
+                    ) {
+                        self.finish_durable_coordination_wake(turn_id);
+                    }
                     if kind == EventKind::CoordinationActivationStarted {
                         self.dispatch_durable_coordination_wake(turn_id, &event);
                     }
@@ -7880,20 +7947,45 @@ impl eframe::App for ChatariumApp {
                 {
                     self.coordination_window_open = true;
                 }
+                let conversation = self.local_conversation_id.to_string();
+                let worker_exists = self.coordination_workspace.member_for(&conversation).is_some();
                 let mut wake_this_chat =
                     self.coordination_auto_wake_target == Some(self.local_conversation_id);
                 if ui
-                    .checkbox(
-                        &mut wake_this_chat,
-                        "Auto-wake this chat (max 8 this session)",
+                    .add_enabled(
+                        worker_exists,
+                        egui::Checkbox::new(
+                            &mut wake_this_chat,
+                            "Auto-wake this chat (max 8 this session)",
+                        ),
                     )
-                    .on_hover_text("Opt in for this chat only. No authored messages are created and switching chats never transfers the opt-in.")
+                    .on_hover_text("Opt in for this open worker chat only. A bounded wake lease is saved before any inference starts; switching chats does not grant another worker permission.")
                     .changed()
                 {
-                    self.coordination_auto_wake_target =
-                        wake_this_chat.then_some(self.local_conversation_id);
+                    let path = self.coordination_store_path();
+                    let outcome = if wake_this_chat {
+                        self.coordination_workspace.grant_wake_lease_durable(
+                            &path,
+                            &conversation,
+                            8,
+                        )
+                    } else {
+                        self.coordination_workspace.stop_wake_lease_durable(
+                            &path,
+                            &conversation,
+                        )
+                    };
+                    match outcome {
+                        Ok(()) => {
+                            self.coordination_auto_wake_target =
+                                wake_this_chat.then_some(self.local_conversation_id);
+                        }
+                        Err(error) => {
+                            self.status = format!("coordination wake permission not saved: {error}");
+                        }
+                    }
                 }
-                if wake_this_chat {
+                if self.coordination_auto_wake_target == Some(self.local_conversation_id) {
                     let budget = self.coordination_auto_wake_count;
                     let tool_mode = if !self.conversation_mcp_enabled {
                         "MCP is off; tool replies cannot run"
