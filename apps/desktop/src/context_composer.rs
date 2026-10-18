@@ -7,6 +7,10 @@
 use crate::local_inference_contract::LoadedContract;
 use serde_json::{Value, json};
 
+/// Conservative UTF-8 proxy ceiling, not a model-token limit. The raw journal
+/// is never pruned; only the input assembled for this inference is bounded.
+pub const DEFAULT_CONTEXT_MAX_UTF8_BYTES: usize = 128 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptRole {
     User,
@@ -214,6 +218,7 @@ pub enum InclusionDecision {
     Included,
     OmittedEmpty,
     ExcludedByPolicy,
+    ExcludedByBudget,
 }
 
 impl InclusionDecision {
@@ -223,6 +228,7 @@ impl InclusionDecision {
             Self::Included => "included",
             Self::OmittedEmpty => "omitted · empty",
             Self::ExcludedByPolicy => "excluded · policy",
+            Self::ExcludedByBudget => "excluded · context budget",
         }
     }
 }
@@ -721,6 +727,175 @@ impl ContextPlan {
         }
 
         plan
+    }
+
+    /// Compose one request under a strict byte ceiling. All durable history
+    /// remains in the journal; excluded content is reported in the inventory.
+    /// Any essential current message that does not fit fails closed, not cut.
+    pub fn compose_bounded(
+        policy: ContextPolicy,
+        instructions: &str,
+        developer_context: &str,
+        transcript: impl IntoIterator<Item = TranscriptMessage>,
+    ) -> Result<Self, String> {
+        Self::compose(policy, instructions, developer_context, transcript)
+            .within_utf8_budget(DEFAULT_CONTEXT_MAX_UTF8_BYTES)
+    }
+
+    /// Bound only the outgoing composed input, without changing its sources.
+    /// UTF-8 is an auditable conservative size proxy, not a tokenizer.
+    pub fn within_utf8_budget(mut self, max_bytes: usize) -> Result<Self, String> {
+        if max_bytes == 0 {
+            return Err("context budget must be positive".to_owned());
+        }
+        if self.size.utf8_bytes <= max_bytes {
+            return Ok(self);
+        }
+        // The included non-instruction inventory has the same order as
+        // messages. Preserve it to correlate omissions exactly, even if two
+        // events happened to have equal content.
+        let inventory_ids = self
+            .inventory
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.decision == InclusionDecision::Included
+                    && item.source != ContextSource::TopLevelInstructions
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if inventory_ids.len() != self.messages.len() {
+            return Err("context message-to-inventory correspondence failed".to_owned());
+        }
+
+        let mut chosen = vec![false; self.messages.len()];
+        let mut used = self.instructions.as_ref().map_or(0, String::len);
+        // Developer context, one-shot choices, and active coordination
+        // instructions must not vanish silently during a long conversation.
+        for (index, message) in self.messages.iter().enumerate() {
+            let mandatory = matches!(
+                message.source,
+                ContextSource::ConversationDeveloperContext
+                    | ContextSource::LocalMemoryOneShot { .. }
+                    | ContextSource::ControllerContinuation { .. }
+                    | ContextSource::ControllerCoordination { .. }
+                    | ContextSource::CoordinationActivation { .. }
+                    | ContextSource::CurrentDraft
+            );
+            if mandatory {
+                chosen[index] = true;
+                used = used.saturating_add(message.content.len());
+            }
+        }
+        // Preserve the latest authored user message and its immediate durable
+        // predecessor. A request must never become a reply to the wrong turn.
+        let recent_durable = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, message)| {
+                matches!(message.source, ContextSource::DurableTranscript { .. })
+            })
+            .map(|(index, _)| index)
+            .take(2)
+            .collect::<Vec<_>>();
+        for index in recent_durable {
+            if !chosen[index] {
+                chosen[index] = true;
+                used = used.saturating_add(self.messages[index].content.len());
+            }
+        }
+        if used > max_bytes {
+            return Err(format!(
+                "current turn, explicit context, or instructions exceed {max_bytes}-byte context budget; refusing silent truncation"
+            ));
+        }
+
+        // Prefer a contiguous recent conversation window (up to 16 messages),
+        // then verified history checkpoints, then other evidence and older
+        // turns. Items remain whole; no UTF-8 slicing or partial provenance.
+        let recent = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, message)| {
+                matches!(message.source, ContextSource::DurableTranscript { .. })
+            })
+            .map(|(index, _)| index)
+            .take(16)
+            .collect::<Vec<_>>();
+        let checkpoints = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, message)| {
+                matches!(message.source, ContextSource::OpenVikingCheckpoint { .. })
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let other = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, message)| {
+                !matches!(
+                    message.source,
+                    ContextSource::DurableTranscript { .. }
+                        | ContextSource::OpenVikingCheckpoint { .. }
+                )
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let older = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, message)| {
+                matches!(message.source, ContextSource::DurableTranscript { .. })
+            })
+            .map(|(index, _)| index)
+            .skip(16)
+            .collect::<Vec<_>>();
+        for index in recent.into_iter().chain(checkpoints).chain(other).chain(older) {
+            if chosen[index] {
+                continue;
+            }
+            let size = self.messages[index].content.len();
+            if size <= max_bytes - used {
+                chosen[index] = true;
+                used += size;
+            }
+        }
+
+        for (index, inventory_id) in inventory_ids.iter().copied().enumerate() {
+            if !chosen[index] {
+                self.inventory[inventory_id].decision = InclusionDecision::ExcludedByBudget;
+            }
+        }
+        self.messages = self
+            .messages
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, message)| chosen[index].then_some(message))
+            .collect();
+        self.size = ContextSizeLedger::default();
+        for item in &self.inventory {
+            if item.decision == InclusionDecision::Included {
+                self.size.included_items += 1;
+                self.size.utf8_bytes += item.utf8_bytes;
+                self.size.unicode_scalars += item.unicode_scalars;
+                self.size.lines += item.lines;
+            } else {
+                self.size.omitted_items += 1;
+            }
+        }
+        debug_assert_eq!(self.size.utf8_bytes, used);
+        Ok(self)
     }
 
     fn add_optional_scalar(
@@ -1548,6 +1723,89 @@ mod tests {
             .find(|item| matches!(item.source, ContextSource::ControllerWorkerResult { .. }))
             .unwrap();
         assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
+    }
+
+    #[test]
+    fn budget_preserves_recent_turn_checkpoint_and_complete_source_ledger() {
+        let mut transcript = (1..=30)
+            .map(|sequence| {
+                TranscriptMessage::durable(
+                    if sequence % 2 == 0 {
+                        TranscriptRole::Assistant
+                    } else {
+                        TranscriptRole::User
+                    },
+                    format!("event {sequence}: {}", "a".repeat(80)),
+                    sequence,
+                )
+            })
+            .collect::<Vec<_>>();
+        transcript.push(TranscriptMessage {
+            role: TranscriptRole::User,
+            text: "verified historical checkpoint".to_owned(),
+            source: ContextSource::OpenVikingCheckpoint {
+                source_conversation_id: "owner".to_owned(),
+                source_turn_id: "turn-3".to_owned(),
+                source_journal_sequence: 3,
+                uri: "viking://~/chatarium/conversations/owner/checkpoints/turn-3.md"
+                    .to_owned(),
+            },
+        });
+        let all = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript);
+        let bounded = all.clone().within_utf8_budget(1700).unwrap();
+        assert!(bounded.size.utf8_bytes <= 1700);
+        assert!(bounded.size.utf8_bytes < all.size.utf8_bytes);
+        assert!(bounded.size.omitted_items > 0);
+        assert!(bounded.messages.iter().any(|m| m.content.contains("event 30:")));
+        assert_eq!(bounded.openviking_checkpoint_count(), 1);
+        assert!(bounded.inventory.iter().any(|item| {
+            item.decision == InclusionDecision::ExcludedByBudget
+                && matches!(item.source, ContextSource::DurableTranscript { .. })
+        }));
+        let included = bounded
+            .inventory
+            .iter()
+            .filter(|item| item.decision == InclusionDecision::Included)
+            .map(|item| item.utf8_bytes)
+            .sum::<usize>();
+        assert_eq!(bounded.size.utf8_bytes, included);
+    }
+
+    #[test]
+    fn budget_does_not_silently_drop_latest_user_or_one_shot() {
+        let transcript = [
+            TranscriptMessage::durable(TranscriptRole::User, "u".repeat(180), 1),
+            TranscriptMessage::durable(TranscriptRole::Assistant, "assistant", 2),
+            TranscriptMessage::durable(TranscriptRole::User, "current", 3),
+        ];
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript);
+        assert!(plan.within_utf8_budget(100).is_err());
+
+        let plan = ContextPlan::compose(
+            ContextPolicy::dispatch(),
+            "",
+            "",
+            [TranscriptMessage::local_memory_one_shot(
+                &"x".repeat(160),
+                1,
+                "owner",
+                3,
+                4,
+                Some(5),
+            )],
+        );
+        assert!(plan.within_utf8_budget(100).is_err());
+    }
+
+    #[test]
+    fn budget_is_identity_when_everything_fits_and_omits_without_mutating_text() {
+        let plan = ContextPlan::compose(
+            ContextPolicy::dispatch(),
+            "top",
+            "developer",
+            [TranscriptMessage::durable(TranscriptRole::User, "hello", 2)],
+        );
+        assert_eq!(plan.clone().within_utf8_budget(100).unwrap(), plan);
     }
 
     #[test]
