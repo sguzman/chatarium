@@ -878,7 +878,6 @@ mod project_scope_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-
     /// Exercises durable checkpoint creation, exact URI retrieval, explicit
     /// cross-chat permission, model context admission, revocation and restart
     /// with a fake OpenViking read backend. Never contacts a real service.
@@ -893,7 +892,8 @@ mod project_scope_tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "chatarium-project-roundtrip-{}-{nonce}", std::process::id()
+            "chatarium-project-roundtrip-{}-{nonce}",
+            std::process::id()
         ));
         let shared = root.join("shared");
         let foreign = root.join("foreign");
@@ -906,7 +906,9 @@ mod project_scope_tests {
             (unrelated, &foreign),
         ] {
             catalog.create(id, 1);
-            catalog.set_project_directory(id, Some(dir.display().to_string()), 2).unwrap();
+            catalog
+                .set_project_directory(id, Some(dir.display().to_string()), 2)
+                .unwrap();
         }
         let outbox_path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
         let grant_path = root.join(PROJECT_MEMORY_GRANTS_FILE_NAME);
@@ -921,19 +923,39 @@ mod project_scope_tests {
             (unrelated, "foreign-secret", 99, true),
         ] {
             let identity = owner.to_string();
-            outbox.enqueue_durable(&outbox_path, &identity, turn, sequence).unwrap();
-            outbox.save_summary_durable(
-                &outbox_path, &identity, turn, sequence, "Durable project fact: Rust client",
-            ).unwrap();
+            outbox
+                .enqueue_durable(&outbox_path, &identity, turn, sequence)
+                .unwrap();
+            outbox
+                .save_summary_durable(
+                    &outbox_path,
+                    &identity,
+                    turn,
+                    sequence,
+                    "Durable project fact: Rust client",
+                )
+                .unwrap();
             if confirmed {
-                outbox.transition_durable(
-                    &outbox_path, &identity, turn, sequence,
-                    State::Ready, State::Dispatched,
-                ).unwrap();
-                outbox.transition_durable(
-                    &outbox_path, &identity, turn, sequence,
-                    State::Dispatched, State::Confirmed,
-                ).unwrap();
+                outbox
+                    .transition_durable(
+                        &outbox_path,
+                        &identity,
+                        turn,
+                        sequence,
+                        State::Ready,
+                        State::Dispatched,
+                    )
+                    .unwrap();
+                outbox
+                    .transition_durable(
+                        &outbox_path,
+                        &identity,
+                        turn,
+                        sequence,
+                        State::Dispatched,
+                        State::Confirmed,
+                    )
+                    .unwrap();
                 let path = Outbox::summary_path(&outbox_path, &identity, turn).unwrap();
                 let uri = checkpoint_uri(&identity, turn).unwrap();
                 fake_server.insert(uri, std::fs::read_to_string(path).unwrap());
@@ -942,12 +964,16 @@ mod project_scope_tests {
         let mut grants = ProjectMemoryGrants::default();
         let mut attempted = Vec::new();
         let before_grant = retrieve_confirmed_for_project_with_read(
-            &outbox_path, &catalog, &grants, destination,
+            &outbox_path,
+            &catalog,
+            &grants,
+            destination,
             |uri, _, _| {
                 attempted.push(uri.to_owned());
                 Err("a read must never occur without a grant".to_owned())
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(before_grant.is_empty());
         assert!(attempted.is_empty());
 
@@ -956,45 +982,76 @@ mod project_scope_tests {
         let mut grants = ProjectMemoryGrants::load(&grant_path).unwrap();
         let mut observed = Vec::new();
         let retrieved = retrieve_confirmed_for_project_with_read(
-            &outbox_path, &catalog, &grants, destination,
+            &outbox_path,
+            &catalog,
+            &grants,
+            destination,
             |uri, owner, turn| {
                 observed.push((uri.to_owned(), owner.to_owned(), turn.to_owned()));
                 let remote = fake_server.get(uri).expect("fake OpenViking immutable URI");
                 Ok(json!({"content": [{"type": "text", "text": remote}]}))
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(retrieved.len(), 1);
         assert_eq!(retrieved[0].source_conversation_id, source.to_string());
         assert_eq!(retrieved[0].source_turn_id, "latest");
         assert_eq!(retrieved[0].source_journal_sequence, 12);
-        assert_eq!(observed, vec![(
-            checkpoint_uri(&source.to_string(), "latest").unwrap(),
-            source.to_string(),
-            "latest".to_owned(),
-        )]);
+        assert_eq!(
+            observed,
+            vec![(
+                checkpoint_uri(&source.to_string(), "latest").unwrap(),
+                source.to_string(),
+                "latest".to_owned(),
+            )]
+        );
         assert!(!retrieved[0].text.contains("foreign-secret"));
-        let admitted = crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-            &retrieved[0], destination, &catalog, &grants,
-        ).unwrap();
+        let admitted =
+            crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                &retrieved[0],
+                destination,
+                &catalog,
+                &grants,
+            )
+            .unwrap();
         assert!(admitted.text.contains("Durable project fact: Rust client"));
         assert!(admitted.text.contains("explicitly granted project-shared"));
-        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-            &retrieved[0], unrelated, &catalog, &grants,
-        ).is_err());
+        assert!(
+            crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                &retrieved[0],
+                unrelated,
+                &catalog,
+                &grants,
+            )
+            .is_err()
+        );
 
         // A successful read may remain cached after explicit revocation.
         // Context assembly must re-check authorization rather than trust it.
         assert!(grants.revoke(source, destination));
         grants.save_atomic(&grant_path).unwrap();
         let revoked = ProjectMemoryGrants::load(&grant_path).unwrap();
-        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-            &retrieved[0], destination, &catalog, &revoked,
-        ).is_err());
+        assert!(
+            crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                &retrieved[0],
+                destination,
+                &catalog,
+                &revoked,
+            )
+            .is_err()
+        );
         let mut calls = 0;
         let after_revocation = retrieve_confirmed_for_project_with_read(
-            &outbox_path, &catalog, &revoked, destination,
-            |_, _, _| { calls += 1; Err("revoked read".to_owned()) },
-        ).unwrap();
+            &outbox_path,
+            &catalog,
+            &revoked,
+            destination,
+            |_, _, _| {
+                calls += 1;
+                Err("revoked read".to_owned())
+            },
+        )
+        .unwrap();
         assert!(after_revocation.is_empty());
         assert_eq!(calls, 0);
         std::fs::remove_dir_all(root).unwrap();
@@ -1009,33 +1066,64 @@ mod project_scope_tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "chatarium-project-drift-{}-{nonce}", std::process::id()
+            "chatarium-project-drift-{}-{nonce}",
+            std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
         let mut catalog = LocalConversationCatalog::default();
         for id in [source, destination] {
             catalog.create(id, 1);
-            catalog.set_project_directory(id, Some(root.display().to_string()), 2).unwrap();
+            catalog
+                .set_project_directory(id, Some(root.display().to_string()), 2)
+                .unwrap();
         }
         let outbox_path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&outbox_path, 0).unwrap();
         let owner = source.to_string();
-        outbox.enqueue_durable(&outbox_path, &owner, "first", 1).unwrap();
-        outbox.save_summary_durable(&outbox_path, &owner, "first", 1, "Correct memory").unwrap();
-        outbox.transition_durable(&outbox_path, &owner, "first", 1, State::Ready, State::Dispatched).unwrap();
-        outbox.transition_durable(&outbox_path, &owner, "first", 1, State::Dispatched, State::Confirmed).unwrap();
+        outbox
+            .enqueue_durable(&outbox_path, &owner, "first", 1)
+            .unwrap();
+        outbox
+            .save_summary_durable(&outbox_path, &owner, "first", 1, "Correct memory")
+            .unwrap();
+        outbox
+            .transition_durable(
+                &outbox_path,
+                &owner,
+                "first",
+                1,
+                State::Ready,
+                State::Dispatched,
+            )
+            .unwrap();
+        outbox
+            .transition_durable(
+                &outbox_path,
+                &owner,
+                "first",
+                1,
+                State::Dispatched,
+                State::Confirmed,
+            )
+            .unwrap();
         let mut grants = ProjectMemoryGrants::default();
         grants.grant(&catalog, source, destination).unwrap();
 
         let drift = retrieve_confirmed_for_project_with_read(
-            &outbox_path, &catalog, &grants, destination,
+            &outbox_path,
+            &catalog,
+            &grants,
+            destination,
             |_, _, _| Ok(json!({"content": [{"type": "text", "text": "Tampered"}]})),
         );
         assert!(drift.unwrap_err().contains("differs from local evidence"));
 
         let offline = retrieve_confirmed_for_project_with_read(
-            &outbox_path, &catalog, &grants, destination,
+            &outbox_path,
+            &catalog,
+            &grants,
+            destination,
             |_, _, _| Err("service is offline".to_owned()),
         );
         assert!(offline.unwrap_err().contains("offline"));
