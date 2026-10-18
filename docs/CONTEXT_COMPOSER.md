@@ -372,13 +372,39 @@ enable any capability.
 The first consumer is [BEHAVIOR_PROFILE.md](BEHAVIOR_PROFILE.md), which uses
 the admitted reasoning, verbosity, and web-search slots.
 
+## Bounded outgoing context window
+
+The composer now exposes `compose_bounded` with a **128 KiB UTF-8 input ceiling**.
+Every production dispatch class and the exact-next-request inspector uses this
+same bounded plan. This is an auditable byte bound, **not** a tokenizer estimate
+or model-specific context size guarantee.
+
+The journal is never trimmed. The context inventory retains exact source IDs,
+byte sizes, and `excluded · context budget` decisions for each omitted item.
+The outgoing manifest tracks tool evidence excluded for this reason distinctly
+from missing or policy-excluded evidence. No source is partially truncated.
+
+The latest two durable transcript events, explicit one-shot memory, current
+draft and non-authored control/coordination activations are mandatory. If
+those plus instructions/developer context cannot fit, dispatch fails visibly
+rather than deleting an essential instruction or current user request. Other
+sources are packed by priority: recent 16 authored/assistant turns, verified
+OpenViking historical checkpoints, other evidence, and older transcript turns.
+The original local journal remains authoritative. OpenViking checkpoints are
+lower-trust navigation/history, not system instructions.
+
+**Limitations:** bounded windows are not semantic summarization; no reliable
+model-specific token estimator is available yet. Automatic checkpoint creation
+provides partial carry-forward of durable decisions but does not guarantee
+complete preservation of arbitrary omitted dialogue.
+
 ## Explicitly not implemented yet
 
 Context Composer does **not** silently introduce:
 
-- token-budget trimming;
-- automatic summarization;
-- retrieval;
+- model-token-based dynamic budgeting;
+- automatic lifecycle/rollover summarization of the complete omitted window;
+- cross-conversation memory search beyond the explicit admissions;
 - automatic memory extraction or semantic retrieval beyond explicitly recorded
   artifacts and explicit persistent/one-shot selection;
 - automatic cross-conversation context outside explicit routed delivery,
@@ -407,8 +433,8 @@ Future composer work should be driven by concrete downstream needs, especially:
 - controller/worker-provided context with explicit provenance;
 - attachment sources;
 - structured-output requirements;
-- real context-budget policy once a trustworthy model-token accounting contract
-  exists.
+- trustworthy model-token accounting and tuning per model, above the present
+  conservative UTF-8 byte ceiling.
 
 Do not add hidden automatic context mutation merely because a higher layer needs
 more information.
