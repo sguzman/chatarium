@@ -83,9 +83,11 @@ impl Outbox {
         if bytes.len() > MAX_FILE_BYTES {
             return Err("checkpoint outbox exceeds file limit".to_owned());
         }
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
-        let root = value.as_object().ok_or("checkpoint outbox root is not an object")?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
+        let root = value
+            .as_object()
+            .ok_or("checkpoint outbox root is not an object")?;
         if root.len() != 3
             || root.get("schema").and_then(Value::as_str) != Some(SCHEMA)
             || root.get("version").and_then(Value::as_u64) != Some(1)
@@ -101,7 +103,9 @@ impl Outbox {
         }
         let mut entries = Vec::with_capacity(items.len());
         for item in items {
-            let obj = item.as_object().ok_or("checkpoint entry is not an object")?;
+            let obj = item
+                .as_object()
+                .ok_or("checkpoint entry is not an object")?;
             if obj.len() != 4 {
                 return Err("checkpoint entry contains unexpected fields".to_owned());
             }
