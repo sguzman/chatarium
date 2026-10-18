@@ -687,14 +687,33 @@ pub fn retrieve_confirmed_for_project(
         permissions,
         destination,
         |uri, owner, turn| {
-            local_http_mcp::invoke(
-                &destination.to_string(),
-                &format!("memory-project-read:{owner}:{turn}"),
-                local_http_mcp::OPENVIKING,
-                "read",
-                &json!({"uris": uri, "limit": 100}),
-            )
+            // The fixed MCP adapter enforces its caller's exact conversation
+            // namespace. The grant was verified before this callback; read
+            // with the source owner, NEVER the destination transport identity.
+            read_project_checkpoint_as_source(owner, turn, uri, local_http_mcp::invoke)
         },
+    )
+}
+
+/// Validate the exact selected source URI and authenticate the fixed,
+/// read-only MCP operation as that owner. A destination-scoped transport call
+/// is correctly denied by the bridge and would make granted sharing unusable.
+/// This function may ONLY be called after the host verifies a directed grant.
+fn read_project_checkpoint_as_source(
+    source: &str,
+    turn: &str,
+    uri: &str,
+    mut invoke: impl FnMut(&str, &str, &str, &str, &Value) -> Result<Value, String>,
+) -> Result<Value, String> {
+    if checkpoint_uri(source, turn)? != uri {
+        return Err("project checkpoint URI does not belong to its verified source".to_owned());
+    }
+    invoke(
+        source,
+        &format!("memory-project-read:{source}:{turn}"),
+        local_http_mcp::OPENVIKING,
+        "read",
+        &json!({"uris": uri, "limit": 100}),
     )
 }
 
@@ -876,6 +895,47 @@ mod project_scope_tests {
         assert_eq!(chosen.len(), 1);
         assert_eq!(chosen[0].turn_id, "new");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_scoped_transport_read_cannot_impersonate_destination() {
+        let source = chatarium_core::LocalConversationId::new().to_string();
+        let destination = chatarium_core::LocalConversationId::new().to_string();
+        let turn = "verified-turn";
+        let uri = checkpoint_uri(&source, turn).unwrap();
+        let mut recorded = Vec::new();
+        let value = read_project_checkpoint_as_source(
+            &source,
+            turn,
+            &uri,
+            |identity, call_key, provider, operation, args| {
+                recorded.push((
+                    identity.to_owned(),
+                    call_key.to_owned(),
+                    provider.to_owned(),
+                    operation.to_owned(),
+                    args.clone(),
+                ));
+                Ok(json!({"content": [{"type":"text", "text":"exact"}]}))
+            },
+        )
+        .unwrap();
+        assert!(readback_matches(&value, "exact"));
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, source);
+        assert_ne!(recorded[0].0, destination);
+        assert_eq!(recorded[0].1, format!("memory-project-read:{source}:{turn}"));
+        assert_eq!(recorded[0].2, local_http_mcp::OPENVIKING);
+        assert_eq!(recorded[0].3, "read");
+        assert_eq!(recorded[0].4, json!({"uris":uri,"limit":100}));
+
+        // Forged owner/URI pairs must be rejected before any transport call.
+        let mut invoked = false;
+        assert!(read_project_checkpoint_as_source(
+            &destination, turn, &uri,
+            |_, _, _, _, _| { invoked = true; Ok(Value::Null) },
+        ).is_err());
+        assert!(!invoked);
     }
 
     /// Exercises durable checkpoint creation, exact URI retrieval, explicit
