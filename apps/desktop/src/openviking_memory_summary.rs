@@ -189,6 +189,16 @@ pub fn validate_summary(output: &str) -> Result<String, String> {
     Ok(result.to_owned())
 }
 
+/// Preserve a confirmed rolling memory chain if a model fails to produce
+/// an updated summary. An unexpected NO_MEMORY may not erase prior state.
+pub fn validate_rolling_summary(output: &str, has_confirmed_prior: bool) -> Result<String, String> {
+    let summary = validate_summary(output)?;
+    if has_confirmed_prior && summary == "NO_MEMORY" {
+        return Err("rolling checkpoint cannot silently discard confirmed prior history".to_owned());
+    }
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +299,19 @@ mod tests {
         std::fs::write(&stored_path, "forged memory document").unwrap();
         assert!(newest_confirmed_prior(&outbox, &path, "owner", 10).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rolling_summary_cannot_discard_existing_confirmed_history() {
+        assert!(validate_rolling_summary("NO_MEMORY", true).is_err());
+        assert_eq!(
+            validate_rolling_summary("NO_MEMORY", false).unwrap(),
+            "NO_MEMORY"
+        );
+        assert_eq!(
+            validate_rolling_summary("Decision remains active", true).unwrap(),
+            "Decision remains active"
+        );
     }
 
     #[test]
