@@ -37,10 +37,7 @@ fn render_with_button(
     let peers = catalog
         .entries()
         .into_iter()
-        .filter(|peer| {
-            peer.id != destination
-                && peer.project_directory.as_deref() == Some(project)
-        })
+        .filter(|peer| peer.id != destination && peer.project_directory.as_deref() == Some(project))
         .collect::<Vec<_>>();
     if peers.is_empty() {
         ui.label("No other chat is bound to this project folder.");
@@ -99,7 +96,8 @@ mod tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "chatarium-project-ui-{prefix}-{}-{nonce}", std::process::id()
+            "chatarium-project-ui-{prefix}-{}-{nonce}",
+            std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
@@ -127,7 +125,9 @@ mod tests {
             (unrelated, "Foreign chat", &foreign, 30),
         ] {
             catalog.create(id, time);
-            catalog.rename(id, Some(title.to_owned()), time + 1).unwrap();
+            catalog
+                .rename(id, Some(title.to_owned()), time + 1)
+                .unwrap();
             catalog
                 .set_project_directory(id, Some(folder.display().to_string()), time + 2)
                 .unwrap();
@@ -155,18 +155,19 @@ mod tests {
         let bounds = Cell::new(None);
         let _ = context.run(input(Vec::new()), |context| {
             egui::CentralPanel::default().show(context, |ui| {
-                let _ = render_with_button(
-                    ui, catalog, grants, destination, |ui, text| {
-                        let response = ui.button(text);
-                        if text == label {
-                            bounds.set(Some(response.rect));
-                        }
-                        response.clicked()
-                    },
-                );
+                let _ = render_with_button(ui, catalog, grants, destination, |ui, text| {
+                    let response = ui.button(text);
+                    if text == label {
+                        bounds.set(Some(response.rect));
+                    }
+                    response.clicked()
+                });
             });
         });
-        let pos = bounds.get().expect("target button must be rendered").center();
+        let pos = bounds
+            .get()
+            .expect("target button must be rendered")
+            .center();
         let event = |pressed| {
             vec![
                 Event::PointerMoved(pos),
@@ -202,8 +203,13 @@ mod tests {
         let mut grants = ProjectMemoryGrants::default();
         assert!(!grants.allows(&catalog, source, destination));
         let (selected, allowed) = click_button(
-            &context, &catalog, &grants, destination, "Allow memory from chat",
-        ).expect("real egui allow button must click");
+            &context,
+            &catalog,
+            &grants,
+            destination,
+            "Allow memory from chat",
+        )
+        .expect("real egui allow button must click");
         assert_eq!((selected, allowed), (source, true));
         change_permission_durable(&path, &catalog, &mut grants, selected, destination, allowed)
             .unwrap();
@@ -213,8 +219,13 @@ mod tests {
         assert!(!grants.allows(&catalog, unrelated, destination));
 
         let (selected, allowed) = click_button(
-            &context, &catalog, &grants, destination, "Revoke memory access",
-        ).expect("real egui revoke button must click");
+            &context,
+            &catalog,
+            &grants,
+            destination,
+            "Revoke memory access",
+        )
+        .expect("real egui revoke button must click");
         assert_eq!((selected, allowed), (source, false));
         change_permission_durable(&path, &catalog, &mut grants, selected, destination, allowed)
             .unwrap();
@@ -229,20 +240,19 @@ mod tests {
         let (catalog, source, destination, unrelated) = fixture(&root);
         let mut grants = ProjectMemoryGrants::default();
         let path = root.join("project-grants.json");
-        assert!(change_permission_durable(
-            &path, &catalog, &mut grants, unrelated, destination, true,
-        ).is_err());
+        assert!(
+            change_permission_durable(&path, &catalog, &mut grants, unrelated, destination, true,)
+                .is_err()
+        );
         assert!(!path.exists());
         let mut candidates = Vec::new();
         let context = egui::Context::default();
         let _ = context.run(input(Vec::new()), |context| {
             egui::CentralPanel::default().show(context, |ui| {
-                let _ = render_with_button(
-                    ui, &catalog, &grants, destination, |ui, label| {
-                        candidates.push(label.to_owned());
-                        ui.button(label).clicked()
-                    },
-                );
+                let _ = render_with_button(ui, &catalog, &grants, destination, |ui, label| {
+                    candidates.push(label.to_owned());
+                    ui.button(label).clicked()
+                });
             });
         });
         assert_eq!(candidates, vec!["Allow memory from chat"]);
@@ -259,9 +269,10 @@ mod tests {
         let blocker = root.join("blocker");
         std::fs::write(&blocker, "not a directory").unwrap();
         let path = blocker.join("grant.json");
-        assert!(change_permission_durable(
-            &path, &catalog, &mut grants, source, destination, true,
-        ).is_err());
+        assert!(
+            change_permission_durable(&path, &catalog, &mut grants, source, destination, true,)
+                .is_err()
+        );
         assert!(!grants.allows(&catalog, source, destination));
         std::fs::remove_dir_all(root).unwrap();
     }
