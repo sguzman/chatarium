@@ -22554,8 +22554,160 @@ fn persistence_worker(
             error,
         });
     }
+    let mut openviking_write_active = false;
+    if let Ok(mut outbox) = openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path) {
+        if let Err(error) = outbox.recover_interrupted_dispatches_durable(&checkpoint_outbox_path) {
+            let _ = notices.send(PersistNotice::Failed {
+                operation: "OpenViking interrupted write recovery",
+                revision: None,
+                request_id: None,
+                turn_id: None,
+                error,
+            });
+        }
+    }
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::DispatchOpenVikingReadyWrite => {
+                if openviking_write_active {
+                    continue;
+                }
+                let claim = (|| -> Result<Option<(String, String, u64, String)>, String> {
+                    let mut outbox =
+                        openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)?;
+                    let Some(entry) = outbox.ready_entries().next().cloned() else {
+                        return Ok(None);
+                    };
+                    let summary_path = openviking_checkpoint_outbox::Outbox::summary_path(
+                        &checkpoint_outbox_path,
+                        &entry.conversation_id,
+                        &entry.turn_id,
+                    )?;
+                    let content = std::fs::read_to_string(&summary_path)
+                        .map_err(|error| format!("cannot read pending OpenViking summary: {error}"))?;
+                    if content.len() > 16384
+                        || !content.contains(&format!("Source journal sequence: {}", entry.completed_sequence))
+                        || !content.contains(&format!("Conversation: {}", entry.conversation_id))
+                    {
+                        return Err("OpenViking summary file fails source or size validation".to_owned());
+                    }
+                    outbox.transition_durable(
+                        &checkpoint_outbox_path,
+                        &entry.conversation_id,
+                        &entry.turn_id,
+                        entry.completed_sequence,
+                        openviking_checkpoint_outbox::State::Ready,
+                        openviking_checkpoint_outbox::State::Dispatched,
+                    )?;
+                    Ok(Some((
+                        entry.conversation_id,
+                        entry.turn_id,
+                        entry.completed_sequence,
+                        content,
+                    )))
+                })();
+                match claim {
+                    Ok(Some((conversation_id, turn_id, completed_sequence, content))) => {
+                        // Persisted claim precedes any network write. A crash
+                        // afterwards produces "uncertain", never an automatic
+                        // duplicate create.
+                        openviking_write_active = true;
+                        let tx = completion_tx.clone();
+                        let owner = conversation_id.clone();
+                        let turn = turn_id.clone();
+                        let spawned = thread::Builder::new()
+                            .name("chatarium-openviking-write".to_owned())
+                            .spawn(move || {
+                                let result = openviking_memory_delivery::deliver_create_once(
+                                    &owner, &turn, &content,
+                                );
+                                let _ = tx.send(PersistCommand::RecordOpenVikingWriteOutcome {
+                                    conversation_id: owner,
+                                    turn_id: turn,
+                                    completed_sequence,
+                                    result,
+                                });
+                            });
+                        if let Err(error) = spawned {
+                            openviking_write_active = false;
+                            if let Ok(mut outbox) =
+                                openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)
+                            {
+                                let _ = outbox.transition_durable(
+                                    &checkpoint_outbox_path,
+                                    &conversation_id,
+                                    &turn_id,
+                                    completed_sequence,
+                                    openviking_checkpoint_outbox::State::Dispatched,
+                                    openviking_checkpoint_outbox::State::Uncertain,
+                                );
+                            }
+                            let _ = notices.send(PersistNotice::Failed {
+                                operation: "OpenViking memory write spawn",
+                                revision: None,
+                                request_id: None,
+                                turn_id: None,
+                                error: error.to_string(),
+                            });
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "OpenViking memory write claim",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
+            PersistCommand::RecordOpenVikingWriteOutcome {
+                conversation_id,
+                turn_id,
+                completed_sequence,
+                result,
+            } => {
+                openviking_write_active = false;
+                let confirmed = result.is_ok();
+                let next = if confirmed {
+                    openviking_checkpoint_outbox::State::Confirmed
+                } else {
+                    openviking_checkpoint_outbox::State::Uncertain
+                };
+                let persisted = openviking_checkpoint_outbox::Outbox::load(
+                    &checkpoint_outbox_path,
+                ).and_then(|mut outbox| {
+                    outbox.transition_durable(
+                        &checkpoint_outbox_path,
+                        &conversation_id,
+                        &turn_id,
+                        completed_sequence,
+                        openviking_checkpoint_outbox::State::Dispatched,
+                        next,
+                    )
+                });
+                match persisted {
+                    Ok(_) => {
+                        let _ = notices.send(PersistNotice::OpenVikingMemoryWriteFinished {
+                            confirmed,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "OpenViking memory write state persistence",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+                if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() != Ok("0") {
+                    let _ = completion_tx.send(PersistCommand::DispatchOpenVikingReadyWrite);
+                }
+            }
             PersistCommand::SaveOpenVikingMemorySummary {
                 conversation_id,
                 turn_id,
