@@ -1588,10 +1588,12 @@ mod tests {
         );
         assert_eq!(excluded.openviking_checkpoint_count(), 0);
         assert!(excluded.messages.is_empty());
-        assert!(matches!(
-            excluded.inventory[0].source,
-            ContextSource::OpenVikingCheckpoint { .. }
-        ));
+        let item = excluded
+            .inventory
+            .iter()
+            .find(|item| matches!(item.source, ContextSource::OpenVikingCheckpoint { .. }))
+            .unwrap();
+        assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
     }
 
     #[test]
