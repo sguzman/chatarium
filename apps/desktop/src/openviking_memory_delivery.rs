@@ -924,17 +924,23 @@ mod project_scope_tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].0, source);
         assert_ne!(recorded[0].0, destination);
-        assert_eq!(recorded[0].1, format!("memory-project-read:{source}:{turn}"));
+        assert_eq!(
+            recorded[0].1,
+            format!("memory-project-read:{source}:{turn}")
+        );
         assert_eq!(recorded[0].2, local_http_mcp::OPENVIKING);
         assert_eq!(recorded[0].3, "read");
         assert_eq!(recorded[0].4, json!({"uris":uri,"limit":100}));
 
         // Forged owner/URI pairs must be rejected before any transport call.
         let mut invoked = false;
-        assert!(read_project_checkpoint_as_source(
-            &destination, turn, &uri,
-            |_, _, _, _, _| { invoked = true; Ok(Value::Null) },
-        ).is_err());
+        assert!(
+            read_project_checkpoint_as_source(&destination, turn, &uri, |_, _, _, _, _| {
+                invoked = true;
+                Ok(Value::Null)
+            },)
+            .is_err()
+        );
         assert!(!invoked);
     }
 
