@@ -158,6 +158,22 @@ old raw transcript, and marks excluded sources in the exact-request inventory.
 This prevents unbounded input growth without deleting any journal events, but
 is **not** a model-token guarantee or complete semantic summary of omitted turns.
 
+## Read-only recovery for uncertain writes
+
+After a crash, a previously dispatched OpenViking create can have an
+**uncertain** outcome. On startup, Chatarium now examines at most eight
+uncertain entries, on a background worker. For each, it validates the local
+durable checkpoint's exact owner, turn, journal sequence, and size, then makes
+an OpenViking **read** call to its exact scoped URI. Only a byte-for-byte
+response match permits the persistence worker to durably transition
+`Uncertain -> Confirmed`. A missing remote object, mismatch, local corruption,
+or offline service leaves the entry uncertain. There is **no automatic
+write retry**, no overwrite, no mass scan, and no UI-thread network call.
+
+This improves restart resilience without weakening the at-most-once create
+guarantee. Local and remote failure modes remain observable through the
+checkpoint state; confirm-only recovery invalidates the active memory cache.
+
 ## Rolling checkpoint continuity
 
 Each new automatic checkpoint can now include the newest **earlier confirmed**
