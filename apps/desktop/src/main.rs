@@ -1142,6 +1142,7 @@ struct OpenVikingSummaryAttempt {
     conversation_id: LocalConversationId,
     turn_id: LocalTurnId,
     completed_sequence: u64,
+    had_confirmed_prior: bool,
 }
 
 struct ChatariumApp {
@@ -5285,6 +5286,7 @@ impl ChatariumApp {
                 conversation_id,
                 turn_id,
                 completed_sequence: entry.completed_sequence,
+                had_confirmed_prior: prior.is_some(),
             });
             return;
         }
@@ -5498,7 +5500,10 @@ impl ChatariumApp {
                         .clone()
                         .filter(|pending| pending.request_id == request_id)
                     {
-                        match openviking_memory_summary::validate_summary(&text) {
+                        match openviking_memory_summary::validate_rolling_summary(
+                            &text,
+                            attempt.had_confirmed_prior,
+                        ) {
                             Ok(summary) => {
                                 let result = self
                                     .persist_tx
