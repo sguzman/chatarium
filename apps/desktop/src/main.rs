@@ -30684,6 +30684,123 @@ mod tests {
     }
 
     #[test]
+    fn completed_turn_automatically_queues_recoverable_metadata_only_memory_intent() {
+        use std::fs;
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-memory-lifecycle-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let journal = root.join("journal.jsonl");
+        let store = JsonlEventStore::open(&journal).unwrap();
+        let (command_tx, command_rx) = mpsc::channel();
+        let (notice_tx, notice_rx) = mpsc::channel();
+        let data_dir = root.clone();
+        let completion_tx = command_tx.clone();
+        let worker = thread::spawn(move || {
+            persistence_worker(store, data_dir, command_rx, completion_tx, notice_tx)
+        });
+        let message = AuthoredUserMessage::new(
+            LocalConversationId::new(),
+            LocalTurnId::new(),
+            LocalMessageId::new(),
+            "Complete this work, and keep the final checkpoint locally.",
+        );
+        command_tx
+            .send(PersistCommand::CommitMessage {
+                request_id: 1,
+                message: message.clone(),
+                attachment: None,
+                one_shot_memory_ids: Vec::new(),
+                one_shot_memory_snapshot_after_sequence: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            notice_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            PersistNotice::MessageCommitted { .. }
+        ));
+        command_tx
+            .send(PersistCommand::AppendTurnEvent {
+                turn_id: message.turn_id,
+                kind: EventKind::DispatchAttempted,
+                payload: remote_turn_payload(
+                    message.turn_id,
+                    "request",
+                    Some("model"),
+                    None,
+                    None,
+                ),
+            })
+            .unwrap();
+        assert!(matches!(
+            notice_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            PersistNotice::TurnEventAppended {
+                kind: EventKind::DispatchAttempted,
+                ..
+            }
+        ));
+        let private_response = "Completed project milestone, recorded verified decisions and             unresolved issues, and confirmed the application builds successfully.             The next action is to inspect the actual source repository for the remaining             work and avoid claiming unverified success.";
+        command_tx
+            .send(PersistCommand::AppendTurnEvent {
+                turn_id: message.turn_id,
+                kind: EventKind::AssistantCompletionObserved,
+                payload: remote_turn_payload(
+                    message.turn_id,
+                    "request",
+                    Some("model"),
+                    Some(private_response),
+                    None,
+                ),
+            })
+            .unwrap();
+        assert!(matches!(
+            notice_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            PersistNotice::TurnEventAppended {
+                kind: EventKind::AssistantCompletionObserved,
+                ..
+            }
+        ));
+        for _ in 0..2 {
+            command_tx
+                .send(PersistCommand::QueueMemoryCheckpoint {
+                    conversation_id: message.conversation_id,
+                    turn_id: message.turn_id,
+                })
+                .unwrap();
+            assert!(matches!(
+                notice_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                PersistNotice::MemoryCheckpointQueued {
+                    pending_count: 1,
+                    ..
+                }
+            ));
+        }
+        command_tx.send(PersistCommand::Shutdown).unwrap();
+        worker.join().unwrap();
+
+        let path = root.join(openviking_checkpoint_outbox::FILE_NAME);
+        let restored = openviking_checkpoint_outbox::Outbox::load(&path).unwrap();
+        assert_eq!(restored.pending_count(), 1);
+        assert_eq!(restored.entries()[0].conversation_id, message.conversation_id.to_string());
+        assert_eq!(restored.entries()[0].turn_id, message.turn_id.to_string());
+        let outbox_text = fs::read_to_string(&path).unwrap();
+        assert!(!outbox_text.contains(private_response));
+        assert!(!outbox_text.contains("verified decisions"));
+        let reopened = JsonlEventStore::open(&journal).unwrap();
+        assert!(reopened.events().iter().any(|event| {
+            event.kind == EventKind::AssistantCompletionObserved
+                && event.scope == Some(local_turn_scope(message.turn_id))
+        }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn context_composer_uses_durable_transcript_order() {
         let messages = vec![
             DisplayMessage {
