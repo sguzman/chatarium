@@ -23,6 +23,7 @@ mod local_stdio_host_diagnostics;
 mod openviking_checkpoint_outbox;
 mod openviking_memory_delivery;
 mod openviking_memory_summary;
+mod openviking_project_ui;
 
 mod local_stdio_runner;
 mod local_tool_adapter;
@@ -2141,25 +2142,17 @@ impl ChatariumApp {
                 "finish the active turn before changing project memory sharing".to_owned();
             return;
         }
-        let destination = self.local_conversation_id;
-        let previous = self.project_memory_grants.clone();
-        if allow {
-            if let Err(error) = self.project_memory_grants.grant(
-                &self.local_conversation_catalog,
-                source,
-                destination,
-            ) {
-                self.status = format!("project memory grant rejected: {error}");
-                return;
-            }
-        } else {
-            self.project_memory_grants.revoke(source, destination);
-        }
         let path = self
             .journal_path
             .with_file_name(openviking_memory_delivery::PROJECT_MEMORY_GRANTS_FILE_NAME);
-        if let Err(error) = self.project_memory_grants.save_atomic(&path) {
-            self.project_memory_grants = previous;
+        if let Err(error) = openviking_project_ui::change_permission_durable(
+            &path,
+            &self.local_conversation_catalog,
+            &mut self.project_memory_grants,
+            source,
+            self.local_conversation_id,
+            allow,
+        ) {
             self.status = format!("project memory permission not saved: {error}");
             return;
         }
@@ -15424,35 +15417,12 @@ impl eframe::App for ChatariumApp {
                                     egui::CollapsingHeader::new("OpenViking project memory (opt-in)")
                                         .default_open(false)
                                         .show(ui, |ui| {
-                                            ui.label("Only manually approved source chats can share verified checkpoints into this chat. Sharing is one-way and reversible.");
-                                            let current = self.local_conversation_catalog
-                                                .entry(self.local_conversation_id)
-                                                .and_then(|entry| entry.project_directory.clone());
-                                            if let Some(project) = current {
-                                                let peers = self.local_conversation_catalog.entries()
-                                                    .into_iter()
-                                                    .filter(|peer| peer.id != self.local_conversation_id
-                                                        && peer.project_directory.as_deref() == Some(project.as_str()))
-                                                    .collect::<Vec<_>>();
-                                                if peers.is_empty() {
-                                                    ui.label("No other chat is bound to this project folder.");
-                                                }
-                                                for peer in peers {
-                                                    let admitted = self.project_memory_grants.allows(
-                                                        &self.local_conversation_catalog, peer.id,
-                                                        self.local_conversation_id,
-                                                    );
-                                                    ui.horizontal_wrapped(|ui| {
-                                                        ui.label(peer.title.as_deref().unwrap_or("Untitled chat"));
-                                                        let label = if admitted { "Revoke memory access" } else { "Allow memory from chat" };
-                                                        if ui.button(label).clicked() {
-                                                            project_memory_permission_request = Some((peer.id, !admitted));
-                                                        }
-                                                    });
-                                                }
-                                            } else {
-                                                ui.label("Assign and save a project folder for this chat to manage sharing.");
-                                            }
+                                            project_memory_permission_request = openviking_project_ui::render(
+                                                ui,
+                                                &self.local_conversation_catalog,
+                                                &self.project_memory_grants,
+                                                self.local_conversation_id,
+                                            );
                                         });
                                     if ui.button("Archive selected chat").clicked() {
                                         archive_local_requested = true;
