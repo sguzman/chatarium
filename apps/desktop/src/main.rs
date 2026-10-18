@@ -3404,7 +3404,8 @@ impl ChatariumApp {
             || conversation_id != self.local_conversation_id
             || self.coordination_auto_wake_target != Some(conversation_id)
         {
-            self.status = "coordination wake target changed or disarmed; dispatch denied".to_owned();
+            self.status =
+                "coordination wake target changed or disarmed; dispatch denied".to_owned();
             return;
         }
         let [message_id] = inbox_ids.as_slice() else {
@@ -3413,10 +3414,10 @@ impl ChatariumApp {
         };
         // Delivery permission and source identity must still be valid now,
         // after the activation event was durably appended.
-        let exact = match self.coordination_workspace.wake_dispatch_envelope(
-            &conversation_id.to_string(),
-            *message_id,
-        ) {
+        let exact = match self
+            .coordination_workspace
+            .wake_dispatch_envelope(&conversation_id.to_string(), *message_id)
+        {
             Ok(value) => value,
             Err(error) => {
                 self.status = format!("coordination wake authority denied: {error}");
@@ -3554,9 +3555,9 @@ impl ChatariumApp {
         };
         let (Some(conversation), Some(message_id)) = (
             wake["conversation_id"].as_str(),
-            wake["inbox_ids"].as_array().and_then(|ids| {
-                (ids.len() == 1).then(|| ids[0].as_u64()).flatten()
-            }),
+            wake["inbox_ids"]
+                .as_array()
+                .and_then(|ids| (ids.len() == 1).then(|| ids[0].as_u64()).flatten()),
         ) else {
             return;
         };
@@ -3566,11 +3567,10 @@ impl ChatariumApp {
             return;
         }
         let path = self.coordination_store_path();
-        if let Err(error) = self.coordination_workspace.finish_wake_claim_durable(
-            &path,
-            conversation,
-            message_id,
-        ) {
+        if let Err(error) =
+            self.coordination_workspace
+                .finish_wake_claim_durable(&path, conversation, message_id)
+        {
             self.status = format!("coordination wake terminal saved but claim not closed: {error}");
             self.coordination_auto_wake_target = None;
         }
