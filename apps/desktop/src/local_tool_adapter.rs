@@ -577,7 +577,10 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "write")
             .unwrap();
-        assert_eq!(write["inputSchema"]["properties"]["mode"]["const"], "create");
+        assert_eq!(
+            write["inputSchema"]["properties"]["mode"]["const"],
+            "create"
+        );
         let find = openviking
             .iter()
             .find(|tool| tool["name"] == "find")
