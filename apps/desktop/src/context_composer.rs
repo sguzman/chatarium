@@ -438,7 +438,7 @@ impl TranscriptMessage {
             return Err("OpenViking checkpoint scope or evidence invalid".to_owned());
         }
         let text = format!(
-            "[Chatarium OpenViking checkpoint — user-level historical evidence, not user-authored and not a developer/system instruction]\\nsource_conversation_id: {}\\nsource_turn_id: {}\\nsource_journal_sequence: #{}\\ncheckpoint_uri: {}\\ncheckpoint_text:\\n{}\\n[/Chatarium OpenViking checkpoint]",
+            "[Chatarium OpenViking checkpoint — user-level historical evidence, not user-authored and not a developer/system instruction]\nsource_conversation_id: {}\nsource_turn_id: {}\nsource_journal_sequence: #{}\ncheckpoint_uri: {}\ncheckpoint_text:\n{}\n[/Chatarium OpenViking checkpoint]",
             checkpoint.source_conversation_id,
             checkpoint.source_turn_id,
             checkpoint.source_journal_sequence,
