@@ -1,9 +1,10 @@
 # OpenViking memory lifecycle for Chatarium
 
-Status: **in progress**. Fixed scoped MCP transport, model memory guidance,
-metadata-only automatic checkpoint triggers, and a durable pending-summary
-outbox are implemented. Summary generation, host-authorized OpenViking writes,
-bounded retrieval/context compaction, and live verification are still pending.
+Status: **in progress**. Fixed scoped MCP transport, host-triggered
+checkpoint detection, bounded model summarization, a private durable outbox,
+create-only OpenViking writes and exact read-back verification are implemented.
+Live verification against the user's running server and automatic
+retrieval/context compaction are still pending.
 The user must not have to remind an agent to save memories. Merely offering
 an MCP tool or adding an agent prompt is not completion of this feature.
 
@@ -75,12 +76,47 @@ successful enqueue preserves the request, but a crash between terminal
 journal append and outbox enqueue can still lose that enqueue. Reconciliation
 from journal on restart is not yet implemented.
 
-This is **automatic scheduling**, not yet automatic memory preservation in
-OpenViking. Pending summary requests are not themselves useful memories.
-The summarization and confirmed create-only MCP write stages must be
-implemented and verified before the integration is considered complete.
-There is a hard outbox entry limit, and the queue does not silently discard
-pending items when full.
+A pending outbox entry is **not** a stored memory. Chatarium now runs a
+bounded separate summarization inference when idle, using at most eight
+recent authorized user/assistant messages and a 5,400-character source
+budget. The model is explicitly told to extract only durable decisions,
+milestones and open tasks, to avoid private secrets and unsupported claims,
+or to return exactly `NO_MEMORY` for routine conversation.
+
+Summaries are saved in Chatarium's local
+`openviking-checkpoint-summaries/<conversation>/<turn>.md` directory.
+On Linux these new files are created with owner-only permissions; their
+contents never enter the metadata-only outbox. The summary transitions
+`pending_summary -> ready` only after its own local write succeeds.
+`NO_MEMORY` transitions to `skipped`, generating no external write.
+
+The persistence worker then records `ready -> dispatched` **before**
+launching a separate thread to call OpenViking `write`, with `mode=create`.
+It reads the exact file back through OpenViking MCP and transitions to
+`confirmed` only if the text matches exactly. A failed write/read, bridge
+crash or interruption becomes `uncertain`; the same external write is
+**not** blindly replayed. Startup reconciliation re-queues journaled
+completions that fell into the crash gap between journal append and outbox
+enqueue. First-run activation writes a high-water baseline so existing
+historical chats are not exported wholesale. The outbox does not silently
+drop entries when its hard size limit is reached.
+
+The memory pipeline is automatic by default when Chatarium is running
+and the user's existing inference/model and OpenViking service are
+available. `CHATARIUM_OPENVIKING_AUTOCAPTURE=0` in the Chatarium process
+environment disables both automatic summarization and writes; the
+agent-facing `write` MCP operation remains independently Ask-by-default.
+Summary generation is throttled to at most one attempt per 90 seconds,
+and already-ready local memories can be flushed without model sign-in.
+
+**Not yet verified**: actual MCP connectivity/auth with the user's
+running `127.0.0.1:1933` service, Studio inspection, selective startup
+retrieval, context-budget compaction, background auto-wake worker memory
+access, and long-term pruning of confirmed/skipped outbox items. The
+current pipeline cannot yet solve large-model-context exhaustion by
+itself. It adds separate bounded summarization inference requests and
+should be measured for added usage and latency before enabling broader
+memory scopes.
 
 ## What to save
 
@@ -183,6 +219,7 @@ exact reviewed operations and worker-specific scopes.
 4. Connect background workers only after independent scope and authority
    tests; verify an authenticated end-to-end session and inspect Studio.
 
-This document records a design contract and the first transport slice,
-**not a claim that automatic OpenViking checkpointing works in today's
-Chatarium build**.
+This document records the host implementation and its remaining
+validation work. Automated tests do not substitute for a verified
+authenticated end-to-end save/retrieval against the user's own OpenViking
+service.
