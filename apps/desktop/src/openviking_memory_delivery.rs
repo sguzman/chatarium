@@ -34,11 +34,7 @@ pub fn readback_matches(value: &Value, expected: &str) -> bool {
         && value.get("isError") != Some(&Value::Bool(true))
 }
 
-pub fn deliver_create_once(
-    conversation: &str,
-    turn: &str,
-    content: &str,
-) -> Result<(), String> {
+pub fn deliver_create_once(conversation: &str, turn: &str, content: &str) -> Result<(), String> {
     if content.is_empty() || content.len() > MAX_CHECKPOINT_BYTES {
         return Err("OpenViking checkpoint content is empty or too large".to_owned());
     }
@@ -80,9 +76,15 @@ mod tests {
         let ok = json!({"isError": false, "content": [{"type": "text", "text": "stored"}]});
         assert!(readback_matches(&ok, "stored"));
         assert!(!readback_matches(&ok, "other"));
-        assert!(!readback_matches(&json!({"isError": true, "content": [{"type":"text","text":"stored"}]}), "stored"));
+        assert!(!readback_matches(
+            &json!({"isError": true, "content": [{"type":"text","text":"stored"}]}),
+            "stored"
+        ));
         assert!(!readback_matches(&json!({"content":[]}), "stored"));
-        assert!(!readback_matches(&json!({"content":[{"type":"text","text":"stored"},{"type":"text","text":"stored"}]}), "stored"));
+        assert!(!readback_matches(
+            &json!({"content":[{"type":"text","text":"stored"},{"type":"text","text":"stored"}]}),
+            "stored"
+        ));
     }
 
     #[test]

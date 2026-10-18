@@ -20,10 +20,7 @@ pub const GUIDANCE: &str = concat!(
     "NO_MEMORY and nothing else."
 );
 
-pub fn bounded_excerpt(
-    messages: &[DisplayMessage],
-    completion_sequence: u64,
-) -> Option<String> {
+pub fn bounded_excerpt(messages: &[DisplayMessage], completion_sequence: u64) -> Option<String> {
     let recent = messages
         .iter()
         .filter(|message| {
@@ -44,7 +41,10 @@ pub fn bounded_excerpt(
             _ => continue,
         };
         let snippet = message.text.chars().take(1800).collect::<String>();
-        source.push_str(&format!("\n[{role}, journal sequence {}]\n{snippet}\n", message.sequence));
+        source.push_str(&format!(
+            "\n[{role}, journal sequence {}]\n{snippet}\n",
+            message.sequence
+        ));
     }
     if source.chars().count() > MAX_SOURCE_CHARS {
         source = source
@@ -115,7 +115,12 @@ mod tests {
         assert!(!excerpt.contains("private-turn-2"));
         let value = request_input("chat", "turn", 22, &excerpt);
         assert_eq!(value[0]["role"], "user");
-        assert!(value[0]["content"].as_str().unwrap().contains("Source excerpt"));
+        assert!(
+            value[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Source excerpt")
+        );
     }
 
     #[test]
@@ -124,7 +129,9 @@ mod tests {
         assert!(validate_summary("").is_err());
         assert!(validate_summary(&"x".repeat(MAX_RESPONSE_BYTES + 1)).is_err());
         assert!(validate_summary("bad\u{0000}text").is_err());
-        assert_eq!(validate_summary("Decision: preserve original code").unwrap(),
-                   "Decision: preserve original code");
+        assert_eq!(
+            validate_summary("Decision: preserve original code").unwrap(),
+            "Decision: preserve original code"
+        );
     }
 }

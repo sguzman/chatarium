@@ -1624,7 +1624,7 @@ impl ChatariumApp {
                         agent_mcp_flow: None,
                         openviking_summary_in_flight: None,
                         openviking_summary_last_attempt: None,
-            openviking_write_last_attempt: None,
+                        openviking_write_last_attempt: None,
                         openviking_summary_blocked: HashSet::new(),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
@@ -3756,7 +3756,8 @@ impl ChatariumApp {
                     self.status = if confirmed {
                         "OpenViking memory checkpoint saved and verified by read-back".to_owned()
                     } else {
-                        "OpenViking checkpoint write uncertain; not automatically repeated".to_owned()
+                        "OpenViking checkpoint write uncertain; not automatically repeated"
+                            .to_owned()
                     };
                 }
                 PersistNotice::OpenVikingMemorySummarySaved {
@@ -3764,16 +3765,21 @@ impl ChatariumApp {
                     turn_id,
                     skipped,
                 } => {
-                    if self.openviking_summary_in_flight.as_ref().is_some_and(|attempt| {
-                        attempt.conversation_id == conversation_id && attempt.turn_id == turn_id
-                    }) {
+                    if self
+                        .openviking_summary_in_flight
+                        .as_ref()
+                        .is_some_and(|attempt| {
+                            attempt.conversation_id == conversation_id && attempt.turn_id == turn_id
+                        })
+                    {
                         self.openviking_summary_in_flight = None;
                     }
                     if conversation_id == self.local_conversation_id {
                         self.status = if skipped {
                             "OpenViking checkpoint skipped: nothing durable to retain".to_owned()
                         } else {
-                            "OpenViking summary durable locally; scheduling verified external write".to_owned()
+                            "OpenViking summary durable locally; scheduling verified external write"
+                                .to_owned()
                         };
                     }
                     if !skipped
@@ -4991,9 +4997,9 @@ impl ChatariumApp {
     fn maybe_dispatch_ready_openviking_write(&mut self) {
         if self.persist_tx.is_none()
             || std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0")
-            || self.openviking_write_last_attempt.is_some_and(|when| {
-                when.elapsed() < Duration::from_secs(30)
-            })
+            || self
+                .openviking_write_last_attempt
+                .is_some_and(|when| when.elapsed() < Duration::from_secs(30))
         {
             return;
         }
@@ -5022,9 +5028,9 @@ impl ChatariumApp {
             || self.sign_in_pending
             || self.selected_remote_catalog_id.is_some()
             || self.selected_historical_conversation.is_some()
-            || self.openviking_summary_last_attempt.is_some_and(|when| {
-                when.elapsed() < Duration::from_secs(90)
-            })
+            || self
+                .openviking_summary_last_attempt
+                .is_some_and(|when| when.elapsed() < Duration::from_secs(90))
         {
             return;
         }
@@ -5040,7 +5046,10 @@ impl ChatariumApp {
             }
         };
         for entry in outbox.pending_summaries() {
-            let key = format!("openviking-summary:{}:{}", entry.conversation_id, entry.turn_id);
+            let key = format!(
+                "openviking-summary:{}:{}",
+                entry.conversation_id, entry.turn_id
+            );
             if self.openviking_summary_blocked.contains(&key) {
                 continue;
             }
@@ -5050,25 +5059,34 @@ impl ChatariumApp {
             let Ok(turn_id) = entry.turn_id.parse::<LocalTurnId>() else {
                 continue;
             };
-            if self.local_conversation_catalog.entry(conversation_id).is_none() {
+            if self
+                .local_conversation_catalog
+                .entry(conversation_id)
+                .is_none()
+            {
                 continue;
             }
             let model = if conversation_id == self.local_conversation_id {
                 self.selected_model.clone()
             } else {
-                self.inference_settings.for_conversation(conversation_id).model
+                self.inference_settings
+                    .for_conversation(conversation_id)
+                    .model
             };
             let Some(model) = model else {
                 continue;
             };
-            if !self.remote_models.iter().any(|available| available.slug == model) {
+            if !self
+                .remote_models
+                .iter()
+                .any(|available| available.slug == model)
+            {
                 continue;
             }
             let messages = projected_local_display_messages(&self.events, conversation_id);
-            let Some(source) = openviking_memory_summary::bounded_excerpt(
-                &messages,
-                entry.completed_sequence,
-            ) else {
+            let Some(source) =
+                openviking_memory_summary::bounded_excerpt(&messages, entry.completed_sequence)
+            else {
                 continue;
             };
             let input = openviking_memory_summary::request_input(
@@ -5302,25 +5320,32 @@ impl ChatariumApp {
                     text,
                     web_search_executed,
                 } => {
-                    if let Some(attempt) = self.openviking_summary_in_flight.clone()
+                    if let Some(attempt) = self
+                        .openviking_summary_in_flight
+                        .clone()
                         .filter(|pending| pending.request_id == request_id)
                     {
                         match openviking_memory_summary::validate_summary(&text) {
                             Ok(summary) => {
-                                let result = self.persist_tx.as_ref().ok_or_else(|| {
-                                    "local persistence unavailable".to_owned()
-                                }).and_then(|sender| {
-                                    sender.send(PersistCommand::SaveOpenVikingMemorySummary {
-                                        conversation_id: attempt.conversation_id,
-                                        turn_id: attempt.turn_id,
-                                        completed_sequence: attempt.completed_sequence,
-                                        summary,
-                                    }).map_err(|error| error.to_string())
-                                });
+                                let result = self
+                                    .persist_tx
+                                    .as_ref()
+                                    .ok_or_else(|| "local persistence unavailable".to_owned())
+                                    .and_then(|sender| {
+                                        sender
+                                            .send(PersistCommand::SaveOpenVikingMemorySummary {
+                                                conversation_id: attempt.conversation_id,
+                                                turn_id: attempt.turn_id,
+                                                completed_sequence: attempt.completed_sequence,
+                                                summary,
+                                            })
+                                            .map_err(|error| error.to_string())
+                                    });
                                 if let Err(error) = result {
                                     self.openviking_summary_in_flight = None;
                                     self.openviking_summary_blocked.insert(request_id);
-                                    self.status = format!("OpenViking summary not persisted: {error}");
+                                    self.status =
+                                        format!("OpenViking summary not persisted: {error}");
                                 }
                             }
                             Err(error) => {
@@ -5491,10 +5516,8 @@ impl ChatariumApp {
                             let key = pending.request_id.clone();
                             self.openviking_summary_in_flight = None;
                             self.openviking_summary_blocked.insert(key);
-                            self.status = format!(
-                                "OpenViking summary generation failed: {}",
-                                error.message
-                            );
+                            self.status =
+                                format!("OpenViking summary generation failed: {}", error.message);
                             continue;
                         }
                     }
@@ -22583,13 +22606,19 @@ fn persistence_worker(
                         &entry.conversation_id,
                         &entry.turn_id,
                     )?;
-                    let content = std::fs::read_to_string(&summary_path)
-                        .map_err(|error| format!("cannot read pending OpenViking summary: {error}"))?;
+                    let content = std::fs::read_to_string(&summary_path).map_err(|error| {
+                        format!("cannot read pending OpenViking summary: {error}")
+                    })?;
                     if content.len() > 16384
-                        || !content.contains(&format!("Source journal sequence: {}", entry.completed_sequence))
+                        || !content.contains(&format!(
+                            "Source journal sequence: {}",
+                            entry.completed_sequence
+                        ))
                         || !content.contains(&format!("Conversation: {}", entry.conversation_id))
                     {
-                        return Err("OpenViking summary file fails source or size validation".to_owned());
+                        return Err(
+                            "OpenViking summary file fails source or size validation".to_owned()
+                        );
                     }
                     outbox.transition_durable(
                         &checkpoint_outbox_path,
@@ -22676,23 +22705,21 @@ fn persistence_worker(
                 } else {
                     openviking_checkpoint_outbox::State::Uncertain
                 };
-                let persisted = openviking_checkpoint_outbox::Outbox::load(
-                    &checkpoint_outbox_path,
-                ).and_then(|mut outbox| {
-                    outbox.transition_durable(
-                        &checkpoint_outbox_path,
-                        &conversation_id,
-                        &turn_id,
-                        completed_sequence,
-                        openviking_checkpoint_outbox::State::Dispatched,
-                        next,
-                    )
-                });
+                let persisted = openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)
+                    .and_then(|mut outbox| {
+                        outbox.transition_durable(
+                            &checkpoint_outbox_path,
+                            &conversation_id,
+                            &turn_id,
+                            completed_sequence,
+                            openviking_checkpoint_outbox::State::Dispatched,
+                            next,
+                        )
+                    });
                 match persisted {
                     Ok(_) => {
-                        let _ = notices.send(PersistNotice::OpenVikingMemoryWriteFinished {
-                            confirmed,
-                        });
+                        let _ = notices
+                            .send(PersistNotice::OpenVikingMemoryWriteFinished { confirmed });
                     }
                     Err(error) => {
                         let _ = notices.send(PersistNotice::Failed {
@@ -22715,9 +22742,8 @@ fn persistence_worker(
                 summary,
             } => {
                 let result = (|| -> Result<bool, String> {
-                    let mut outbox = openviking_checkpoint_outbox::Outbox::load(
-                        &checkpoint_outbox_path,
-                    )?;
+                    let mut outbox =
+                        openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)?;
                     let skipped = summary.trim() == "NO_MEMORY";
                     outbox.save_summary_durable(
                         &checkpoint_outbox_path,
