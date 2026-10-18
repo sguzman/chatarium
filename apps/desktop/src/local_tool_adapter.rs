@@ -124,7 +124,7 @@ fn openviking_input_schema(name: &str) -> Option<Value> {
             "type": "object",
             "properties": {"query": query, "target_uri": uri,
                 "limit": limit, "min_score": {"type": "number", "minimum": 0, "maximum": 1}},
-            "required": ["query", "target_uri"],
+            "required": ["query", "target_uri", "limit"],
             "additionalProperties": false
         }),
         "search" => json!({
@@ -132,7 +132,7 @@ fn openviking_input_schema(name: &str) -> Option<Value> {
             "properties": {"query": query, "target_uri": uri,
                 "limit": limit, "mode": {"const": "list"},
                 "min_score": {"type": "number", "minimum": 0, "maximum": 1}},
-            "required": ["query", "target_uri"],
+            "required": ["query", "target_uri", "limit"],
             "additionalProperties": false
         }),
         "read" => json!({
@@ -144,7 +144,7 @@ fn openviking_input_schema(name: &str) -> Option<Value> {
                 "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100}
             },
-            "required": ["uris"],
+            "required": ["uris", "limit"],
             "additionalProperties": false
         }),
         "write" => json!({
