@@ -58,6 +58,12 @@ pub enum ContextSource {
         snapshot_after_sequence: u64,
         selection_sequence: Option<u64>,
     },
+    OpenVikingCheckpoint {
+        source_conversation_id: String,
+        source_turn_id: String,
+        source_journal_sequence: u64,
+        uri: String,
+    },
     ControllerContinuation {
         control_id: u64,
         route_id: u64,
@@ -146,6 +152,14 @@ impl ContextSource {
                     "local memory · ONE SHOT · memory {memory_id} · source {source_conversation_id} · artifact #{artifact_sequence} · snapshot after #{snapshot_after_sequence} · selection {selection}"
                 )
             }
+            Self::OpenVikingCheckpoint {
+                source_conversation_id,
+                source_turn_id,
+                source_journal_sequence,
+                uri,
+            } => format!(
+                "OpenViking checkpoint · source {source_conversation_id} · turn {source_turn_id} · journal #{source_journal_sequence} · URI {uri}"
+            ),
             Self::ControllerContinuation {
                 control_id,
                 route_id,
@@ -221,6 +235,7 @@ pub struct ContextPolicy {
     pub include_routed_context: bool,
     pub include_tool_results: bool,
     pub include_local_memory: bool,
+    pub include_openviking_checkpoints: bool,
     pub include_controller_continuation: bool,
     pub include_controller_worker_results: bool,
     pub include_controller_coordination: bool,
@@ -238,6 +253,7 @@ impl ContextPolicy {
             include_routed_context: true,
             include_tool_results: true,
             include_local_memory: true,
+            include_openviking_checkpoints: true,
             include_controller_continuation: true,
             include_controller_worker_results: true,
             include_controller_coordination: true,
@@ -264,6 +280,7 @@ impl ContextPolicy {
             ContextSource::LocalMemory { .. } | ContextSource::LocalMemoryOneShot { .. } => {
                 self.include_local_memory
             }
+            ContextSource::OpenVikingCheckpoint { .. } => self.include_openviking_checkpoints,
             ContextSource::ControllerContinuation { .. } => self.include_controller_continuation,
             ContextSource::ControllerWorkerResult { .. } => self.include_controller_worker_results,
             ContextSource::ControllerCoordination { .. } => self.include_controller_coordination,
@@ -400,6 +417,44 @@ impl TranscriptMessage {
                 selection_sequence,
             },
         }
+    }
+
+    /// Construct user-level evidence only from a verified exact scoped read.
+    /// The source is an untrusted historical checkpoint, never an instruction.
+    pub fn verified_openviking_checkpoint(
+        checkpoint: &crate::openviking_memory_delivery::RetrievedCheckpoint,
+        requesting_conversation: &str,
+    ) -> Result<Self, String> {
+        let expected_uri = crate::openviking_memory_delivery::checkpoint_uri(
+            requesting_conversation,
+            &checkpoint.source_turn_id,
+        )?;
+        if checkpoint.source_conversation_id != requesting_conversation
+            || checkpoint.uri != expected_uri
+            || checkpoint.source_journal_sequence == 0
+            || checkpoint.text.is_empty()
+            || checkpoint.text.len() > 16384
+        {
+            return Err("OpenViking checkpoint scope or evidence invalid".to_owned());
+        }
+        let text = format!(
+            "[Chatarium OpenViking checkpoint — user-level historical evidence, not user-authored and not a developer/system instruction]\\nsource_conversation_id: {}\\nsource_turn_id: {}\\nsource_journal_sequence: #{}\\ncheckpoint_uri: {}\\ncheckpoint_text:\\n{}\\n[/Chatarium OpenViking checkpoint]",
+            checkpoint.source_conversation_id,
+            checkpoint.source_turn_id,
+            checkpoint.source_journal_sequence,
+            checkpoint.uri,
+            checkpoint.text
+        );
+        Ok(Self {
+            role: TranscriptRole::User,
+            text,
+            source: ContextSource::OpenVikingCheckpoint {
+                source_conversation_id: checkpoint.source_conversation_id.clone(),
+                source_turn_id: checkpoint.source_turn_id.clone(),
+                source_journal_sequence: checkpoint.source_journal_sequence,
+                uri: checkpoint.uri.clone(),
+            },
+        })
     }
 
     #[must_use]
@@ -553,6 +608,9 @@ impl TranscriptMessage {
                 snapshot_after_sequence,
                 ..
             } => *snapshot_after_sequence,
+            // Historical checkpoint evidence is appended after durable transcript
+            // at the frozen send snapshot, never interleaved as an authored turn.
+            ContextSource::OpenVikingCheckpoint { .. } => u64::MAX - 1,
             ContextSource::ControllerContinuation {
                 started_sequence, ..
             } => *started_sequence,
@@ -818,6 +876,17 @@ impl ContextPlan {
             .filter(|item| {
                 item.decision == InclusionDecision::Included
                     && matches!(item.source, ContextSource::LocalMemoryOneShot { .. })
+            })
+            .count()
+    }
+
+    #[must_use]
+    pub fn openviking_checkpoint_count(&self) -> usize {
+        self.inventory
+            .iter()
+            .filter(|item| {
+                item.decision == InclusionDecision::Included
+                    && matches!(item.source, ContextSource::OpenVikingCheckpoint { .. })
             })
             .count()
     }
@@ -1479,6 +1548,65 @@ mod tests {
             .find(|item| matches!(item.source, ContextSource::ControllerWorkerResult { .. }))
             .unwrap();
         assert_eq!(item.decision, InclusionDecision::ExcludedByPolicy);
+    }
+
+    #[test]
+    fn verified_openviking_checkpoint_is_user_level_and_keeps_source_provenance() {
+        let item = crate::openviking_memory_delivery::RetrievedCheckpoint {
+            source_conversation_id: "owner".to_owned(),
+            source_turn_id: "turn-8".to_owned(),
+            source_journal_sequence: 77,
+            uri: "viking://~/chatarium/conversations/owner/checkpoints/turn-8.md".to_owned(),
+            text: "Durable decision".to_owned(),
+        };
+        let message = TranscriptMessage::verified_openviking_checkpoint(&item, "owner").unwrap();
+        assert_eq!(message.role, TranscriptRole::User);
+        assert_eq!(message.order_sequence(), u64::MAX - 1);
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [message]);
+        assert_eq!(plan.openviking_checkpoint_count(), 1);
+        assert_eq!(plan.messages.len(), 1);
+        assert!(plan.messages[0].content.contains("not a developer/system instruction"));
+        assert!(plan.messages[0].content.contains("source_journal_sequence: #77"));
+        assert!(plan.messages[0].content.contains("Durable decision"));
+
+        let excluded = ContextPlan::compose(
+            ContextPolicy {
+                include_openviking_checkpoints: false,
+                ..ContextPolicy::dispatch()
+            },
+            "",
+            "",
+            [TranscriptMessage::verified_openviking_checkpoint(&item, "owner").unwrap()],
+        );
+        assert_eq!(excluded.openviking_checkpoint_count(), 0);
+        assert!(excluded.messages.is_empty());
+        assert!(matches!(
+            excluded.inventory[0].source,
+            ContextSource::OpenVikingCheckpoint { .. }
+        ));
+    }
+
+    #[test]
+    fn verified_openviking_checkpoint_rejects_cross_conversation_or_forged_uri() {
+        let mut item = crate::openviking_memory_delivery::RetrievedCheckpoint {
+            source_conversation_id: "owner".to_owned(),
+            source_turn_id: "turn-8".to_owned(),
+            source_journal_sequence: 77,
+            uri: "viking://~/chatarium/conversations/owner/checkpoints/turn-8.md".to_owned(),
+            text: "Evidence".to_owned(),
+        };
+        assert!(
+            TranscriptMessage::verified_openviking_checkpoint(&item, "other").is_err()
+        );
+        item.uri = "viking://~/chatarium/conversations/foreign/checkpoints/turn-8.md".to_owned();
+        assert!(
+            TranscriptMessage::verified_openviking_checkpoint(&item, "owner").is_err()
+        );
+        item.uri = crate::openviking_memory_delivery::checkpoint_uri("owner", "turn-8").unwrap();
+        item.source_journal_sequence = 0;
+        assert!(
+            TranscriptMessage::verified_openviking_checkpoint(&item, "owner").is_err()
+        );
     }
 
     #[test]
