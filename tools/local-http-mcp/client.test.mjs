@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { LocalMcpBroker, boundManifoldrResult } from "./client.mjs";
+import { LOCAL_SERVERS, LocalMcpBroker, boundManifoldrResult, validateOpenVikingArguments } from "./client.mjs";
 
 let server;
 let port;
@@ -74,6 +74,7 @@ function client() {
   return new LocalMcpBroker({ routes: {
     mathematica: { url, health: `http://127.0.0.1:${port}/healthz` },
     manifoldr: { url, health: `http://127.0.0.1:${port}/healthz` },
+    openviking: { url, health: `http://127.0.0.1:${port}/healthz` },
   } });
 }
 
@@ -245,4 +246,70 @@ test("oversized single-market descriptions do not hide real IDs or imply complet
   assert.equal(projected.structuredContent._chatarium_projection.complete, false);
   assert.ok(projected.structuredContent._chatarium_projection.omitted_entries > 0);
   assert.equal(projected.structuredContent.data.description, undefined);
+});
+
+test("OpenViking endpoint is pinned to loopback port 1933", () => {
+  assert.equal(LOCAL_SERVERS.openviking.url, "http://127.0.0.1:1933/mcp");
+  assert.equal(LOCAL_SERVERS.openviking.health, "http://127.0.0.1:1933/health");
+});
+
+test("OpenViking scoped retrieval and create-only checkpoint reach the MCP server", async () => {
+  const broker = client(), before = seen.length;
+  const scope = "viking://~/chatarium/conversations/chat-a";
+  const a = await broker.request({ conversation_id: "chat-a", provider: "openviking",
+    method: "call", name: "find", arguments: { query: "milestone", target_uri: scope, limit: 3 } });
+  assert.equal(a.structuredContent.name, "find");
+  const b = await broker.request({ conversation_id: "chat-a", provider: "openviking",
+    method: "call", name: "write", arguments: { uri: scope + "/checkpoints/turn-4.md",
+      content: "Milestone done; source commit abc.", mode: "create" } });
+  assert.equal(b.structuredContent.name, "write");
+  const calls = seen.slice(before).filter(x => x.method === "tools/call");
+  assert.deepEqual(calls.map(x => x.tool), ["find", "write"]);
+  assert.equal(calls[1].args.mode, "create");
+});
+
+test("OpenViking invalid scopes, context-mode searches, and overwrites fail before tools/call", async () => {
+  const failures = [
+    ["find", { query: "anything" }],
+    ["find", { query: "anything", target_uri: "viking://agent/skills" }],
+    ["search", { query: "anything", target_uri: "viking://~/chatarium", mode: "context" }],
+    ["read", { uris: "viking://~/secrets/token" }],
+    ["read", { uris: "viking://~/chatarium", limit: -1 }],
+    ["read", { uris: Array(4).fill("viking://~/chatarium") }],
+    ["write", { uri: "viking://~/chatarium/conversations/chat-a/checkpoints/1.md",
+      content: "overwrite", mode: "replace" }],
+    ["write", { uri: "viking://~/chatarium/conversations/../checkpoints/1.md",
+      content: "traversal", mode: "create" }],
+    ["write", { uri: "viking://~/chatarium/conversations/chat-a/checkpoints/1.md",
+      content: "x", mode: "create", acl: { acl_mode: "inherit" } }],
+    ["write", { uri: "viking://~/chatarium/conversations/chat-a/checkpoints/1.md",
+      content: "x".repeat(20000), mode: "create" }],
+    ["forget", { uri: "viking://~/chatarium" }],
+  ];
+  const broker = client(), before = seen.filter(x => x.method === "tools/call").length;
+  for (const [name, args] of failures) {
+    assert.throws(() => validateOpenVikingArguments(name, args), /OpenViking|scoped/);
+    await assert.rejects(broker.request({ conversation_id: "chat-guard",
+      provider: "openviking", method: "call", name, arguments: args }), /OpenViking/);
+  }
+  assert.equal(seen.filter(x => x.method === "tools/call").length, before);
+});
+
+test("OpenViking API key is never sent to another provider", async () => {
+  const headers = [];
+  const url = "http://127.0.0.1:" + port + "/mcp";
+  const health = "http://127.0.0.1:" + port + "/healthz";
+  const broker = new LocalMcpBroker({ routes: {
+    openviking: { url, health }, manifoldr: { url, health },
+  }, openVikingApiKey: "example-secret-not-real",
+     fetchImpl: async (url, init) => {
+       headers.push({ url, key: init.headers?.["X-Api-Key"] ?? null });
+       return fetch(url, init);
+     } });
+  await broker.request({ conversation_id: "c1", provider: "openviking",
+    method: "call", name: "read", arguments: { uris: "viking://~/chatarium/test.md", limit: 10 } });
+  await broker.request({ conversation_id: "c1", provider: "manifoldr", method: "list" });
+  assert.equal(headers.filter(h => h.key).length, 2);
+  assert.ok(headers.filter(h => h.key).every(h => h.key === "example-secret-not-real"));
+  assert.equal(headers[headers.length - 1].key, null);
 });
