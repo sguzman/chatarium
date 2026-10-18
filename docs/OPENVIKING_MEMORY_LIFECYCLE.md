@@ -6,8 +6,9 @@ create-only OpenViking writes and exact read-back verification are implemented.
 Confirmed checkpoint retrieval now automatically prefetches for the active
 conversation on a background worker and freezes provenance-marked evidence
 into authored Send context. Live verification against the user's running server,
-relevance-aware cross-conversation retrieval and context compaction remain
-pending.
+relevance-aware cross-conversation retrieval and semantic history compaction
+remain pending. A bounded 128 KiB inference context window is now wired to
+live dispatch and its inspector.
 The user must not have to remind an agent to save memories. Merely offering
 an MCP tool or adding an agent prompt is not completion of this feature.
 
@@ -148,10 +149,14 @@ turn and journal sequence visible in its provenance. The original journal is
 untouched.
 
 **Still missing:** topic-relevant selection, explicitly granted
-cross-conversation/project recall, lifecycle compaction and end-to-end testing
-against the user's actual running service. The initial reader intentionally
+cross-conversation/project recall, semantic lifecycle compaction and end-to-end
+testing against the user's actual running service. The initial reader intentionally
 does not search other conversation namespaces even when sharing OpenViking
-storage. This does not yet solve long-conversation context exhaustion.
+storage. The composer now bounds outgoing context at 128 KiB UTF-8, keeps the
+latest messages and critical control sources, prefers verified checkpoints to
+old raw transcript, and marks excluded sources in the exact-request inventory.
+This prevents unbounded input growth without deleting any journal events, but
+is **not** a model-token guarantee or complete semantic summary of omitted turns.
 
 ## What to save
 
