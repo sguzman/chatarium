@@ -177,7 +177,9 @@ Chatarium reuses the existing OpenViking service at
 daemon. Supported tools: `find`, `search`, `read`, and `write`.
 This is the **first transport slice**, not yet automatic memory checkpointing.
 
-The transport permits only `viking://~/chatarium` paths. Semantic
+The transport binds every request to
+`viking://~/chatarium/conversations/<requesting-conversation-id>`.
+A worker cannot name another conversation's memory directory. Semantic
 `find` and list-mode `search` require an explicit `target_uri` in that
 namespace and at most five results. `read` permits at most three scoped
 URIs and a maximum of 100 text lines per call. `write` permits only
