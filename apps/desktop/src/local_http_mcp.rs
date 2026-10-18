@@ -59,7 +59,11 @@ pub fn registered_tools() -> impl Iterator<Item = (&'static str, &'static str, &
             )
         }))
         .chain(OPENVIKING_TOOLS.iter().map(|&operation| {
-            (OPENVIKING, operation, "Scoped OpenViking memory; write creates new checkpoints only")
+            (
+                OPENVIKING,
+                operation,
+                "Scoped OpenViking memory; write creates new checkpoints only",
+            )
         }))
 }
 
