@@ -891,14 +891,22 @@ impl Workspace {
             .iter()
             .find(|message| message.id == message_id && message.to == worker)
             .ok_or("wake claim message missing")?;
-        if message.status != "delivered" || message.kind != "directive" {
-            return Err("wake claim message is not a delivered directive".to_owned());
+        // Admission changes an already dispatched directive to "consumed".
+        // Preserve its proof for same-turn tool continuations without making
+        // other consumed messages eligible for fresh wake claims.
+        let admitted = message.status == "consumed"
+            && message.consumed_ms.is_some()
+            && message.note == "admitted to recipient model request; preserved in transcript";
+        if (message.status != "delivered" && !admitted) || message.kind != "directive" {
+            return Err("wake claim message is not a delivered/admitted directive".to_owned());
         }
         let authorized = Self::route_for(c, message.from, worker).is_some_and(|(edge, _)| {
             edge.directives
                 && match edge.mode.as_str() {
                     "allow" | "rate_limit" => true,
-                    "queue" | "approve" => message.note == "released by human operator",
+                    "queue" | "approve" => {
+                        message.note == "released by human operator" || admitted
+                    }
                     _ => false,
                 }
         });
@@ -2520,6 +2528,30 @@ mod tests {
         assert_eq!(workspace.wake_leases[0].active_message_id, None);
         assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(target));
         let _ = fs::remove_file(missing_parent);
+    }
+
+    #[test]
+    fn consumed_wake_claim_remains_valid_for_same_turn_coordination_reply() {
+        let (mut workspace, container, director, worker) = setup();
+        workspace
+            .set_link(container, director, worker, true, true, "approve", 12)
+            .unwrap();
+        let directive = workspace
+            .send("chat-a", worker, "directive", "Approved", 10)
+            .unwrap()
+            .0;
+        workspace.decide(container, directive, true, 11).unwrap();
+        workspace.grant_wake_lease("chat-b", 1).unwrap();
+        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(directive));
+        assert_eq!(workspace.consume_ids("chat-b", &[directive], 12), 1);
+        assert_eq!(workspace.next_eligible_wake_id("chat-b"), None);
+        workspace.validate_wake_claim("chat-b", directive).unwrap();
+        workspace
+            .set_link(container, director, worker, false, false, "block", 12)
+            .unwrap();
+        assert!(workspace.validate_wake_claim("chat-b", directive).is_err());
+        workspace.stop_wake_lease("chat-b").unwrap();
+        assert!(workspace.validate_wake_claim("chat-b", directive).is_err());
     }
 
     #[test]
