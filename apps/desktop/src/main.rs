@@ -3363,7 +3363,11 @@ impl ChatariumApp {
                 } else {
                     self.inference_settings.for_conversation(worker).model?
                 };
-                if !self.remote_models.iter().any(|available| available.slug == model) {
+                if !self
+                    .remote_models
+                    .iter()
+                    .any(|available| available.slug == model)
+                {
                     return None;
                 }
                 let profile = if worker == self.local_conversation_id {
@@ -3414,8 +3418,7 @@ impl ChatariumApp {
             "not_user_authored": true
         })
         .to_string();
-        self.coordination_pending_wake =
-            Some((turn_id, target, inbox_ids.clone()));
+        self.coordination_pending_wake = Some((turn_id, target, inbox_ids.clone()));
         if self.queue_turn_event(turn_id, EventKind::CoordinationActivationStarted, payload) {
             self.coordination_auto_wake_count += 1;
             self.status = format!(
@@ -3434,7 +3437,9 @@ impl ChatariumApp {
             return;
         };
         if pending_id != turn_id
-            || !self.coordination_auto_wake_targets.contains(&conversation_id)
+            || !self
+                .coordination_auto_wake_targets
+                .contains(&conversation_id)
         {
             self.status =
                 "coordination wake target changed or disarmed; dispatch denied".to_owned();
@@ -3464,10 +3469,9 @@ impl ChatariumApp {
             return;
         }
         let selected = conversation_id == self.local_conversation_id;
-        let settings = self.inference_settings.for_conversation_with_mcp_defaults(
-            conversation_id,
-            &self.mcp_agent_defaults,
-        );
+        let settings = self
+            .inference_settings
+            .for_conversation_with_mcp_defaults(conversation_id, &self.mcp_agent_defaults);
         let Some(model) = (if selected {
             self.selected_model.clone()
         } else {
@@ -3607,7 +3611,10 @@ impl ChatariumApp {
         conversation_id: LocalConversationId,
         turn_id: LocalTurnId,
     ) -> bool {
-        if !self.coordination_auto_wake_targets.contains(&conversation_id) {
+        if !self
+            .coordination_auto_wake_targets
+            .contains(&conversation_id)
+        {
             return false;
         }
         let conversation = conversation_id.to_string();
@@ -6268,7 +6275,8 @@ impl ChatariumApp {
         if active.conversation_id != self.local_conversation_id
             && !self.is_authorized_background_wake_turn(active.conversation_id, active.turn_id)
         {
-            self.status = "coordination call denied: no valid background wake provenance".to_owned();
+            self.status =
+                "coordination call denied: no valid background wake provenance".to_owned();
             self.agent_mcp_flow = None;
             return;
         }

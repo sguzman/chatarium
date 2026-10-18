@@ -910,7 +910,10 @@ impl Workspace {
 
     /// A read-only scheduling hint; claim and network dispatch recheck policy.
     pub fn next_eligible_wake_id(&self, conversation: &str) -> Option<u64> {
-        let lease = self.wake_leases.iter().find(|lease| lease.conversation == conversation)?;
+        let lease = self
+            .wake_leases
+            .iter()
+            .find(|lease| lease.conversation == conversation)?;
         if lease.remaining == 0
             || lease.active_message_id.is_some()
             || lease.claimed_message_ids.len() >= MAX_WAKE_CLAIMS
