@@ -3829,22 +3829,22 @@ impl ChatariumApp {
                         // A checkpoint was confirmed while this read was in
                         // flight; its old snapshot cannot refresh the cache.
                         self.openviking_retrieval_cache.remove(&conversation_id);
-                        self.openviking_retrieval_retry_after.remove(&conversation_id);
+                        self.openviking_retrieval_retry_after
+                            .remove(&conversation_id);
                         continue;
                     }
                     match result {
                         Ok(checkpoints) => {
                             self.openviking_retrieval_cache
                                 .insert(conversation_id, checkpoints);
-                            self.openviking_retrieval_retry_after.remove(&conversation_id);
+                            self.openviking_retrieval_retry_after
+                                .remove(&conversation_id);
                         }
                         Err(error) => {
                             // The conversation remains usable. Retry after a
                             // bounded delay rather than on every UI frame.
-                            self.openviking_retrieval_retry_after.insert(
-                                conversation_id,
-                                Instant::now() + Duration::from_secs(300),
-                            );
+                            self.openviking_retrieval_retry_after
+                                .insert(conversation_id, Instant::now() + Duration::from_secs(300));
                             if conversation_id == self.local_conversation_id {
                                 self.status = format!(
                                     "OpenViking retrieval unavailable; continuing without memory: {error}"
@@ -3863,6 +3863,7 @@ impl ChatariumApp {
                         let affected = self
                             .openviking_retrieval_cache
                             .keys()
+                            .chain(self.openviking_retrieval_retry_after.keys())
                             .chain(self.openviking_retrieval_in_flight.iter())
                             .copied()
                             .filter(|id| id.to_string() == conversation_id)
