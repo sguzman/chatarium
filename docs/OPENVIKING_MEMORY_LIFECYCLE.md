@@ -158,6 +158,29 @@ old raw transcript, and marks excluded sources in the exact-request inventory.
 This prevents unbounded input growth without deleting any journal events, but
 is **not** a model-token guarantee or complete semantic summary of omitted turns.
 
+## Rolling checkpoint continuity
+
+Each new automatic checkpoint can now include the newest **earlier confirmed**
+checkpoint for the **same conversation** as lower-trust historical evidence,
+alongside the fresh bounded eight-message excerpt. The host reads the prior
+checkpoint's private local source file only after the durable outbox says its
+write was confirmed. Owner, exact source header, earlier journal sequence and
+strict file size are validated; unknown, future, foreign, incomplete and
+corrupted checkpoints never enter the summarizer. No extra localhost network
+round trip occurs during summary preparation.
+
+The model is instructed to retain still-valid decisions and unresolved work,
+remove superseded details, and produce one new concise immutable summary.
+A later checkpoint must not overtake an earlier in-progress same-conversation
+checkpoint, so a confirmed state can be carried forward. If an older summary
+is permanently blocked or its write is uncertain, the journal remains the
+fallback source; Chatarium never invents or retries an uncertain write.
+
+This improves long-running semantic continuity beyond the latest eight raw
+messages. It is still **lossy summarization**, not full replay or proof of
+complete fact preservation. End-to-end verification on the user's local
+OpenViking service is still outstanding.
+
 ## What to save
 
 A checkpoint is short, structured, and useful for resumption:
