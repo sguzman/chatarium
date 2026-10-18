@@ -904,9 +904,7 @@ impl Workspace {
             edge.directives
                 && match edge.mode.as_str() {
                     "allow" | "rate_limit" => true,
-                    "queue" | "approve" => {
-                        message.note == "released by human operator" || admitted
-                    }
+                    "queue" | "approve" => message.note == "released by human operator" || admitted,
                     _ => false,
                 }
         });
@@ -2542,7 +2540,10 @@ mod tests {
             .0;
         workspace.decide(container, directive, true, 11).unwrap();
         workspace.grant_wake_lease("chat-b", 1).unwrap();
-        assert_eq!(workspace.claim_next_wake("chat-b").unwrap(), Some(directive));
+        assert_eq!(
+            workspace.claim_next_wake("chat-b").unwrap(),
+            Some(directive)
+        );
         assert_eq!(workspace.consume_ids("chat-b", &[directive], 12), 1);
         assert_eq!(workspace.next_eligible_wake_id("chat-b"), None);
         workspace.validate_wake_claim("chat-b", directive).unwrap();
