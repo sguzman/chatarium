@@ -302,3 +302,34 @@ This document records the host implementation and its remaining
 validation work. Automated tests do not substitute for a verified
 authenticated end-to-end save/retrieval against the user's own OpenViking
 service.
+
+
+## Project-scoped memory permission foundation (development branch)
+
+A source conversation's existing project-folder binding is **not** permission
+to publish that conversation's memories to other conversations. Project-scoped
+recall has a separate, explicit, **directed** authorization model: a user-reviewed
+source-to-destination grant is bound to the project's verified canonical local
+directory. Permission in one direction never implies permission in reverse.
+
+The backend stores these metadata-only grants in
+`openviking-project-memory-grants.json` under the Chatarium data
+directory. The schema has strict identity, duplicate, size and count validation,
+with an atomic replacement save and a specific revocation operation. A missing
+grant file means no shared memory access. A malformed file rejects the read
+instead of allowing broader access. When the directory bindings no longer
+match the stored grant, that grant is ineligible.
+
+The scoped selection path takes at most one newest **confirmed** checkpoint
+per authorized source, at most three total. It never scans OpenViking's global
+namespace. Read-back is against the exact URI, and the entire response must
+match the locally persisted checkpoint with its owner, turn and journal-sequence
+header, within the 12 KiB shared retrieval budget. Foreign, unconfirmed,
+uncertain, mismatched, oversized and unbound entries are excluded or rejected.
+
+**This is a backend foundation, not a claim that sharing is enabled in live
+chat:** there is not yet a UI action to review and persist the grant, nor a
+background project retrieval scheduler and context-admission integration.
+The existing conversation-only retrieval remains the runtime default until
+that approval path is connected and tested. Live validation against the
+user's running OpenViking instance is still pending.
