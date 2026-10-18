@@ -3638,12 +3638,18 @@ impl ChatariumApp {
         } else {
             &settings.instructions
         };
-        let plan = context_composer::ContextPlan::compose(
+        let plan = match context_composer::ContextPlan::compose_bounded(
             context_composer::ContextPolicy::dispatch(),
             instructions,
             &developer,
             transcript,
-        );
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.status = format!("coordination wake context budget rejected: {error}");
+                return;
+            }
+        };
         let manifest = match mcp_dispatch_manifest::capture(
             conversation_id,
             "coordination_auto_wake",
@@ -3998,12 +4004,18 @@ impl ChatariumApp {
                             transcript.extend(intent.controller_coordination_result_context);
                             transcript
                                 .sort_by_key(context_composer::TranscriptMessage::order_sequence);
-                            let context_plan = context_composer::ContextPlan::compose(
+                            let context_plan = match context_composer::ContextPlan::compose_bounded(
                                 context_composer::ContextPolicy::dispatch(),
                                 intent.instructions.as_deref().unwrap_or_default(),
                                 intent.developer_context.as_str(),
                                 transcript,
-                            );
+                            ) {
+                                Ok(plan) => plan,
+                                Err(error) => {
+                                    self.status = format!("cannot compose bounded outgoing context: {error}");
+                                    continue;
+                                }
+                            };
                             let manifest = match mcp_dispatch_manifest::capture(
                                 message.conversation_id,
                                 "authored",
@@ -7793,12 +7805,18 @@ impl ChatariumApp {
             ),
         );
 
-        let context_plan = context_composer::ContextPlan::compose(
+        let context_plan = match context_composer::ContextPlan::compose_bounded(
             context_composer::ContextPolicy::dispatch(),
             self.conversation_instructions.as_str(),
             self.conversation_developer_context.as_str(),
             transcript,
-        );
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.status = format!("controller coordination context budget rejected: {error}");
+                return;
+            }
+        };
         let frozen_tool_sources = match admitted_tool_result_context_messages(
             &coordination_prefix,
             self.local_conversation_id,
@@ -8060,12 +8078,18 @@ impl ChatariumApp {
             ),
         );
 
-        let context_plan = context_composer::ContextPlan::compose(
+        let context_plan = match context_composer::ContextPlan::compose_bounded(
             context_composer::ContextPolicy::dispatch(),
             self.conversation_instructions.as_str(),
             self.conversation_developer_context.as_str(),
             transcript,
-        );
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.status = format!("worker continuation context budget rejected: {error}");
+                return;
+            }
+        };
         let frozen_tool_sources = match admitted_tool_result_context_messages(
             &execution_prefix,
             self.local_conversation_id,
@@ -14432,12 +14456,18 @@ impl eframe::App for ChatariumApp {
                                     self.draft.clone(),
                                 ));
                             }
-                            let context_plan = context_composer::ContextPlan::compose(
+                            let context_plan = match context_composer::ContextPlan::compose_bounded(
                                 context_composer::ContextPolicy::preview(),
                                 self.conversation_instructions.as_str(),
                                 self.conversation_developer_context.as_str(),
                                 transcript,
-                            );
+                            ) {
+                                Ok(plan) => plan,
+                                Err(error) => {
+                                    ui.label(format!("Bounded context preview unavailable: {error}"));
+                                    return;
+                                }
+                            };
                             ui.label(
                                 egui::RichText::new(format!(
                                     "Context Composer · {} durable transcript message{} · {} admitted routed item{} · {} admitted tool result{} · {} admitted local memor{} · {} verified OpenViking checkpoint{} · {} next-request-only memor{} · {} admitted controller result{} · {} admitted coordination result{} · developer context {} · current draft {}",
