@@ -230,7 +230,7 @@ mod tests {
             value[0]["content"]
                 .as_str()
                 .unwrap()
-                .contains("Source excerpt")
+                .contains("Current source excerpt")
         );
     }
 
