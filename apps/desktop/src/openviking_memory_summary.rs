@@ -194,7 +194,9 @@ pub fn validate_summary(output: &str) -> Result<String, String> {
 pub fn validate_rolling_summary(output: &str, has_confirmed_prior: bool) -> Result<String, String> {
     let summary = validate_summary(output)?;
     if has_confirmed_prior && summary == "NO_MEMORY" {
-        return Err("rolling checkpoint cannot silently discard confirmed prior history".to_owned());
+        return Err(
+            "rolling checkpoint cannot silently discard confirmed prior history".to_owned(),
+        );
     }
     Ok(summary)
 }
