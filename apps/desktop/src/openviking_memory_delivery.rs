@@ -199,19 +199,31 @@ mod tests {
                     .transition_durable(&path, owner, turn, seq, State::Ready, State::Dispatched)
                     .unwrap();
                 outbox
-                    .transition_durable(&path, owner, turn, seq, State::Dispatched, State::Confirmed)
+                    .transition_durable(
+                        &path,
+                        owner,
+                        turn,
+                        seq,
+                        State::Dispatched,
+                        State::Confirmed,
+                    )
                     .unwrap();
             }
         }
         let selected = confirmed_sources(&outbox, "owner").unwrap();
         assert_eq!(
-            selected.iter().map(|item| item.turn_id.as_str()).collect::<Vec<_>>(),
+            selected
+                .iter()
+                .map(|item| item.turn_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["newer", "older"]
         );
-        assert!(confirmed_sources(&outbox, "foreign")
-            .unwrap()
-            .iter()
-            .all(|item| item.conversation_id == "foreign"));
+        assert!(
+            confirmed_sources(&outbox, "foreign")
+                .unwrap()
+                .iter()
+                .all(|item| item.conversation_id == "foreign")
+        );
         assert!(confirmed_sources(&outbox, "../escape").is_err());
         assert!(confirmed_sources(&outbox, "").is_err());
         std::fs::remove_dir_all(dir).unwrap();
@@ -242,7 +254,14 @@ mod tests {
                 .transition_durable(&path, "owner", &turn, n, State::Ready, State::Dispatched)
                 .unwrap();
             outbox
-                .transition_durable(&path, "owner", &turn, n, State::Dispatched, State::Confirmed)
+                .transition_durable(
+                    &path,
+                    "owner",
+                    &turn,
+                    n,
+                    State::Dispatched,
+                    State::Confirmed,
+                )
                 .unwrap();
         }
         assert_eq!(
