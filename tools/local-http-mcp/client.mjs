@@ -1,13 +1,67 @@
-// Fixed-loopback MCP Streamable HTTP client for Chatarium.
+// Fixed-loopback MCP Streamable HTTP client for Chatarium, including scoped OpenViking.
 // No credentials, redirects, remote endpoints, dynamic hosts, or implicit tool retries.
 // Sessions are isolated by local conversation and provider.
 export const LOCAL_SERVERS = Object.freeze({
   mathematica: Object.freeze({ url: "http://127.0.0.1:8765/mcp", health: "http://127.0.0.1:8765/healthz" }),
   manifoldr: Object.freeze({ url: "http://127.0.0.1:8877/mcp", health: "http://127.0.0.1:8877/healthz" }),
+  openviking: Object.freeze({ url: "http://127.0.0.1:1933/mcp", health: "http://127.0.0.1:1933/health" }),
 });
 const MAX_REPLY = 4 * 1024 * 1024;
 const MATHEMATICA_PROTOCOL = "2025-03-26";
 const MANIFOLDR_PROTOCOL = "2025-11-25";
+const OPENVIKING_PROTOCOL = "2025-03-26";
+
+// Scope is enforced in the transport, not inferred from model instructions.
+// Do not expose other agents' memory, skills, resources or private user data.
+const MEMORY_ROOT = "viking://~/chatarium";
+const MEMORY_TOOLS = new Set(["find", "search", "read", "write"]);
+function scopedUri(uri) {
+  if (typeof uri !== "string" || !uri.startsWith(MEMORY_ROOT)) return false;
+  const remainder = uri.slice(MEMORY_ROOT.length);
+  if (remainder !== "" && !remainder.startsWith("/")) return false;
+  if (remainder.length > 512 || /[?#%\\]/.test(remainder)) return false;
+  return remainder === "" || remainder.split("/").slice(1).every(part =>
+    part.length > 0 && part !== "." && part !== ".." && /^[a-zA-Z0-9._-]+$/.test(part));
+}
+function exactKeys(args, required, optional = []) {
+  return required.every(k => Object.hasOwn(args, k))
+      && Object.keys(args).every(k => required.includes(k) || optional.includes(k));
+}
+function queryValid(q) { return typeof q === "string" && q.trim().length > 0 && q.length <= 512; }
+function limitValid(n, max) { return Number.isSafeInteger(n) && n >= 1 && n <= max; }
+export function validateOpenVikingArguments(name, args) {
+  if (!MEMORY_TOOLS.has(name) || !args || typeof args !== "object" || Array.isArray(args))
+    throw new Error("Unsupported or malformed OpenViking operation");
+  if (name === "find" || name === "search") {
+    const optional = name === "search" ? ["limit", "min_score", "mode"] : ["limit", "min_score"];
+    if (!exactKeys(args, ["query", "target_uri"], optional) || !queryValid(args.query)
+        || !scopedUri(args.target_uri) || (args.limit !== undefined && !limitValid(args.limit, 5))
+        || (args.min_score !== undefined && (typeof args.min_score !== "number"
+           || args.min_score < 0 || args.min_score > 1))
+        || (name === "search" && args.mode !== undefined && args.mode !== "list"))
+      throw new Error("OpenViking search must be scoped and bounded to Chatarium");
+    return;
+  }
+  if (name === "read") {
+    const uris = typeof args.uris === "string" ? [args.uris] : args.uris;
+    if (!exactKeys(args, ["uris"], ["offset", "limit"]) || !Array.isArray(uris)
+        || !limitValid(uris.length, 3) || !uris.every(scopedUri)
+        || (args.offset !== undefined && (!Number.isSafeInteger(args.offset)
+          || args.offset < 0 || args.offset > 100000))
+        || (args.limit !== undefined && !limitValid(args.limit, 100)))
+      throw new Error("OpenViking read must be scoped to three bounded Chatarium paths");
+    return;
+  }
+  // The installed v0.5.0 server's mode=create fails if the file exists.
+  // The model cannot overwrite existing memories or set ACLs.
+  if (!exactKeys(args, ["uri", "content", "mode"], ["wait"])
+      || !scopedUri(args.uri)
+      || !/^viking:\/\/~\/chatarium\/conversations\/[a-zA-Z0-9_-]+\/checkpoints\/[a-zA-Z0-9._-]+\.md$/.test(args.uri)
+      || args.mode !== "create" || typeof args.content !== "string"
+      || args.content.trim().length === 0 || Buffer.byteLength(args.content) > 16384
+      || (args.wait !== undefined && typeof args.wait !== "boolean"))
+    throw new Error("OpenViking write only permits create-only scoped checkpoint files");
+}
 
 function validateRoute(url) {
   const parsed = new URL(url);
@@ -141,8 +195,13 @@ export function boundManifoldrResult(operation, result) {
 }
 
 export class LocalMcpBroker {
-  constructor({ routes = LOCAL_SERVERS, fetchImpl = globalThis.fetch, timeoutMs = 120000 } = {}) {
+  constructor({ routes = LOCAL_SERVERS, fetchImpl = globalThis.fetch, timeoutMs = 120000,
+                openVikingApiKey = process.env.CHATARIUM_OPENVIKING_API_KEY || null } = {}) {
     for (const { url } of Object.values(routes)) validateRoute(url);
+    if (openVikingApiKey !== null && (typeof openVikingApiKey !== "string"
+        || !openVikingApiKey.trim() || /[\r\n]/.test(openVikingApiKey)))
+      throw new Error("Invalid OpenViking API key");
+    this.openVikingApiKey = openVikingApiKey;
     this.routes = routes;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
@@ -157,6 +216,8 @@ export class LocalMcpBroker {
       "MCP-Protocol-Version": state.protocol,
     };
     if (state.sessionId) headers["Mcp-Session-Id"] = state.sessionId;
+    if (state.provider === "openviking" && this.openVikingApiKey)
+      headers["X-Api-Key"] = this.openVikingApiKey;
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers,
@@ -236,8 +297,9 @@ export class LocalMcpBroker {
     let state = this.sessions.get(key);
     if (!state) {
       state = { sessionId: null, nextId: 0,
-        protocol: provider === "manifoldr" ? MANIFOLDR_PROTOCOL : MATHEMATICA_PROTOCOL,
-        initialized: false };
+        protocol: provider === "manifoldr" ? MANIFOLDR_PROTOCOL
+          : provider === "openviking" ? OPENVIKING_PROTOCOL : MATHEMATICA_PROTOCOL,
+        provider, initialized: false };
       this.sessions.set(key, state);
     }
     try {
@@ -247,6 +309,7 @@ export class LocalMcpBroker {
         if (typeof args.name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(args.name)
             || !args.arguments || typeof args.arguments !== "object" || Array.isArray(args.arguments))
           throw new Error("Invalid MCP tool name or JSON-object arguments");
+        if (provider === "openviking") validateOpenVikingArguments(args.name, args.arguments);
         // One attempt only. Transport timeout may be an unknown-outcome mutation.
         const result = await this._request(state, config.url, "tools/call", {
           name: args.name, arguments: args.arguments,
@@ -282,6 +345,8 @@ export class LocalMcpBroker {
     if (!Object.hasOwn(this.routes, provider)) throw new Error("Unsupported local MCP provider");
     const result = await this.fetchImpl(this.routes[provider].health, {
       method: "GET", redirect: "error", signal: AbortSignal.timeout(3000),
+      headers: provider === "openviking" && this.openVikingApiKey
+        ? { "X-Api-Key": this.openVikingApiKey } : {},
     });
     return { reachable: result.ok, status: result.status };
   }
