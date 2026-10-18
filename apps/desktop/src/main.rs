@@ -22198,6 +22198,97 @@ fn apply_worker_action(
     }
 }
 
+fn checkpoint_owner_for_turn(
+    events: &[EventEnvelope],
+    turn_id: LocalTurnId,
+) -> Option<LocalConversationId> {
+    let scope = local_turn_scope(turn_id);
+    let mut owner = None;
+    for event in events {
+        if event.kind != EventKind::UserMessageCommitted {
+            continue;
+        }
+        let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+            decode_user_message_commit(event)
+        else {
+            continue;
+        };
+        if local_turn_scope(message.turn_id) != scope {
+            continue;
+        }
+        if owner.is_some_and(|existing| existing != message.conversation_id) {
+            return None;
+        }
+        owner = Some(message.conversation_id);
+    }
+    owner
+}
+
+fn checkpoint_completion_eligible(event: &EventEnvelope) -> bool {
+    if event.kind != EventKind::AssistantCompletionObserved {
+        return false;
+    }
+    let Ok(payload) = serde_json::from_str::<Value>(&event.payload) else {
+        return false;
+    };
+    let Some(text) = payload["text"].as_str() else {
+        return false;
+    };
+    text.trim().chars().count() >= 160
+        && matches!(mcp_agent_defaults::parse_model_tool_request(text), Ok(None))
+}
+
+/// Recover committed assistant completions after the durable activation
+/// boundary. A crash between journaling completion and creating the outbox
+/// item must not permanently lose the checkpoint. Never ingest pre-existing
+/// transcript history on first installation or assign an ambiguous owner.
+fn reconcile_checkpoint_outbox(
+    store: &JsonlEventStore,
+    path: &std::path::Path,
+) -> Result<usize, String> {
+    let mut outbox = openviking_checkpoint_outbox::Outbox::load(path)?;
+    let journal_high_water = store.events().last().map_or(0, |event| event.sequence);
+    outbox.activate_durable(path, journal_high_water)?;
+    let boundary = outbox.started_after_sequence().unwrap_or(journal_high_water);
+    let mut recovered = 0;
+    for event in store.events() {
+        if event.sequence <= boundary || !checkpoint_completion_eligible(event) {
+            continue;
+        }
+        let Some(turn_string) = event.scope.as_deref().and_then(|value| value.strip_prefix("local-turn:")) else {
+            continue;
+        };
+        // Scope encoding belongs to Chatarium, not an untrusted model claim.
+        // Resolve an exact typed authored source before queuing anything.
+        let Some(message) = store.events().iter().find_map(|source| {
+            let Ok(Some(DecodedUserMessageCommit::Typed(message))) =
+                decode_user_message_commit(source)
+            else {
+                return None;
+            };
+            (local_turn_scope(message.turn_id) == event.scope.clone().unwrap_or_default())
+                .then_some(message)
+        }) else {
+            continue;
+        };
+        if checkpoint_owner_for_turn(store.events(), message.turn_id)
+            != Some(message.conversation_id)
+        {
+            continue;
+        }
+        let _ = turn_string;
+        if outbox.enqueue_durable(
+            path,
+            &message.conversation_id.to_string(),
+            &message.turn_id.to_string(),
+            event.sequence,
+        )? {
+            recovered += 1;
+        }
+    }
+    Ok(recovered)
+}
+
 fn persistence_worker(
     mut store: JsonlEventStore,
     data_dir: PathBuf,
@@ -22212,6 +22303,17 @@ fn persistence_worker(
             store.events().len()
         ),
     );
+    let checkpoint_outbox_path =
+        data_dir.join(openviking_checkpoint_outbox::FILE_NAME);
+    if let Err(error) = reconcile_checkpoint_outbox(&store, &checkpoint_outbox_path) {
+        let _ = notices.send(PersistNotice::Failed {
+            operation: "automatic memory checkpoint startup reconciliation",
+            revision: None,
+            request_id: None,
+            turn_id: None,
+            error,
+        });
+    }
     while let Ok(command) = commands.recv() {
         match command {
             PersistCommand::QueueMemoryCheckpoint {
@@ -22222,23 +22324,24 @@ fn persistence_worker(
                     event.kind == EventKind::AssistantCompletionObserved
                         && event.scope == Some(local_turn_scope(turn_id))
                 });
+                let owner_verified =
+                    checkpoint_owner_for_turn(store.events(), turn_id) == Some(conversation_id);
                 let result = (|| -> Result<Option<usize>, String> {
+                    if !owner_verified {
+                        return Err("checkpoint turn is not uniquely owned by the requesting conversation".to_owned());
+                    }
                     let event =
                         source.ok_or("checkpoint requested before durable model completion")?;
-                    let payload: Value = serde_json::from_str(&event.payload)
-                        .map_err(|e| format!("checkpoint terminal evidence invalid: {e}"))?;
-                    let text = payload["text"]
-                        .as_str()
-                        .ok_or("checkpoint completion has no assistant text")?;
-                    // Skip short conversational acknowledgements. The future
-                    // summary stage will filter non-durable longer outcomes.
-                    if text.trim().chars().count() < 160 {
+                    if !checkpoint_completion_eligible(event) {
                         return Ok(None);
                     }
-                    let path = data_dir.join(openviking_checkpoint_outbox::FILE_NAME);
-                    let mut outbox = openviking_checkpoint_outbox::Outbox::load(&path)?;
+                    let path = &checkpoint_outbox_path;
+                    let mut outbox = openviking_checkpoint_outbox::Outbox::load(path)?;
+                    if outbox.started_after_sequence().is_none() {
+                        return Err("checkpoint outbox has no durable activation boundary".to_owned());
+                    }
                     outbox.enqueue_durable(
-                        &path,
+                        path,
                         &conversation_id.to_string(),
                         &turn_id.to_string(),
                         event.sequence,
