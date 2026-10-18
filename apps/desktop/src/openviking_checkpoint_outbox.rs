@@ -212,8 +212,22 @@ impl Outbox {
         let parent = path.parent().ok_or("checkpoint outbox parent missing")?;
         fs::create_dir_all(parent).map_err(|e| format!("checkpoint outbox directory: {e}"))?;
         let temporary = path.with_extension("json.tmp");
-        let mut file = fs::File::create(&temporary)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
             .map_err(|e| format!("checkpoint outbox temporary file: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|e| format!("checkpoint outbox permissions: {e}"))?;
+        }
         use std::io::Write;
         file.write_all(&bytes)
             .and_then(|()| file.sync_all())
@@ -363,9 +377,14 @@ impl Outbox {
             }
         } else {
             use std::io::Write;
-            let mut dest = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut dest = options
                 .open(&file)
                 .map_err(|e| format!("cannot create checkpoint summary: {e}"))?;
             dest.write_all(body.as_bytes())
