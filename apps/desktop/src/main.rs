@@ -23394,7 +23394,8 @@ fn persistence_worker(
                 ) {
                     // Never reuse a proof for a different Ready checkpoint.
                     openviking_preflight_verified = None;
-                    if openviking_preflight_retry_after.is_some_and(|until| Instant::now() < until) {
+                    if openviking_preflight_retry_after.is_some_and(|until| Instant::now() < until)
+                    {
                         continue;
                     }
                     openviking_preflight_active = true;
