@@ -19973,7 +19973,9 @@ fn append_agent_mcp_call_checked(
     {
         // Reject before creating a route, even for an old saved Allow policy.
         // The host-owned outbox remains the only checkpoint write authority.
-        return Err("OpenViking writes use Chatarium's automatic verified checkpoint lifecycle".to_owned());
+        return Err(
+            "OpenViking writes use Chatarium's automatic verified checkpoint lifecycle".to_owned(),
+        );
     }
     if matches!(
         policy,
@@ -20277,7 +20279,9 @@ fn reserve_local_http_mcp_checked(
     let name = provider.name.as_str().to_owned();
     let operation = call.operation.as_str().to_owned();
     if !local_http_mcp::allowed_model_operation(&name, &operation) {
-        return Err("OpenViking model-authored checkpoint writes are blocked; host outbox only".to_owned());
+        return Err(
+            "OpenViking model-authored checkpoint writes are blocked; host outbox only".to_owned(),
+        );
     }
     let route = replay_routing_audit(store.events())?
         .into_iter()
@@ -28299,8 +28303,8 @@ mod tests {
             mcp_agent_defaults::ToolPolicy::Ask,
             mcp_agent_defaults::ToolPolicy::Automatic,
         ] {
-            let error = append_agent_mcp_call_checked(&mut store, owner, &proposal, policy)
-                .unwrap_err();
+            let error =
+                append_agent_mcp_call_checked(&mut store, owner, &proposal, policy).unwrap_err();
             assert!(error.contains("automatic verified checkpoint lifecycle"));
             assert!(store.events().is_empty());
         }
