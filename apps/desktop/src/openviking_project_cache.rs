@@ -331,11 +331,8 @@ mod tests {
         use crate::context_composer::{
             ContextPlan, ContextPolicy, TranscriptMessage, TranscriptRole,
         };
-        let question = TranscriptMessage::durable(
-            TranscriptRole::User,
-            "Recall the calendar reminders",
-            17,
-        );
+        let question =
+            TranscriptMessage::durable(TranscriptRole::User, "Recall the calendar reminders", 17);
         let limit = question.text.len() + ranked[1].text.len() + 20;
         let plan = ContextPlan::compose(
             ContextPolicy::dispatch(),
@@ -345,8 +342,17 @@ mod tests {
         )
         .within_utf8_budget(limit)
         .unwrap();
-        assert!(plan.messages.iter().any(|m| m.content.contains("Calendar review")));
-        assert!(!plan.messages.iter().any(|m| m.content.contains("Rust ownership")));
+        assert!(
+            plan.messages
+                .iter()
+                .any(|m| m.content.contains("Calendar review"))
+        );
+        assert!(
+            !plan
+                .messages
+                .iter()
+                .any(|m| m.content.contains("Rust ownership"))
+        );
         assert!(plan.size.omitted_items > 0);
 
         let no_match = cache.admitted_relevant_context(
