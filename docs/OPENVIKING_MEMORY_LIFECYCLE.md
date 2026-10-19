@@ -103,8 +103,12 @@ the metadata transition without rewriting the source.
 The persistence worker then records `ready -> dispatched` **before**
 launching a separate thread to call OpenViking `write`, with `mode=create`.
 It reads the exact file back through OpenViking MCP and transitions to
-`confirmed` only if the text matches exactly. A failed write/read, bridge
-crash or interruption becomes `uncertain`; the same external write is
+`confirmed` only if the text matches exactly. Because the create uses
+`wait: false`, verification allows up to five bounded **read-only**
+attempts (exponential pauses of 250, 500, 1,000, and 2,000 ms) to tolerate
+delayed materialization. No repeat `write` is permitted; if exact content
+never appears, the result remains `uncertain`. A failed write, bridge
+crash or interruption likewise becomes `uncertain`; the same external write is
 **not** blindly replayed. Startup reconciliation re-queues journaled
 completions that fell into the crash gap between journal append and outbox
 enqueue. First-run activation writes a high-water baseline so existing
@@ -371,6 +375,10 @@ It reads back the exact URI and verifies byte-for-byte content. This synthetic
 file is PERSISTENT; no delete, overwrite or retry of uncertain writes occurs.
 The probe never alters a real chat, journal or existing checkpoint. GitHub CI
 must never run write mode against the user's host. No automatic live writes.
+
+The synthetic probe uses the same five-read verification limit and never
+reissues a create request after a write was attempted. Transient read errors
+or not-yet-visible content may settle; persistent mismatches fail closed.
 
 The probe tests the installed transport, not the complete automatic
 summarization, outbox, grants and Send-context pipeline. That broader live
