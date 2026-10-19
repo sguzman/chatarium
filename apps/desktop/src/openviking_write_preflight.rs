@@ -27,6 +27,19 @@ pub(crate) fn matches_ready(
     verified == Some(selected)
 }
 
+/// Only reuse a successful server-compatibility check briefly during the
+/// current app process. This avoids synthetic QA files for each item in a
+/// burst of queued checkpoints, while requiring fresh proof after an idle
+/// interval or restart. An incompatible or timed-out probe is never cached.
+const COMPATIBILITY_LEASE: Duration = Duration::from_secs(300);
+
+pub(crate) fn recently_attested(verified_at: Option<Instant>, now: Instant) -> bool {
+    verified_at.is_some_and(|at| {
+        now.checked_duration_since(at)
+            .is_some_and(|elapsed| elapsed < COMPATIBILITY_LEASE)
+    })
+}
+
 /// One disposable, randomly named synthetic namespace per attempted checkpoint.
 /// No user text or production URI is sent to the diagnostic. It may leave a
 /// synthetic QA file behind; an ambiguous outcome never authorizes the write.
@@ -96,6 +109,21 @@ pub fn verify_before_checkpoint_write() -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_recent_compatibility_lease_covers_only_a_short_process_local_window() {
+        let start = Instant::now();
+        assert!(!recently_attested(None, start));
+        assert!(recently_attested(Some(start), start));
+        assert!(recently_attested(
+            Some(start),
+            start + Duration::from_secs(299)
+        ));
+        assert!(!recently_attested(
+            Some(start),
+            start + Duration::from_secs(300)
+        ));
+    }
 
     #[test]
     fn a_preflight_proof_cannot_be_reused_for_another_checkpoint() {
