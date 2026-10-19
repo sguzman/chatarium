@@ -1128,6 +1128,195 @@ mod project_scope_tests {
         assert!(!invoked);
     }
 
+    /// A complete synthetic host lifecycle: durable outbox, one create,
+    /// eventual read-back, confirmation, restarted grants, exact foreign-chat
+    /// admission, and revocation. No actual OpenViking data is modified.
+    #[test]
+    fn openviking_checkpoint_create_verify_restore_and_authorized_recall() {
+        use std::cell::RefCell;
+        use std::collections::BTreeMap;
+        let source = chatarium_core::LocalConversationId::new();
+        let destination = chatarium_core::LocalConversationId::new();
+        let other = chatarium_core::LocalConversationId::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-openviking-full-host-{}-{nonce}",
+            std::process::id()
+        ));
+        let shared = root.join("project");
+        let unrelated = root.join("other");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(&unrelated).unwrap();
+        let mut catalog = LocalConversationCatalog::default();
+        for (id, directory) in [
+            (source, &shared),
+            (destination, &shared),
+            (other, &unrelated),
+        ] {
+            catalog.create(id, 1);
+            catalog
+                .set_project_directory(id, Some(directory.display().to_string()), 2)
+                .unwrap();
+        }
+        let owner = source.to_string();
+        let turn = "turn-1";
+        let sequence = 42;
+        let outbox_path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let grants_path = root.join(PROJECT_MEMORY_GRANTS_FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&outbox_path, 0).unwrap();
+        assert!(outbox
+            .enqueue_durable(&outbox_path, &owner, turn, sequence)
+            .unwrap());
+        outbox
+            .save_summary_durable(
+                &outbox_path,
+                &owner,
+                turn,
+                sequence,
+                "The Rust OpenViking integration requires verified recall.",
+            )
+            .unwrap();
+        outbox
+            .transition_durable(
+                &outbox_path,
+                &owner,
+                turn,
+                sequence,
+                State::Ready,
+                State::Dispatched,
+            )
+            .unwrap();
+        let body = std::fs::read_to_string(
+            Outbox::summary_path(&outbox_path, &owner, turn).unwrap(),
+        )
+        .unwrap();
+        let remote = RefCell::new(BTreeMap::<String, String>::new());
+        let mut writes = 0;
+        let mut reads = 0;
+        deliver_create_once_with(
+            &owner,
+            turn,
+            &body,
+            |request_owner, _, provider, operation, args| {
+                assert_eq!(request_owner, owner);
+                assert_eq!(provider, local_http_mcp::OPENVIKING);
+                match operation {
+                    "write" => {
+                        writes += 1;
+                        assert_eq!(args["mode"], "create");
+                        assert_eq!(args["wait"], false);
+                        let uri = args["uri"].as_str().unwrap().to_owned();
+                        assert!(remote.borrow_mut().insert(uri, body.clone()).is_none());
+                        Ok(json!({"content": [{"type": "text", "text": "accepted"}]}))
+                    }
+                    "read" => {
+                        reads += 1;
+                        let uri = args["uris"].as_str().unwrap();
+                        if reads == 1 {
+                            return Err("async checkpoint is not visible yet".to_owned());
+                        }
+                        let text = remote.borrow().get(uri).unwrap().clone();
+                        Ok(json!({"content": [{"type": "text", "text": text}]}))
+                    }
+                    _ => panic!("only create and read are permitted"),
+                }
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!((writes, reads), (1, 2));
+        outbox
+            .transition_durable(
+                &outbox_path,
+                &owner,
+                turn,
+                sequence,
+                State::Dispatched,
+                State::Confirmed,
+            )
+            .unwrap();
+        assert_eq!(
+            Outbox::load(&outbox_path).unwrap().entries()[0].state,
+            State::Confirmed
+        );
+
+        let mut grants = ProjectMemoryGrants::default();
+        let before_grant = retrieve_confirmed_for_project_with_read(
+            &outbox_path,
+            &catalog,
+            &grants,
+            destination,
+            |_, _, _| panic!("an ungranted source must never be read"),
+        )
+        .unwrap();
+        assert!(before_grant.is_empty());
+
+        grants.grant(&catalog, source, destination).unwrap();
+        grants.save_atomic(&grants_path).unwrap();
+        let mut restarted_grants = ProjectMemoryGrants::load(&grants_path).unwrap();
+        let mut retrievals = 0;
+        let memories = retrieve_confirmed_for_project_with_read(
+            &outbox_path,
+            &catalog,
+            &restarted_grants,
+            destination,
+            |uri, request_owner, request_turn| {
+                retrievals += 1;
+                assert_eq!(request_owner, owner);
+                assert_eq!(request_turn, turn);
+                let expected = remote.borrow().get(uri).unwrap().clone();
+                Ok(json!({"content": [{"type": "text", "text": expected}]}))
+            },
+        )
+        .unwrap();
+        assert_eq!(retrievals, 1);
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].text, body);
+        assert_eq!(memories[0].source_journal_sequence, sequence);
+        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+            &memories[0],
+            destination,
+            &catalog,
+            &restarted_grants,
+        )
+        .unwrap()
+        .text
+        .contains("verified recall"));
+        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+            &memories[0],
+            other,
+            &catalog,
+            &restarted_grants,
+        )
+        .is_err());
+
+        assert!(restarted_grants.revoke(source, destination));
+        restarted_grants.save_atomic(&grants_path).unwrap();
+        let revoked = ProjectMemoryGrants::load(&grants_path).unwrap();
+        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+            &memories[0],
+            destination,
+            &catalog,
+            &revoked,
+        )
+        .is_err());
+        assert!(retrieve_confirmed_for_project_with_read(
+            &outbox_path,
+            &catalog,
+            &revoked,
+            destination,
+            |_, _, _| panic!("revoked source must not trigger a read"),
+        )
+        .unwrap()
+        .is_empty());
+        assert_eq!(writes, 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Exercises durable checkpoint creation, exact URI retrieval, explicit
     /// cross-chat permission, model context admission, revocation and restart
     /// with a fake OpenViking read backend. Never contacts a real service.
