@@ -309,8 +309,8 @@ mod tests {
             "",
         );
         assert_eq!(baseline.len(), 2);
-        assert!(baseline[0].content.contains("Calendar review"));
-        assert!(baseline[1].content.contains("Rust ownership"));
+        assert!(baseline[0].text.contains("Calendar review"));
+        assert!(baseline[1].text.contains("Rust ownership"));
 
         // A relevant project checkpoint moves to the last (highest-budget-
         // priority) position, but its exact source identity is preserved.
@@ -322,10 +322,10 @@ mod tests {
             "Can you recall the calendar meeting reminders?",
         );
         assert_eq!(ranked.len(), 2);
-        assert!(ranked[0].content.contains("Rust ownership"));
-        assert!(ranked[1].content.contains("Calendar review"));
-        assert!(ranked[0].content.contains(&source.to_string()));
-        assert!(ranked[1].content.contains(&destination.to_string()));
+        assert!(ranked[0].text.contains("Rust ownership"));
+        assert!(ranked[1].text.contains("Calendar review"));
+        assert!(ranked[0].text.contains(&source.to_string()));
+        assert!(ranked[1].text.contains(&destination.to_string()));
 
         let no_match = cache.admitted_relevant_context(
             Some(std::slice::from_ref(&own)),
@@ -345,8 +345,8 @@ mod tests {
             "rust ownership",
         );
         assert_eq!(after_revoke.len(), 1);
-        assert!(after_revoke[0].content.contains("Calendar review"));
-        assert!(!after_revoke[0].content.contains("Rust ownership"));
+        assert!(after_revoke[0].text.contains("Calendar review"));
+        assert!(!after_revoke[0].text.contains("Rust ownership"));
     }
 
     #[test]
