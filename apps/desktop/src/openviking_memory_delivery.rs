@@ -1272,9 +1272,7 @@ pub fn retrieve_confirmed_for_project(
     permissions: &ProjectMemoryGrants,
     destination: chatarium_core::LocalConversationId,
 ) -> Result<Vec<RetrievedCheckpoint>, String> {
-    retrieve_confirmed_for_project_query(
-        outbox_path, catalog, permissions, destination, "",
-    )
+    retrieve_confirmed_for_project_query(outbox_path, catalog, permissions, destination, "")
 }
 
 /// Query-aware historical recall with the same explicit source/destination
@@ -1332,7 +1330,12 @@ fn retrieve_confirmed_for_project_with_read(
     read: impl FnMut(&str, &str, &str) -> Result<Value, String>,
 ) -> Result<Vec<RetrievedCheckpoint>, String> {
     retrieve_confirmed_for_project_with_query_and_read(
-        outbox_path, catalog, permissions, destination, "", read,
+        outbox_path,
+        catalog,
+        permissions,
+        destination,
+        "",
+        read,
     )
 }
 
@@ -1346,7 +1349,12 @@ fn retrieve_confirmed_for_project_with_query_and_read(
 ) -> Result<Vec<RetrievedCheckpoint>, String> {
     let outbox = crate::openviking_checkpoint_outbox::Outbox::load(outbox_path)?;
     let sources = select_confirmed_project_history(
-        &outbox, outbox_path, catalog, permissions, destination, query,
+        &outbox,
+        outbox_path,
+        catalog,
+        permissions,
+        destination,
+        query,
     )?;
     let mut used_bytes = 0usize;
     let mut result = Vec::with_capacity(sources.len());
@@ -1524,12 +1532,36 @@ mod project_scope_tests {
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
         for (owner, turn, seq, summary, confirm) in [
-            (source, "old-rust", 1, "Rust ownership borrow checker decision", true),
-            (foreign, "foreign", 2, "Rust ownership private controller data", true),
+            (
+                source,
+                "old-rust",
+                1,
+                "Rust ownership borrow checker decision",
+                true,
+            ),
+            (
+                foreign,
+                "foreign",
+                2,
+                "Rust ownership private controller data",
+                true,
+            ),
             (source, "old-ui", 3, "UI typography spacing decision", true),
-            (source, "unconfirmed", 4, "Rust ownership unconfirmed", false),
+            (
+                source,
+                "unconfirmed",
+                4,
+                "Rust ownership unconfirmed",
+                false,
+            ),
             (source, "recent", 5, "Newer weather checkpoint", true),
-            (source, "latest", 6, "Latest work and outstanding tasks", true),
+            (
+                source,
+                "latest",
+                6,
+                "Latest work and outstanding tasks",
+                true,
+            ),
         ] {
             let owner = owner.to_string();
             outbox.enqueue_durable(&path, &owner, turn, seq).unwrap();
@@ -1541,16 +1573,31 @@ mod project_scope_tests {
                     .transition_durable(&path, &owner, turn, seq, State::Ready, State::Dispatched)
                     .unwrap();
                 outbox
-                    .transition_durable(&path, &owner, turn, seq, State::Dispatched, State::Confirmed)
+                    .transition_durable(
+                        &path,
+                        &owner,
+                        turn,
+                        seq,
+                        State::Dispatched,
+                        State::Confirmed,
+                    )
                     .unwrap();
             }
         }
 
         let selected = select_confirmed_project_history(
-            &outbox, &path, &catalog, &grants, destination, "Review Rust ownership",
+            &outbox,
+            &path,
+            &catalog,
+            &grants,
+            destination,
+            "Review Rust ownership",
         )
         .unwrap();
-        let names: Vec<_> = selected.iter().map(|(entry, _)| entry.turn_id.as_str()).collect();
+        let names: Vec<_> = selected
+            .iter()
+            .map(|(entry, _)| entry.turn_id.as_str())
+            .collect();
         assert_eq!(names, ["latest", "old-rust"]);
         assert!(!names.contains(&"foreign"));
         assert!(!names.contains(&"unconfirmed"));
@@ -1574,19 +1621,26 @@ mod project_scope_tests {
         .unwrap();
         assert_eq!(remote_reads, ["latest", "old-rust"]);
         assert_eq!(retrieved.len(), 2);
-        assert!(retrieved.iter().all(|memory| memory.source_conversation_id == source.to_string()));
+        assert!(
+            retrieved
+                .iter()
+                .all(|memory| memory.source_conversation_id == source.to_string())
+        );
 
         // Empty query keeps the previous newest-per-source behavior.
-        let no_query = select_confirmed_project_history(
-            &outbox, &path, &catalog, &grants, destination, "",
-        )
-        .unwrap();
+        let no_query =
+            select_confirmed_project_history(&outbox, &path, &catalog, &grants, destination, "")
+                .unwrap();
         assert_eq!(no_query.len(), 1);
         assert_eq!(no_query[0].0.turn_id, "latest");
 
         assert!(grants.revoke(source, destination));
         let revoked = retrieve_confirmed_for_project_with_query_and_read(
-            &path, &catalog, &grants, destination, "Rust ownership",
+            &path,
+            &catalog,
+            &grants,
+            destination,
+            "Rust ownership",
             |_, _, _| panic!("revoked project must never issue a remote read"),
         )
         .unwrap();
@@ -1602,13 +1656,16 @@ mod project_scope_tests {
         let project = std::env::current_dir().unwrap().display().to_string();
         for (id, n) in [(source, 1), (dest, 2)] {
             catalog.create(id, n);
-            catalog.set_project_directory(id, Some(project.clone()), n + 2).unwrap();
+            catalog
+                .set_project_directory(id, Some(project.clone()), n + 2)
+                .unwrap();
         }
         let mut grants = ProjectMemoryGrants::default();
         grants.grant(&catalog, source, dest).unwrap();
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap().as_nanos();
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!(
             "chatarium-project-drift-{}-{nonce}",
             std::process::id()
@@ -1617,18 +1674,38 @@ mod project_scope_tests {
         let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
-        outbox.enqueue_durable(&path, &source.to_string(), "turn", 1).unwrap();
+        outbox
+            .enqueue_durable(&path, &source.to_string(), "turn", 1)
+            .unwrap();
         outbox
             .save_summary_durable(&path, &source.to_string(), "turn", 1, "verified Rust plan")
             .unwrap();
         outbox
-            .transition_durable(&path, &source.to_string(), "turn", 1, State::Ready, State::Dispatched)
+            .transition_durable(
+                &path,
+                &source.to_string(),
+                "turn",
+                1,
+                State::Ready,
+                State::Dispatched,
+            )
             .unwrap();
         outbox
-            .transition_durable(&path, &source.to_string(), "turn", 1, State::Dispatched, State::Confirmed)
+            .transition_durable(
+                &path,
+                &source.to_string(),
+                "turn",
+                1,
+                State::Dispatched,
+                State::Confirmed,
+            )
             .unwrap();
         let error = retrieve_confirmed_for_project_with_query_and_read(
-            &path, &catalog, &grants, dest, "Rust",
+            &path,
+            &catalog,
+            &grants,
+            dest,
+            "Rust",
             |_, _, _| Ok(json!({"content": [{"type": "text", "text": "TAMPERED"}]})),
         )
         .unwrap_err();
