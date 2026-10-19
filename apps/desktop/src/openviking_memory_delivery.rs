@@ -44,7 +44,15 @@ pub fn deliver_create_once(conversation: &str, turn: &str, content: &str) -> Res
         conversation,
         turn,
         content,
-        local_http_mcp::invoke,
+        |owner, key, provider, operation, args| {
+            if provider == local_http_mcp::OPENVIKING && operation == "write" {
+                // The sole production write route is host-owned, not a
+                // model-approved generic MCP invocation.
+                local_http_mcp::invoke_checkpoint_write(owner, turn, content)
+            } else {
+                local_http_mcp::invoke(owner, key, provider, operation, args)
+            }
+        },
         std::thread::sleep,
     )
 }
