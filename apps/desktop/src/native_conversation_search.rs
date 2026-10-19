@@ -378,6 +378,10 @@ struct NativeRowsCache {
     query: String,
     show_archived: bool,
     catalog: Vec<CatalogSearchKey>,
+    // Retain the exact per-owner projections used to build these rows. A new
+    // journal index can share all but one owner's message Arc; keeping those
+    // identities lets sidebar refresh skip unchanged, potentially huge chats.
+    row_sources: Vec<Option<Arc<Vec<DisplayMessage>>>>,
     rows: Arc<Vec<NativeSearchRow>>,
 }
 
@@ -531,32 +535,66 @@ pub fn cached_rows(
         })
         .collect::<Vec<_>>();
     let id = egui::Id::new("chatarium-native-conversation-search-rows");
-    if let Some(cache) = ctx.data_mut(|data| data.get_temp::<NativeRowsCache>(id)) {
+    let previous = ctx.data_mut(|data| data.get_temp::<NativeRowsCache>(id));
+    if let Some(cache) = &previous {
         if Arc::ptr_eq(&cache.index, index)
             && cache.query == query
             && cache.show_archived == show_archived
             && cache.catalog == catalog
         {
-            return cache.rows;
+            return Arc::clone(&cache.rows);
         }
     }
 
+    // Query and catalog changes require a full scan. A new index caused by
+    // a journal append may still share each unaffected conversation's Arc.
+    // Reuse both matching rows and cached misses without inspecting their
+    // transcripts again. The catalog snapshot fixes the row indices/order.
+    let reusable = previous.as_ref().is_some_and(|cache| {
+        cache.query == query
+            && cache.show_archived == show_archived
+            && cache.catalog == catalog
+            && cache.row_sources.len() == entries.len()
+    });
     let needle = query.trim().to_lowercase();
     let mut rows = Vec::new();
+    let mut row_sources = Vec::with_capacity(entries.len());
     for (catalog_index, entry) in entries.iter().enumerate() {
-        if entry.archived && !show_archived {
-            continue;
+        let projection = index.messages.get(&entry.id);
+        let unchanged = reusable
+            && previous.as_ref().is_some_and(|cache| {
+                match (cache.row_sources[catalog_index].as_ref(), projection) {
+                    (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+                    (None, None) => true,
+                    _ => false,
+                }
+            });
+        if !entry.archived || show_archived {
+            let row = if unchanged {
+                // Rows are ordered by catalog_index. A failed lookup is a
+                // genuine cached miss, not permission to scan another owner.
+                previous.as_ref().and_then(|cache| {
+                    cache
+                        .rows
+                        .binary_search_by_key(&catalog_index, |row| row.catalog_index)
+                        .ok()
+                        .map(|position| cache.rows[position].clone())
+                })
+            } else {
+                let messages = index.messages(entry.id);
+                let title = entry
+                    .title
+                    .as_deref()
+                    .filter(|title| !title.trim().is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| derived_conversation_title(messages));
+                collect_native_search_row(&needle, catalog_index, title, messages)
+            };
+            if let Some(row) = row {
+                rows.push(row);
+            }
         }
-        let messages = index.messages(entry.id);
-        let title = entry
-            .title
-            .as_deref()
-            .filter(|title| !title.trim().is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| derived_conversation_title(messages));
-        if let Some(row) = collect_native_search_row(&needle, catalog_index, title, messages) {
-            rows.push(row);
-        }
+        row_sources.push(projection.cloned());
     }
     let rows = Arc::new(rows);
     ctx.data_mut(|data| {
@@ -567,6 +605,7 @@ pub fn cached_rows(
                 query: query.to_owned(),
                 show_archived,
                 catalog,
+                row_sources,
                 rows: Arc::clone(&rows),
             },
         )
@@ -1878,6 +1917,92 @@ mod tests {
         let fresh = cached_rows(&ctx, &advanced_index, &archived_entries, false, "rust");
         assert_eq!(fresh.len(), 1);
         assert_eq!(archived_entries[fresh[0].catalog_index].id, second);
+    }
+
+    #[test]
+    fn sidebar_rows_reuse_unchanged_conversations_after_other_chat_appends() {
+        use super::super::local_conversations::LocalConversationCatalog;
+        use chatarium_store::{EventStore, MemoryEventStore};
+
+        let ctx = egui::Context::default();
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let third = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        for (owner, when, title) in [
+            (first, 1, "First"),
+            (second, 2, "Second"),
+            (third, 3, "Third"),
+        ] {
+            catalog.create(owner, when);
+            catalog.rename(owner, Some(title.to_owned()), when).unwrap();
+        }
+        let entries = catalog.entries();
+        let mut store = MemoryEventStore::default();
+        author(&mut store, first, "needle in the first chat");
+        author(&mut store, second, "no initial match");
+        author(&mut store, third, "needle in the third chat");
+        let initial_index = cached_index(&ctx, store.events());
+        let initial = cached_rows(&ctx, &initial_index, &entries, false, "needle");
+        assert_eq!(initial.len(), 2);
+        let cache_id = egui::Id::new("chatarium-native-conversation-search-rows");
+        let before = ctx
+            .data_mut(|data| data.get_temp::<NativeRowsCache>(cache_id))
+            .unwrap();
+
+        // A new message changes only its owner's projection; the two earlier
+        // hits remain correct, and a previously cached miss becomes visible.
+        author(&mut store, second, "needle appears here now");
+        let updated_index = cached_index(&ctx, store.events());
+        assert!(!Arc::ptr_eq(&initial_index, &updated_index));
+        assert!(Arc::ptr_eq(
+            initial_index.messages.get(&first).unwrap(),
+            updated_index.messages.get(&first).unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            initial_index.messages.get(&third).unwrap(),
+            updated_index.messages.get(&third).unwrap()
+        ));
+        let updated = cached_rows(&ctx, &updated_index, &entries, false, "needle");
+        assert_eq!(updated.len(), 3);
+        assert!(updated
+            .iter()
+            .any(|row| entries[row.catalog_index].id == second
+                && row.message_index == Some(1)
+                && row.summary.message_count == 2));
+        let after = ctx
+            .data_mut(|data| data.get_temp::<NativeRowsCache>(cache_id))
+            .unwrap();
+        for owner in [first, third] {
+            let position = entries.iter().position(|entry| entry.id == owner).unwrap();
+            assert!(Arc::ptr_eq(
+                before.row_sources[position].as_ref().unwrap(),
+                after.row_sources[position].as_ref().unwrap()
+            ));
+            assert_eq!(
+                before.rows.iter().find(|row| row.catalog_index == position),
+                after.rows.iter().find(|row| row.catalog_index == position)
+            );
+        }
+        assert!(Arc::ptr_eq(
+            &updated,
+            &cached_rows(&ctx, &updated_index, &entries, false, "needle")
+        ));
+
+        // An unchanged search miss must stay excluded after an unrelated
+        // journal append, but the owner's own append must invalidate it.
+        let absent = cached_rows(&ctx, &updated_index, &entries, false, "new topic");
+        assert!(absent.is_empty());
+        author(&mut store, first, "still no matching phrase");
+        let next_index = cached_index(&ctx, store.events());
+        assert!(cached_rows(&ctx, &next_index, &entries, false, "new topic").is_empty());
+        author(&mut store, third, "a new topic belongs to this chat");
+        let last_index = cached_index(&ctx, store.events());
+        let found = cached_rows(&ctx, &last_index, &entries, false, "new topic");
+        assert_eq!(found.len(), 1);
+        assert_eq!(entries[found[0].catalog_index].id, third);
+        assert_eq!(found[0].message_index, Some(1));
+        assert_eq!(found[0].summary.message_count, 2);
     }
 
     #[test]
