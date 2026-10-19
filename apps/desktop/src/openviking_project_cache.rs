@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(sent.messages[1].role, "user");
         assert!(sent.messages[1].content.contains("Shared milestone: beta passed."));
         assert!(sent.messages[1].content.contains("explicitly granted project-shared"));
-        assert!(matches!(sent.messages[1].source,
+        assert!(matches!(&sent.messages[1].source,
             ContextSource::OpenVikingCheckpoint { source_journal_sequence: 35, .. }));
         let preview = ContextPlan::compose_bounded(
             ContextPolicy::preview(), "", "",
