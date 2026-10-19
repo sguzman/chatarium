@@ -154,7 +154,21 @@ async function withFakeHttpOpenViking(t, behavior = {}) {
       assert.equal(args.mode, "create");
       assert.equal(args.wait, false);
       assert.match(args.uri, /^viking:\/\/~\/chatarium\/conversations\/chatarium_openviking_qa_/);
-      assert.ok(!files.has(args.uri), "checkpoint create must not overwrite");
+      if (files.has(args.uri)) {
+        // A repeated write is permitted ONLY in the explicit synthetic
+        // create-exclusivity diagnostic; never as a production retry.
+        if (!behavior.exclusiveCreate && !behavior.permissiveCreate && !behavior.collisionFailure) {
+          assert.fail("a second create must never be attempted");
+        }
+        if (behavior.exclusiveCreate) {
+          reply({ isError: true, content: [{ type: "text", text: "409 ALREADY_EXISTS" }] });
+          return;
+        }
+        if (behavior.collisionFailure) {
+          reply({ isError: true, content: [{ type: "text", text: "500 temporary failure" }] });
+          return;
+        }
+      }
       // The server may commit a write even if it only returns HTTP 202.
       files.set(args.uri, args.content);
       if (behavior.toolWriteError) {
@@ -234,6 +248,45 @@ test("real HTTP MCP delayed readback confirms one create without retry", async t
   assert.deepEqual(calls.map(call => call.name ?? call.method),
     ["initialize", "tools/list", "write", "read", "read", "read"]);
   assert.equal(files.size, 1);
+});
+
+test("explicit synthetic check proves exclusive-create semantics over MCP HTTP", async t => {
+  const { broker, calls, files } = await withFakeHttpOpenViking(t, { exclusiveCreate: true });
+  const result = await probeOpenViking({
+    broker, nonce: "exclusive_http_123", verifyExclusiveCreate: true,
+    pause: async () => {},
+  });
+  assert.equal(result.verified, true);
+  assert.equal(result.exclusiveCreate, true);
+  assert.equal(result.mode, "synthetic-exclusive-create");
+  assert.deepEqual(calls.map(call => call.name ?? call.method),
+    ["initialize", "tools/list", "write", "read", "write", "read"]);
+  assert.equal(files.size, 1);
+  assert.equal(files.get(result.uri), calls[2].args.content);
+  assert.notEqual(calls[2].args.content, calls[4].args.content);
+});
+
+test("permissive create alias is rejected as unsafe before enabling checkpoint writes", async t => {
+  const { broker, calls, files } = await withFakeHttpOpenViking(t, { permissiveCreate: true });
+  await assert.rejects(probeOpenViking({
+    broker, nonce: "permissive_http_123", verifyExclusiveCreate: true,
+    pause: async () => {},
+  }), /unsafe for checkpoint writes/);
+  assert.deepEqual(calls.map(call => call.name ?? call.method),
+    ["initialize", "tools/list", "write", "read", "write"]);
+  assert.equal(files.size, 1, "only the disposable QA URI may be modified");
+  assert.equal(files.get(calls[2].args.uri), calls[4].args.content);
+});
+
+test("ambiguous collision error cannot prove exclusive-create semantics", async t => {
+  const { broker, calls, files } = await withFakeHttpOpenViking(t, { collisionFailure: true });
+  await assert.rejects(probeOpenViking({
+    broker, nonce: "ambiguous_http_123", verifyExclusiveCreate: true,
+    pause: async () => {},
+  }), /unsafe for checkpoint writes/);
+  assert.deepEqual(calls.map(call => call.name ?? call.method),
+    ["initialize", "tools/list", "write", "read", "write"]);
+  assert.equal(files.get(calls[2].args.uri), calls[2].args.content);
 });
 
 test("real HTTP MCP rejects missing tools before mutation", async t => {
