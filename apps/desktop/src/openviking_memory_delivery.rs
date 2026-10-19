@@ -165,6 +165,104 @@ pub struct RetrievedCheckpoint {
 
 const MAX_RETRIEVAL_ITEMS: usize = 3;
 const MAX_RETRIEVAL_BYTES: usize = 12 * 1024;
+const MAX_HISTORY_SCAN_ITEMS: usize = 64;
+const MAX_QUERY_CHARS: usize = 4096;
+
+/// Bounded local vocabulary, never a permission check or a remote search.
+pub(crate) fn relevance_terms(text: &str) -> std::collections::BTreeSet<String> {
+    const STOP: &[&str] = &[
+        "about", "after", "also", "and", "are", "como", "con", "del", "does", "for", "from",
+        "have", "how", "las", "los", "para", "por", "que", "the", "this", "una", "was", "were",
+        "what", "when", "where", "which", "who", "will", "with", "you", "your",
+    ];
+    text.chars()
+        .take(MAX_QUERY_CHARS)
+        .collect::<String>()
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .filter(|word| word.chars().count() >= 2)
+        .map(str::to_lowercase)
+        .filter(|word| !STOP.contains(&word.as_str()))
+        .take(96)
+        .collect()
+}
+
+/// Never score durable metadata (owner ID, turn ID, journal sequence): only
+/// the lower-trust checkpoint body may match the local query.
+pub(crate) fn checkpoint_relevance(
+    checkpoint: &str,
+    query: &std::collections::BTreeSet<String>,
+) -> usize {
+    let body = checkpoint.splitn(3, "\n\n").nth(2).unwrap_or("");
+    query.intersection(&relevance_terms(body)).count()
+}
+
+/// An immutable confirmed summary must match the outbox's exact source
+/// identity *before* any source is considered for retrieval or ranking.
+fn read_confirmed_evidence(
+    outbox_path: &std::path::Path,
+    entry: &crate::openviking_checkpoint_outbox::Entry,
+) -> Result<String, String> {
+    let file = crate::openviking_checkpoint_outbox::Outbox::summary_path(
+        outbox_path, &entry.conversation_id, &entry.turn_id,
+    )?;
+    let size = std::fs::metadata(&file)
+        .map_err(|e| format!("confirmed checkpoint source metadata: {e}"))?
+        .len();
+    if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
+        return Err("confirmed checkpoint has invalid local summary size".to_owned());
+    }
+    let expected = std::fs::read_to_string(&file)
+        .map_err(|e| format!("confirmed checkpoint source unreadable: {e}"))?;
+    if expected.len() != size as usize
+        || !expected.starts_with(&format!(
+            "# Chatarium memory checkpoint\n\nConversation: {}\nTurn: {}\nSource journal sequence: {}\n\n",
+            entry.conversation_id, entry.turn_id, entry.completed_sequence,
+        ))
+    {
+        return Err("confirmed checkpoint summary identity mismatch".to_owned());
+    }
+    Ok(expected)
+}
+
+/// Keep the newest rolling checkpoint and, when the query has real matches,
+/// allow up to two additional historical checkpoints to win over newer
+/// irrelevant entries. Scan only the latest 64 confirmed entries for this
+/// exact owner. The caller still verifies the selected immutable bytes against
+/// OpenViking before model-context admission.
+fn select_confirmed_history<'a>(
+    outbox: &'a crate::openviking_checkpoint_outbox::Outbox,
+    outbox_path: &std::path::Path,
+    conversation: &str,
+    query: &str,
+) -> Result<Vec<(&'a crate::openviking_checkpoint_outbox::Entry, String)>, String> {
+    let mut candidates = confirmed_sources(outbox, conversation)?;
+    candidates.truncate(MAX_HISTORY_SCAN_ITEMS);
+    let terms = relevance_terms(query);
+    let mut scanned = Vec::with_capacity(candidates.len());
+    for entry in candidates {
+        let evidence = read_confirmed_evidence(outbox_path, entry)?;
+        let score = checkpoint_relevance(&evidence, &terms);
+        scanned.push((entry, evidence, score));
+    }
+    if !terms.is_empty() && scanned.iter().skip(1).any(|(_, _, score)| *score > 0) {
+        // A latest rolling summary retains the authoritative continuity
+        // chain even when the current question is about an older topic.
+        let newest = scanned.remove(0);
+        scanned.sort_by(|a, b| {
+            b.2.cmp(&a.2)
+                .then_with(|| b.0.completed_sequence.cmp(&a.0.completed_sequence))
+                .then_with(|| b.0.turn_id.cmp(&a.0.turn_id))
+        });
+        scanned.truncate(MAX_RETRIEVAL_ITEMS - 1);
+        let mut selected = vec![newest];
+        selected.extend(scanned);
+        Ok(selected.into_iter().map(|(e, text, _)| (e, text)).collect())
+    } else {
+        scanned.truncate(MAX_RETRIEVAL_ITEMS);
+        Ok(scanned.into_iter().map(|(e, text, _)| (e, text)).collect())
+    }
+}
+
 
 /// Select recent confirmed checkpoints from exactly one conversation. No
 /// implicit global search, shared namespace, or cross-conversation access.
@@ -187,7 +285,6 @@ fn confirmed_sources<'a>(
             .cmp(&a.completed_sequence)
             .then_with(|| b.turn_id.cmp(&a.turn_id))
     });
-    entries.truncate(MAX_RETRIEVAL_ITEMS);
     Ok(entries)
 }
 
@@ -202,35 +299,24 @@ pub fn retrieve_confirmed_for_conversation(
     outbox_path: &std::path::Path,
     conversation: &str,
 ) -> Result<Vec<RetrievedCheckpoint>, String> {
-    use crate::openviking_checkpoint_outbox::Outbox;
-    let outbox = Outbox::load(outbox_path)?;
-    let sources = confirmed_sources(&outbox, conversation)?;
+    retrieve_confirmed_for_conversation_query(outbox_path, conversation, "")
+}
+
+/// A bounded historical lookup within one authenticated owner. This is a
+/// local lexical preselection, not a semantic index or a trust substitution.
+pub fn retrieve_confirmed_for_conversation_query(
+    outbox_path: &std::path::Path,
+    conversation: &str,
+    query: &str,
+) -> Result<Vec<RetrievedCheckpoint>, String> {
+    let outbox = crate::openviking_checkpoint_outbox::Outbox::load(outbox_path)?;
+    let sources = select_confirmed_history(&outbox, outbox_path, conversation, query)?;
     let mut used_bytes = 0usize;
     let mut retrieved = Vec::with_capacity(sources.len());
 
-    for entry in sources {
-        let file = Outbox::summary_path(outbox_path, conversation, &entry.turn_id)?;
-        let size = std::fs::metadata(&file)
-            .map_err(|e| format!("checkpoint summary metadata unavailable: {e}"))?
-            .len();
-        if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
-            return Err("confirmed checkpoint has invalid local summary size".to_owned());
-        }
-        // Never partially inject a checkpoint that does not fit the budget.
-        if size > (MAX_RETRIEVAL_BYTES - used_bytes) as u64 {
-            // A large recent checkpoint must not prevent an older, smaller
-            // confirmed checkpoint from fitting the remaining context budget.
+    for (entry, expected) in sources {
+        if expected.len() > MAX_RETRIEVAL_BYTES - used_bytes {
             continue;
-        }
-        let expected = std::fs::read_to_string(&file)
-            .map_err(|e| format!("cannot read confirmed checkpoint summary: {e}"))?;
-        if expected.len() != size as usize
-            || !expected.starts_with(&format!(
-                "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {}\nSource journal sequence: {}\n\n",
-                entry.turn_id, entry.completed_sequence,
-            ))
-        {
-            return Err("confirmed checkpoint summary identity mismatch".to_owned());
         }
         let uri = checkpoint_uri(conversation, &entry.turn_id)?;
         let response = local_http_mcp::invoke(
