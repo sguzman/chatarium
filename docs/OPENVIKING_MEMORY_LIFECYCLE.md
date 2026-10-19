@@ -45,18 +45,23 @@ These are materially different contracts. An at-most-once client dispatch
 does **not** make a non-exclusive server operation safe against overwriting
 a preexisting remote file.
 
-The production write dispatcher now performs a **fresh, background, synthetic
-exclusive-create preflight for every Ready checkpoint before durably marking
-it Dispatched**. It requires the actual two-create collision rejection,
+The production write dispatcher performs a **background, synthetic
+exclusive-create preflight before the first Ready checkpoint is marked
+Dispatched**. It requires the actual two-create collision rejection,
 followed by exact re-verification of the original synthetic bytes. No user
-memory or existing production URI is used in the preflight. A failed or
-unavailable check leaves the original checkpoint in Ready state and delays
-another attempt for 30 minutes; it must never convert a never-attempted
-production write into an uncertain one. This has no manual setup per write,
-but does leave a small synthetic QA file in the server for each preflight.
-It is a live compatibility check, not a guarantee against a server changing
-between preflight and production dispatch. The installed server version and
-behavior still require real-service acceptance QA before completion.
+memory or existing production URI is used in the preflight. A successful
+compatibility check is cached **in memory for five minutes** to process a
+burst of Ready checkpoints without creating a synthetic QA file for every
+write. A new process or an expired lease must revalidate. Every individual
+checkpoint still has its exact queue identity and source header checked at
+its own durable claim. A failed or unavailable check invalidates the lease,
+leaves the checkpoint Ready, and delays another attempt for 30 minutes; it
+must never convert a never-attempted production write into an uncertain
+one. This requires no manual setup per write, but creates a persistent,
+synthetic QA file for each compatibility check. It is a live compatibility
+check, not a guarantee against the server changing within the five-minute
+window or between preflight and production dispatch. The installed server
+version and behavior still require real-service acceptance QA.
 
 The user's installed server version and exclusive-create behavior must be
 confirmed in live integration QA before claiming non-overwrite guarantees
@@ -75,6 +80,20 @@ not suitable for this checkpoint-writing contract without an additional
 collision-safe storage mechanism or a verified compatible server version.
 Never silently treat a successful read-back as proof that no preexisting
 object was overwritten.
+
+## Model-requested tool writes are not production checkpoint writes
+
+Model-proposed `chatarium.local.openviking::write` is **disabled by default**
+and **rejected before durable MCP-route allocation**, even if a previously
+saved setting allows or requires approval. This protects the verified,
+host-owned lifecycle from an independent tool call lacking a durable outbox,
+read-back verification, and synthetic compatibility preflight. A defense at
+the Rust transport boundary also blocks direct model dispatch; the host
+uses a distinct checkpoint-only invocation with exact conversation, turn,
+and summary-header validation. Read-only scoped memory tools remain
+available under their existing policies. Changing the saved model tool
+policy does not bypass this restriction. Only Chatarium's automatic
+checkpoint pipeline creates production memories.
 
 ## Non-negotiable: automatic behavior is application-owned
 
