@@ -203,7 +203,9 @@ fn read_confirmed_evidence(
     entry: &crate::openviking_checkpoint_outbox::Entry,
 ) -> Result<String, String> {
     let file = crate::openviking_checkpoint_outbox::Outbox::summary_path(
-        outbox_path, &entry.conversation_id, &entry.turn_id,
+        outbox_path,
+        &entry.conversation_id,
+        &entry.turn_id,
     )?;
     let size = std::fs::metadata(&file)
         .map_err(|e| format!("confirmed checkpoint source metadata: {e}"))?
@@ -261,7 +263,6 @@ fn select_confirmed_history<'a>(
         Ok(scanned.into_iter().map(|(e, text, _)| (e, text)).collect())
     }
 }
-
 
 /// Select recent confirmed checkpoints from exactly one conversation. No
 /// implicit global search, shared namespace, or cross-conversation access.
@@ -371,33 +372,71 @@ mod tests {
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
         for (owner, turn, sequence, content, confirmed) in [
-            ("owner", "source-old", 1, "DECISION: rust ownership and borrow checking", true),
-            ("foreign", "secret", 2, "rust ownership secret foreign memory", true),
-            ("owner", "unconfirmed", 3, "rust ownership prohibited pending", false),
+            (
+                "owner",
+                "source-old",
+                1,
+                "DECISION: rust ownership and borrow checking",
+                true,
+            ),
+            (
+                "foreign",
+                "secret",
+                2,
+                "rust ownership secret foreign memory",
+                true,
+            ),
+            (
+                "owner",
+                "unconfirmed",
+                3,
+                "rust ownership prohibited pending",
+                false,
+            ),
             ("owner", "middle", 4, "weather tonight", true),
             ("owner", "middle-2", 5, "calendar meetings", true),
             ("owner", "newest", 6, "active future milestones", true),
         ] {
-            outbox.enqueue_durable(&path, owner, turn, sequence).unwrap();
+            outbox
+                .enqueue_durable(&path, owner, turn, sequence)
+                .unwrap();
             outbox
                 .save_summary_durable(&path, owner, turn, sequence, content)
                 .unwrap();
             if confirmed {
                 outbox
-                    .transition_durable(&path, owner, turn, sequence, State::Ready, State::Dispatched)
+                    .transition_durable(
+                        &path,
+                        owner,
+                        turn,
+                        sequence,
+                        State::Ready,
+                        State::Dispatched,
+                    )
                     .unwrap();
                 outbox
                     .transition_durable(
-                        &path, owner, turn, sequence, State::Dispatched, State::Confirmed,
+                        &path,
+                        owner,
+                        turn,
+                        sequence,
+                        State::Dispatched,
+                        State::Confirmed,
                     )
                     .unwrap();
             }
         }
         let relevant = select_confirmed_history(
-            &outbox, &path, "owner", "Can we resume RUST ownership decisions?",
+            &outbox,
+            &path,
+            "owner",
+            "Can we resume RUST ownership decisions?",
         )
         .unwrap();
-        let names = relevant.iter().map(|(entry, _)| entry.turn_id.as_str()).collect::<Vec<_>>();
+        let names = relevant
+            .iter()
+            .map(|(entry, _)| entry.turn_id.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(names[0], "newest");
         assert!(names.contains(&"source-old"));
         assert!(!names.contains(&"secret"));
@@ -433,28 +472,51 @@ mod tests {
         outbox.activate_durable(&path, 0).unwrap();
         for sequence in 1..=(MAX_HISTORY_SCAN_ITEMS as u64 + 3) {
             let turn = format!("checkpoint-{sequence}");
-            let text = if sequence == 1 { "ORBITAL ANCHOR" } else { "unrelated summary" };
-            outbox.enqueue_durable(&path, "owner", &turn, sequence).unwrap();
+            let text = if sequence == 1 {
+                "ORBITAL ANCHOR"
+            } else {
+                "unrelated summary"
+            };
+            outbox
+                .enqueue_durable(&path, "owner", &turn, sequence)
+                .unwrap();
             outbox
                 .save_summary_durable(&path, "owner", &turn, sequence, text)
                 .unwrap();
             outbox
-                .transition_durable(&path, "owner", &turn, sequence, State::Ready, State::Dispatched)
+                .transition_durable(
+                    &path,
+                    "owner",
+                    &turn,
+                    sequence,
+                    State::Ready,
+                    State::Dispatched,
+                )
                 .unwrap();
             outbox
                 .transition_durable(
-                    &path, "owner", &turn, sequence, State::Dispatched, State::Confirmed,
+                    &path,
+                    "owner",
+                    &turn,
+                    sequence,
+                    State::Dispatched,
+                    State::Confirmed,
                 )
                 .unwrap();
         }
         let selected = select_confirmed_history(&outbox, &path, "owner", "ORBITAL").unwrap();
         assert_eq!(selected.len(), 3);
-        assert!(selected.iter().all(|(entry, _)| entry.completed_sequence > 3));
+        assert!(
+            selected
+                .iter()
+                .all(|(entry, _)| entry.completed_sequence > 3)
+        );
         assert_eq!(
             checkpoint_relevance(
                 "# Chatarium memory checkpoint\n\nConversation: orbital\nTurn: orbital\nSource journal sequence: 8\n\nNo meaningful match.",
                 &relevance_terms("orbital"),
-            ), 0,
+            ),
+            0,
         );
         std::fs::remove_dir_all(root).unwrap();
     }
