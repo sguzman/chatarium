@@ -92,6 +92,12 @@ Summaries are saved in Chatarium's local
 On Linux these new files are created with owner-only permissions; their
 contents never enter the metadata-only outbox. The summary transitions
 `pending_summary -> ready` only after its own local write succeeds.
+On Unix, the summary's directory and newly created ancestors are synced
+before the outbox can mark it ready. If a create-new summary write fails,
+the partial file is removed so a later attempt is not blocked; a preexisting
+different summary remains protected against overwrite. A restart after an
+exact completed summary but before its Ready transition can safely finish
+the metadata transition without rewriting the source.
 `NO_MEMORY` transitions to `skipped`, generating no external write.
 
 The persistence worker then records `ready -> dispatched` **before**
@@ -315,8 +321,11 @@ directory. Permission in one direction never implies permission in reverse.
 The backend stores these metadata-only grants in
 `openviking-project-memory-grants.json` under the Chatarium data
 directory. The schema has strict identity, duplicate, size and count validation,
-with an atomic replacement save and a specific revocation operation. A missing
-grant file means no shared memory access. A malformed file rejects the read
+with an atomic replacement save and a specific revocation operation.
+Both the grant file and checkpoint outbox use create-new, private temporary
+files and sync their parent directory after replacement on Unix, so a
+successful durable state transition does not rely on rename alone.
+A missing grant file means no shared memory access. A malformed file rejects the read
 instead of allowing broader access. When the directory bindings no longer
 match the stored grant, that grant is ineligible.
 
