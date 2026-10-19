@@ -16,10 +16,9 @@ const RETRY_DELAY: Duration = Duration::from_secs(300);
 /// is to order already verified evidence before the bounded context composer.
 fn relevance_terms(text: &str) -> std::collections::BTreeSet<String> {
     const STOP: &[&str] = &[
-        "about", "after", "also", "and", "are", "como", "con", "del", "does", "for",
-        "from", "have", "how", "las", "los", "para", "por", "que", "the", "this",
-        "una", "was", "were", "what", "when", "where", "which", "who", "will", "with",
-        "you", "your",
+        "about", "after", "also", "and", "are", "como", "con", "del", "does", "for", "from",
+        "have", "how", "las", "los", "para", "por", "que", "the", "this", "una", "was", "were",
+        "what", "when", "where", "which", "who", "will", "with", "you", "your",
     ];
     text.chars()
         .take(4096)
@@ -32,13 +31,15 @@ fn relevance_terms(text: &str) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-fn relevance_score(checkpoint: &RetrievedCheckpoint, query: &std::collections::BTreeSet<String>) -> usize {
+fn relevance_score(
+    checkpoint: &RetrievedCheckpoint,
+    query: &std::collections::BTreeSet<String>,
+) -> usize {
     // The first two Markdown sections are source metadata, not memory facts.
     let body = checkpoint.text.splitn(3, "\n\n").nth(2).unwrap_or("");
     let terms = relevance_terms(body);
     query.intersection(&terms).count()
 }
-
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Completion {
@@ -261,11 +262,8 @@ mod tests {
             source_conversation_id: owner.to_string(),
             source_turn_id: turn.to_owned(),
             source_journal_sequence: sequence,
-            uri: crate::openviking_memory_delivery::checkpoint_uri(
-                &owner.to_string(),
-                turn,
-            )
-            .unwrap(),
+            uri: crate::openviking_memory_delivery::checkpoint_uri(&owner.to_string(), turn)
+                .unwrap(),
             text: format!(
                 "# Chatarium memory checkpoint\n\nConversation: {owner}\nTurn: {turn}\nSource journal sequence: {sequence}\n\n{body}\n"
             ),
