@@ -1857,14 +1857,24 @@ mod tests {
         assert!(bounded.size.utf8_bytes <= 515);
         for sequence in 17..=20 {
             assert!(bounded.messages.iter().any(|message| {
-                message.content.starts_with(&format!("durable {sequence}: "))
+                message
+                    .content
+                    .starts_with(&format!("durable {sequence}: "))
             }));
         }
         assert_eq!(bounded.openviking_checkpoint_count(), 1);
-        assert!(bounded.messages.iter().any(|message| message.content == evidence));
+        assert!(
+            bounded
+                .messages
+                .iter()
+                .any(|message| message.content == evidence)
+        );
         assert!(bounded.inventory.iter().any(|item| {
             item.decision == InclusionDecision::ExcludedByBudget
-                && matches!(item.source, ContextSource::DurableTranscript { sequence: 16 })
+                && matches!(
+                    item.source,
+                    ContextSource::DurableTranscript { sequence: 16 }
+                )
         }));
         assert!(bounded.inventory.iter().any(|item| {
             item.decision == InclusionDecision::Included
@@ -1894,8 +1904,18 @@ mod tests {
             .within_utf8_budget(100)
             .unwrap();
         assert_eq!(bounded.openviking_checkpoint_count(), 0);
-        assert!(bounded.messages.iter().any(|m| m.content == "current question"));
-        assert!(bounded.messages.iter().any(|m| m.content == "immediate reply"));
+        assert!(
+            bounded
+                .messages
+                .iter()
+                .any(|m| m.content == "current question")
+        );
+        assert!(
+            bounded
+                .messages
+                .iter()
+                .any(|m| m.content == "immediate reply")
+        );
         assert!(bounded.messages.iter().any(|m| m.content == "older"));
         assert!(bounded.inventory.iter().any(|item| {
             item.decision == InclusionDecision::ExcludedByBudget
