@@ -15162,8 +15162,8 @@ impl eframe::App for ChatariumApp {
                                         ui.label(
                                             egui::RichText::new(format!(
                                                 "{} message{}",
-                                                messages.len(),
-                                                if messages.len() == 1 { "" } else { "s" }
+                                                row.summary.message_count,
+                                                if row.summary.message_count == 1 { "" } else { "s" }
                                             ))
                                             .size(10.0)
                                             .color(egui::Color32::from_rgb(139, 143, 153)),
@@ -15181,16 +15181,11 @@ impl eframe::App for ChatariumApp {
                                     // similarly named chats without opening them. Search
                                     // result excerpts below remain separate and exact.
                                     if self.local_conversation_search_query.trim().is_empty() {
-                                        let latest = messages.last().map(|message| {
-                                            message.text.split_whitespace()
-                                                .take(12)
-                                                .collect::<Vec<_>>()
-                                                .join(" ")
-                                        }).filter(|value| !value.is_empty());
+                                        let latest = row.summary.latest_excerpt.as_deref();
                                         ui.add(
                                             egui::Label::new(
                                                 egui::RichText::new(
-                                                    latest.as_deref().unwrap_or("New conversation")
+                                                    latest.unwrap_or("New conversation")
                                                 )
                                                 .size(10.0)
                                                 .color(egui::Color32::from_rgb(156, 160, 171)),
@@ -15198,15 +15193,11 @@ impl eframe::App for ChatariumApp {
                                             .truncate(),
                                         );
                                     }
-                                    let authored = messages.iter().filter(|m| {
-                                        matches!(m.role, DisplayRole::User | DisplayRole::Assistant)
-                                    });
-                                    let (words, bytes) = authored.fold((0_usize, 0_usize), |(words, bytes), message| {
-                                        (words + message.text.split_whitespace().count(), bytes + message.text.len())
-                                    });
                                     ui.label(
                                         egui::RichText::new(format!(
-                                            "{words} words · {} chat text", readable_byte_size(bytes as u64)
+                                            "{} words · {} chat text",
+                                            row.summary.authored_words,
+                                            readable_byte_size(row.summary.authored_bytes as u64)
                                         ))
                                         .size(10.0)
                                         .color(egui::Color32::from_rgb(142, 167, 194)),

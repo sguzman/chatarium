@@ -3,7 +3,7 @@
 //! The journal and metadata catalog remain authoritative; the query is ephemeral.
 
 use super::local_conversations::LocalConversationEntry;
-use super::{DisplayMessage, derived_conversation_title, projected_display_messages_iter};
+use super::{DisplayMessage, DisplayRole, derived_conversation_title, projected_display_messages_iter};
 use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{
@@ -331,6 +331,17 @@ pub fn matching_message_preview<'a>(
         .find_map(|message| super::local_archive_search::local_snippet(message, &folded))
 }
 
+/// Lightweight native sidebar metadata, cached alongside search results.
+/// In particular, the word/byte scan must not run again on every UI frame
+/// for every conversation in a long local archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeRowSummary {
+    pub message_count: usize,
+    pub authored_words: usize,
+    pub authored_bytes: usize,
+    pub latest_excerpt: Option<String>,
+}
+
 /// One visible sidebar row, derived solely from the local catalog and
 /// projected native user/assistant messages. The position refers to the
 /// catalog snapshot supplied to `cached_rows`.
@@ -346,6 +357,7 @@ pub struct NativeSearchRow {
     /// All matching visible-message positions in this conversation. The
     /// individual texts are not cloned into the sidebar search cache.
     pub matching_message_indices: Vec<usize>,
+    pub summary: NativeRowSummary,
 }
 
 /// These are the only mutable catalog facts that affect native sidebar
@@ -441,31 +453,46 @@ fn collect_native_search_row(
     title: String,
     messages: &[DisplayMessage],
 ) -> Option<NativeSearchRow> {
-    if needle.is_empty() {
-        return Some(NativeSearchRow {
-            catalog_index,
-            title,
-            kind: NativeSearchMatch::Title,
-            preview: None,
-            message_index: None,
-            matching_message_indices: Vec::new(),
-        });
-    }
     let mut matching_message_indices = Vec::new();
     let mut preview = None;
+    let mut authored_words = 0_usize;
+    let mut authored_bytes = 0_usize;
+    // One pass computes both the filtered hits and the sidebar totals. With
+    // no query, skip case folding entirely; the cached row is reused on
+    // subsequent egui frames until its conversation projection changes.
     for (position, message) in messages.iter().enumerate() {
-        if message.text.to_lowercase().contains(needle) {
+        if matches!(message.role, DisplayRole::User | DisplayRole::Assistant) {
+            authored_words += message.text.split_whitespace().count();
+            authored_bytes += message.text.len();
+        }
+        if !needle.is_empty() && message.text.to_lowercase().contains(needle) {
             if matching_message_indices.is_empty() {
                 preview = super::local_archive_search::local_snippet(&message.text, needle);
             }
             matching_message_indices.push(position);
         }
     }
+    let summary = NativeRowSummary {
+        message_count: messages.len(),
+        authored_words,
+        authored_bytes,
+        latest_excerpt: messages
+            .last()
+            .map(|message| {
+                message
+                    .text
+                    .split_whitespace()
+                    .take(12)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|value| !value.is_empty()),
+    };
     let message_index = matching_message_indices.first().copied();
-    let kind = if message_index.is_some() {
-        NativeSearchMatch::Message
-    } else if title.to_lowercase().contains(needle) {
+    let kind = if needle.is_empty() || (message_index.is_none() && title.to_lowercase().contains(needle)) {
         NativeSearchMatch::Title
+    } else if message_index.is_some() {
+        NativeSearchMatch::Message
     } else {
         return None;
     };
@@ -476,6 +503,7 @@ fn collect_native_search_row(
         preview,
         message_index,
         matching_message_indices,
+        summary,
     })
 }
 
@@ -1088,6 +1116,50 @@ mod tests {
         let new_row = collect_native_search_row("match", 0, "test".to_owned(), &replaced).unwrap();
         assert_eq!(confirmed_hit_index(&new_row, &replaced, Some(29)), None);
         assert_eq!(confirmed_hit_index(&new_row, &replaced, None), Some(0));
+    }
+
+    #[test]
+    fn sidebar_summary_is_cached_with_local_search_rows() {
+        let display = |role, text: &str, sequence| DisplayMessage {
+            role,
+            text: text.to_owned(),
+            sequence,
+            timestamp: None,
+            provenance_label: None,
+        };
+        let messages = [
+            display(DisplayRole::User, "Hola México", 1),
+            display(DisplayRole::Assistant, "answer now", 2),
+            display(DisplayRole::Mcp, "tool is not authored chat", 3),
+            display(DisplayRole::Activity, "Agent activity complete", 4),
+        ];
+        let listed = collect_native_search_row("", 0, "Chat".to_owned(), &messages).unwrap();
+        let matched =
+            collect_native_search_row("answer", 0, "Chat".to_owned(), &messages).unwrap();
+        assert_eq!(listed.kind, NativeSearchMatch::Title);
+        assert_eq!(matched.message_index, Some(1));
+        assert_eq!(listed.summary, matched.summary);
+        assert_eq!(listed.summary.message_count, 4);
+        assert_eq!(listed.summary.authored_words, 4);
+        assert_eq!(
+            listed.summary.authored_bytes,
+            "Hola México".len() + "answer now".len()
+        );
+        assert_eq!(
+            listed.summary.latest_excerpt.as_deref(),
+            Some("Agent activity complete")
+        );
+        let updated = [
+            display(DisplayRole::User, "first question", 1),
+            display(DisplayRole::Assistant, "different response", 2),
+        ];
+        let changed = collect_native_search_row("", 0, "Chat".to_owned(), &updated).unwrap();
+        assert_eq!(changed.summary.message_count, 2);
+        assert_eq!(changed.summary.authored_words, 4);
+        assert_eq!(
+            changed.summary.latest_excerpt.as_deref(),
+            Some("different response")
+        );
     }
 
     fn author(
