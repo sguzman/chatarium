@@ -348,6 +348,110 @@ mod tests {
     use super::*;
 
     #[test]
+    fn historical_lookup_retrieves_relevant_old_checkpoint_but_preserves_latest() {
+        use crate::openviking_checkpoint_outbox::{Outbox, State};
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-scoped-history-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        for (owner, turn, sequence, content, confirmed) in [
+            ("owner", "source-old", 1, "DECISION: rust ownership and borrow checking", true),
+            ("foreign", "secret", 2, "rust ownership secret foreign memory", true),
+            ("owner", "unconfirmed", 3, "rust ownership prohibited pending", false),
+            ("owner", "middle", 4, "weather tonight", true),
+            ("owner", "middle-2", 5, "calendar meetings", true),
+            ("owner", "newest", 6, "active future milestones", true),
+        ] {
+            outbox.enqueue_durable(&path, owner, turn, sequence).unwrap();
+            outbox
+                .save_summary_durable(&path, owner, turn, sequence, content)
+                .unwrap();
+            if confirmed {
+                outbox
+                    .transition_durable(&path, owner, turn, sequence, State::Ready, State::Dispatched)
+                    .unwrap();
+                outbox
+                    .transition_durable(
+                        &path, owner, turn, sequence, State::Dispatched, State::Confirmed,
+                    )
+                    .unwrap();
+            }
+        }
+        let relevant = select_confirmed_history(
+            &outbox, &path, "owner", "Can we resume RUST ownership decisions?",
+        )
+        .unwrap();
+        let names = relevant.iter().map(|(entry, _)| entry.turn_id.as_str()).collect::<Vec<_>>();
+        assert_eq!(names[0], "newest");
+        assert!(names.contains(&"source-old"));
+        assert!(!names.contains(&"secret"));
+        assert!(!names.contains(&"unconfirmed"));
+        assert_eq!(relevant.len(), 3);
+        assert_eq!(
+            select_confirmed_history(&outbox, &path, "owner", "")
+                .unwrap()
+                .iter()
+                .map(|(entry, _)| entry.turn_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newest", "middle-2", "middle"]
+        );
+        // Wrong owner or path scope is rejected before local file scanning.
+        assert!(select_confirmed_history(&outbox, &path, "../escape", "rust").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn historical_candidate_scan_is_bounded_and_does_not_rank_metadata() {
+        use crate::openviking_checkpoint_outbox::{Outbox, State};
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-bounded-history-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        for sequence in 1..=(MAX_HISTORY_SCAN_ITEMS as u64 + 3) {
+            let turn = format!("checkpoint-{sequence}");
+            let text = if sequence == 1 { "ORBITAL ANCHOR" } else { "unrelated summary" };
+            outbox.enqueue_durable(&path, "owner", &turn, sequence).unwrap();
+            outbox
+                .save_summary_durable(&path, "owner", &turn, sequence, text)
+                .unwrap();
+            outbox
+                .transition_durable(&path, "owner", &turn, sequence, State::Ready, State::Dispatched)
+                .unwrap();
+            outbox
+                .transition_durable(
+                    &path, "owner", &turn, sequence, State::Dispatched, State::Confirmed,
+                )
+                .unwrap();
+        }
+        let selected = select_confirmed_history(&outbox, &path, "owner", "ORBITAL").unwrap();
+        assert_eq!(selected.len(), 3);
+        assert!(selected.iter().all(|(entry, _)| entry.completed_sequence > 3));
+        assert_eq!(
+            checkpoint_relevance(
+                "# Chatarium memory checkpoint\n\nConversation: orbital\nTurn: orbital\nSource journal sequence: 8\n\nNo meaningful match.",
+                &relevance_terms("orbital"),
+            ), 0,
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn retrieval_scopes_to_owner_and_confirmed_entries_only() {
         use crate::openviking_checkpoint_outbox::{Outbox, State};
         let nonce = std::time::SystemTime::now()
