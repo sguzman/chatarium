@@ -3696,15 +3696,17 @@ impl ChatariumApp {
         // Freeze the exact worker-owned and currently granted project memory
         // at wake dispatch. Never use the displayed conversation's cache or
         // borrow the controller's authorization for an inactive worker.
-        transcript.extend(self.openviking_project_cache.admitted_relevant_context(
-            self.openviking_retrieval_cache
-                .get(&conversation_id)
-                .map(Vec::as_slice),
-            conversation_id,
-            &self.local_conversation_catalog,
-            &self.project_memory_grants,
-            &exact.model_context(),
-        ));
+        transcript.extend(
+            self.openviking_project_cache.admitted_relevant_context(
+                self.openviking_retrieval_cache
+                    .get(&conversation_id)
+                    .map(Vec::as_slice),
+                conversation_id,
+                &self.local_conversation_catalog,
+                &self.project_memory_grants,
+                &exact.model_context(),
+            ),
+        );
         let mut activation = context_composer::TranscriptMessage::coordination_activation(
             turn_id.to_string(),
             start.sequence,
@@ -3884,10 +3886,7 @@ impl ChatariumApp {
     /// Schedule a source-owner-scoped read on the persistence worker.
     /// Return false only while a read is outstanding, so offline OpenViking
     /// never indefinitely blocks a non-authored coordination wake.
-    fn maybe_retrieve_openviking_context_for(
-        &mut self,
-        owner: LocalConversationId,
-    ) -> bool {
+    fn maybe_retrieve_openviking_context_for(&mut self, owner: LocalConversationId) -> bool {
         if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
             return true;
         }
