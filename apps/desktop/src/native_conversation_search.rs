@@ -140,6 +140,19 @@ pub fn activate_identity_selection(
     }
 }
 
+/// Return the currently highlighted sidebar row by conversation ID.
+/// An explicit ID that disappeared must not fall back to another owner's row.
+/// Only an unset selection intentionally defaults to the first visible row.
+pub fn selected_identity_row(
+    matches: &[LocalConversationId],
+    selected: Option<LocalConversationId>,
+) -> Option<usize> {
+    match selected {
+        Some(id) => matches.iter().position(|candidate| *candidate == id),
+        None => (!matches.is_empty()).then_some(0),
+    }
+}
+
 /// The same identity gate for copy, stage-as-memory, and reader navigation.
 pub fn activate_identity_copy_selection(
     matches: &[(LocalConversationId, Option<usize>)],
@@ -1025,6 +1038,10 @@ mod tests {
             Some(second)
         );
         assert_eq!(move_identity_selection(&[], Some(absent), 1), None);
+        assert_eq!(selected_identity_row(&after, None), Some(0));
+        assert_eq!(selected_identity_row(&after, Some(first)), Some(1));
+        assert_eq!(selected_identity_row(&after, Some(absent)), None);
+        assert_eq!(selected_identity_row(&[], None), None);
         let candidates = [(first, Some(0)), (third, Some(5))];
         let title_only = [(third, None), (first, Some(5))];
         assert_eq!(
