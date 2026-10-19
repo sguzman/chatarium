@@ -3343,21 +3343,11 @@ impl ChatariumApp {
                         }
                     }
                 }
-                if let Some(checkpoints) = self
-                    .openviking_project_cache
-                    .checkpoints(self.local_conversation_id)
-                {
-                    for checkpoint in checkpoints {
-                        if let Ok(message) =
-                            context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-                                checkpoint, self.local_conversation_id,
-                                &self.local_conversation_catalog, &self.project_memory_grants,
-                            )
-                        {
-                            local_memory_context.push(message);
-                        }
-                    }
-                }
+                local_memory_context.extend(self.openviking_project_cache.admitted_context(
+                    self.local_conversation_id,
+                    &self.local_conversation_catalog,
+                    &self.project_memory_grants,
+                ));
                 let selected_one_shot = self
                     .local_memory_one_shot_selections
                     .get(&self.local_conversation_id)
@@ -14583,20 +14573,11 @@ impl eframe::App for ChatariumApp {
                                     }
                                 }
                             }
-                            if let Some(checkpoints) = self
-                                .openviking_project_cache.checkpoints(self.local_conversation_id)
-                            {
-                                for checkpoint in checkpoints {
-                                    if let Ok(message) =
-                                        context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-                                            checkpoint, self.local_conversation_id,
-                                            &self.local_conversation_catalog, &self.project_memory_grants,
-                                        )
-                                    {
-                                        transcript.push(message);
-                                    }
-                                }
-                            }
+                            transcript.extend(self.openviking_project_cache.admitted_context(
+                                self.local_conversation_id,
+                                &self.local_conversation_catalog,
+                                &self.project_memory_grants,
+                            ));
                             let selected_one_shot = self
                                 .local_memory_one_shot_selections
                                 .get(&self.local_conversation_id)
