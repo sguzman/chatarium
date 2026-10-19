@@ -87,14 +87,18 @@ pub fn activate_selection(
 }
 
 /// Resolve a keyboard-highlighted native search match to a visible message.
-/// A selected title-only hit deliberately cannot copy another row's text.
+/// Enter without a selection uses the first row, matching conversation-open
+/// navigation. An explicitly selected but stale/out-of-range row MUST NOT
+/// silently copy the first result: it could belong to another conversation.
+/// A selected title-only hit likewise cannot copy another row's text.
 pub fn activate_copy_selection(
     matches: &[(LocalConversationId, Option<usize>)],
     selection: Option<usize>,
 ) -> Option<(LocalConversationId, usize)> {
-    let &(conversation_id, message_index) = selection
-        .and_then(|index| matches.get(index))
-        .or_else(|| matches.first())?;
+    let &(conversation_id, message_index) = match selection {
+        Some(index) => matches.get(index)?,
+        None => matches.first()?,
+    };
     message_index.map(|index| (conversation_id, index))
 }
 
@@ -859,6 +863,26 @@ mod stress_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_native_copy_selection_never_falls_back_to_another_conversation() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let matches = vec![(first, Some(0)), (second, Some(3))];
+
+        assert_eq!(activate_copy_selection(&matches, None), Some((first, 0)));
+        assert_eq!(activate_copy_selection(&matches, Some(1)), Some((second, 3)));
+        // The selected row disappeared after a query/filter update. Copying
+        // the first result instead would attribute it to the wrong chat.
+        assert_eq!(activate_copy_selection(&matches, Some(2)), None);
+        assert_eq!(activate_copy_selection(&matches, Some(usize::MAX)), None);
+
+        let title_only = vec![(first, None), (second, Some(3))];
+        assert_eq!(activate_copy_selection(&title_only, None), None);
+        assert_eq!(activate_copy_selection(&title_only, Some(0)), None);
+        assert_eq!(activate_copy_selection(&title_only, Some(1)), Some((second, 3)));
+        assert_eq!(activate_copy_selection(&[], None), None);
+    }
 
     fn author(
         store: &mut impl chatarium_store::EventStore,
