@@ -62,6 +62,33 @@ fn legacy_search_row(
         }
         None => (None, None, Vec::new()),
     };
+    // Keep the benchmark's legacy row structurally equal to the runtime
+    // row, including the new sidebar summary. This intentionally retains
+    // the legacy multiple-pass behavior for an apples-to-apples comparison.
+    let mut authored_words = 0_usize;
+    let mut authored_bytes = 0_usize;
+    for message in messages {
+        if matches!(message.role, DisplayRole::User | DisplayRole::Assistant) {
+            authored_words += message.text.split_whitespace().count();
+            authored_bytes += message.text.len();
+        }
+    }
+    let summary = NativeRowSummary {
+        message_count: messages.len(),
+        authored_words,
+        authored_bytes,
+        latest_excerpt: messages
+            .last()
+            .map(|message| {
+                message
+                    .text
+                    .split_whitespace()
+                    .take(12)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|value| !value.is_empty()),
+    };
     Some(NativeSearchRow {
         catalog_index,
         title: title.to_owned(),
@@ -69,6 +96,7 @@ fn legacy_search_row(
         preview,
         message_index,
         matching_message_indices,
+        summary,
     })
 }
 
