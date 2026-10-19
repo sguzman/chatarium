@@ -15129,12 +15129,20 @@ impl eframe::App for ChatariumApp {
                                         .clicked()
                                     {
                                         select_local_requested = Some(entry.id);
-                                        native_reader_target_message =
+                                        // Opening the conversation is safe, but a
+                                        // vanished remembered event must never
+                                        // retarget the reader to the first new
+                                        // matching message without an explicit
+                                        // hit-selection action.
+                                        native_reader_target_message = if stale_hit {
+                                            None
+                                        } else {
                                             native_conversation_search::selected_message_index(
                                                 row,
                                                 hit_ordinal,
                                             )
-                                            .map(|index| (entry.id, index));
+                                            .map(|index| (entry.id, index))
+                                        };
                                         }
                                     });
                                     ui.horizontal(|ui| {
