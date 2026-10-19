@@ -19967,6 +19967,14 @@ fn append_agent_mcp_call_checked(
     proposal: &mcp_agent_defaults::ModelToolRequest,
     policy: mcp_agent_defaults::ToolPolicy,
 ) -> Result<(ToolCallId, RouteId, Vec<EventEnvelope>), String> {
+    if !local_http_mcp::allowed_model_operation(&proposal.provider, &proposal.tool)
+        && proposal.provider == local_http_mcp::OPENVIKING
+        && proposal.tool == "write"
+    {
+        // Reject before creating a route, even for an old saved Allow policy.
+        // The host-owned outbox remains the only checkpoint write authority.
+        return Err("OpenViking writes use Chatarium's automatic verified checkpoint lifecycle".to_owned());
+    }
     if matches!(
         policy,
         mcp_agent_defaults::ToolPolicy::Disabled | mcp_agent_defaults::ToolPolicy::Manual
@@ -20268,8 +20276,8 @@ fn reserve_local_http_mcp_checked(
         .ok_or("localhost MCP provider missing")?;
     let name = provider.name.as_str().to_owned();
     let operation = call.operation.as_str().to_owned();
-    if !local_http_mcp::allowed_operation(&name, &operation) {
-        return Err("tool not in fixed localhost MCP provider allowlist".to_owned());
+    if !local_http_mcp::allowed_model_operation(&name, &operation) {
+        return Err("OpenViking model-authored checkpoint writes are blocked; host outbox only".to_owned());
     }
     let route = replay_routing_audit(store.events())?
         .into_iter()
@@ -23165,6 +23173,7 @@ fn persistence_worker(
     // Nothing is marked Dispatched until the matching attestation succeeds.
     let mut openviking_preflight_active = false;
     let mut openviking_preflight_verified: Option<(String, String, u64)> = None;
+    let mut openviking_preflight_verified_at: Option<Instant> = None;
     let mut openviking_preflight_retry_after: Option<Instant> = None;
     if let Ok(mut outbox) = openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path) {
         if let Err(error) = outbox.recover_interrupted_dispatches_durable(&checkpoint_outbox_path) {
@@ -23336,6 +23345,7 @@ fn persistence_worker(
                 match result {
                     Ok(()) => {
                         openviking_preflight_retry_after = None;
+                        openviking_preflight_verified_at = Some(Instant::now());
                         openviking_preflight_verified = Some(selected);
                         // Return to the same persistence-worker dispatch path,
                         // which checks that the attested Ready entry still matches.
@@ -23343,6 +23353,7 @@ fn persistence_worker(
                     }
                     Err(error) => {
                         openviking_preflight_verified = None;
+                        openviking_preflight_verified_at = None;
                         openviking_preflight_retry_after =
                             Some(Instant::now() + Duration::from_secs(1800));
                         // Report failure once; do not consume or mark uncertain
@@ -23391,9 +23402,14 @@ fn persistence_worker(
                 if !openviking_write_preflight::matches_ready(
                     &selected,
                     openviking_preflight_verified.as_ref(),
+                ) && !openviking_write_preflight::recently_attested(
+                    openviking_preflight_verified_at,
+                    Instant::now(),
                 ) {
-                    // Never reuse a proof for a different Ready checkpoint.
+                    // Expired proof is not transferable, even to the same
+                    // queued checkpoint after a long period of inactivity.
                     openviking_preflight_verified = None;
+                    openviking_preflight_verified_at = None;
                     if openviking_preflight_retry_after.is_some_and(|until| Instant::now() < until)
                     {
                         continue;
@@ -23424,8 +23440,9 @@ fn persistence_worker(
                     }
                     continue;
                 }
-                // A proof is single-use. If later validation fails, nothing is
-                // Dispatched; a future attempt requires new live proof.
+                // Single-use queue identity proof. The backend compatibility
+                // lease may cover other queued checkpoints for five minutes.
+                // Their queue identity and source bytes are separately checked.
                 openviking_preflight_verified = None;
                 let claim = (|| -> Result<Option<(String, String, u64, String)>, String> {
                     let mut outbox =
