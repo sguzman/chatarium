@@ -34,13 +34,36 @@ pub fn readback_matches(value: &Value, expected: &str) -> bool {
         && value.get("isError") != Some(&Value::Bool(true))
 }
 
+// Asynchronous OpenViking create returns before the checkpoint is guaranteed
+// readable. Only read-only verification may be repeated: a second create could
+// duplicate an uncertain external side effect.
+const VERIFY_READ_ATTEMPTS: usize = 5;
+
 pub fn deliver_create_once(conversation: &str, turn: &str, content: &str) -> Result<(), String> {
+    deliver_create_once_with(
+        conversation,
+        turn,
+        content,
+        local_http_mcp::invoke,
+        std::thread::sleep,
+    )
+}
+
+/// Injectable transport and pause make the real at-most-once dispatch rule
+/// testable without contacting or mutating the user's OpenViking instance.
+fn deliver_create_once_with(
+    conversation: &str,
+    turn: &str,
+    content: &str,
+    mut invoke: impl FnMut(&str, &str, &str, &str, &Value) -> Result<Value, String>,
+    mut pause: impl FnMut(std::time::Duration),
+) -> Result<(), String> {
     if content.is_empty() || content.len() > MAX_CHECKPOINT_BYTES {
         return Err("OpenViking checkpoint content is empty or too large".to_owned());
     }
     let uri = checkpoint_uri(conversation, turn)?;
     let identity = format!("memory-create:{conversation}:{turn}");
-    local_http_mcp::invoke(
+    let write_result = invoke(
         conversation,
         &identity,
         local_http_mcp::OPENVIKING,
@@ -52,19 +75,31 @@ pub fn deliver_create_once(conversation: &str, turn: &str, content: &str) -> Res
             "wait": false,
         }),
     )?;
-    // Verification is a read, never a second write. Failed or unconfirmed
-    // verification makes the outbound operation uncertain.
-    let readback = local_http_mcp::invoke(
-        conversation,
-        &format!("memory-verify:{conversation}:{turn}"),
-        local_http_mcp::OPENVIKING,
-        "read",
-        &json!({"uris": uri, "limit": 100}),
-    )?;
-    if !readback_matches(&readback, content) {
-        return Err("OpenViking write was attempted but exact read-back is unconfirmed".to_owned());
+    if write_result.get("isError") == Some(&Value::Bool(true)) {
+        return Err("OpenViking create returned a tool error; outcome uncertain".to_owned());
     }
-    Ok(())
+    // The write was attempted exactly once. Delayed materialization, transport
+    // errors and temporary read mismatches may be resolved by safe read-only
+    // checks; none can authorize a write retry or an unverified confirmation.
+    for attempt in 0..VERIFY_READ_ATTEMPTS {
+        let readback = invoke(
+            conversation,
+            &format!("memory-verify:{conversation}:{turn}:{attempt}"),
+            local_http_mcp::OPENVIKING,
+            "read",
+            &json!({"uris": uri, "limit": 100}),
+        );
+        if readback
+            .as_ref()
+            .is_ok_and(|response| readback_matches(response, content))
+        {
+            return Ok(());
+        }
+        if attempt + 1 < VERIFY_READ_ATTEMPTS {
+            pause(std::time::Duration::from_millis(250_u64 << attempt));
+        }
+    }
+    Err("OpenViking create was attempted once but exact read-back remains unconfirmed".to_owned())
 }
 
 /// A crash-uncertain write may already exist remotely. Read, compare with
@@ -410,6 +445,101 @@ mod tests {
                 .unwrap()
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn asynchronous_create_is_written_once_and_verified_with_read_only_retries() {
+        let mut calls = Vec::new();
+        let mut read_count = 0;
+        let mut pauses = Vec::new();
+        deliver_create_once_with(
+            "conversation-1",
+            "turn-1",
+            "expected durable memory",
+            |owner, key, provider, operation, args| {
+                assert_eq!(owner, "conversation-1");
+                assert_eq!(provider, local_http_mcp::OPENVIKING);
+                assert_eq!(
+                    args.get(if operation == "write" { "uri" } else { "uris" })
+                        .and_then(Value::as_str),
+                    checkpoint_uri("conversation-1", "turn-1").ok().as_deref(),
+                );
+                calls.push((operation.to_owned(), key.to_owned()));
+                match operation {
+                    "write" => {
+                        assert_eq!(args["mode"], "create");
+                        assert_eq!(args["wait"], false);
+                        Ok(json!({"content": [{"type": "text", "text": "accepted"}]}))
+                    }
+                    "read" => {
+                        read_count += 1;
+                        match read_count {
+                            1 => Err("not materialized yet".to_owned()),
+                            2 => Ok(json!({"content": [{"type": "text", "text": "stale"}]})),
+                            3 => Ok(json!({"content": [{"type": "text", "text": "expected durable memory"}]})),
+                            _ => panic!("verification must stop after an exact read"),
+                        }
+                    }
+                    _ => panic!("unexpected operation"),
+                }
+            },
+            |delay| pauses.push(delay.as_millis()),
+        )
+        .unwrap();
+        assert_eq!(calls.iter().filter(|(method, _)| method == "write").count(), 1);
+        assert_eq!(calls.iter().filter(|(method, _)| method == "read").count(), 3);
+        assert_eq!(pauses, [250, 500]);
+        assert_ne!(calls[2].1, calls[3].1, "verification IDs must stay distinct");
+    }
+
+    #[test]
+    fn mismatched_readback_remains_uncertain_without_any_second_create() {
+        let mut writes = 0;
+        let mut reads = 0;
+        let error = deliver_create_once_with(
+            "conversation-1",
+            "turn-2",
+            "verified bytes only",
+            |_, _, _, operation, _| match operation {
+                "write" => {
+                    writes += 1;
+                    Ok(json!({"content": []}))
+                }
+                "read" => {
+                    reads += 1;
+                    Ok(json!({"content": [{"type": "text", "text": "REMOTE DRIFT"}]}))
+                }
+                _ => panic!("unexpected operation"),
+            },
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.contains("unconfirmed"));
+        assert_eq!(writes, 1);
+        assert_eq!(reads, VERIFY_READ_ATTEMPTS);
+    }
+
+    #[test]
+    fn failed_or_rejected_create_does_not_attempt_read_or_retry() {
+        for fail_as_tool_error in [false, true] {
+            let mut calls = Vec::new();
+            let result = deliver_create_once_with(
+                "conversation-1",
+                "turn-3",
+                "private checkpoint",
+                |_, _, _, operation, _| {
+                    calls.push(operation.to_owned());
+                    if fail_as_tool_error {
+                        Ok(json!({"isError": true, "content": []}))
+                    } else {
+                        Err("create uncertain".to_owned())
+                    }
+                },
+                |_| panic!("no delay after failed create"),
+            );
+            assert!(result.is_err());
+            assert_eq!(calls, ["write"]);
+        }
     }
 
     #[test]
