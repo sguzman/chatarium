@@ -1306,6 +1306,49 @@ mod project_scope_tests {
     }
 
     #[test]
+    fn revoked_project_grant_is_absent_after_durable_restart() {
+        let source = chatarium_core::LocalConversationId::new();
+        let destination = chatarium_core::LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(source, 1);
+        catalog.create(destination, 2);
+        let directory = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        for id in [source, destination] {
+            catalog
+                .set_project_directory(
+                    id,
+                    Some(directory.to_str().unwrap().to_owned()),
+                    3,
+                )
+                .unwrap();
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-grant-restart-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(PROJECT_MEMORY_GRANTS_FILE_NAME);
+
+        let mut grants = ProjectMemoryGrants::default();
+        grants.grant(&catalog, source, destination).unwrap();
+        grants.save_atomic(&path).unwrap();
+        assert!(ProjectMemoryGrants::load(&path)
+            .unwrap()
+            .allows(&catalog, source, destination));
+
+        assert!(grants.revoke(source, destination));
+        grants.save_atomic(&path).unwrap();
+        let restarted = ProjectMemoryGrants::load(&path).unwrap();
+        assert!(!restarted.allows(&catalog, source, destination));
+        assert!(!restarted.has_sources(&catalog, destination));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn grants_roundtrip_and_reject_tampered_schema() {
         let first = chatarium_core::LocalConversationId::new();
         let second = chatarium_core::LocalConversationId::new();
