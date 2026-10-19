@@ -4,7 +4,8 @@ import http from "node:http";
 import { LocalMcpBroker } from "./client.mjs";
 import { probeOpenViking } from "./openviking-live-probe.mjs";
 
-function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite = false } = {}) {
+function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite = false,
+  toolWriteError = false } = {}) {
   const calls = [];
   let stored = null;
   return {
@@ -23,6 +24,9 @@ function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite =
         assert.equal(request.arguments.uri.includes(request.conversation_id), true);
         assert.equal(stored, null, "a second write must never be attempted");
         stored = { uri: request.arguments.uri, body: request.arguments.content };
+        if (toolWriteError) {
+          return { isError: true, content: [{ type: "text", text: "create rejected" }] };
+        }
         return { content: [{ type: "text", text: "created" }] };
       }
       if (request.name === "read") {
@@ -69,6 +73,14 @@ test("uncertain write or corrupted readback is never retried", async () => {
       options.rejectWrite ? ["list", "write"] : ["list", "write", "read"]);
   }
 });
+test("tool-level write failure must not become a confirmed create", async () => {
+  const broker = syntheticBroker({ toolWriteError: true });
+  await assert.rejects(probeOpenViking({
+    broker, nonce: "toolerr1234", createSyntheticCheckpoint: true,
+  }), /MCP tool error; outcome unknown/);
+  assert.deepEqual(broker.calls.map(x => x.name || x.method), ["list", "write"]);
+});
+
 test("bad identity fails before contacting transport", async () => {
   const broker = syntheticBroker();
   await assert.rejects(probeOpenViking({
@@ -126,6 +138,10 @@ async function withFakeHttpOpenViking(t, behavior = {}) {
       assert.ok(!files.has(args.uri), "checkpoint create must not overwrite");
       // The server may commit a write even if it only returns HTTP 202.
       files.set(args.uri, args.content);
+      if (behavior.toolWriteError) {
+        reply({ isError: true, content: [{ type: "text", text: "create rejected" }] });
+        return;
+      }
       if (behavior.uncertainWrite) {
         response.writeHead(202);
         response.end();
@@ -202,6 +218,16 @@ test("real MCP HTTP 202 is an uncertain write, never automatically replayed", as
   assert.deepEqual(calls.map(call => call.name ?? call.method),
     ["initialize", "tools/list", "write"]);
   assert.equal(files.size, 1, "the server may have persisted an uncertain write");
+});
+
+test("real MCP tool error is never mistaken for successful create or retried", async t => {
+  const { broker, calls, files } = await withFakeHttpOpenViking(t, { toolWriteError: true });
+  await assert.rejects(probeOpenViking({
+    broker, nonce: "tool_error_http_123", createSyntheticCheckpoint: true,
+  }), /MCP tool error; outcome unknown/);
+  assert.deepEqual(calls.map(call => call.name ?? call.method),
+    ["initialize", "tools/list", "write"]);
+  assert.equal(files.size, 1, "a tool-error reply does not prove no write occurred");
 });
 
 test("real MCP SSE remote drift fails closed with no repeated writes", async t => {
