@@ -484,9 +484,21 @@ mod tests {
             "Recall authorized shared decision for worker",
         );
         assert_eq!(context.len(), 2);
-        assert!(context.iter().any(|entry| entry.text.contains("worker local identity")));
-        assert!(context.iter().any(|entry| entry.text.contains("authorized shared decision")));
-        assert!(context.iter().all(|entry| !entry.text.contains("controller private strategy")));
+        assert!(
+            context
+                .iter()
+                .any(|entry| entry.text.contains("worker local identity"))
+        );
+        assert!(
+            context
+                .iter()
+                .any(|entry| entry.text.contains("authorized shared decision"))
+        );
+        assert!(
+            context
+                .iter()
+                .all(|entry| !entry.text.contains("controller private strategy"))
+        );
         assert!(context.iter().all(|entry| {
             matches!(entry.source, ContextSource::OpenVikingCheckpoint { .. })
                 && entry.role == TranscriptRole::User
@@ -498,20 +510,20 @@ mod tests {
             100,
         )];
         transcript.extend(context);
-        let plan = ContextPlan::compose_bounded(
-            ContextPolicy::dispatch(),
-            "",
-            "",
-            transcript,
-        )
-        .unwrap();
+        let plan =
+            ContextPlan::compose_bounded(ContextPolicy::dispatch(), "", "", transcript).unwrap();
         assert_eq!(plan.openviking_checkpoint_count(), 2);
-        assert!(plan.messages.iter().any(|entry| {
-            entry.content == "Worker's latest durable directive"
-        }));
-        assert!(!plan.messages.iter().any(|entry| {
-            entry.content.contains("controller private strategy")
-        }));
+        assert!(
+            plan.messages
+                .iter()
+                .any(|entry| { entry.content == "Worker's latest durable directive" })
+        );
+        assert!(
+            !plan
+                .messages
+                .iter()
+                .any(|entry| { entry.content.contains("controller private strategy") })
+        );
 
         // Revocation after prefetch removes project sharing at final admission.
         assert!(grants.revoke(source, worker));
@@ -549,7 +561,12 @@ mod tests {
         assert!(cache.is_in_flight(worker));
         assert_eq!(
             cache.finish(
-                worker, epoch, Err("offline".to_owned()), now, &catalog, &grants
+                worker,
+                epoch,
+                Err("offline".to_owned()),
+                now,
+                &catalog,
+                &grants
             ),
             Completion::Deferred("offline".to_owned())
         );
