@@ -212,6 +212,34 @@ This is **budget-aware history selection**, not a guarantee that a model has
 semantically preserved every omitted turn. Gaps in checkpoint coverage and
 model-authored summary accuracy still require separate end-to-end validation.
 
+## Landed: bounded owner-scoped historical lookup
+
+An OpenViking background read can now preselect historical checkpoints from
+the **latest 64 locally confirmed checkpoints of the requesting conversation**
+instead of only considering its three newest entries. The host scores only
+the checkpoint's memory body against a bounded lexical query, never the
+source's owner/turn/sequence header. It always retains the newest rolling
+checkpoint for continuity, plus up to two older topic-relevant entries. With
+no matches it retains the original three-newest behavior. Only the selected
+three are remotely read and **byte-for-byte verified against their original
+durable source** before they can become user-level inference evidence. The
+total verified-memory budget remains 12 KiB. The selection reads only
+on-disk summaries, off the egui thread; it does **not** search or download
+another conversation's OpenViking namespace.
+
+The foreground background-prefetch uses the current authored draft if one
+exists at the time of the read, otherwise the conversation's last durable
+user message. An inactive coordination worker uses the **exact authorized
+wake directive** as its query before spending the at-most-once wake claim.
+A cached result remains fixed until the existing source-invalidation path
+refreshes it; editing an already-open draft does not run a new OpenViking
+search on every keystroke. This is explicit bounded lexical lookup, not a
+claim of embedding-based or unrestricted semantic search.
+
+Cross-conversation project sharing still considers the most recent confirmed
+checkpoint for each explicitly granted source; broader historical selection
+for those granted sources remains a separate acceptance item.
+
 ## Landed: query-aware ordering of verified memory context
 
 At authored Send, and identically in the exact-request inspector, Chatarium
