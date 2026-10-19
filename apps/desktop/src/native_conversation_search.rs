@@ -1965,11 +1965,13 @@ mod tests {
         ));
         let updated = cached_rows(&ctx, &updated_index, &entries, false, "needle");
         assert_eq!(updated.len(), 3);
-        assert!(updated
-            .iter()
-            .any(|row| entries[row.catalog_index].id == second
-                && row.message_index == Some(1)
-                && row.summary.message_count == 2));
+        assert!(
+            updated
+                .iter()
+                .any(|row| entries[row.catalog_index].id == second
+                    && row.message_index == Some(1)
+                    && row.summary.message_count == 2)
+        );
         let after = ctx
             .data_mut(|data| data.get_temp::<NativeRowsCache>(cache_id))
             .unwrap();
