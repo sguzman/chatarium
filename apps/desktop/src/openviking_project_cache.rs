@@ -325,6 +325,30 @@ mod tests {
         assert!(ranked[0].text.contains(&source.to_string()));
         assert!(ranked[1].text.contains(&destination.to_string()));
 
+        // Integration: the real bounded composer examines checkpoint evidence
+        // from the end of the snapshot. The matching checkpoint must survive
+        // a budget where only one complete historical source can fit.
+        use crate::context_composer::{
+            ContextPlan, ContextPolicy, TranscriptMessage, TranscriptRole,
+        };
+        let question = TranscriptMessage::durable(
+            TranscriptRole::User,
+            "Recall the calendar reminders",
+            17,
+        );
+        let limit = question.text.len() + ranked[1].text.len() + 20;
+        let plan = ContextPlan::compose(
+            ContextPolicy::dispatch(),
+            "",
+            "",
+            std::iter::once(question).chain(ranked.iter().cloned()),
+        )
+        .within_utf8_budget(limit)
+        .unwrap();
+        assert!(plan.messages.iter().any(|m| m.content.contains("Calendar review")));
+        assert!(!plan.messages.iter().any(|m| m.content.contains("Rust ownership")));
+        assert!(plan.size.omitted_items > 0);
+
         let no_match = cache.admitted_relevant_context(
             Some(std::slice::from_ref(&own)),
             destination,
