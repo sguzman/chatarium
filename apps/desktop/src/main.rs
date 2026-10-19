@@ -28283,6 +28283,30 @@ mod tests {
     }
 
     #[test]
+    fn model_openviking_write_is_rejected_without_creating_a_durable_tool_route() {
+        let mut store = chatarium_store::MemoryEventStore::default();
+        let owner = LocalConversationId::new();
+        let proposal = mcp_agent_defaults::ModelToolRequest {
+            provider: local_http_mcp::OPENVIKING.to_owned(),
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({
+                "uri": format!("viking://~/chatarium/conversations/{owner}/checkpoints/turn-1.md"),
+                "mode": "create",
+                "content": "unverified model-authored memory",
+            }),
+        };
+        for policy in [
+            mcp_agent_defaults::ToolPolicy::Ask,
+            mcp_agent_defaults::ToolPolicy::Automatic,
+        ] {
+            let error = append_agent_mcp_call_checked(&mut store, owner, &proposal, policy)
+                .unwrap_err();
+            assert!(error.contains("automatic verified checkpoint lifecycle"));
+            assert!(store.events().is_empty());
+        }
+    }
+
+    #[test]
     fn in_chat_mcp_status_distinguishes_denied_and_saved_auto_permission() {
         let conversation = LocalConversationId::new();
         let request = mcp_agent_defaults::ModelToolRequest {
