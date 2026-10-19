@@ -18,6 +18,15 @@ pub(crate) fn attested_exclusive_create(value: &Value) -> bool {
         && value.get("remoteMutation") == Some(&Value::Bool(true))
 }
 
+/// A safe result authorizes exactly the checkpoint that was selected before
+/// the synthetic check. Never apply it to a newer or different outbox entry.
+pub(crate) fn matches_ready(
+    selected: &(String, String, u64),
+    verified: Option<&(String, String, u64)>,
+) -> bool {
+    verified == Some(selected)
+}
+
 /// One disposable, randomly named synthetic namespace per attempted checkpoint.
 /// No user text or production URI is sent to the diagnostic. It may leave a
 /// synthetic QA file behind; an ambiguous outcome never authorizes the write.
@@ -72,6 +81,17 @@ pub fn verify_before_checkpoint_write() -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_preflight_proof_cannot_be_reused_for_another_checkpoint() {
+        let first = ("owner".to_owned(), "turn-one".to_owned(), 10);
+        let next = ("owner".to_owned(), "turn-two".to_owned(), 11);
+        let foreign = ("another".to_owned(), "turn-one".to_owned(), 10);
+        assert!(!matches_ready(&first, None));
+        assert!(matches_ready(&first, Some(&first)));
+        assert!(!matches_ready(&next, Some(&first)));
+        assert!(!matches_ready(&foreign, Some(&first)));
+    }
 
     #[test]
     fn attestation_requires_actual_exclusive_create_proof() {
