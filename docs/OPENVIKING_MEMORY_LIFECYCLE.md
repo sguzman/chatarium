@@ -45,6 +45,19 @@ These are materially different contracts. An at-most-once client dispatch
 does **not** make a non-exclusive server operation safe against overwriting
 a preexisting remote file.
 
+The production write dispatcher now performs a **fresh, background, synthetic
+exclusive-create preflight for every Ready checkpoint before durably marking
+it Dispatched**. It requires the actual two-create collision rejection,
+followed by exact re-verification of the original synthetic bytes. No user
+memory or existing production URI is used in the preflight. A failed or
+unavailable check leaves the original checkpoint in Ready state and delays
+another attempt for 30 minutes; it must never convert a never-attempted
+production write into an uncertain one. This has no manual setup per write,
+but does leave a small synthetic QA file in the server for each preflight.
+It is a live compatibility check, not a guarantee against a server changing
+between preflight and production dispatch. The installed server version and
+behavior still require real-service acceptance QA before completion.
+
 The user's installed server version and exclusive-create behavior must be
 confirmed in live integration QA before claiming non-overwrite guarantees
 or finishing this milestone. The default read-only probe does not mutate
@@ -513,7 +526,11 @@ named checkpoint within a dedicated synthetic QA conversation namespace.
 It reads back the exact URI and verifies byte-for-byte content. This synthetic
 file is PERSISTENT; no delete, overwrite or retry of uncertain writes occurs.
 The probe never alters a real chat, journal or existing checkpoint. GitHub CI
-must never run write mode against the user's host. No automatic live writes.
+must never run write mode against the user's host. No automatic live writes **from the standalone diagnostic harness**.
+The host's separate production dispatch now invokes the same synthetic
+exclusive-create check automatically whenever it has a Ready checkpoint.
+It performs this from a dedicated background thread before claiming the
+actual write; failures do not consume that durable queue entry.
 
 The synthetic probe uses the same five-read verification limit and never
 reissues a create request after a write was attempted. Transient read errors
