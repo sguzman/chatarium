@@ -217,6 +217,24 @@ pub fn selected_hit_ordinal(
         .unwrap_or(0)
 }
 
+/// A remembered event sequence must still exist in the currently matching
+/// visible projection before it can be copied, staged, or opened. A stale
+/// event must not be silently replaced by the first new matching message.
+pub fn confirmed_hit_index(
+    row: &NativeSearchRow,
+    messages: &[DisplayMessage],
+    source_sequence: Option<u64>,
+) -> Option<usize> {
+    match source_sequence {
+        Some(sequence) => row.matching_message_indices.iter().copied().find(|index| {
+            messages
+                .get(*index)
+                .is_some_and(|message| message.sequence == sequence)
+        }),
+        None => selected_message_index(row, 0),
+    }
+}
+
 pub fn selected_hit_sequence(
     row: &NativeSearchRow,
     messages: &[DisplayMessage],
@@ -1001,6 +1019,22 @@ mod tests {
         assert_eq!(ordinal, 0);
         assert_eq!(selected_hit_sequence(&later, &reordered, ordinal), Some(29));
         assert_eq!(selected_hit_ordinal(&later, &reordered, Some(999)), 0);
+        assert_eq!(confirmed_hit_index(&later, &reordered, Some(29)), Some(0));
+        assert_eq!(confirmed_hit_index(&later, &reordered, Some(17)), Some(1));
+        assert_eq!(confirmed_hit_index(&later, &reordered, None), Some(0));
+        assert_eq!(confirmed_hit_index(&later, &reordered, Some(999)), None);
+
+        // The old selected event disappeared but another matching text remains.
+        // A new row position must not become the target of copy or memory stage.
+        let replaced = [message(31, "a new match")];
+        let new_row = collect_native_search_row(
+            "match",
+            0,
+            "test".to_owned(),
+            &replaced,
+        ).unwrap();
+        assert_eq!(confirmed_hit_index(&new_row, &replaced, Some(29)), None);
+        assert_eq!(confirmed_hit_index(&new_row, &replaced, None), Some(0));
     }
 
     fn author(

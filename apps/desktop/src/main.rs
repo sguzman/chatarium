@@ -15057,13 +15057,22 @@ impl eframe::App for ChatariumApp {
                             let old_choice = ctx.data_mut(|data| {
                                 data.get_temp::<(String, Option<u64>)>(hit_choice_id)
                             });
+                            let remembered_sequence = old_choice
+                                .as_ref()
+                                .filter(|(query, _)| query == &self.local_conversation_search_query)
+                                .and_then(|(_, source_sequence)| *source_sequence);
                             let mut hit_ordinal = native_conversation_search::selected_hit_ordinal(
                                 row,
                                 messages,
-                                old_choice
-                                    .filter(|(query, _)| query == &self.local_conversation_search_query)
-                                    .and_then(|(_, source_sequence)| source_sequence),
+                                remembered_sequence,
                             );
+                            let mut stale_hit = remembered_sequence.is_some()
+                                && native_conversation_search::confirmed_hit_index(
+                                    row,
+                                    messages,
+                                    remembered_sequence,
+                                )
+                                .is_none();
                             if match_kind
                                 == native_conversation_search::NativeSearchMatch::Message
                             {
@@ -15074,10 +15083,14 @@ impl eframe::App for ChatariumApp {
                             native_search_matches.push(entry.id);
                             native_copy_candidates.push((
                                 entry.id,
-                                native_conversation_search::selected_message_index(
-                                    row,
-                                    hit_ordinal,
-                                ),
+                                if stale_hit {
+                                    None
+                                } else {
+                                    native_conversation_search::selected_message_index(
+                                        row,
+                                        hit_ordinal,
+                                    )
+                                },
                             ));
                             let keyboard_selected =
                                 self.local_conversation_search_selection == Some(entry.id);
@@ -15196,6 +15209,7 @@ impl eframe::App for ChatariumApp {
                                                 } else {
                                                     hit_ordinal - 1
                                                 };
+                                                stale_hit = false;
                                             }
                                             ui.label(format!(
                                                 "Match {} of {}",
@@ -15205,20 +15219,37 @@ impl eframe::App for ChatariumApp {
                                             if ui.small_button("Next hit").clicked() {
                                                 hit_ordinal = (hit_ordinal + 1)
                                                     % row.matching_message_indices.len();
+                                                stale_hit = false;
                                             }
                                         });
                                     }
-                                    let selected_message_index =
+                                    if stale_hit
+                                        && !row.matching_message_indices.is_empty()
+                                        && ui.small_button("Select first match").clicked()
+                                    {
+                                        // A removed source event must never
+                                        // implicitly retarget a copy or memory
+                                        // staging action; this is explicit.
+                                        hit_ordinal = 0;
+                                        stale_hit = false;
+                                    }
+                                    let selected_message_index = if stale_hit {
+                                        None
+                                    } else {
                                         native_conversation_search::selected_message_index(
                                             row,
                                             hit_ordinal,
-                                        );
-                                    let selected_source_sequence =
+                                        )
+                                    };
+                                    let selected_source_sequence = if stale_hit {
+                                        remembered_sequence
+                                    } else {
                                         native_conversation_search::selected_hit_sequence(
                                             row,
                                             messages,
                                             hit_ordinal,
-                                        );
+                                        )
+                                    };
                                     ctx.data_mut(|data| {
                                         data.insert_temp(
                                             hit_choice_id,
@@ -16158,12 +16189,10 @@ impl eframe::App for ChatariumApp {
                 memory.request_focus(egui::Id::new("chatarium-message-composer"))
             });
         }
-        if self
-            .local_conversation_search_selection
-            .is_some_and(|owner| !native_search_matches.contains(&owner))
-        {
-            self.local_conversation_search_selection = None;
-        }
+        // An explicitly highlighted owner may disappear after archive/filter
+        // changes. Keep its ID: clearing to None would make Alt+Enter or
+        // Enter silently fall back to a different conversation's first row.
+        // Arrow navigation or an edited query explicitly selects anew.
         if native_search_has_focus {
             let mut clear_focus = false;
             let mut copy_hit_requested = false;
