@@ -16305,8 +16305,8 @@ impl eframe::App for ChatariumApp {
                                 ),
                             )
                         });
-                        if let Some(candidate) = row_index
-                            .and_then(|index| native_copy_candidates.get_mut(index))
+                        if let Some(candidate) =
+                            row_index.and_then(|index| native_copy_candidates.get_mut(index))
                         {
                             candidate.1 = Some(message_index);
                         }
