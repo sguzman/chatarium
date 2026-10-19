@@ -10,6 +10,7 @@ export async function probeOpenViking({
   broker = new LocalMcpBroker(),
   createSyntheticCheckpoint = false,
   nonce = randomUUID().replaceAll("-", ""),
+  pause = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
   if (typeof nonce !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(nonce)) {
     throw new Error("Invalid synthetic probe identity");
@@ -44,17 +45,32 @@ export async function probeOpenViking({
   if (writeResult?.isError === true) {
     throw new Error("Synthetic create returned an MCP tool error; outcome unknown; NEVER auto-retry");
   }
-  const readback = await broker.request({
-    conversation_id: owner, provider: "openviking", method: "call",
-    name: "read", arguments: { uris: uri, limit: 100 },
-  });
-  if (readback?.isError === true
-      || readback?.content?.length !== 1
-      || readback.content[0]?.type !== "text"
-      || readback.content[0]?.text !== body) {
-    throw new Error("Synthetic create attempted; exact readback unconfirmed; NEVER auto-retry");
+  // wait:false may return before the created checkpoint is materialized.
+  // Repeat only idempotent reads, never the potentially-committed write.
+  const maxReadAttempts = 5;
+  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
+    let readback;
+    try {
+      readback = await broker.request({
+        conversation_id: owner, provider: "openviking", method: "call",
+        name: "read", arguments: { uris: uri, limit: 100 },
+      });
+    } catch {
+      // A temporary read failure is safe to retry; do not log source data.
+    }
+    if (readback?.isError !== true
+        && readback?.content?.length === 1
+        && readback.content[0]?.type === "text"
+        && readback.content[0]?.text === body) {
+      return { ok: true, mode: "synthetic-create-once",
+        verified: true, remoteMutation: true, uri };
+    }
+    if (attempt + 1 < maxReadAttempts) {
+      await pause(250 * 2 ** attempt);
+    }
   }
-  return { ok: true, mode: "synthetic-create-once", verified: true, remoteMutation: true, uri };
+  throw new Error("Synthetic create attempted once; exact readback unconfirmed; NEVER auto-retry");
+
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
