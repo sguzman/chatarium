@@ -254,6 +254,12 @@ impl Outbox {
             let _ = fs::remove_file(&temporary);
             return Err(format!("checkpoint outbox atomic rename: {error}"));
         }
+        // The staged file is synced already, but on Unix the directory entry
+        // created by rename needs a separate sync before claiming durability.
+        #[cfg(unix)]
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|e| format!("checkpoint outbox directory sync: {e}"))?;
         Ok(())
     }
 
@@ -407,9 +413,23 @@ impl Outbox {
             let mut dest = options
                 .open(&file)
                 .map_err(|e| format!("cannot create checkpoint summary: {e}"))?;
-            dest.write_all(body.as_bytes())
-                .and_then(|()| dest.sync_all())
-                .map_err(|e| format!("cannot persist checkpoint summary: {e}"))?;
+            if let Err(error) = dest.write_all(body.as_bytes()).and_then(|()| dest.sync_all()) {
+                drop(dest);
+                // This file was opened with create_new: removing it after our
+                // own failed write permits a clean retry without overwriting
+                // any preexisting, independently persisted checkpoint.
+                let _ = fs::remove_file(&file);
+                return Err(format!("cannot persist checkpoint summary: {error}"));
+            }
+        }
+        // Sync the summary directory and both ancestors: the conversation
+        // and summaries directories may also have just been created.
+        // Only after that may a separate durable outbox transition say Ready.
+        #[cfg(unix)]
+        for directory in parent.ancestors().take(3) {
+            fs::File::open(directory)
+                .and_then(|handle| handle.sync_all())
+                .map_err(|e| format!("checkpoint summary directory sync: {e}"))?;
         }
         self.transition_durable(
             outbox_path,
