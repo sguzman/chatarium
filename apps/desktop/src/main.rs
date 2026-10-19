@@ -23,6 +23,7 @@ mod local_stdio_host_diagnostics;
 mod openviking_checkpoint_outbox;
 mod openviking_memory_delivery;
 mod openviking_memory_summary;
+mod openviking_project_cache;
 mod openviking_project_ui;
 
 mod local_stdio_runner;
@@ -305,6 +306,7 @@ impl ControllerControlAction {
 enum PersistCommand {
     RetrieveConfirmedProjectOpenViking {
         conversation_id: LocalConversationId,
+        generation: u64,
         catalog: local_conversations::LocalConversationCatalog,
         grants: openviking_memory_delivery::ProjectMemoryGrants,
     },
@@ -621,6 +623,7 @@ enum PersistCommand {
 enum PersistNotice {
     ProjectOpenVikingRetrievalFinished {
         conversation_id: LocalConversationId,
+        generation: u64,
         result: Result<Vec<openviking_memory_delivery::RetrievedCheckpoint>, String>,
     },
     OpenVikingRetrievalFinished {
@@ -1314,11 +1317,7 @@ struct ChatariumApp {
     openviking_retrieval_in_flight: HashSet<LocalConversationId>,
     openviking_retrieval_retry_after: BTreeMap<LocalConversationId, Instant>,
     openviking_retrieval_stale: HashSet<LocalConversationId>,
-    openviking_project_retrieval_cache:
-        BTreeMap<LocalConversationId, Vec<openviking_memory_delivery::RetrievedCheckpoint>>,
-    openviking_project_retrieval_in_flight: HashSet<LocalConversationId>,
-    openviking_project_retrieval_retry_after: BTreeMap<LocalConversationId, Instant>,
-    openviking_project_retrieval_stale: HashSet<LocalConversationId>,
+    openviking_project_cache: openviking_project_cache::RetrievalCache,
     commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
     delivery: delivery_telemetry::Timeline,
 }
@@ -1679,10 +1678,7 @@ impl ChatariumApp {
                         openviking_retrieval_in_flight: HashSet::new(),
                         openviking_retrieval_retry_after: BTreeMap::new(),
                         openviking_retrieval_stale: HashSet::new(),
-                        openviking_project_retrieval_cache: BTreeMap::new(),
-                        openviking_project_retrieval_in_flight: HashSet::new(),
-                        openviking_project_retrieval_retry_after: BTreeMap::new(),
-                        openviking_project_retrieval_stale: HashSet::new(),
+                        openviking_project_cache: openviking_project_cache::RetrievalCache::default(),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
                     },
@@ -1949,10 +1945,7 @@ impl ChatariumApp {
             openviking_retrieval_in_flight: HashSet::new(),
             openviking_retrieval_retry_after: BTreeMap::new(),
             openviking_retrieval_stale: HashSet::new(),
-            openviking_project_retrieval_cache: BTreeMap::new(),
-            openviking_project_retrieval_in_flight: HashSet::new(),
-            openviking_project_retrieval_retry_after: BTreeMap::new(),
-            openviking_project_retrieval_stale: HashSet::new(),
+            openviking_project_cache: openviking_project_cache::RetrievalCache::default(),
             commit_remote_intents: BTreeMap::new(),
             delivery: delivery_telemetry::Timeline::default(),
         }
@@ -2130,10 +2123,7 @@ impl ChatariumApp {
 
     /// In-flight project reads cannot remain eligible after revocation.
     fn invalidate_project_memory_cache(&mut self) {
-        self.openviking_project_retrieval_cache.clear();
-        self.openviking_project_retrieval_retry_after.clear();
-        self.openviking_project_retrieval_stale
-            .extend(self.openviking_project_retrieval_in_flight.iter().copied());
+        self.openviking_project_cache.invalidate();
     }
 
     fn change_project_memory_permission(&mut self, source: LocalConversationId, allow: bool) {
@@ -3353,8 +3343,8 @@ impl ChatariumApp {
                     }
                 }
                 if let Some(checkpoints) = self
-                    .openviking_project_retrieval_cache
-                    .get(&self.local_conversation_id)
+                    .openviking_project_cache
+                    .checkpoints(self.local_conversation_id)
                 {
                     for checkpoint in checkpoints {
                         if let Ok(message) =
@@ -3925,21 +3915,11 @@ impl ChatariumApp {
             return;
         }
         let destination = self.local_conversation_id;
-        if self
-            .openviking_project_retrieval_cache
-            .contains_key(&destination)
-            || self
-                .openviking_project_retrieval_in_flight
-                .contains(&destination)
-            || self
-                .openviking_project_retrieval_retry_after
-                .get(&destination)
-                .is_some_and(|next| Instant::now() < *next)
-        {
+        if !self.openviking_project_cache.can_schedule(destination, Instant::now()) {
             return;
         }
-        // Scope checks may canonicalize project paths. Skip them on frames
-        // where the cached result, in-flight read or backoff already suffices.
+        // Scope checks can canonicalize project paths. Do not perform them
+        // on frames with a cached result, an in-flight read, or backoff.
         if !self
             .project_memory_grants
             .has_sources(&self.local_conversation_catalog, destination)
@@ -3949,16 +3929,19 @@ impl ChatariumApp {
         let Some(sender) = &self.persist_tx else {
             return;
         };
+        let Some(generation) = self.openviking_project_cache.begin(destination, Instant::now()) else {
+            return;
+        };
         if sender
             .send(PersistCommand::RetrieveConfirmedProjectOpenViking {
                 conversation_id: destination,
+                generation,
                 catalog: self.local_conversation_catalog.clone(),
                 grants: self.project_memory_grants.clone(),
             })
-            .is_ok()
+            .is_err()
         {
-            self.openviking_project_retrieval_in_flight
-                .insert(destination);
+            self.openviking_project_cache.cancel(destination, generation);
         }
     }
 
@@ -3973,51 +3956,22 @@ impl ChatariumApp {
             match notice {
                 PersistNotice::ProjectOpenVikingRetrievalFinished {
                     conversation_id,
+                    generation,
                     result,
                 } => {
-                    self.openviking_project_retrieval_in_flight
-                        .remove(&conversation_id);
-                    if self
-                        .openviking_project_retrieval_stale
-                        .remove(&conversation_id)
-                    {
-                        self.openviking_project_retrieval_cache
-                            .remove(&conversation_id);
-                        self.openviking_project_retrieval_retry_after
-                            .remove(&conversation_id);
-                        continue;
-                    }
-                    match result {
-                        Ok(checkpoints) => {
-                            let valid = checkpoints
-                                .into_iter()
-                                .filter(|checkpoint| {
-                                    checkpoint
-                                        .source_conversation_id
-                                        .parse::<LocalConversationId>()
-                                        .ok()
-                                        .is_some_and(|source| {
-                                            self.project_memory_grants.allows(
-                                                &self.local_conversation_catalog,
-                                                source,
-                                                conversation_id,
-                                            )
-                                        })
-                                })
-                                .collect();
-                            self.openviking_project_retrieval_cache
-                                .insert(conversation_id, valid);
-                            self.openviking_project_retrieval_retry_after
-                                .remove(&conversation_id);
-                        }
-                        Err(error) => {
-                            self.openviking_project_retrieval_retry_after
-                                .insert(conversation_id, Instant::now() + Duration::from_secs(300));
-                            if conversation_id == self.local_conversation_id {
-                                self.status = format!(
-                                    "Project memory retrieval unavailable; continuing without shared memory: {error}"
-                                );
-                            }
+                    let result = self.openviking_project_cache.finish(
+                        conversation_id,
+                        generation,
+                        result,
+                        Instant::now(),
+                        &self.local_conversation_catalog,
+                        &self.project_memory_grants,
+                    );
+                    if let openviking_project_cache::Completion::Deferred(error) = result {
+                        if conversation_id == self.local_conversation_id {
+                            self.status = format!(
+                                "Project memory retrieval unavailable; continuing without shared memory: {error}"
+                            );
                         }
                     }
                 }
@@ -14622,7 +14576,7 @@ impl eframe::App for ChatariumApp {
                                 }
                             }
                             if let Some(checkpoints) = self
-                                .openviking_project_retrieval_cache.get(&self.local_conversation_id)
+                                .openviking_project_cache.checkpoints(self.local_conversation_id)
                             {
                                 for checkpoint in checkpoints {
                                     if let Ok(message) =
@@ -23125,6 +23079,7 @@ fn persistence_worker(
             }
             PersistCommand::RetrieveConfirmedProjectOpenViking {
                 conversation_id,
+                generation,
                 catalog,
                 grants,
             } => {
@@ -23141,12 +23096,14 @@ fn persistence_worker(
                         );
                         let _ = sender.send(PersistNotice::ProjectOpenVikingRetrievalFinished {
                             conversation_id,
+                            generation,
                             result,
                         });
                     });
                 if let Err(error) = spawned {
                     let _ = notices.send(PersistNotice::ProjectOpenVikingRetrievalFinished {
                         conversation_id,
+                        generation,
                         result: Err(format!("cannot launch project memory read worker: {error}")),
                     });
                 }

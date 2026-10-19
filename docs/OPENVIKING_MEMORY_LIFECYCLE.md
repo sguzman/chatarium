@@ -367,3 +367,20 @@ The probe tests the installed transport, not the complete automatic
 summarization, outbox, grants and Send-context pipeline. That broader live
 integration remains unverified, and should be tested by the local QA agent,
 not by demanding that the user manually operate a test harness.
+
+
+## Background project-read epoch and revocation safety
+
+The project-memory retrieval cache uses an explicit generation token on every
+background command and completion. A saved grant/revocation, saved project-folder
+change or newly verified source checkpoint increments the generation and removes
+cached results. Already-running workers cannot publish their old results after
+an invalidation, even if the same source is granted again before they return.
+Each completion must match the outstanding destination and generation, and
+current directed permissions are rechecked when the result is admitted.
+Stale failures do not poison retry backoff. The in-flight claim remains until
+the old worker finishes, preventing redundant concurrent retrievals; once it
+returns, the current generation can retrieve afresh. Authored Send still
+rechecks authorization on the final context snapshot. These guarantees do not
+cancel an already-dispatched network read, nor imply that a live OpenViking
+instance has been tested.
