@@ -11,6 +11,35 @@ use std::time::{Duration, Instant};
 
 const RETRY_DELAY: Duration = Duration::from_secs(300);
 
+/// Deterministic, local-only lexical relevance hint. It never authorizes a
+/// memory, changes its body, or performs an external search. Its only purpose
+/// is to order already verified evidence before the bounded context composer.
+fn relevance_terms(text: &str) -> std::collections::BTreeSet<String> {
+    const STOP: &[&str] = &[
+        "about", "after", "also", "and", "are", "como", "con", "del", "does", "for",
+        "from", "have", "how", "las", "los", "para", "por", "que", "the", "this",
+        "una", "was", "were", "what", "when", "where", "which", "who", "will", "with",
+        "you", "your",
+    ];
+    text.chars()
+        .take(4096)
+        .collect::<String>()
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .filter(|word| word.chars().count() >= 2)
+        .map(str::to_lowercase)
+        .filter(|word| !STOP.contains(&word.as_str()))
+        .take(96)
+        .collect()
+}
+
+fn relevance_score(checkpoint: &RetrievedCheckpoint, query: &std::collections::BTreeSet<String>) -> usize {
+    // The first two Markdown sections are source metadata, not memory facts.
+    let body = checkpoint.text.splitn(3, "\n\n").nth(2).unwrap_or("");
+    let terms = relevance_terms(body);
+    query.intersection(&terms).count()
+}
+
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Completion {
     /// A result from an earlier epoch, or one with no outstanding request.
@@ -66,6 +95,54 @@ impl RetrievalCache {
                 .ok()
             })
             .collect()
+    }
+
+    /// Combine exact-owner and explicitly granted project checkpoints for one
+    /// request. The existing final authority checks run BEFORE ranking.
+    ///
+    /// When the composer exceeds its context budget it examines OpenViking
+    /// checkpoint messages from the END of the transcript backward. Place
+    /// relevant evidence last so it wins that bounded, whole-document selection.
+    /// Unmatched/empty queries preserve ordinary admission order.
+    pub fn admitted_relevant_context(
+        &self,
+        own: Option<&[RetrievedCheckpoint]>,
+        destination: LocalConversationId,
+        catalog: &LocalConversationCatalog,
+        grants: &ProjectMemoryGrants,
+        query: &str,
+    ) -> Vec<crate::context_composer::TranscriptMessage> {
+        let mut evidence = Vec::<(usize, crate::context_composer::TranscriptMessage)>::new();
+        let terms = relevance_terms(query);
+        for checkpoint in own.into_iter().flatten() {
+            if let Ok(message) =
+                crate::context_composer::TranscriptMessage::verified_openviking_checkpoint(
+                    checkpoint,
+                    &destination.to_string(),
+                )
+            {
+                evidence.push((relevance_score(checkpoint, &terms), message));
+            }
+        }
+        for checkpoint in self.checkpoints(destination).into_iter().flatten() {
+            if let Ok(source) = checkpoint.source_conversation_id.parse::<LocalConversationId>()
+                && grants.allows(catalog, source, destination)
+                && let Ok(message) =
+                    crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                        checkpoint,
+                        destination,
+                        catalog,
+                        grants,
+                    )
+            {
+                evidence.push((relevance_score(checkpoint, &terms), message));
+            }
+        }
+        if !terms.is_empty() && evidence.iter().any(|(score, _)| *score > 0) {
+            // Stable sort keeps deterministic original order among ties.
+            evidence.sort_by_key(|(score, _)| *score);
+        }
+        evidence.into_iter().map(|(_, message)| message).collect()
     }
 
     pub fn can_schedule(&self, destination: LocalConversationId, now: Instant) -> bool {
@@ -172,6 +249,121 @@ mod tests {
             uri: "viking://~/chatarium/synthetic".to_owned(),
             text: "known local evidence".to_owned(),
         }
+    }
+
+    fn verified_checkpoint(
+        owner: LocalConversationId,
+        turn: &str,
+        sequence: u64,
+        body: &str,
+    ) -> RetrievedCheckpoint {
+        RetrievedCheckpoint {
+            source_conversation_id: owner.to_string(),
+            source_turn_id: turn.to_owned(),
+            source_journal_sequence: sequence,
+            uri: crate::openviking_memory_delivery::checkpoint_uri(
+                &owner.to_string(),
+                turn,
+            )
+            .unwrap(),
+            text: format!(
+                "# Chatarium memory checkpoint\n\nConversation: {owner}\nTurn: {turn}\nSource journal sequence: {sequence}\n\n{body}\n"
+            ),
+        }
+    }
+
+    #[test]
+    fn query_relevance_orders_verified_project_memory_without_widening_grants() {
+        let (catalog, mut grants, source, destination) = fixture();
+        let own = verified_checkpoint(
+            destination,
+            "my-turn",
+            4,
+            "Calendar review and meeting reminders",
+        );
+        let project = verified_checkpoint(
+            source,
+            "project-turn",
+            9,
+            "Rust ownership checkpoint and borrow checker decisions",
+        );
+        let mut cache = RetrievalCache::default();
+        let now = Instant::now();
+        let generation = cache.begin(destination, now).unwrap();
+        assert_eq!(
+            cache.finish(
+                destination,
+                generation,
+                Ok(vec![project.clone()]),
+                now,
+                &catalog,
+                &grants,
+            ),
+            Completion::Loaded
+        );
+        let baseline = cache.admitted_relevant_context(
+            Some(std::slice::from_ref(&own)),
+            destination,
+            &catalog,
+            &grants,
+            "",
+        );
+        assert_eq!(baseline.len(), 2);
+        assert!(baseline[0].content.contains("Calendar review"));
+        assert!(baseline[1].content.contains("Rust ownership"));
+
+        // A relevant project checkpoint moves to the last (highest-budget-
+        // priority) position, but its exact source identity is preserved.
+        let ranked = cache.admitted_relevant_context(
+            Some(std::slice::from_ref(&own)),
+            destination,
+            &catalog,
+            &grants,
+            "Can you recall the calendar meeting reminders?",
+        );
+        assert_eq!(ranked.len(), 2);
+        assert!(ranked[0].content.contains("Rust ownership"));
+        assert!(ranked[1].content.contains("Calendar review"));
+        assert!(ranked[0].content.contains(&source.to_string()));
+        assert!(ranked[1].content.contains(&destination.to_string()));
+
+        let no_match = cache.admitted_relevant_context(
+            Some(std::slice::from_ref(&own)),
+            destination,
+            &catalog,
+            &grants,
+            "unrelated galaxies",
+        );
+        assert_eq!(no_match, baseline);
+
+        assert!(grants.revoke(source, destination));
+        let after_revoke = cache.admitted_relevant_context(
+            Some(std::slice::from_ref(&own)),
+            destination,
+            &catalog,
+            &grants,
+            "rust ownership",
+        );
+        assert_eq!(after_revoke.len(), 1);
+        assert!(after_revoke[0].content.contains("Calendar review"));
+        assert!(!after_revoke[0].content.contains("Rust ownership"));
+    }
+
+    #[test]
+    fn query_terms_are_bounded_casefolded_and_ignore_metadata_noise() {
+        let evidence = verified_checkpoint(
+            LocalConversationId::new(),
+            "turn-1",
+            10,
+            "Español México: TÉRMINOS de lingüística y Rust 3090.",
+        );
+        let terms = relevance_terms("¿Qué sabemos de RUST y lingüística en México?");
+        assert!(relevance_score(&evidence, &terms) >= 3);
+        assert_eq!(
+            relevance_score(&evidence, &relevance_terms("conversation turn journal")),
+            0,
+        );
+        assert!(relevance_terms(&"token ".repeat(1000)).len() <= 1);
     }
 
     #[test]
