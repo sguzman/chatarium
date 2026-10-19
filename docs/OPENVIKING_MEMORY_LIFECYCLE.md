@@ -499,6 +499,15 @@ a replace-compatible implementation fails the diagnostic. The synthetic file
 persists. The user must not confuse this opt-in test with a production
 checkpoint or invoke it on a real memory URI.
 
+The read-only probe now checks the server's advertised MCP input schemas
+for bounded `read(uris, limit)` and `write(uri, content, mode, wait)` before
+allowing any synthetic mutation. It rejects missing schemas and modes that
+do not advertise `create`. Passing schema discovery is **not** evidence
+that `create` is exclusive. An ordinary successful synthetic create/read-back
+also explicitly reports `exclusiveCreateVerified=false`. Only the opt-in
+collision test reports `exclusiveCreateVerified=true`; a generic HTTP 409
+or unrelated transport/validation failure cannot establish this contract.
+
 This first confirms the tools/list contract, then creates ONE new, uniquely
 named checkpoint within a dedicated synthetic QA conversation namespace.
 It reads back the exact URI and verifies byte-for-byte content. This synthetic
