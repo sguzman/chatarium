@@ -1187,6 +1187,83 @@ fn confirmed_project_sources<'a>(
     results
 }
 
+/// Select newest rolling evidence for each explicitly authorized source,
+/// then spend unused result slots on relevant older checkpoints. No grant
+/// permits a global OpenViking namespace scan: only locally confirmed entries
+/// whose exact source/destination grant is valid can be considered.
+/// The historical scan is capped at 64 additional entries, and remote reads
+/// are still limited to three exact, byte-for-byte verified source URIs.
+fn select_confirmed_project_history<'a>(
+    outbox: &'a crate::openviking_checkpoint_outbox::Outbox,
+    outbox_path: &std::path::Path,
+    catalog: &crate::local_conversations::LocalConversationCatalog,
+    permissions: &ProjectMemoryGrants,
+    destination: chatarium_core::LocalConversationId,
+    query: &str,
+) -> Result<Vec<(&'a crate::openviking_checkpoint_outbox::Entry, String)>, String> {
+    // Preserve the previously supported one-newest-per-source behavior.
+    let newest = confirmed_project_sources(outbox, catalog, permissions, destination);
+    let mut selected = Vec::with_capacity(MAX_RETRIEVAL_ITEMS);
+    for entry in &newest {
+        selected.push((*entry, read_confirmed_evidence(outbox_path, entry)?));
+    }
+    if selected.len() == MAX_RETRIEVAL_ITEMS {
+        return Ok(selected);
+    }
+    let terms = relevance_terms(query);
+    if terms.is_empty() || selected.is_empty() {
+        return Ok(selected);
+    }
+
+    // Search only among the exact sources already admitted by directed grants.
+    // Never even inspect local memory bodies for an ungranted conversation.
+    let authorized_owners: std::collections::BTreeSet<&str> = newest
+        .iter()
+        .map(|entry| entry.conversation_id.as_str())
+        .collect();
+    let mut history: Vec<_> = outbox
+        .entries()
+        .iter()
+        .filter(|entry| {
+            entry.state == crate::openviking_checkpoint_outbox::State::Confirmed
+                && authorized_owners.contains(entry.conversation_id.as_str())
+                && !newest.iter().any(|head| {
+                    head.conversation_id == entry.conversation_id
+                        && head.turn_id == entry.turn_id
+                        && head.completed_sequence == entry.completed_sequence
+                })
+        })
+        .collect();
+    history.sort_by(|a, b| {
+        b.completed_sequence
+            .cmp(&a.completed_sequence)
+            .then_with(|| b.turn_id.cmp(&a.turn_id))
+    });
+    history.truncate(MAX_HISTORY_SCAN_ITEMS);
+
+    let mut matches = Vec::new();
+    for entry in history {
+        let body = read_confirmed_evidence(outbox_path, entry)?;
+        let score = checkpoint_relevance(&body, &terms);
+        if score > 0 {
+            matches.push((entry, body, score));
+        }
+    }
+    matches.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| b.0.completed_sequence.cmp(&a.0.completed_sequence))
+            .then_with(|| b.0.turn_id.cmp(&a.0.turn_id))
+    });
+    let free_slots = MAX_RETRIEVAL_ITEMS - selected.len();
+    selected.extend(
+        matches
+            .into_iter()
+            .take(free_slots)
+            .map(|(entry, body, _)| (entry, body)),
+    );
+    Ok(selected)
+}
+
 /// A bounded, explicit cross-conversation read path. Never call on the UI
 /// thread. Existing single-conversation retrieval remains the default.
 pub fn retrieve_confirmed_for_project(
@@ -1195,15 +1272,28 @@ pub fn retrieve_confirmed_for_project(
     permissions: &ProjectMemoryGrants,
     destination: chatarium_core::LocalConversationId,
 ) -> Result<Vec<RetrievedCheckpoint>, String> {
-    retrieve_confirmed_for_project_with_read(
+    retrieve_confirmed_for_project_query(
+        outbox_path, catalog, permissions, destination, "",
+    )
+}
+
+/// Query-aware historical recall with the same explicit source/destination
+/// grant and exact remote read-back as the original project retrieval path.
+pub fn retrieve_confirmed_for_project_query(
+    outbox_path: &std::path::Path,
+    catalog: &crate::local_conversations::LocalConversationCatalog,
+    permissions: &ProjectMemoryGrants,
+    destination: chatarium_core::LocalConversationId,
+    query: &str,
+) -> Result<Vec<RetrievedCheckpoint>, String> {
+    retrieve_confirmed_for_project_with_query_and_read(
         outbox_path,
         catalog,
         permissions,
         destination,
+        query,
         |uri, owner, turn| {
-            // The fixed MCP adapter enforces its caller's exact conversation
-            // namespace. The grant was verified before this callback; read
-            // with the source owner, NEVER the destination transport identity.
+            // The MCP broker requires the source owner for an authorized read.
             read_project_checkpoint_as_source(owner, turn, uri, local_http_mcp::invoke)
         },
     )
@@ -1239,37 +1329,31 @@ fn retrieve_confirmed_for_project_with_read(
     catalog: &crate::local_conversations::LocalConversationCatalog,
     permissions: &ProjectMemoryGrants,
     destination: chatarium_core::LocalConversationId,
+    read: impl FnMut(&str, &str, &str) -> Result<Value, String>,
+) -> Result<Vec<RetrievedCheckpoint>, String> {
+    retrieve_confirmed_for_project_with_query_and_read(
+        outbox_path, catalog, permissions, destination, "", read,
+    )
+}
+
+fn retrieve_confirmed_for_project_with_query_and_read(
+    outbox_path: &std::path::Path,
+    catalog: &crate::local_conversations::LocalConversationCatalog,
+    permissions: &ProjectMemoryGrants,
+    destination: chatarium_core::LocalConversationId,
+    query: &str,
     mut read: impl FnMut(&str, &str, &str) -> Result<Value, String>,
 ) -> Result<Vec<RetrievedCheckpoint>, String> {
     let outbox = crate::openviking_checkpoint_outbox::Outbox::load(outbox_path)?;
-    let sources = confirmed_project_sources(&outbox, catalog, permissions, destination);
+    let sources = select_confirmed_project_history(
+        &outbox, outbox_path, catalog, permissions, destination, query,
+    )?;
     let mut used_bytes = 0usize;
     let mut result = Vec::with_capacity(sources.len());
-    for entry in sources {
+    for (entry, expected) in sources {
         let owner = entry.conversation_id.as_str();
-        let path = crate::openviking_checkpoint_outbox::Outbox::summary_path(
-            outbox_path,
-            owner,
-            &entry.turn_id,
-        )?;
-        let size = std::fs::metadata(&path)
-            .map_err(|error| format!("project checkpoint metadata: {error}"))?
-            .len();
-        if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
-            return Err("invalid project checkpoint summary size".to_owned());
-        }
-        if size > (MAX_RETRIEVAL_BYTES - used_bytes) as u64 {
+        if expected.len() > MAX_RETRIEVAL_BYTES - used_bytes {
             continue;
-        }
-        let expected = std::fs::read_to_string(&path)
-            .map_err(|error| format!("project checkpoint source unavailable: {error}"))?;
-        if expected.len() != size as usize
-            || !expected.starts_with(&format!(
-                "# Chatarium memory checkpoint\n\nConversation: {owner}\nTurn: {}\nSource journal sequence: {}\n\n",
-                entry.turn_id, entry.completed_sequence,
-            ))
-        {
-            return Err("project checkpoint source identity mismatch".to_owned());
         }
         // Re-check authorization at dispatch, not just at earlier selection.
         let source = owner
