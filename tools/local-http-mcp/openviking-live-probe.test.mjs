@@ -5,9 +5,10 @@ import { LocalMcpBroker } from "./client.mjs";
 import { probeOpenViking } from "./openviking-live-probe.mjs";
 
 function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite = false,
-  toolWriteError = false } = {}) {
+  toolWriteError = false, readNotReady = 0 } = {}) {
   const calls = [];
   let stored = null;
+  let readAttempts = 0;
   return {
     calls,
     async request(request) {
@@ -32,6 +33,9 @@ function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite =
       if (request.name === "read") {
         assert.equal(request.arguments.uris, stored?.uri);
         assert.equal(request.arguments.limit, 100);
+        if (++readAttempts <= readNotReady) {
+          return { isError: true, content: [{ type: "text", text: "not yet materialized" }] };
+        }
         return { content: [{ type: "text", text: corruptRead ? "tampered" : stored.body }] };
       }
       throw new Error("unexpected operation");
@@ -68,11 +72,25 @@ test("uncertain write or corrupted readback is never retried", async () => {
     const broker = syntheticBroker(options);
     await assert.rejects(probeOpenViking({
       broker, nonce: "uncertain1234", createSyntheticCheckpoint: true,
+      pause: async () => {},
     }));
     assert.deepEqual(broker.calls.map(x => x.name || x.method),
-      options.rejectWrite ? ["list", "write"] : ["list", "write", "read"]);
+      options.rejectWrite ? ["list", "write"] : ["list", "write", ...Array(5).fill("read")]);
   }
 });
+test("eventually readable checkpoint is verified with reads only", async () => {
+  const broker = syntheticBroker({ readNotReady: 2 });
+  const delays = [];
+  const result = await probeOpenViking({
+    broker, nonce: "eventually1234", createSyntheticCheckpoint: true,
+    pause: async ms => delays.push(ms),
+  });
+  assert.equal(result.verified, true);
+  assert.deepEqual(broker.calls.map(x => x.name || x.method),
+    ["list", "write", "read", "read", "read"]);
+  assert.deepEqual(delays, [250, 500]);
+});
+
 test("tool-level write failure must not become a confirmed create", async () => {
   const broker = syntheticBroker({ toolWriteError: true });
   await assert.rejects(probeOpenViking({
@@ -97,6 +115,7 @@ async function withFakeHttpOpenViking(t, behavior = {}) {
   const calls = [];
   const files = new Map();
   let sessionCount = 0;
+  let readAttempts = 0;
   const server = http.createServer(async (request, response) => {
     assert.equal(request.url, "/mcp");
     assert.equal(request.method, "POST");
@@ -154,6 +173,10 @@ async function withFakeHttpOpenViking(t, behavior = {}) {
     const { uris, limit } = rpc.params.arguments;
     assert.equal(limit, 100);
     assert.ok(files.has(uris), "read must use exactly the newly created URI");
+    if (++readAttempts <= (behavior.readNotReady ?? 0)) {
+      reply({ isError: true, content: [{ type: "text", text: "not ready" }] });
+      return;
+    }
     const body = behavior.corruptRead ? "REMOTE CONTENT DRIFT" : files.get(uris);
     // The real transport supports SSE and stops on the correlated RPC
     // result; exercise that path rather than returning only JSON mocks.
@@ -201,6 +224,18 @@ test("real MCP HTTP plus SSE verifies exact synthetic create-once checkpoint", a
   assert.equal(calls[2].session, calls[3].session);
 });
 
+test("real HTTP MCP delayed readback confirms one create without retry", async t => {
+  const { broker, calls, files } = await withFakeHttpOpenViking(t, { readNotReady: 2 });
+  const result = await probeOpenViking({
+    broker, nonce: "delayed_http_123", createSyntheticCheckpoint: true,
+    pause: async () => {},
+  });
+  assert.equal(result.verified, true);
+  assert.deepEqual(calls.map(call => call.name ?? call.method),
+    ["initialize", "tools/list", "write", "read", "read", "read"]);
+  assert.equal(files.size, 1);
+});
+
 test("real HTTP MCP rejects missing tools before mutation", async t => {
   const { broker, calls, files } = await withFakeHttpOpenViking(t, { missingWrite: true });
   await assert.rejects(probeOpenViking({
@@ -234,8 +269,9 @@ test("real MCP SSE remote drift fails closed with no repeated writes", async t =
   const { broker, calls, files } = await withFakeHttpOpenViking(t, { corruptRead: true });
   await assert.rejects(probeOpenViking({
     broker, nonce: "drift_http_123", createSyntheticCheckpoint: true,
+    pause: async () => {},
   }), /exact readback unconfirmed/);
   assert.deepEqual(calls.map(call => call.name ?? call.method),
-    ["initialize", "tools/list", "write", "read"]);
+    ["initialize", "tools/list", "write", ...Array(5).fill("read")]);
   assert.equal(files.size, 1);
 });
