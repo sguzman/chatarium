@@ -1681,7 +1681,8 @@ impl ChatariumApp {
                         openviking_retrieval_in_flight: HashSet::new(),
                         openviking_retrieval_retry_after: BTreeMap::new(),
                         openviking_retrieval_stale: HashSet::new(),
-                        openviking_query_tracker: openviking_project_cache::QueryRefreshTracker::default(),
+                        openviking_query_tracker:
+                            openviking_project_cache::QueryRefreshTracker::default(),
                         openviking_project_cache: openviking_project_cache::RetrievalCache::default(
                         ),
                         commit_remote_intents: BTreeMap::new(),
@@ -3913,12 +3914,9 @@ impl ChatariumApp {
         query: &str,
         interactive: bool,
     ) -> bool {
-        let (changed, ready) = self.openviking_query_tracker.observe(
-            owner,
-            query,
-            Instant::now(),
-            interactive,
-        );
+        let (changed, ready) =
+            self.openviking_query_tracker
+                .observe(owner, query, Instant::now(), interactive);
         if changed {
             self.openviking_retrieval_cache.remove(&owner);
             self.openviking_retrieval_retry_after.remove(&owner);
@@ -4069,7 +4067,8 @@ impl ChatariumApp {
         directive: &str,
     ) -> bool {
         let own_ready = self.maybe_retrieve_openviking_context_for(worker, directive, false);
-        let project_ready = self.maybe_retrieve_project_openviking_context_for(worker, directive, false);
+        let project_ready =
+            self.maybe_retrieve_project_openviking_context_for(worker, directive, false);
         own_ready && project_ready
     }
 
