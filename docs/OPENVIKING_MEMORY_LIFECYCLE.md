@@ -198,6 +198,26 @@ old raw transcript, and marks excluded sources in the exact-request inventory.
 This prevents unbounded input growth without deleting any journal events, but
 is **not** a model-token guarantee or complete semantic summary of omitted turns.
 
+## Landed: query-aware ordering of verified memory context
+
+At authored Send, and identically in the exact-request inspector, Chatarium
+ranks **already read-back-verified** own-conversation and explicitly granted
+project checkpoints against the current message. Local, bounded Unicode-aware
+term overlap gives relevant content priority *only when the bounded Context
+Composer must choose which whole checkpoint fits*. The composition pipeline
+examines checkpoints from the end backward, so the most relevant is placed
+last. No memory content is truncated, rewritten, elevated to instructions,
+or silently admitted across conversations. The source URI, turn, journal
+sequence and project-grant checks are unchanged and run **before** ordering;
+revocations still fail closed at Send.
+
+This is a first-stage lexical ranking, **not** full semantic retrieval:
+it only considers the latest verified checkpoints already in the background
+cache (currently at most three own and three explicitly shared). Queries
+with no meaningful overlap preserve the former admission order. Broader
+topic-aware discovery and exhaustive recall across historical checkpoints
+remain outside this completed slice.
+
 ## Read-only recovery for uncertain writes
 
 After a crash, a previously dispatched OpenViking create can have an
