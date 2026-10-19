@@ -202,7 +202,9 @@ pub fn invoke(
     arguments: &Value,
 ) -> Result<Value, String> {
     if provider == OPENVIKING && operation == "write" {
-        return Err("OpenViking checkpoint writes require the host-owned durable outbox".to_owned());
+        return Err(
+            "OpenViking checkpoint writes require the host-owned durable outbox".to_owned(),
+        );
     }
     invoke_transport(conversation, call_key, provider, operation, arguments)
 }
@@ -219,10 +221,7 @@ pub fn invoke_checkpoint_write(
     let required_header = format!(
         "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {turn}\nSource journal sequence: "
     );
-    if content.is_empty()
-        || content.len() > 16384
-        || !content.starts_with(&required_header)
-    {
+    if content.is_empty() || content.len() > 16384 || !content.starts_with(&required_header) {
         return Err("OpenViking host checkpoint content identity is invalid".to_owned());
     }
     invoke_transport(
