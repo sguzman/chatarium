@@ -47,6 +47,12 @@ pub fn allowed_operation(provider: &str, operation: &str) -> bool {
     allowed.contains(&operation)
 }
 
+/// Model proposals may read scoped memory but can never bypass the host-owned
+/// durable checkpoint outbox by calling OpenViking write directly.
+pub fn allowed_model_operation(provider: &str, operation: &str) -> bool {
+    allowed_operation(provider, operation) && !(provider == OPENVIKING && operation == "write")
+}
+
 pub fn registered_tools() -> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
     MANIFOLDR_TOOLS
         .iter()
@@ -186,7 +192,54 @@ impl Worker {
 // transport sessions keyed by provider plus owning local conversation.
 static BRIDGE: OnceLock<Mutex<Option<Worker>>> = OnceLock::new();
 
+/// The general MCP dispatcher is model-accessible after its standing policy
+/// or user approval. Neither grants permission for a raw OpenViking write.
 pub fn invoke(
+    conversation: &str,
+    call_key: &str,
+    provider: &str,
+    operation: &str,
+    arguments: &Value,
+) -> Result<Value, String> {
+    if !allowed_model_operation(provider, operation) {
+        return Err("OpenViking checkpoint writes require the host-owned durable outbox".to_owned());
+    }
+    invoke_transport(conversation, call_key, provider, operation, arguments)
+}
+
+/// Only the background host checkpoint dispatcher calls this path, after a
+/// live collision-safety preflight and the durable Dispatched transition.
+/// Never expose it as an ordinary model-selected tool.
+pub fn invoke_checkpoint_write(
+    conversation: &str,
+    turn: &str,
+    content: &str,
+) -> Result<Value, String> {
+    let uri = crate::openviking_memory_delivery::checkpoint_uri(conversation, turn)?;
+    let required_header = format!(
+        "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {turn}\nSource journal sequence: "
+    );
+    if content.is_empty()
+        || content.len() > 16384
+        || !content.starts_with(&required_header)
+    {
+        return Err("OpenViking host checkpoint content identity is invalid".to_owned());
+    }
+    invoke_transport(
+        conversation,
+        &format!("memory-create:{conversation}:{turn}"),
+        OPENVIKING,
+        "write",
+        &json!({
+            "uri": uri,
+            "content": content,
+            "mode": "create",
+            "wait": false,
+        }),
+    )
+}
+
+fn invoke_transport(
     conversation: &str,
     call_key: &str,
     provider: &str,
@@ -245,5 +298,11 @@ mod tests {
             assert!(!allowed_operation(OPENVIKING, operation));
         }
         assert_eq!(registered_tools().count(), 19);
+        assert!(allowed_model_operation(OPENVIKING, "read"));
+        assert!(allowed_model_operation(OPENVIKING, "find"));
+        assert!(!allowed_model_operation(OPENVIKING, "write"));
+        assert!(allowed_operation(OPENVIKING, "write")); // host-only transport
+        assert!(invoke("owner", "7", OPENVIKING, "write", &json!({})).is_err());
+        assert!(invoke_checkpoint_write("owner", "turn-1", "forged content").is_err());
     }
 }
