@@ -1319,6 +1319,7 @@ struct ChatariumApp {
     openviking_retrieval_in_flight: HashSet<LocalConversationId>,
     openviking_retrieval_retry_after: BTreeMap<LocalConversationId, Instant>,
     openviking_retrieval_stale: HashSet<LocalConversationId>,
+    openviking_query_tracker: openviking_project_cache::QueryRefreshTracker,
     openviking_project_cache: openviking_project_cache::RetrievalCache,
     commit_remote_intents: BTreeMap<u64, PendingInferenceIntent>,
     delivery: delivery_telemetry::Timeline,
@@ -1680,6 +1681,7 @@ impl ChatariumApp {
                         openviking_retrieval_in_flight: HashSet::new(),
                         openviking_retrieval_retry_after: BTreeMap::new(),
                         openviking_retrieval_stale: HashSet::new(),
+                        openviking_query_tracker: openviking_project_cache::QueryRefreshTracker::default(),
                         openviking_project_cache: openviking_project_cache::RetrievalCache::default(
                         ),
                         commit_remote_intents: BTreeMap::new(),
@@ -1948,6 +1950,7 @@ impl ChatariumApp {
             openviking_retrieval_in_flight: HashSet::new(),
             openviking_retrieval_retry_after: BTreeMap::new(),
             openviking_retrieval_stale: HashSet::new(),
+            openviking_query_tracker: openviking_project_cache::QueryRefreshTracker::default(),
             openviking_project_cache: openviking_project_cache::RetrievalCache::default(),
             commit_remote_intents: BTreeMap::new(),
             delivery: delivery_telemetry::Timeline::default(),
@@ -3273,6 +3276,11 @@ impl ChatariumApp {
             self.status = "attachment send requires an active ChatGPT connection".to_owned();
             return;
         }
+        // Final Send admission cannot use a prior topic's verified checkpoint.
+        // A newly typed topic may still be fetching; in that case proceed
+        // without old-topic memory instead of smuggling stale evidence.
+        let send_query = self.draft.clone();
+        self.observe_openviking_query(self.local_conversation_id, &send_query, true);
         let Some(sender) = &self.persist_tx else {
             self.status = "cannot commit: persistence unavailable".to_owned();
             return;
@@ -3896,6 +3904,32 @@ impl ChatariumApp {
         }
     }
 
+    /// A topic change immediately removes both owner and project evidence.
+    /// An in-flight owner read is marked stale, and the project cache similarly
+    /// discards its old completion. No network request runs on the GUI thread.
+    fn observe_openviking_query(
+        &mut self,
+        owner: LocalConversationId,
+        query: &str,
+        interactive: bool,
+    ) -> bool {
+        let (changed, ready) = self.openviking_query_tracker.observe(
+            owner,
+            query,
+            Instant::now(),
+            interactive,
+        );
+        if changed {
+            self.openviking_retrieval_cache.remove(&owner);
+            self.openviking_retrieval_retry_after.remove(&owner);
+            if self.openviking_retrieval_in_flight.contains(&owner) {
+                self.openviking_retrieval_stale.insert(owner);
+            }
+            self.openviking_project_cache.invalidate_destination(owner);
+        }
+        ready
+    }
+
     /// Schedule a source-owner-scoped read on the persistence worker.
     /// Return false only while a read is outstanding, so offline OpenViking
     /// never indefinitely blocks a non-authored coordination wake.
@@ -3903,8 +3937,12 @@ impl ChatariumApp {
         &mut self,
         owner: LocalConversationId,
         query: &str,
+        interactive: bool,
     ) -> bool {
         if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
+            return true;
+        }
+        if !self.observe_openviking_query(owner, query, interactive) {
             return true;
         }
         if self.openviking_retrieval_cache.contains_key(&owner) {
@@ -3943,8 +3981,12 @@ impl ChatariumApp {
         &mut self,
         destination: LocalConversationId,
         query: &str,
+        interactive: bool,
     ) -> bool {
         if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
+            return true;
+        }
+        if !self.observe_openviking_query(destination, query, interactive) {
             return true;
         }
         if !self
@@ -3992,13 +4034,9 @@ impl ChatariumApp {
         // Querying the verified local history is done only in the background
         // worker, not on the UI thread. If an authored draft exists, use it;
         // otherwise use the last durable user message for this conversation.
-        // Each read is cached until its source becomes stale.
-        if self.openviking_retrieval_cache.contains_key(&owner)
-            || self.openviking_retrieval_in_flight.contains(&owner)
-        {
-            return;
-        }
-        let query = if !self.draft.trim().is_empty() {
+        // Query-dependent caches invalidate when the normalized topic changes.
+        let interactive = !self.draft.trim().is_empty();
+        let query = if interactive {
             self.draft.clone()
         } else {
             projected_local_display_messages(&self.events, owner)
@@ -4007,12 +4045,13 @@ impl ChatariumApp {
                 .find(|message| matches!(message.role, DisplayRole::User))
                 .map_or_else(String::new, |message| message.text)
         };
-        self.maybe_retrieve_openviking_context_for(owner, &query);
+        self.maybe_retrieve_openviking_context_for(owner, &query, interactive);
     }
 
     fn maybe_retrieve_project_openviking_context(&mut self) {
         let owner = self.local_conversation_id;
-        let query = if !self.draft.trim().is_empty() {
+        let interactive = !self.draft.trim().is_empty();
+        let query = if interactive {
             self.draft.clone()
         } else {
             projected_local_display_messages(&self.events, owner)
@@ -4021,7 +4060,7 @@ impl ChatariumApp {
                 .find(|message| matches!(message.role, DisplayRole::User))
                 .map_or_else(String::new, |message| message.text)
         };
-        self.maybe_retrieve_project_openviking_context_for(owner, &query);
+        self.maybe_retrieve_project_openviking_context_for(owner, &query, interactive);
     }
 
     fn background_worker_memory_ready(
@@ -4029,8 +4068,8 @@ impl ChatariumApp {
         worker: LocalConversationId,
         directive: &str,
     ) -> bool {
-        let own_ready = self.maybe_retrieve_openviking_context_for(worker, directive);
-        let project_ready = self.maybe_retrieve_project_openviking_context_for(worker, directive);
+        let own_ready = self.maybe_retrieve_openviking_context_for(worker, directive, false);
+        let project_ready = self.maybe_retrieve_project_openviking_context_for(worker, directive, false);
         own_ready && project_ready
     }
 

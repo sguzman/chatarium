@@ -232,10 +232,16 @@ The foreground background-prefetch uses the current authored draft if one
 exists at the time of the read, otherwise the conversation's last durable
 user message. An inactive coordination worker uses the **exact authorized
 wake directive** as its query before spending the at-most-once wake claim.
-A cached result remains fixed until the existing source-invalidation path
-refreshes it; editing an already-open draft does not run a new OpenViking
-search on every keystroke. This is explicit bounded lexical lookup, not a
-claim of embedding-based or unrestricted semantic search.
+Each conversation now tracks the bounded lexical terms of the active query.
+When its topic changes, both its owner checkpoint cache and explicitly
+granted project cache are immediately invalidated, including older in-flight
+results and obsolete retry delays. Foreground draft edits settle for 700 ms
+before scheduling a new background read, avoiding network calls per keystroke;
+whitespace, punctuation, case and word order do not trigger a re-fetch.
+Inactive worker directives bypass typing debounce. If Send occurs before a
+new result is verified, the request excludes old-topic evidence rather than
+silently reusing it. This is explicit bounded lexical lookup, not a claim of
+embedding-based or unrestricted semantic search.
 
 Cross-conversation sharing now retains the newest confirmed checkpoint for
 each of up to three selected explicitly granted sources and can fill any
@@ -248,9 +254,9 @@ shared project directory alone is never permission to read memory.
 
 The query is captured by the background retrieval command from the current
 draft/last user message or the exact authorized coordination directive.
-Existing cache lifetimes mean changes in query do **not** automatically
-trigger a new historical read; query-dependent cache refresh remains a
-separate correctness improvement.
+Changing the normalized topic refreshes both conversation and shared-history
+selection after the draft settles; stale in-flight completions cannot populate
+either cache. All retrieval remains bounded, verified and off the UI thread.
 
 ## Landed: query-aware ordering of verified memory context
 

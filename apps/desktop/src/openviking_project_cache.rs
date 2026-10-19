@@ -6,10 +6,58 @@
 use crate::local_conversations::LocalConversationCatalog;
 use crate::openviking_memory_delivery::{ProjectMemoryGrants, RetrievedCheckpoint};
 use chatarium_core::LocalConversationId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 const RETRY_DELAY: Duration = Duration::from_secs(300);
+const INTERACTIVE_QUERY_SETTLE: Duration = Duration::from_millis(700);
+
+/// Track the topic a conversation is actually asking about. Normalization
+/// ignores edits to spacing, punctuation, word order and common stop words.
+/// A live draft must settle before remote reads are scheduled; an exact
+/// coordination wake directive does not wait for a typing debounce.
+#[derive(Default)]
+pub struct QueryRefreshTracker {
+    observed: BTreeMap<LocalConversationId, ObservedQuery>,
+}
+
+struct ObservedQuery {
+    terms: BTreeSet<String>,
+    changed_at: Instant,
+}
+
+impl QueryRefreshTracker {
+    /// Return (topic_changed, ready_to_fetch). A changed topic must invalidate
+    /// cached results immediately, even while the next query is still typing.
+    pub fn observe(
+        &mut self,
+        conversation: LocalConversationId,
+        query: &str,
+        now: Instant,
+        interactive: bool,
+    ) -> (bool, bool) {
+        let terms = relevance_terms(query);
+        let changed = self
+            .observed
+            .get(&conversation)
+            .is_none_or(|old| old.terms != terms);
+        if changed {
+            self.observed.insert(
+                conversation,
+                ObservedQuery {
+                    terms,
+                    changed_at: now,
+                },
+            );
+        }
+        let ready = !interactive
+            || self
+                .observed
+                .get(&conversation)
+                .is_some_and(|topic| now.duration_since(topic.changed_at) >= INTERACTIVE_QUERY_SETTLE);
+        (changed, ready)
+    }
+}
 
 // Use the same bounded lexical rule for historical preselection and context
 // ordering. Owner/turn metadata must never increase a checkpoint's score.
@@ -31,6 +79,7 @@ pub struct RetrievalCache {
     cached: BTreeMap<LocalConversationId, Vec<RetrievedCheckpoint>>,
     in_flight: BTreeMap<LocalConversationId, u64>,
     retry_after: BTreeMap<LocalConversationId, Instant>,
+    stale_destinations: BTreeSet<LocalConversationId>,
 }
 
 impl RetrievalCache {
@@ -40,8 +89,20 @@ impl RetrievalCache {
         self.generation = self.generation.wrapping_add(1);
         self.cached.clear();
         self.retry_after.clear();
+        self.stale_destinations.clear();
         // Retain old in-flight claims: do not issue concurrent network reads.
         // A stale completion frees its claim without filling the cache.
+    }
+
+    /// Discard only one conversation's topic-specific results. A read already
+    /// running for its former topic may finish, but cannot publish old evidence
+    /// or install an offline backoff for the replacement topic.
+    pub fn invalidate_destination(&mut self, destination: LocalConversationId) {
+        self.cached.remove(&destination);
+        self.retry_after.remove(&destination);
+        if self.in_flight.contains_key(&destination) {
+            self.stale_destinations.insert(destination);
+        }
     }
 
     pub fn checkpoints(&self, destination: LocalConversationId) -> Option<&[RetrievedCheckpoint]> {
@@ -150,6 +211,7 @@ impl RetrievalCache {
     pub fn cancel(&mut self, destination: LocalConversationId, generation: u64) {
         if self.in_flight.get(&destination) == Some(&generation) {
             self.in_flight.remove(&destination);
+            self.stale_destinations.remove(&destination);
         }
     }
 
@@ -168,7 +230,8 @@ impl RetrievalCache {
             return Completion::Discarded;
         }
         self.in_flight.remove(&destination);
-        if generation != self.generation {
+        let stale_topic = self.stale_destinations.remove(&destination);
+        if generation != self.generation || stale_topic {
             return Completion::Discarded;
         }
         match result {
@@ -198,6 +261,86 @@ impl RetrievalCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn topic_refresh_is_lexical_bounded_and_waits_for_draft_to_settle() {
+        let owner = LocalConversationId::new();
+        let other = LocalConversationId::new();
+        let now = Instant::now();
+        let mut tracker = QueryRefreshTracker::default();
+        assert_eq!(tracker.observe(owner, "Rust ownership", now, true), (true, false));
+        assert_eq!(
+            tracker.observe(
+                owner,
+                "ownership, rust!!!",
+                now + Duration::from_millis(500),
+                true
+            ),
+            (false, false)
+        );
+        assert_eq!(
+            tracker.observe(
+                owner,
+                "RUST ownership",
+                now + Duration::from_millis(701),
+                true
+            ),
+            (false, true)
+        );
+        assert_eq!(
+            tracker.observe(
+                owner,
+                "Spanish verbs",
+                now + Duration::from_millis(702),
+                true
+            ),
+            (true, false)
+        );
+        // Worker directives bypass draft typing debounce and remain isolated.
+        assert_eq!(tracker.observe(other, "Spanish verbs", now, false), (true, true));
+        assert_eq!(
+            tracker.observe(owner, "Spanish verbs", now + Duration::from_millis(703), false),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn changed_topic_discards_in_flight_project_read_without_poisoning_other_owner() {
+        let (catalog, grants, source, dest) = fixture();
+        let other = LocalConversationId::new();
+        let now = Instant::now();
+        let mut cache = RetrievalCache::default();
+        let old = cache.begin(dest, now).unwrap();
+        let unrelated = cache.begin(other, now).unwrap();
+        cache.invalidate_destination(dest);
+        assert!(!cache.can_schedule(dest, now)); // No concurrent reads.
+        assert_eq!(
+            cache.finish(
+                dest,
+                old,
+                Err("offline previous topic".to_owned()),
+                now,
+                &catalog,
+                &grants
+            ),
+            Completion::Discarded
+        );
+        assert!(cache.can_schedule(dest, now)); // No stale backoff.
+        assert_eq!(
+            cache.finish(other, unrelated, Ok(Vec::new()), now, &catalog, &grants),
+            Completion::Loaded
+        );
+        let fresh = cache.begin(dest, now).unwrap();
+        assert_eq!(
+            cache.finish(dest, fresh, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            Completion::Loaded
+        );
+        assert_eq!(cache.checkpoints(dest).unwrap().len(), 1);
+        cache.invalidate_destination(dest);
+        assert!(cache.checkpoints(dest).is_none());
+        assert!(cache.can_schedule(dest, now));
+        assert!(cache.checkpoints(other).is_some());
+    }
 
     fn fixture() -> (
         LocalConversationCatalog,
