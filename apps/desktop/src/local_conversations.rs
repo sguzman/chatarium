@@ -661,6 +661,17 @@ mod tests {
         assert_eq!(title.chars().count(), MAX_TITLE_BYTES / 2);
         assert!(title.chars().all(|ch| ch == 'é'));
 
+        // The byte ceiling can land inside a multi-byte character; never
+        // store an invalid boundary or a replacement character.
+        let crab = bounded_derived_title(Some(format!(
+            "{}{}",
+            "a".repeat(MAX_TITLE_BYTES - 2),
+            "🦀".repeat(4)
+        )))
+        .unwrap();
+        assert_eq!(crab.len(), MAX_TITLE_BYTES - 2);
+        assert!(crab.chars().all(|ch| ch == 'a'));
+
         catalog.save_atomic(&path).unwrap();
         let mut loaded = LocalConversationCatalog::load(&path).unwrap();
         assert_eq!(loaded, catalog);
