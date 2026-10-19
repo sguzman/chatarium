@@ -145,7 +145,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const createSyntheticCheckpoint = args[0] === "--create-synthetic-checkpoint";
     const verifyExclusiveCreate = args[0] === "--verify-exclusive-create";
     try {
+      // Each RPC has its own upper bound. Rust also applies a 90-second
+      // process deadline to automatically triggered production preflights.
       console.log(JSON.stringify(await probeOpenViking({
+        broker: new LocalMcpBroker({ timeoutMs: 10000 }),
         createSyntheticCheckpoint, verifyExclusiveCreate,
       })));
     } catch {
