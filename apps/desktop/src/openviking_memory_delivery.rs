@@ -235,8 +235,7 @@ fn select_confirmed_history<'a>(
     conversation: &str,
     query: &str,
 ) -> Result<Vec<(&'a crate::openviking_checkpoint_outbox::Entry, String)>, String> {
-    let mut candidates = confirmed_sources(outbox, conversation)?;
-    candidates.truncate(MAX_HISTORY_SCAN_ITEMS);
+    let candidates = confirmed_sources_limit(outbox, conversation, MAX_HISTORY_SCAN_ITEMS)?;
     let terms = relevance_terms(query);
     let mut scanned = Vec::with_capacity(candidates.len());
     for entry in candidates {
@@ -270,6 +269,14 @@ fn confirmed_sources<'a>(
     outbox: &'a crate::openviking_checkpoint_outbox::Outbox,
     conversation: &str,
 ) -> Result<Vec<&'a crate::openviking_checkpoint_outbox::Entry>, String> {
+    confirmed_sources_limit(outbox, conversation, MAX_RETRIEVAL_ITEMS)
+}
+
+fn confirmed_sources_limit<'a>(
+    outbox: &'a crate::openviking_checkpoint_outbox::Outbox,
+    conversation: &str,
+    limit: usize,
+) -> Result<Vec<&'a crate::openviking_checkpoint_outbox::Entry>, String> {
     // Reuse the same strict path identity validation as the writer.
     checkpoint_uri(conversation, "scope-check")?;
     let mut entries: Vec<_> = outbox
@@ -285,6 +292,7 @@ fn confirmed_sources<'a>(
             .cmp(&a.completed_sequence)
             .then_with(|| b.turn_id.cmp(&a.turn_id))
     });
+    entries.truncate(limit);
     Ok(entries)
 }
 
