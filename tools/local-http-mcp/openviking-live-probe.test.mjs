@@ -4,8 +4,25 @@ import http from "node:http";
 import { LocalMcpBroker } from "./client.mjs";
 import { probeOpenViking } from "./openviking-live-probe.mjs";
 
+function advertisedTools({ advertised = true, missingSchema = false, modeUnavailable = false } = {}) {
+  if (!advertised) return [{ name: "read" }];
+  const read = { name: "read", inputSchema: {
+    type: "object", properties: { uris: { type: "string" }, limit: { type: "integer" } },
+  } };
+  const write = { name: "write", inputSchema: {
+    type: "object", properties: {
+      uri: { type: "string" }, content: { type: "string" },
+      mode: { type: "string", enum: modeUnavailable ? ["replace", "append"]
+        : ["replace", "append", "create"] },
+      wait: { type: "boolean" },
+    },
+  } };
+  if (missingSchema) delete write.inputSchema;
+  return [read, write];
+}
+
 function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite = false,
-  toolWriteError = false, readNotReady = 0 } = {}) {
+  toolWriteError = false, readNotReady = 0, missingSchema = false, modeUnavailable = false } = {}) {
   const calls = [];
   let stored = null;
   let readAttempts = 0;
@@ -14,7 +31,7 @@ function syntheticBroker({ advertised = true, corruptRead = false, rejectWrite =
     async request(request) {
       calls.push(request);
       if (request.method === "list") {
-        return { tools: advertised ? [{ name: "read" }, { name: "write" }] : [{ name: "read" }] };
+        return { tools: advertisedTools({ advertised, missingSchema, modeUnavailable }) };
       }
       assert.equal(request.provider, "openviking");
       assert.equal(request.method, "call");
@@ -46,7 +63,8 @@ test("live probe defaults to discovery-only and never sends a write", async () =
   const broker = syntheticBroker();
   const result = await probeOpenViking({ broker, nonce: "readonly1234" });
   assert.deepEqual(result, { ok: true, mode: "discovery-only",
-    advertisedReadAndWrite: true, remoteMutation: false });
+    advertisedReadAndWrite: true, schemaCompatible: true,
+    exclusiveCreateVerified: false, remoteMutation: false });
   assert.deepEqual(broker.calls.map(x => x.method), ["list"]);
 });
 test("explicit synthetic create reads same owner's exact bytes", async () => {
@@ -99,6 +117,35 @@ test("tool-level write failure must not become a confirmed create", async () => 
   assert.deepEqual(broker.calls.map(x => x.name || x.method), ["list", "write"]);
 });
 
+test("discovery and write QA fail before mutation when advertised tool schema is incompatible", async () => {
+  for (const options of [{ missingSchema: true }, { modeUnavailable: true }]) {
+    const broker = syntheticBroker(options);
+    await assert.rejects(probeOpenViking({
+      broker, nonce: "bad_contract_1234", verifyExclusiveCreate: true,
+    }), /schema|mode=create/);
+    assert.deepEqual(broker.calls.map(call => call.method), ["list"]);
+  }
+});
+
+test("ambiguous 409 or validation error cannot prove an exclusive-create collision", async () => {
+  const broker = syntheticBroker();
+  const inner = broker.request.bind(broker);
+  let writes = 0;
+  broker.request = async request => {
+    if (request.name === "write" && ++writes === 2) {
+      broker.calls.push(request);
+      return { isError: true, content: [{ type: "text",
+        text: "HTTP 409: request body validation failed" }] };
+    }
+    return inner(request);
+  };
+  await assert.rejects(probeOpenViking({
+    broker, nonce: "ambiguous4091234", verifyExclusiveCreate: true, pause: async () => {},
+  }), /unsafe for checkpoint writes/);
+  assert.deepEqual(broker.calls.map(call => call.name ?? call.method),
+    ["list", "write", "read", "write"]);
+});
+
 test("bad identity fails before contacting transport", async () => {
   const broker = syntheticBroker();
   await assert.rejects(probeOpenViking({
@@ -143,9 +190,11 @@ async function withFakeHttpOpenViking(t, behavior = {}) {
     }
     assert.match(request.headers["mcp-session-id"] ?? "", /^fake-session-/);
     if (rpc.method === "tools/list") {
-      reply({ tools: behavior.missingWrite
-        ? [{ name: "read" }]
-        : [{ name: "read" }, { name: "write" }] });
+      reply({ tools: advertisedTools({
+        advertised: !behavior.missingWrite,
+        missingSchema: behavior.missingSchema,
+        modeUnavailable: behavior.modeUnavailable,
+      }) });
       return;
     }
     assert.equal(rpc.method, "tools/call");
