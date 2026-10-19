@@ -198,6 +198,20 @@ old raw transcript, and marks excluded sources in the exact-request inventory.
 This prevents unbounded input growth without deleting any journal events, but
 is **not** a model-token guarantee or complete semantic summary of omitted turns.
 
+**Checkpoint-aware history selection:** when a request exceeds that ceiling, the
+composer preserves its mandatory controls and two latest durable messages,
+then considers four recent durable messages, followed by the verified OpenViking
+checkpoints (already ranked for topic relevance), before filling any remaining
+budget with the other twelve recent messages and older evidence. This prevents
+the previous sixteen-message window from consuming the entire budget ahead of
+confirmed historical decisions. Each checkpoint is included in full or excluded
+with a recorded budget decision; no journal event is removed. The newest
+messages remain mandatory and a too-large checkpoint cannot force truncation.
+
+This is **budget-aware history selection**, not a guarantee that a model has
+semantically preserved every omitted turn. Gaps in checkpoint coverage and
+model-authored summary accuracy still require separate end-to-end validation.
+
 ## Landed: query-aware ordering of verified memory context
 
 At authored Send, and identically in the exact-request inspector, Chatarium
