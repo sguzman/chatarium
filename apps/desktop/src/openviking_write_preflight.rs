@@ -2,7 +2,9 @@
 //! durably marked Dispatched. This runs ONLY on a background thread.
 use serde_json::Value;
 use std::path::PathBuf;
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Do not accept discovery-only or a successful synthetic create/read alone.
 /// The probe must demonstrate that a second create was rejected and that the
@@ -25,17 +27,40 @@ pub fn verify_before_checkpoint_write() -> Result<(), String> {
     if !script.is_file() {
         return Err("OpenViking write preflight is missing; checkpoint remains Ready".to_owned());
     }
-    let output = Command::new("node")
+    let mut child = Command::new("node")
         .arg(script)
         .arg("--verify-exclusive-create")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|_| "OpenViking write preflight could not start; checkpoint remains Ready".to_owned())?;
-    if !output.status.success() {
+    // Bound the background preflight without locking the journal worker or
+    // leaving an unbounded process when an MCP server stops responding.
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < Duration::from_secs(90) => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("OpenViking preflight timed out or could not finish; checkpoint remains Ready".to_owned());
+            }
+        }
+    };
+    if !status.success() {
         return Err("OpenViking exclusive-create compatibility was not proven; checkpoint remains Ready".to_owned());
     }
     // Never include raw stdout/stderr in logs or UI, even on errors: the
     // external service or transport might accidentally disclose secrets.
-    let value: Value = serde_json::from_slice(&output.stdout)
+    let mut stdout = Vec::new();
+    child.stdout.take().ok_or("OpenViking preflight evidence unavailable")?
+        .take(4096)
+        .read_to_end(&mut stdout)
+        .map_err(|_| "OpenViking preflight evidence unreadable".to_owned())?;
+    let value: Value = serde_json::from_slice(&stdout)
         .map_err(|_| "OpenViking preflight returned malformed evidence; checkpoint remains Ready".to_owned())?;
     if !attested_exclusive_create(&value) {
         return Err("OpenViking preflight did not prove safe exclusive creation; checkpoint remains Ready".to_owned());
