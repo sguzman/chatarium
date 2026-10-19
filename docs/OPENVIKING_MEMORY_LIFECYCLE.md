@@ -188,11 +188,12 @@ Memories remain **user-level historical evidence**, with the source URI, owner,
 turn and journal sequence visible in its provenance. The original journal is
 untouched.
 
-**Still missing:** topic-relevant selection, explicitly granted
-cross-conversation/project recall, semantic lifecycle compaction and end-to-end
-testing against the user's actual running service. The initial reader intentionally
-does not search other conversation namespaces even when sharing OpenViking
-storage. The composer now bounds outgoing context at 128 KiB UTF-8, keeps the
+**Current scope:** bounded lexical topic selection and directed,
+explicitly granted project recall have been implemented. Unbounded semantic
+search, full history compaction and end-to-end testing against the user's
+actual running service remain incomplete. Owner-only retrieval never scans
+other conversation namespaces; project recall requires a source-to-destination
+grant with an independently validated project-directory binding. The composer now bounds outgoing context at 128 KiB UTF-8, keeps the
 latest messages and critical control sources, prefers verified checkpoints to
 old raw transcript, and marks excluded sources in the exact-request inventory.
 This prevents unbounded input growth without deleting any journal events, but
@@ -236,9 +237,20 @@ refreshes it; editing an already-open draft does not run a new OpenViking
 search on every keystroke. This is explicit bounded lexical lookup, not a
 claim of embedding-based or unrestricted semantic search.
 
-Cross-conversation project sharing still considers the most recent confirmed
-checkpoint for each explicitly granted source; broader historical selection
-for those granted sources remains a separate acceptance item.
+Cross-conversation sharing now retains the newest confirmed checkpoint for
+each of up to three selected explicitly granted sources and can fill any
+remaining slots with older topic-matching checkpoints. The older candidate
+scan is capped at 64 confirmed entries drawn only from those exact authorized
+sources. Each candidate is validated against its local checkpoint header
+before lexical scoring, and selected remote evidence must still match exactly.
+No broad project-directory or OpenViking namespace scan is authorized; a
+shared project directory alone is never permission to read memory.
+
+The query is captured by the background retrieval command from the current
+draft/last user message or the exact authorized coordination directive.
+Existing cache lifetimes mean changes in query do **not** automatically
+trigger a new historical read; query-dependent cache refresh remains a
+separate correctness improvement.
 
 ## Landed: query-aware ordering of verified memory context
 
@@ -432,14 +444,17 @@ A missing grant file means no shared memory access. A malformed file rejects the
 instead of allowing broader access. When the directory bindings no longer
 match the stored grant, that grant is ineligible.
 
-The scoped selection path takes at most one newest **confirmed** checkpoint
-per authorized source, at most three total. It never scans OpenViking's global
-namespace. Read-back is against the exact URI, and the entire response must
-match the locally persisted checkpoint with its owner, turn and journal-sequence
-header, within the 12 KiB shared retrieval budget. Foreign, unconfirmed,
-uncertain, mismatched, oversized and unbound entries are excluded or rejected.
+The scoped selection preserves the newest **confirmed** checkpoint from
+each of at most three authorized sources. If there are fewer than three
+such checkpoints, a bounded scan of up to 64 additional confirmed entries
+from those same sources may fill the remaining slots with relevant older
+checkpoints. It never scans OpenViking's global namespace. Read-back is against
+each exact URI, and the entire response must match the locally persisted
+checkpoint with its owner, turn and journal-sequence header, within the
+12 KiB shared retrieval budget. Foreign, unconfirmed, uncertain, mismatched,
+oversized and unbound entries are excluded or rejected.
 
-**Native integration implemented on the development branch:** under
+**Native integration implemented on `main`:** under
 **Manage selected chat → OpenViking project memory (opt-in)**, the operator can
 explicitly allow or revoke read access from a same-project source conversation.
 The application persists the directed grant, prefetches permitted confirmed
@@ -448,8 +463,8 @@ or checkpoint changes, and rechecks grants at exact Send/inspector composition.
 A fresh conversation still has no sharing enabled by default.
 
 Live validation against the user's running OpenViking instance and complete
-cross-chat permission QA remain pending. Changes are not yet merged into
-the default branch.
+cross-chat permission QA remain pending. Development is committed directly
+to `main` without a pull request or branch merge.
 
 
 ## Opt-in live-service diagnostic harness
