@@ -3328,26 +3328,17 @@ impl ChatariumApp {
                 // Freeze the already verified, strictly same-conversation
                 // OpenViking evidence at Send click alongside local admissions.
                 // A later background result cannot mutate this request.
-                if let Some(checkpoints) = self
-                    .openviking_retrieval_cache
-                    .get(&self.local_conversation_id)
-                {
-                    for checkpoint in checkpoints {
-                        if let Ok(message) =
-                            context_composer::TranscriptMessage::verified_openviking_checkpoint(
-                                checkpoint,
-                                &self.local_conversation_id.to_string(),
-                            )
-                        {
-                            local_memory_context.push(message);
-                        }
-                    }
-                }
-                local_memory_context.extend(self.openviking_project_cache.admitted_context(
-                    self.local_conversation_id,
-                    &self.local_conversation_catalog,
-                    &self.project_memory_grants,
-                ));
+                local_memory_context.extend(
+                    self.openviking_project_cache.admitted_relevant_context(
+                        self.openviking_retrieval_cache
+                            .get(&self.local_conversation_id)
+                            .map(Vec::as_slice),
+                        self.local_conversation_id,
+                        &self.local_conversation_catalog,
+                        &self.project_memory_grants,
+                        &self.draft,
+                    ),
+                );
                 let selected_one_shot = self
                     .local_memory_one_shot_selections
                     .get(&self.local_conversation_id)
@@ -14561,24 +14552,17 @@ impl eframe::App for ChatariumApp {
                             }
                             // Mirror the frozen Send composition using the same
                             // verified background cache; never perform MCP I/O in preview.
-                            if let Some(checkpoints) = self
-                                .openviking_retrieval_cache
-                                .get(&self.local_conversation_id)
-                            {
-                                for checkpoint in checkpoints {
-                                    if let Ok(memory) = context_composer::TranscriptMessage::verified_openviking_checkpoint(
-                                        checkpoint,
-                                        &self.local_conversation_id.to_string(),
-                                    ) {
-                                        transcript.push(memory);
-                                    }
-                                }
-                            }
-                            transcript.extend(self.openviking_project_cache.admitted_context(
-                                self.local_conversation_id,
-                                &self.local_conversation_catalog,
-                                &self.project_memory_grants,
-                            ));
+                            transcript.extend(
+                                self.openviking_project_cache.admitted_relevant_context(
+                                    self.openviking_retrieval_cache
+                                        .get(&self.local_conversation_id)
+                                        .map(Vec::as_slice),
+                                    self.local_conversation_id,
+                                    &self.local_conversation_catalog,
+                                    &self.project_memory_grants,
+                                    &self.draft,
+                                ),
+                            );
                             let selected_one_shot = self
                                 .local_memory_one_shot_selections
                                 .get(&self.local_conversation_id)
