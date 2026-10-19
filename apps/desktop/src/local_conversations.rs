@@ -693,7 +693,9 @@ mod tests {
         let second = LocalConversationId::new();
         let mut catalog = LocalConversationCatalog::default();
         catalog.create(first, 1);
-        catalog.rename(first, Some("Keep title".to_owned()), 2).unwrap();
+        catalog
+            .rename(first, Some("Keep title".to_owned()), 2)
+            .unwrap();
         catalog
             .set_project_directory(
                 first,
