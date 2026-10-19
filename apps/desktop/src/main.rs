@@ -309,6 +309,7 @@ enum PersistCommand {
         generation: u64,
         catalog: local_conversations::LocalConversationCatalog,
         grants: openviking_memory_delivery::ProjectMemoryGrants,
+        query: String,
     },
     RetrieveConfirmedOpenViking {
         conversation_id: LocalConversationId,
@@ -3941,6 +3942,7 @@ impl ChatariumApp {
     fn maybe_retrieve_project_openviking_context_for(
         &mut self,
         destination: LocalConversationId,
+        query: &str,
     ) -> bool {
         if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
             return true;
@@ -3972,6 +3974,7 @@ impl ChatariumApp {
                 generation,
                 catalog: self.local_conversation_catalog.clone(),
                 grants: self.project_memory_grants.clone(),
+                query: query.chars().take(4096).collect(),
             })
             .is_ok()
         {
@@ -4008,7 +4011,17 @@ impl ChatariumApp {
     }
 
     fn maybe_retrieve_project_openviking_context(&mut self) {
-        self.maybe_retrieve_project_openviking_context_for(self.local_conversation_id);
+        let owner = self.local_conversation_id;
+        let query = if !self.draft.trim().is_empty() {
+            self.draft.clone()
+        } else {
+            projected_local_display_messages(&self.events, owner)
+                .into_iter()
+                .rev()
+                .find(|message| matches!(message.role, DisplayRole::User))
+                .map_or_else(String::new, |message| message.text)
+        };
+        self.maybe_retrieve_project_openviking_context_for(owner, &query);
     }
 
     fn background_worker_memory_ready(
@@ -4017,7 +4030,7 @@ impl ChatariumApp {
         directive: &str,
     ) -> bool {
         let own_ready = self.maybe_retrieve_openviking_context_for(worker, directive);
-        let project_ready = self.maybe_retrieve_project_openviking_context_for(worker);
+        let project_ready = self.maybe_retrieve_project_openviking_context_for(worker, directive);
         own_ready && project_ready
     }
 
@@ -23213,18 +23226,21 @@ fn persistence_worker(
                 generation,
                 catalog,
                 grants,
+                query,
             } => {
                 let outbox_path = checkpoint_outbox_path.clone();
                 let sender = notices.clone();
                 let spawned = thread::Builder::new()
                     .name("chatarium-openviking-project-retrieve".to_owned())
                     .spawn(move || {
-                        let result = openviking_memory_delivery::retrieve_confirmed_for_project(
-                            &outbox_path,
-                            &catalog,
-                            &grants,
-                            conversation_id,
-                        );
+                        let result =
+                            openviking_memory_delivery::retrieve_confirmed_for_project_query(
+                                &outbox_path,
+                                &catalog,
+                                &grants,
+                                conversation_id,
+                                &query,
+                            );
                         let _ = sender.send(PersistNotice::ProjectOpenVikingRetrievalFinished {
                             conversation_id,
                             generation,
