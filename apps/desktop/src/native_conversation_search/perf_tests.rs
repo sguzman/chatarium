@@ -232,6 +232,13 @@ fn native_search_perf_profile() {
     assert!(Arc::ptr_eq(&index, &unchanged));
     let unrelated_append_us = draft_start.elapsed().as_micros();
 
+    // Restore the matching query after the query-edit profiling churn.
+    // Otherwise the next refresh would be a cold query invalidation.
+    let warmed_before_append = cached_rows(&ctx, &index, &entries, false, "needle");
+    assert!(Arc::ptr_eq(
+        &warmed_before_append,
+        &cached_rows(&ctx, &index, &entries, false, "needle")
+    ));
     let native_start = Instant::now();
     author(&mut store, owners[0], "needle newly appended".to_owned());
     let extended = cached_index(&ctx, store.events());
@@ -241,6 +248,28 @@ fn native_search_perf_profile() {
         extended.messages.get(&owners[1]).unwrap(),
     ));
     let native_append_us = native_start.elapsed().as_micros();
+
+    // Measure a hot query after one owner appends. Compare to the exact same
+    // updated index using a clean egui context, which scans every owner.
+    // These timings are evidence, not pass/fail thresholds.
+    let partial_start = Instant::now();
+    let partial_rows = cached_rows(&ctx, &extended, &entries, false, "needle");
+    let partial_sidebar_refresh_us = partial_start.elapsed().as_micros();
+    let fresh_ctx = egui::Context::default();
+    let full_start = Instant::now();
+    let fresh_rows = cached_rows(&fresh_ctx, &extended, &entries, false, "needle");
+    let full_sidebar_refresh_us = full_start.elapsed().as_micros();
+    assert_eq!(partial_rows, fresh_rows);
+    assert_eq!(partial_rows.len(), CONVERSATIONS / 4);
+    assert_eq!(
+        partial_rows
+            .iter()
+            .find(|row| entries[row.catalog_index].id == owners[0])
+            .unwrap()
+            .summary
+            .message_count,
+        MESSAGES_PER_CONVERSATION + 1
+    );
 
     // Compare both implementations inside the same runner, journal, and
     // binary. Ten alternating rounds are observational, not a timing gate.
@@ -320,6 +349,8 @@ fn native_search_perf_profile() {
             "ab_single_pass_scan_median_us": median_us(&single_pass_scan_samples_us),
             "unrelated_append_us": unrelated_append_us,
             "native_append_us": native_append_us,
+            "partial_sidebar_refresh_us": partial_sidebar_refresh_us,
+            "full_sidebar_refresh_us": full_sidebar_refresh_us,
             "process_rss_kib_after_journal": setup_rss_kib,
             "process_rss_kib_after_index": index_rss_kib,
             "process_rss_kib_after_rows": rows_rss_kib,
