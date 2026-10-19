@@ -31,11 +31,41 @@ async function verifyReadback({ broker, owner, uri, expected, pause }) {
   throw new Error("Synthetic create attempted once; exact readback unconfirmed; NEVER auto-retry");
 }
 
+function explicitAlreadyExists(detail) {
+  // "409" alone also occurs in unrelated transport/status and validation
+  // errors. Demand an actual AlreadyExists business code/message instead.
+  return /\bALREADY_EXISTS\b|\bAlreadyExists\b|\bfile already exists\b/i.test(String(detail));
+}
+
 function explicitCollision(result) {
-  // Only an explicit, tool-level already-exists/409 rejection can establish
-  // exclusive-create semantics; generic transport failure proves nothing.
-  const detail = JSON.stringify(result ?? "");
-  return result?.isError === true && /ALREADY_EXISTS|already.exists|409/i.test(detail);
+  // Never infer collision safety from a successful, ambiguous or generic
+  // isError reply. The original bytes must also be reverified after rejection.
+  return result?.isError === true && explicitAlreadyExists(
+    JSON.stringify(result?.structuredContent?.error ?? result?.content ?? []));
+}
+
+function verifyToolSchema(tool, fields) {
+  const schema = tool?.inputSchema;
+  if (schema?.type !== "object" || !schema.properties
+      || !fields.every(key => Object.hasOwn(schema.properties, key))) {
+    throw new Error("OpenViking MCP tools/list lacks expected argument schemas");
+  }
+  return schema;
+}
+
+function validateAdvertisedContract(tools) {
+  const read = tools.find(tool => tool?.name === "read");
+  const write = tools.find(tool => tool?.name === "write");
+  if (!read || !write) {
+    throw new Error("OpenViking does not advertise the expected read/write tools");
+  }
+  verifyToolSchema(read, ["uris", "limit"]);
+  const writeSchema = verifyToolSchema(write, ["uri", "content", "mode", "wait"]);
+  const mode = writeSchema.properties.mode;
+  if (mode?.type !== "string"
+      || (Array.isArray(mode.enum) && !mode.enum.includes("create"))) {
+    throw new Error("OpenViking write tool does not advertise mode=create");
+  }
 }
 
 export async function probeOpenViking({
@@ -52,14 +82,10 @@ export async function probeOpenViking({
   const listed = await broker.request({
     conversation_id: owner, provider: "openviking", method: "list",
   });
-  const names = (Array.isArray(listed?.tools) ? listed.tools : [])
-    .map(item => item?.name)
-    .filter(name => typeof name === "string");
-  if (!["read", "write"].every(name => names.includes(name))) {
-    throw new Error("OpenViking does not advertise the expected read/write tools");
-  }
+  validateAdvertisedContract(Array.isArray(listed?.tools) ? listed.tools : []);
   if (!createSyntheticCheckpoint && !verifyExclusiveCreate) {
-    return { ok: true, mode: "discovery-only", advertisedReadAndWrite: true, remoteMutation: false };
+    return { ok: true, mode: "discovery-only", advertisedReadAndWrite: true,
+      schemaCompatible: true, exclusiveCreateVerified: false, remoteMutation: false };
   }
   const turn = "probe_" + nonce;
   const uri = "viking://~/chatarium/conversations/" + owner + "/checkpoints/" + turn + ".md";
@@ -77,7 +103,8 @@ export async function probeOpenViking({
   }
   await verifyReadback({ broker, owner, uri, expected: body, pause });
   if (!verifyExclusiveCreate) {
-    return { ok: true, mode: "synthetic-create-once", verified: true, remoteMutation: true, uri };
+    return { ok: true, mode: "synthetic-create-once", verified: true,
+      exclusiveCreateVerified: false, remoteMutation: true, uri };
   }
 
   // Explicit diagnostic ONLY. Attempt a second create on this disposable
@@ -97,14 +124,15 @@ export async function probeOpenViking({
   } catch (error) {
     // A protocol-level 409/AlreadyExists may be surfaced as an exception.
     // Network failures or unknown errors cannot establish the contract.
-    collisionRejected = /ALREADY_EXISTS|already.exists|409/i.test(String(error));
+    collisionRejected = explicitAlreadyExists(error);
   }
   if (!collisionRejected) {
     throw new Error("Installed OpenViking did not prove exclusive-create semantics; unsafe for checkpoint writes");
   }
   await verifyReadback({ broker, owner, uri, expected: body, pause });
   return { ok: true, mode: "synthetic-exclusive-create",
-    verified: true, exclusiveCreate: true, remoteMutation: true, uri };
+    verified: true, exclusiveCreate: true, exclusiveCreateVerified: true,
+    remoteMutation: true, uri };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
