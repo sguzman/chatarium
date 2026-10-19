@@ -100,6 +100,26 @@ user/assistant journal observations invalidate that projection, while
 unrelated draft, tool and controller events can reuse it. The underlying
 append-only journal and conversation ownership boundaries remain unchanged.
 
+### Native sidebar search refresh
+
+The local sidebar caches the query result, preview, match positions, and
+message/word/byte summaries. A simple UI redraw reuses that snapshot.
+If a new native journal observation reprojects **one** conversation, the sidebar
+compares the immutable message-vector identity of each owner and recomputes
+only affected rows. Unchanged matches **and unchanged misses** are reused;
+a newly matching message becomes visible as soon as its owner changes.
+
+Query edits, title changes, catalog reordering, and archive visibility changes
+invalidate the full row view. Replaced or rebuilt archives receive fresh
+projections and cannot inherit stale sidebar results merely because a row
+index matches. An explicit search result still resolves copy, staging, and
+reader navigation through the selected conversation identity; no cached
+excerpt authorizes another conversation's text to enter inference context.
+
+`native-search-release-profile` compares hot incremental sidebar refresh
+against a fresh full rescan on the same synthetic journal. Timings are
+observations, not cross-machine performance guarantees.
+
 ### Bounded native transcript reader
 
 Large native conversations (1,024 or more visible messages) now default to a
