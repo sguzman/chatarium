@@ -23433,6 +23433,17 @@ fn persistence_worker(
                     let Some(entry) = outbox.ready_entries().next().cloned() else {
                         return Ok(None);
                     };
+                    // Recheck at the exact durable claim, not just before
+                    // opening the queue: a different process may have changed
+                    // its head after the proof was matched.
+                    if (
+                        entry.conversation_id.as_str(),
+                        entry.turn_id.as_str(),
+                        entry.completed_sequence,
+                    ) != (selected.0.as_str(), selected.1.as_str(), selected.2)
+                    {
+                        return Ok(None);
+                    }
                     let summary_path = openviking_checkpoint_outbox::Outbox::summary_path(
                         &checkpoint_outbox_path,
                         &entry.conversation_id,
@@ -23441,12 +23452,13 @@ fn persistence_worker(
                     let content = std::fs::read_to_string(&summary_path).map_err(|error| {
                         format!("cannot read pending OpenViking summary: {error}")
                     })?;
-                    if content.len() > 16384
-                        || !content.contains(&format!(
-                            "Source journal sequence: {}",
-                            entry.completed_sequence
-                        ))
-                        || !content.contains(&format!("Conversation: {}", entry.conversation_id))
+                    let expected_header = format!(
+                        "# Chatarium memory checkpoint\n\nConversation: {}\nTurn: {}\nSource journal sequence: {}\n\n",
+                        entry.conversation_id, entry.turn_id, entry.completed_sequence,
+                    );
+                    if content.is_empty()
+                        || content.len() > 16384
+                        || !content.starts_with(&expected_header)
                     {
                         return Err(
                             "OpenViking summary file fails source or size validation".to_owned()
