@@ -871,7 +871,10 @@ mod tests {
         let matches = vec![(first, Some(0)), (second, Some(3))];
 
         assert_eq!(activate_copy_selection(&matches, None), Some((first, 0)));
-        assert_eq!(activate_copy_selection(&matches, Some(1)), Some((second, 3)));
+        assert_eq!(
+            activate_copy_selection(&matches, Some(1)),
+            Some((second, 3))
+        );
         // The selected row disappeared after a query/filter update. Copying
         // the first result instead would attribute it to the wrong chat.
         assert_eq!(activate_copy_selection(&matches, Some(2)), None);
@@ -880,7 +883,10 @@ mod tests {
         let title_only = vec![(first, None), (second, Some(3))];
         assert_eq!(activate_copy_selection(&title_only, None), None);
         assert_eq!(activate_copy_selection(&title_only, Some(0)), None);
-        assert_eq!(activate_copy_selection(&title_only, Some(1)), Some((second, 3)));
+        assert_eq!(
+            activate_copy_selection(&title_only, Some(1)),
+            Some((second, 3))
+        );
         assert_eq!(activate_copy_selection(&[], None), None);
     }
 
