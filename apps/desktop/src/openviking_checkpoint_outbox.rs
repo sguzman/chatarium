@@ -413,7 +413,10 @@ impl Outbox {
             let mut dest = options
                 .open(&file)
                 .map_err(|e| format!("cannot create checkpoint summary: {e}"))?;
-            if let Err(error) = dest.write_all(body.as_bytes()).and_then(|()| dest.sync_all()) {
+            if let Err(error) = dest
+                .write_all(body.as_bytes())
+                .and_then(|()| dest.sync_all())
+            {
                 drop(dest);
                 // This file was opened with create_new: removing it after our
                 // own failed write permits a clean retry without overwriting
@@ -637,17 +640,24 @@ mod tests {
         let mut restarted = Outbox::load(&path).unwrap();
 
         // A different result must not silently replace a prior summary.
-        assert!(restarted
-            .save_summary_durable(&path, "chat-abc", "turn-777", 11, "different summary")
-            .is_err());
+        assert!(
+            restarted
+                .save_summary_durable(&path, "chat-abc", "turn-777", 11, "different summary")
+                .is_err()
+        );
         assert_eq!(fs::read_to_string(&file).unwrap(), body);
         assert_eq!(restarted.pending_count(), 1);
 
         // Exact retry finishes the state transition without rewriting content.
-        assert!(restarted
-            .save_summary_durable(&path, "chat-abc", "turn-777", 11, summary)
-            .unwrap());
-        assert_eq!(Outbox::load(&path).unwrap().entries()[0].state, State::Ready);
+        assert!(
+            restarted
+                .save_summary_durable(&path, "chat-abc", "turn-777", 11, summary)
+                .unwrap()
+        );
+        assert_eq!(
+            Outbox::load(&path).unwrap().entries()[0].state,
+            State::Ready
+        );
         assert_eq!(fs::read_to_string(&file).unwrap(), body);
         fs::remove_dir_all(root).unwrap();
     }
