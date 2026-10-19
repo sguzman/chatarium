@@ -47,9 +47,17 @@ a preexisting remote file.
 
 The user's installed server version and exclusive-create behavior must be
 confirmed in live integration QA before claiming non-overwrite guarantees
-or finishing this milestone. The existing synthetic probe confirms one
-write/read roundtrip but **cannot** establish exclusive-create semantics
-by itself. If the installed version aliases `create` to `replace`, it is
+or finishing this milestone. The default read-only probe does not mutate
+the server. The one-create synthetic probe verifies exact read-back, but
+**does not** establish exclusive-create semantics. A separate explicit
+`--verify-exclusive-create` diagnostic creates a unique disposable synthetic
+checkpoint, verifies it, then intentionally attempts a second `create` on
+**that synthetic file only** with different content. It requires an explicit
+AlreadyExists/409 rejection AND re-verifies the original bytes. An alias that
+overwrites existing content fails the test and may overwrite the disposable
+synthetic QA file; no personal data or previous checkpoint is used. The
+diagnostic never runs automatically against the user's service.
+If the installed version aliases `create` to `replace`, it is
 not suitable for this checkpoint-writing contract without an additional
 collision-safe storage mechanism or a verified compatible server version.
 Never silently treat a successful read-back as proof that no preexisting
@@ -397,6 +405,16 @@ requiring authentication. Never commit or print the key.
 A separate explicitly selected one-shot write test uses:
 
     node tools/local-http-mcp/openviking-live-probe.mjs --create-synthetic-checkpoint
+
+A separate **explicit** compatibility test of exclusive-create behavior uses:
+
+    node tools/local-http-mcp/openviking-live-probe.mjs --verify-exclusive-create
+
+This test performs two writes **only on a new, synthetic QA URI** with
+intentionally different bodies. A compatible server rejects the second write;
+a replace-compatible implementation fails the diagnostic. The synthetic file
+persists. The user must not confuse this opt-in test with a production
+checkpoint or invoke it on a real memory URI.
 
 This first confirms the tools/list contract, then creates ONE new, uniquely
 named checkpoint within a dedicated synthetic QA conversation namespace.
