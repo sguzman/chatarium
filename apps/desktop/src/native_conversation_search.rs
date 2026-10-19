@@ -109,7 +109,21 @@ pub fn move_identity_selection(
     current: Option<LocalConversationId>,
     delta: isize,
 ) -> Option<LocalConversationId> {
+    if matches.is_empty() {
+        return None;
+    }
     let position = current.and_then(|id| matches.iter().position(|candidate| *candidate == id));
+    // Preserve ordinary arrow navigation when nothing was highlighted.
+    // A remembered owner that vanished after archiving/filtering is different:
+    // pressing an arrow is an explicit reselection, and must land on the first
+    // or last visible row rather than accidentally skipping the first.
+    if current.is_some() && position.is_none() {
+        return if delta < 0 {
+            matches.last().copied()
+        } else {
+            matches.first().copied()
+        };
+    }
     super::local_archive_search::move_selection(position, matches.len(), delta)
         .and_then(|index| matches.get(index).copied())
 }
@@ -978,26 +992,60 @@ mod tests {
         let first = LocalConversationId::new();
         let second = LocalConversationId::new();
         let third = LocalConversationId::new();
+        let absent = LocalConversationId::new();
         let before = [first, second, third];
         let after = [third, first, second];
 
-        assert_eq!(activate_identity_selection(&after, Some(second)), Some(second));
-        assert_eq!(move_identity_selection(&after, Some(second), -1), Some(first));
-        assert_eq!(move_identity_selection(&before, Some(second), 1), Some(third));
+        assert_eq!(
+            activate_identity_selection(&after, Some(second)),
+            Some(second)
+        );
+        assert_eq!(
+            move_identity_selection(&after, Some(second), -1),
+            Some(first)
+        );
+        assert_eq!(
+            move_identity_selection(&before, Some(second), 1),
+            Some(third)
+        );
         assert_eq!(activate_identity_selection(&after, None), Some(third));
-        assert_eq!(activate_identity_selection(&[first, third], Some(second)), None);
-        assert_eq!(activate_identity_copy_selection(
-            &[(first, Some(0)), (third, Some(5))],
-            Some(second),
-        ), None);
-        assert_eq!(activate_identity_copy_selection(
-            &[(third, None), (first, Some(5))],
-            Some(third),
-        ), None);
-        assert_eq!(activate_identity_copy_selection(
-            &[(third, None), (first, Some(5))],
-            Some(first),
-        ), Some((first, 5)));
+        assert_eq!(
+            activate_identity_selection(&[first, third], Some(second)),
+            None
+        );
+        // A removed owner must never cause Enter/copy/staging to select a
+        // different chat. Only a subsequent arrow explicitly reselects.
+        assert_eq!(activate_identity_selection(&after, Some(absent)), None);
+        assert_eq!(
+            move_identity_selection(&after, Some(absent), 1),
+            Some(third)
+        );
+        assert_eq!(
+            move_identity_selection(&after, Some(absent), -1),
+            Some(second)
+        );
+        assert_eq!(move_identity_selection(&[], Some(absent), 1), None);
+        assert_eq!(
+            activate_identity_copy_selection(
+                &[(first, Some(0)), (third, Some(5))],
+                Some(second),
+            ),
+            None
+        );
+        assert_eq!(
+            activate_identity_copy_selection(
+                &[(third, None), (first, Some(5))],
+                Some(third),
+            ),
+            None
+        );
+        assert_eq!(
+            activate_identity_copy_selection(
+                &[(third, None), (first, Some(5))],
+                Some(first),
+            ),
+            Some((first, 5))
+        );
     }
 
     #[test]
