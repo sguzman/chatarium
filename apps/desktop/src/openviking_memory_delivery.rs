@@ -1315,11 +1315,7 @@ mod project_scope_tests {
         let directory = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         for id in [source, destination] {
             catalog
-                .set_project_directory(
-                    id,
-                    Some(directory.to_str().unwrap().to_owned()),
-                    3,
-                )
+                .set_project_directory(id, Some(directory.to_str().unwrap().to_owned()), 3)
                 .unwrap();
         }
         let nonce = std::time::SystemTime::now()
@@ -1336,9 +1332,11 @@ mod project_scope_tests {
         let mut grants = ProjectMemoryGrants::default();
         grants.grant(&catalog, source, destination).unwrap();
         grants.save_atomic(&path).unwrap();
-        assert!(ProjectMemoryGrants::load(&path)
-            .unwrap()
-            .allows(&catalog, source, destination));
+        assert!(
+            ProjectMemoryGrants::load(&path)
+                .unwrap()
+                .allows(&catalog, source, destination)
+        );
 
         assert!(grants.revoke(source, destination));
         grants.save_atomic(&path).unwrap();
