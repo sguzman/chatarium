@@ -16,6 +16,23 @@ const VERSION: u64 = 1;
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_PROJECT_DIRECTORY_BYTES: usize = 4096;
 
+/// Imported/derived titles are not a user edit, so safely bound them before
+/// storing. The on-disk catalog rejects titles exceeding MAX_TITLE_BYTES at
+/// reload time. Truncate only at a UTF-8 boundary to keep save/load symmetric.
+fn bounded_derived_title(title: Option<String>) -> Option<String> {
+    let title = title?;
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let mut end = title.len().min(MAX_TITLE_BYTES);
+    while !title.is_char_boundary(end) {
+        end -= 1;
+    }
+    let title = title[..end].trim_end();
+    (!title.is_empty()).then(|| title.to_owned())
+}
+
 /// Local chat accents are durable UI metadata, not part of a conversation title.
 /// The palette is spread around the hue wheel, with candidate selection maximizing
 /// distance from accents already allocated in this catalog.
@@ -326,12 +343,9 @@ impl LocalConversationCatalog {
         now_ms: u64,
     ) -> bool {
         let key = id.to_string();
+        let derived_title = bounded_derived_title(derived_title);
         if let Some(entry) = self.entries.get_mut(&key) {
-            if entry.title.is_none()
-                && derived_title
-                    .as_ref()
-                    .is_some_and(|title| !title.trim().is_empty())
-            {
+            if entry.title.is_none() && derived_title.is_some() {
                 entry.title = derived_title;
                 return true;
             }
@@ -343,7 +357,7 @@ impl LocalConversationCatalog {
             LocalConversationEntry {
                 id,
                 color,
-                title: derived_title.filter(|title| !title.trim().is_empty()),
+                title: derived_title,
                 project_directory: None,
                 archived: false,
                 created_at_unix_ms: now_ms,
@@ -354,6 +368,12 @@ impl LocalConversationCatalog {
     }
 
     pub fn create(&mut self, id: LocalConversationId, now_ms: u64) {
+        // A repeated create request must never destroy a durable conversation's
+        // title, project binding, archive flag, color, or timestamps, nor
+        // silently change the active conversation.
+        if self.entries.contains_key(&id.to_string()) {
+            return;
+        }
         let color = allocate_color(id, &self.entries);
         self.entries.insert(
             id.to_string(),
@@ -626,6 +646,60 @@ mod tests {
         assert_eq!(migrated.entry(first).unwrap().accent_rgb().len(), 3);
         migrated.save_atomic(&path).unwrap();
         assert_eq!(LocalConversationCatalog::load(&path).unwrap(), migrated);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn oversized_derived_title_is_utf8_safe_and_restartable() {
+        let path = temp_path();
+        let id = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        let oversized = format!("  {}  ", "é".repeat(MAX_TITLE_BYTES));
+        assert!(catalog.ensure(id, Some(oversized.clone()), 1));
+        let title = catalog.entry(id).unwrap().title.as_deref().unwrap();
+        assert_eq!(title.len(), MAX_TITLE_BYTES);
+        assert_eq!(title.chars().count(), MAX_TITLE_BYTES / 2);
+        assert!(title.chars().all(|ch| ch == 'é'));
+
+        catalog.save_atomic(&path).unwrap();
+        let mut loaded = LocalConversationCatalog::load(&path).unwrap();
+        assert_eq!(loaded, catalog);
+        assert!(!loaded.ensure(id, Some("replacement must not win".to_owned()), 2));
+        assert_eq!(loaded.entry(id).unwrap().title.as_deref(), Some(title));
+
+        let empty = LocalConversationId::new();
+        assert!(loaded.ensure(empty, Some("  \n  ".to_owned()), 3));
+        assert!(loaded.entry(empty).unwrap().title.is_none());
+        loaded.save_atomic(&path).unwrap();
+        assert_eq!(LocalConversationCatalog::load(&path).unwrap(), loaded);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn repeated_create_preserves_metadata_archive_and_active_chat() {
+        let path = temp_path();
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(first, 1);
+        catalog.rename(first, Some("Keep title".to_owned()), 2).unwrap();
+        catalog
+            .set_project_directory(
+                first,
+                Some(std::env::current_dir().unwrap().display().to_string()),
+                3,
+            )
+            .unwrap();
+        catalog.create(second, 4);
+        catalog.set_archived(first, true, 5).unwrap();
+        let before = catalog.entry(first).unwrap().clone();
+
+        catalog.create(first, 999_999);
+        assert_eq!(catalog.active(), Some(second));
+        assert_eq!(catalog.entry(first).unwrap(), &before);
+        assert_eq!(catalog.entries().len(), 2);
+        catalog.save_atomic(&path).unwrap();
+        assert_eq!(LocalConversationCatalog::load(&path).unwrap(), catalog);
         let _ = fs::remove_file(path);
     }
 
