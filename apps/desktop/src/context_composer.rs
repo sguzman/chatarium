@@ -847,9 +847,14 @@ impl ContextPlan {
             ));
         }
 
-        // Prefer a contiguous recent conversation window (up to 16 messages),
-        // then verified history checkpoints, then other evidence and older
-        // turns. Items remain whole; no UTF-8 slicing or partial provenance.
+        // Preserve a short contiguous recent conversation window BEFORE
+        // selecting verified historical memory. Otherwise sixteen large recent
+        // messages can consume the full budget and silently crowd out the
+        // rolling checkpoint needed to recover older decisions. After memory
+        // selection, fill the remaining budget with up to twelve more recent
+        // turns, then other evidence and older turns. Without checkpoints this
+        // preserves the existing 16-message recency ordering.
+        // All evidence remains whole with its original source provenance.
         let recent = self
             .messages
             .iter()
@@ -897,8 +902,11 @@ impl ContextPlan {
             .skip(16)
             .collect::<Vec<_>>();
         for index in recent
-            .into_iter()
+            .iter()
+            .take(4)
+            .copied()
             .chain(checkpoints)
+            .chain(recent.into_iter().skip(4))
             .chain(other)
             .chain(older)
         {
@@ -1813,6 +1821,86 @@ mod tests {
             .map(|item| item.utf8_bytes)
             .sum::<usize>();
         assert_eq!(bounded.size.utf8_bytes, included);
+    }
+
+    #[test]
+    fn long_context_keeps_recent_turns_and_verified_checkpoint_before_old_turns() {
+        // Without an early checkpoint reservation, the sixteen-message
+        // recency pass would fill this budget and exclude historical memory.
+        let mut transcript = (1..=20)
+            .map(|sequence| {
+                TranscriptMessage::durable(
+                    if sequence % 2 == 0 {
+                        TranscriptRole::Assistant
+                    } else {
+                        TranscriptRole::User
+                    },
+                    format!("durable {sequence}: {}", "x".repeat(90)),
+                    sequence,
+                )
+            })
+            .collect::<Vec<_>>();
+        let evidence = "Previously completed Rust ownership fix. Preserve this decision.";
+        transcript.push(TranscriptMessage {
+            role: TranscriptRole::User,
+            text: evidence.to_owned(),
+            source: ContextSource::OpenVikingCheckpoint {
+                source_conversation_id: "owner".to_owned(),
+                source_turn_id: "checkpoint-8".to_owned(),
+                source_journal_sequence: 8,
+                uri: "viking://~/chatarium/conversations/owner/checkpoints/checkpoint-8.md"
+                    .to_owned(),
+            },
+        });
+        let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript);
+        let bounded = plan.within_utf8_budget(515).unwrap();
+        assert!(bounded.size.utf8_bytes <= 515);
+        for sequence in 17..=20 {
+            assert!(bounded.messages.iter().any(|message| {
+                message.content.starts_with(&format!("durable {sequence}: "))
+            }));
+        }
+        assert_eq!(bounded.openviking_checkpoint_count(), 1);
+        assert!(bounded.messages.iter().any(|message| message.content == evidence));
+        assert!(bounded.inventory.iter().any(|item| {
+            item.decision == InclusionDecision::ExcludedByBudget
+                && matches!(item.source, ContextSource::DurableTranscript { sequence: 16 })
+        }));
+        assert!(bounded.inventory.iter().any(|item| {
+            item.decision == InclusionDecision::Included
+                && matches!(item.source, ContextSource::OpenVikingCheckpoint { .. })
+        }));
+    }
+
+    #[test]
+    fn oversized_checkpoint_cannot_displace_current_turn_or_block_other_history() {
+        let transcript = vec![
+            TranscriptMessage::durable(TranscriptRole::User, "older", 1),
+            TranscriptMessage::durable(TranscriptRole::Assistant, "immediate reply", 2),
+            TranscriptMessage::durable(TranscriptRole::User, "current question", 3),
+            TranscriptMessage {
+                role: TranscriptRole::User,
+                text: "large".repeat(150),
+                source: ContextSource::OpenVikingCheckpoint {
+                    source_conversation_id: "owner".to_owned(),
+                    source_turn_id: "checkpoint-1".to_owned(),
+                    source_journal_sequence: 1,
+                    uri: "viking://~/chatarium/conversations/owner/checkpoints/checkpoint-1.md"
+                        .to_owned(),
+                },
+            },
+        ];
+        let bounded = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript)
+            .within_utf8_budget(100)
+            .unwrap();
+        assert_eq!(bounded.openviking_checkpoint_count(), 0);
+        assert!(bounded.messages.iter().any(|m| m.content == "current question"));
+        assert!(bounded.messages.iter().any(|m| m.content == "immediate reply"));
+        assert!(bounded.messages.iter().any(|m| m.content == "older"));
+        assert!(bounded.inventory.iter().any(|item| {
+            item.decision == InclusionDecision::ExcludedByBudget
+                && matches!(item.source, ContextSource::OpenVikingCheckpoint { .. })
+        }));
     }
 
     #[test]
