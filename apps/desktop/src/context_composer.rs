@@ -906,7 +906,7 @@ impl ContextPlan {
             .take(4)
             .copied()
             .chain(checkpoints)
-            .chain(recent.into_iter().skip(4))
+            .chain(recent.iter().skip(4).copied())
             .chain(other)
             .chain(older)
         {
