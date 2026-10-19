@@ -25,6 +25,7 @@ mod openviking_memory_delivery;
 mod openviking_memory_summary;
 mod openviking_project_cache;
 mod openviking_project_ui;
+mod openviking_write_preflight;
 
 mod local_stdio_runner;
 mod local_tool_adapter;
@@ -322,6 +323,10 @@ enum PersistCommand {
         summary: String,
     },
     DispatchOpenVikingReadyWrite,
+    OpenVikingWritePreflightFinished {
+        selected: (String, String, u64),
+        result: Result<(), String>,
+    },
     RecordOpenVikingUncertainReadback {
         conversation_id: String,
         turn_id: String,
@@ -23155,6 +23160,12 @@ fn persistence_worker(
         });
     }
     let mut openviking_write_active = false;
+    // Production writes require a FRESH synthetic collision attestation for
+    // each Ready checkpoint, performed off the journal persistence thread.
+    // Nothing is marked Dispatched until the matching attestation succeeds.
+    let mut openviking_preflight_active = false;
+    let mut openviking_preflight_verified: Option<(String, String, u64)> = None;
+    let mut openviking_preflight_retry_after: Option<Instant> = None;
     if let Ok(mut outbox) = openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path) {
         if let Err(error) = outbox.recover_interrupted_dispatches_durable(&checkpoint_outbox_path) {
             let _ = notices.send(PersistNotice::Failed {
@@ -23320,10 +23331,98 @@ fn persistence_worker(
                     });
                 }
             }
+            PersistCommand::OpenVikingWritePreflightFinished { selected, result } => {
+                openviking_preflight_active = false;
+                match result {
+                    Ok(()) => {
+                        openviking_preflight_retry_after = None;
+                        openviking_preflight_verified = Some(selected);
+                        // Return to the same persistence-worker dispatch path,
+                        // which checks that the attested Ready entry still matches.
+                        let _ = completion_tx.send(PersistCommand::DispatchOpenVikingReadyWrite);
+                    }
+                    Err(error) => {
+                        openviking_preflight_verified = None;
+                        openviking_preflight_retry_after =
+                            Some(Instant::now() + Duration::from_secs(1800));
+                        // Report failure once; do not consume or mark uncertain
+                        // any queued checkpoint when no production write ran.
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "OpenViking write safety preflight (checkpoint remains Ready)",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                    }
+                }
+            }
             PersistCommand::DispatchOpenVikingReadyWrite => {
-                if openviking_write_active {
+                if openviking_write_active || openviking_preflight_active {
                     continue;
                 }
+                // Only the oldest Ready checkpoint may be attested and sent.
+                // Never preflight a queue with no pending write.
+                let next_ready = (|| -> Result<Option<(String, String, u64)>, String> {
+                    let outbox =
+                        openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)?;
+                    Ok(outbox.ready_entries().next().map(|entry| {
+                        (
+                            entry.conversation_id.clone(),
+                            entry.turn_id.clone(),
+                            entry.completed_sequence,
+                        )
+                    }))
+                })();
+                let selected = match next_ready {
+                    Ok(Some(selected)) => selected,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "OpenViking write safety queue inspection",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error,
+                        });
+                        continue;
+                    }
+                };
+                if openviking_preflight_verified.as_ref() != Some(&selected) {
+                    // Never reuse a proof for a different Ready checkpoint.
+                    openviking_preflight_verified = None;
+                    if openviking_preflight_retry_after.is_some_and(|until| Instant::now() < until) {
+                        continue;
+                    }
+                    openviking_preflight_active = true;
+                    let tx = completion_tx.clone();
+                    let spawned = thread::Builder::new()
+                        .name("chatarium-openviking-write-preflight".to_owned())
+                        .spawn(move || {
+                            let result =
+                                openviking_write_preflight::verify_before_checkpoint_write();
+                            let _ = tx.send(PersistCommand::OpenVikingWritePreflightFinished {
+                                selected,
+                                result,
+                            });
+                        });
+                    if let Err(error) = spawned {
+                        openviking_preflight_active = false;
+                        openviking_preflight_retry_after =
+                            Some(Instant::now() + Duration::from_secs(1800));
+                        let _ = notices.send(PersistNotice::Failed {
+                            operation: "OpenViking write safety preflight launch",
+                            revision: None,
+                            request_id: None,
+                            turn_id: None,
+                            error: error.to_string(),
+                        });
+                    }
+                    continue;
+                }
+                // A proof is single-use. If later validation fails, nothing is
+                // Dispatched; a future attempt requires new live proof.
+                openviking_preflight_verified = None;
                 let claim = (|| -> Result<Option<(String, String, u64, String)>, String> {
                     let mut outbox =
                         openviking_checkpoint_outbox::Outbox::load(&checkpoint_outbox_path)?;
