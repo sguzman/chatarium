@@ -441,6 +441,105 @@ mod tests {
     }
 
     #[test]
+    fn inactive_worker_uses_only_own_or_directly_granted_verified_memory() {
+        use crate::context_composer::{
+            ContextPlan, ContextPolicy, ContextSource, TranscriptMessage, TranscriptRole,
+        };
+        let (mut catalog, mut grants, source, worker) = fixture();
+        let controller = LocalConversationId::new();
+        catalog.create(controller, 3);
+        catalog
+            .set_project_directory(
+                controller,
+                Some(std::env::current_dir().unwrap().display().to_string()),
+                4,
+            )
+            .unwrap();
+        // Merely sharing a project directory is not a directed memory grant.
+        assert!(!grants.allows(&catalog, controller, worker));
+        let own = verified_checkpoint(worker, "own", 2, "worker local identity context");
+        let granted = verified_checkpoint(source, "shared", 3, "authorized shared decision");
+        let foreign = verified_checkpoint(controller, "secret", 4, "controller private strategy");
+
+        let mut cache = RetrievalCache::default();
+        let now = Instant::now();
+        let generation = cache.begin(worker, now).unwrap();
+        assert_eq!(
+            cache.finish(
+                worker,
+                generation,
+                Ok(vec![foreign.clone(), granted.clone()]),
+                now,
+                &catalog,
+                &grants,
+            ),
+            Completion::Loaded
+        );
+        let own_and_foreign = [own.clone(), foreign.clone()];
+        let context = cache.admitted_relevant_context(
+            Some(&own_and_foreign),
+            worker,
+            &catalog,
+            &grants,
+            "Recall authorized shared decision for worker",
+        );
+        assert_eq!(context.len(), 2);
+        assert!(context.iter().any(|entry| entry.text.contains("worker local identity")));
+        assert!(context.iter().any(|entry| entry.text.contains("authorized shared decision")));
+        assert!(context.iter().all(|entry| !entry.text.contains("controller private strategy")));
+        assert!(context.iter().all(|entry| {
+            matches!(entry.source, ContextSource::OpenVikingCheckpoint { .. })
+                && entry.role == TranscriptRole::User
+        }));
+
+        let mut transcript = vec![TranscriptMessage::durable(
+            TranscriptRole::User,
+            "Worker's latest durable directive",
+            100,
+        )];
+        transcript.extend(context);
+        let plan = ContextPlan::compose_bounded(
+            ContextPolicy::dispatch(),
+            "",
+            "",
+            transcript,
+        )
+        .unwrap();
+        assert_eq!(plan.openviking_checkpoint_count(), 2);
+        assert!(plan.messages.iter().any(|entry| {
+            entry.content == "Worker's latest durable directive"
+        }));
+        assert!(!plan.messages.iter().any(|entry| {
+            entry.content.contains("controller private strategy")
+        }));
+
+        // Revocation after prefetch removes project sharing at final admission.
+        assert!(grants.revoke(source, worker));
+        let revoked = cache.admitted_relevant_context(
+            Some(&own_and_foreign),
+            worker,
+            &catalog,
+            &grants,
+            "authorized shared decision",
+        );
+        assert_eq!(revoked.len(), 1);
+        assert!(revoked[0].text.contains("worker local identity"));
+
+        // A new controller grant cannot resurrect a stale worker snapshot.
+        grants.grant(&catalog, controller, worker).unwrap();
+        cache.invalidate();
+        let after_epoch = cache.admitted_relevant_context(
+            Some(&own_and_foreign),
+            worker,
+            &catalog,
+            &grants,
+            "controller private strategy",
+        );
+        assert_eq!(after_epoch.len(), 1);
+        assert!(after_epoch[0].text.contains("worker local identity"));
+    }
+
+    #[test]
     fn prefetch_in_flight_is_distinct_from_offline_retry_backoff() {
         let (catalog, grants, _, worker) = fixture();
         let now = Instant::now();
