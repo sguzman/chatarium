@@ -44,6 +44,15 @@ function explicitCollision(result) {
     JSON.stringify(result?.structuredContent?.error ?? result?.content ?? []));
 }
 
+function explicitHttpCollision(error) {
+  // The transport prefixes real non-2xx responses with "MCP HTTP <status>:".
+  // Arbitrary network, JSON-RPC and validation errors can mention
+  // "AlreadyExists" without proving the server rejected a duplicate create.
+  const message = String(error);
+  const prefix = "Error: MCP HTTP 409:";
+  return message.startsWith(prefix) && explicitAlreadyExists(message.slice(prefix.length));
+}
+
 function verifyToolSchema(tool, fields) {
   const schema = tool?.inputSchema;
   if (schema?.type !== "object" || !schema.properties
@@ -122,9 +131,9 @@ export async function probeOpenViking({
     });
     collisionRejected = explicitCollision(second);
   } catch (error) {
-    // A protocol-level 409/AlreadyExists may be surfaced as an exception.
-    // Network failures or unknown errors cannot establish the contract.
-    collisionRejected = explicitAlreadyExists(error);
+    // Only a transport-confirmed HTTP 409 with an explicit AlreadyExists
+    // reason may prove collision. A free-form exception never suffices.
+    collisionRejected = explicitHttpCollision(error);
   }
   if (!collisionRejected) {
     throw new Error("Installed OpenViking did not prove exclusive-create semantics; unsafe for checkpoint writes");
