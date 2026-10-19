@@ -16267,11 +16267,11 @@ impl eframe::App for ChatariumApp {
                     self.show_archived_local_conversations,
                     &self.local_conversation_search_query,
                 );
-                let row_index = self
-                    .local_conversation_search_selection
-                    .and_then(|owner| native_search_matches.iter().position(|id| *id == owner))
-                    .unwrap_or(0);
-                if let Some(row) = rows.get(row_index) {
+                let row_index = native_conversation_search::selected_identity_row(
+                    &native_search_matches,
+                    self.local_conversation_search_selection,
+                );
+                if let Some(row) = row_index.and_then(|index| rows.get(index)) {
                     let conversation_id = native_entries[row.catalog_index].id;
                     let choice_id = egui::Id::new(("chatarium-native-hit-choice", conversation_id));
                     let prior =
@@ -16305,7 +16305,9 @@ impl eframe::App for ChatariumApp {
                                 ),
                             )
                         });
-                        if let Some(candidate) = native_copy_candidates.get_mut(row_index) {
+                        if let Some(candidate) = row_index
+                            .and_then(|index| native_copy_candidates.get_mut(index))
+                        {
                             candidate.1 = Some(message_index);
                         }
                     }
