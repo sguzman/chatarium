@@ -308,6 +308,13 @@ exact reviewed operations and worker-specific scopes.
 4. Connect background workers only after independent scope and authority
    tests; verify an authenticated end-to-end session and inspect Studio.
 
+The synthetic host lifecycle regression exercises durable enqueue,
+summary-file persistence, at-most-once create, delayed read-back, confirmation,
+authorized cross-conversation retrieval, model-context admission, restart and
+revocation using a fake OpenViking backend. The real HTTP/SSE broker has a
+separate async-readback regression. These tests require no user credentials
+or network mutation.
+
 This document records the host implementation and its remaining
 validation work. Automated tests do not substitute for a verified
 authenticated end-to-end save/retrieval against the user's own OpenViking
