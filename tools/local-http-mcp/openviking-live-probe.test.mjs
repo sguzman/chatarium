@@ -362,7 +362,7 @@ test("real HTTP 409 AlreadyExists proves collision only after exact re-read", as
   });
   assert.equal(result.exclusiveCreateVerified, true);
   assert.deepEqual(calls.map(call => call.name ?? call.method),
-    ["initialize", "tools/list", "write", "read", "write", "read"]);
+    ["initialize", "tools/list", "write", "read", "write", "initialize", "read"]);
   assert.equal(files.size, 1);
   assert.equal(files.get(result.uri), calls[2].args.content);
 });
