@@ -1678,7 +1678,8 @@ impl ChatariumApp {
                         openviking_retrieval_in_flight: HashSet::new(),
                         openviking_retrieval_retry_after: BTreeMap::new(),
                         openviking_retrieval_stale: HashSet::new(),
-                        openviking_project_cache: openviking_project_cache::RetrievalCache::default(),
+                        openviking_project_cache: openviking_project_cache::RetrievalCache::default(
+                        ),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
                     },
@@ -3915,7 +3916,10 @@ impl ChatariumApp {
             return;
         }
         let destination = self.local_conversation_id;
-        if !self.openviking_project_cache.can_schedule(destination, Instant::now()) {
+        if !self
+            .openviking_project_cache
+            .can_schedule(destination, Instant::now())
+        {
             return;
         }
         // Scope checks can canonicalize project paths. Do not perform them
@@ -3929,7 +3933,10 @@ impl ChatariumApp {
         let Some(sender) = &self.persist_tx else {
             return;
         };
-        let Some(generation) = self.openviking_project_cache.begin(destination, Instant::now()) else {
+        let Some(generation) = self
+            .openviking_project_cache
+            .begin(destination, Instant::now())
+        else {
             return;
         };
         if sender
@@ -3941,7 +3948,8 @@ impl ChatariumApp {
             })
             .is_err()
         {
-            self.openviking_project_cache.cancel(destination, generation);
+            self.openviking_project_cache
+                .cancel(destination, generation);
         }
     }
 

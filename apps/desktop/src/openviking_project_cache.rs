@@ -47,7 +47,10 @@ impl RetrievalCache {
     pub fn can_schedule(&self, destination: LocalConversationId, now: Instant) -> bool {
         !self.cached.contains_key(&destination)
             && !self.in_flight.contains_key(&destination)
-            && !self.retry_after.get(&destination).is_some_and(|after| now < *after)
+            && !self
+                .retry_after
+                .get(&destination)
+                .is_some_and(|after| now < *after)
     }
 
     /// Reserve exactly one read claim; publish its generation with the worker
@@ -87,13 +90,16 @@ impl RetrievalCache {
         }
         match result {
             Ok(checkpoints) => {
-                let permitted = checkpoints.into_iter().filter(|checkpoint| {
-                    checkpoint
-                        .source_conversation_id
-                        .parse::<LocalConversationId>()
-                        .ok()
-                        .is_some_and(|source| grants.allows(catalog, source, destination))
-                }).collect();
+                let permitted = checkpoints
+                    .into_iter()
+                    .filter(|checkpoint| {
+                        checkpoint
+                            .source_conversation_id
+                            .parse::<LocalConversationId>()
+                            .ok()
+                            .is_some_and(|source| grants.allows(catalog, source, destination))
+                    })
+                    .collect();
                 self.cached.insert(destination, permitted);
                 self.retry_after.remove(&destination);
                 Completion::Loaded
@@ -109,7 +115,6 @@ impl RetrievalCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn fixture() -> (
         LocalConversationCatalog,
@@ -157,14 +162,28 @@ mod tests {
         state.invalidate();
         assert!(!state.can_schedule(dest, now));
         assert_eq!(
-            state.finish(dest, generation, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            state.finish(
+                dest,
+                generation,
+                Ok(vec![checkpoint(source)]),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Discarded
         );
         assert!(state.checkpoints(dest).is_none());
         let new_generation = state.begin(dest, now).unwrap();
         assert_ne!(new_generation, generation);
         assert_eq!(
-            state.finish(dest, new_generation, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            state.finish(
+                dest,
+                new_generation,
+                Ok(vec![checkpoint(source)]),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Loaded
         );
         assert_eq!(state.checkpoints(dest).unwrap().len(), 1);
@@ -178,13 +197,27 @@ mod tests {
         let stale = state.begin(dest, now).unwrap();
         state.invalidate();
         assert_eq!(
-            state.finish(dest, stale, Err("offline".to_owned()), now, &catalog, &grants),
+            state.finish(
+                dest,
+                stale,
+                Err("offline".to_owned()),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Discarded
         );
         assert!(state.can_schedule(dest, now));
         let current = state.begin(dest, now).unwrap();
         assert_eq!(
-            state.finish(dest, current, Err("offline".to_owned()), now, &catalog, &grants),
+            state.finish(
+                dest,
+                current,
+                Err("offline".to_owned()),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Deferred("offline".to_owned())
         );
         assert!(!state.can_schedule(dest, now));
@@ -202,7 +235,14 @@ mod tests {
         let current = state.begin(dest, now).unwrap();
         grants.revoke(source, dest);
         assert_eq!(
-            state.finish(dest, current, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            state.finish(
+                dest,
+                current,
+                Ok(vec![checkpoint(source)]),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Loaded
         );
         assert!(state.checkpoints(dest).unwrap().is_empty());
@@ -217,16 +257,37 @@ mod tests {
         state.cancel(dest, current);
         assert!(state.can_schedule(dest, now));
         assert_eq!(
-            state.finish(dest, current, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            state.finish(
+                dest,
+                current,
+                Ok(vec![checkpoint(source)]),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Discarded
         );
         let current = state.begin(dest, now).unwrap();
         assert_eq!(
-            state.finish(dest, current, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            state.finish(
+                dest,
+                current,
+                Ok(vec![checkpoint(source)]),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Loaded
         );
         assert_eq!(
-            state.finish(dest, current, Err("duplicate".to_owned()), now, &catalog, &grants),
+            state.finish(
+                dest,
+                current,
+                Err("duplicate".to_owned()),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Discarded
         );
         assert_eq!(state.checkpoints(dest).unwrap().len(), 1);
