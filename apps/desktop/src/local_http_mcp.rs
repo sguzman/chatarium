@@ -201,7 +201,7 @@ pub fn invoke(
     operation: &str,
     arguments: &Value,
 ) -> Result<Value, String> {
-    if !allowed_model_operation(provider, operation) {
+    if provider == OPENVIKING && operation == "write" {
         return Err("OpenViking checkpoint writes require the host-owned durable outbox".to_owned());
     }
     invoke_transport(conversation, call_key, provider, operation, arguments)
