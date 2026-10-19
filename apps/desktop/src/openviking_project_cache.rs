@@ -51,10 +51,9 @@ impl QueryRefreshTracker {
             );
         }
         let ready = !interactive
-            || self
-                .observed
-                .get(&conversation)
-                .is_some_and(|topic| now.duration_since(topic.changed_at) >= INTERACTIVE_QUERY_SETTLE);
+            || self.observed.get(&conversation).is_some_and(|topic| {
+                now.duration_since(topic.changed_at) >= INTERACTIVE_QUERY_SETTLE
+            });
         (changed, ready)
     }
 }
@@ -268,7 +267,10 @@ mod tests {
         let other = LocalConversationId::new();
         let now = Instant::now();
         let mut tracker = QueryRefreshTracker::default();
-        assert_eq!(tracker.observe(owner, "Rust ownership", now, true), (true, false));
+        assert_eq!(
+            tracker.observe(owner, "Rust ownership", now, true),
+            (true, false)
+        );
         assert_eq!(
             tracker.observe(
                 owner,
@@ -297,9 +299,17 @@ mod tests {
             (true, false)
         );
         // Worker directives bypass draft typing debounce and remain isolated.
-        assert_eq!(tracker.observe(other, "Spanish verbs", now, false), (true, true));
         assert_eq!(
-            tracker.observe(owner, "Spanish verbs", now + Duration::from_millis(703), false),
+            tracker.observe(other, "Spanish verbs", now, false),
+            (true, true)
+        );
+        assert_eq!(
+            tracker.observe(
+                owner,
+                "Spanish verbs",
+                now + Duration::from_millis(703),
+                false
+            ),
             (false, true)
         );
     }
@@ -332,7 +342,14 @@ mod tests {
         );
         let fresh = cache.begin(dest, now).unwrap();
         assert_eq!(
-            cache.finish(dest, fresh, Ok(vec![checkpoint(source)]), now, &catalog, &grants),
+            cache.finish(
+                dest,
+                fresh,
+                Ok(vec![checkpoint(source)]),
+                now,
+                &catalog,
+                &grants
+            ),
             Completion::Loaded
         );
         assert_eq!(cache.checkpoints(dest).unwrap().len(), 1);
