@@ -312,6 +312,7 @@ enum PersistCommand {
     },
     RetrieveConfirmedOpenViking {
         conversation_id: LocalConversationId,
+        query: String,
     },
     SaveOpenVikingMemorySummary {
         conversation_id: LocalConversationId,
@@ -3556,11 +3557,22 @@ impl ChatariumApp {
         let Some(target) = coordination_wake_scheduler::oldest_candidate(&candidates) else {
             return;
         };
+        let target_message_id = candidates
+            .iter()
+            .find_map(|(worker, message_id)| (*worker == target).then_some(*message_id))
+            .expect("selected wake candidate must have its message ID");
         // Do not spend the durable at-most-once wake claim while authorized
         // OpenViking reads for this exact worker are still in flight. Each
         // read runs off the egui thread. An offline backend uses backoff and
         // the wake proceeds without invented historical memory.
-        if !self.background_worker_memory_ready(target) {
+        let directive = match self
+            .coordination_workspace
+            .wake_dispatch_envelope(&target.to_string(), target_message_id)
+        {
+            Ok(exact) => exact.model_context(),
+            Err(_) => return,
+        };
+        if !self.background_worker_memory_ready(target, &directive) {
             return;
         }
         let conversation = target.to_string();
@@ -3886,7 +3898,11 @@ impl ChatariumApp {
     /// Schedule a source-owner-scoped read on the persistence worker.
     /// Return false only while a read is outstanding, so offline OpenViking
     /// never indefinitely blocks a non-authored coordination wake.
-    fn maybe_retrieve_openviking_context_for(&mut self, owner: LocalConversationId) -> bool {
+    fn maybe_retrieve_openviking_context_for(
+        &mut self,
+        owner: LocalConversationId,
+        query: &str,
+    ) -> bool {
         if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
             return true;
         }
@@ -3909,6 +3925,7 @@ impl ChatariumApp {
         if sender
             .send(PersistCommand::RetrieveConfirmedOpenViking {
                 conversation_id: owner,
+                query: query.chars().take(4096).collect(),
             })
             .is_ok()
         {
@@ -3968,15 +3985,38 @@ impl ChatariumApp {
     /// Foreground prefetch is also used by inactive workers, but each worker
     /// retains its own conversation identity, journal and directed grants.
     fn maybe_retrieve_openviking_context(&mut self) {
-        self.maybe_retrieve_openviking_context_for(self.local_conversation_id);
+        let owner = self.local_conversation_id;
+        // Querying the verified local history is done only in the background
+        // worker, not on the UI thread. If an authored draft exists, use it;
+        // otherwise use the last durable user message for this conversation.
+        // Each read is cached until its source becomes stale.
+        if self.openviking_retrieval_cache.contains_key(&owner)
+            || self.openviking_retrieval_in_flight.contains(&owner)
+        {
+            return;
+        }
+        let query = if !self.draft.trim().is_empty() {
+            self.draft.clone()
+        } else {
+            projected_local_display_messages(&self.events, owner)
+                .into_iter()
+                .rev()
+                .find(|message| matches!(message.role, DisplayRole::User))
+                .map_or_else(String::new, |message| message.text)
+        };
+        self.maybe_retrieve_openviking_context_for(owner, &query);
     }
 
     fn maybe_retrieve_project_openviking_context(&mut self) {
         self.maybe_retrieve_project_openviking_context_for(self.local_conversation_id);
     }
 
-    fn background_worker_memory_ready(&mut self, worker: LocalConversationId) -> bool {
-        let own_ready = self.maybe_retrieve_openviking_context_for(worker);
+    fn background_worker_memory_ready(
+        &mut self,
+        worker: LocalConversationId,
+        directive: &str,
+    ) -> bool {
+        let own_ready = self.maybe_retrieve_openviking_context_for(worker, directive);
         let project_ready = self.maybe_retrieve_project_openviking_context_for(worker);
         own_ready && project_ready
     }
@@ -23199,16 +23239,20 @@ fn persistence_worker(
                     });
                 }
             }
-            PersistCommand::RetrieveConfirmedOpenViking { conversation_id } => {
+            PersistCommand::RetrieveConfirmedOpenViking {
+                conversation_id,
+                query,
+            } => {
                 let outbox_path = checkpoint_outbox_path.clone();
                 let sender = notices.clone();
                 let spawned = thread::Builder::new()
                     .name("chatarium-openviking-retrieve".to_owned())
                     .spawn(move || {
                         let result =
-                            openviking_memory_delivery::retrieve_confirmed_for_conversation(
+                            openviking_memory_delivery::retrieve_confirmed_for_conversation_query(
                                 &outbox_path,
                                 &conversation_id.to_string(),
+                                &query,
                             );
                         let _ = sender.send(PersistNotice::OpenVikingRetrievalFinished {
                             conversation_id,
