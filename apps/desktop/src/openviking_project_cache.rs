@@ -146,6 +146,13 @@ impl RetrievalCache {
         evidence.into_iter().map(|(_, message)| message).collect()
     }
 
+    /// A background worker must not dispatch with a memory snapshot that is
+    /// still being populated. Failed/offline reads use ordinary retry backoff
+    /// and must not permanently block a durable coordination wake.
+    pub fn is_in_flight(&self, destination: LocalConversationId) -> bool {
+        self.in_flight.contains_key(&destination)
+    }
+
     pub fn can_schedule(&self, destination: LocalConversationId, now: Instant) -> bool {
         !self.cached.contains_key(&destination)
             && !self.in_flight.contains_key(&destination)
@@ -431,6 +438,25 @@ mod tests {
             Completion::Loaded
         );
         assert_eq!(state.checkpoints(dest).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn prefetch_in_flight_is_distinct_from_offline_retry_backoff() {
+        let (catalog, grants, _, worker) = fixture();
+        let now = Instant::now();
+        let mut cache = RetrievalCache::default();
+        assert!(!cache.is_in_flight(worker));
+        let epoch = cache.begin(worker, now).unwrap();
+        assert!(cache.is_in_flight(worker));
+        assert_eq!(
+            cache.finish(
+                worker, epoch, Err("offline".to_owned()), now, &catalog, &grants
+            ),
+            Completion::Deferred("offline".to_owned())
+        );
+        assert!(!cache.is_in_flight(worker));
+        assert!(!cache.can_schedule(worker, now));
+        assert!(cache.can_schedule(worker, now + RETRY_DELAY));
     }
 
     #[test]
