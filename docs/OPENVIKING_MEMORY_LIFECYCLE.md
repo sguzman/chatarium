@@ -33,6 +33,28 @@ the actual installed server's `tools/list` and authentication mode must be
 verified before enabling provider operations. A localhost URL is not proof
 that authentication is disabled.
 
+## Version-sensitive external write semantics
+
+This integration requests `write(mode="create", wait=false)` and durably
+dispatches **at most one** such write per checkpoint. OpenViking **v0.5.0**
+[documents `create` as exclusive](https://github.com/volcengine/OpenViking/blob/v0.5.0/docs/en/api/12-content.md):
+an existing target returns 409. However the [upstream main
+documentation](https://github.com/volcengine/OpenViking/blob/main/docs/en/api/12-content.md)
+currently describes `create` as a compatibility alias for `replace`.
+These are materially different contracts. An at-most-once client dispatch
+does **not** make a non-exclusive server operation safe against overwriting
+a preexisting remote file.
+
+The user's installed server version and exclusive-create behavior must be
+confirmed in live integration QA before claiming non-overwrite guarantees
+or finishing this milestone. The existing synthetic probe confirms one
+write/read roundtrip but **cannot** establish exclusive-create semantics
+by itself. If the installed version aliases `create` to `replace`, it is
+not suitable for this checkpoint-writing contract without an additional
+collision-safe storage mechanism or a verified compatible server version.
+Never silently treat a successful read-back as proof that no preexisting
+object was overwritten.
+
 ## Non-negotiable: automatic behavior is application-owned
 
 The model receives explicit memory discipline in its **agent bootstrap**,
