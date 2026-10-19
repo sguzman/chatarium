@@ -284,18 +284,24 @@ impl LocalConversationCatalog {
         if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
             drop(file);
             let _ = fs::remove_file(&temporary);
-            return Err(format!("failed to persist local conversation catalog: {error}"));
+            return Err(format!(
+                "failed to persist local conversation catalog: {error}"
+            ));
         }
         drop(file);
         if let Err(error) = fs::rename(&temporary, path) {
             let _ = fs::remove_file(&temporary);
-            return Err(format!("failed to replace local conversation catalog: {error}"));
+            return Err(format!(
+                "failed to replace local conversation catalog: {error}"
+            ));
         }
         // Atomic rename is not crash-durable on Unix until the containing
         // directory's metadata is synced too.
         #[cfg(unix)]
         {
-            let parent = path.parent().ok_or("local conversation catalog parent missing")?;
+            let parent = path
+                .parent()
+                .ok_or("local conversation catalog parent missing")?;
             fs::File::open(parent)
                 .and_then(|directory| directory.sync_all())
                 .map_err(|error| format!("local conversation catalog directory sync: {error}"))?;
