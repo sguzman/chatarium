@@ -467,6 +467,39 @@ integration remains unverified, and should be tested by the local QA agent,
 not by demanding that the user manually operate a test harness.
 
 
+## Landed: authorized inactive-worker recall at coordination wake
+
+Inactive coordination workers now follow the same background OpenViking
+prefetch path as the foreground chat, but their **own local conversation ID**
+is the retrieval owner and destination. Before spending a durable, at-most-once
+coordination wake claim, the host schedules pending owner-scoped reads and
+explicitly granted project reads on persistence workers. It waits for those
+pending read completions, never runs OpenViking network operations on the egui
+thread, and never borrows the currently displayed chat's cache or the
+controller's permissions.
+
+At durable wake dispatch, Chatarium snapshots the worker's own confirmed
+checkpoint evidence and currently authorized directed project evidence,
+ranks that verified material against the exact claimed directive, and includes
+it as **user-level historical evidence** in the same bounded inference
+context as the non-authored activation. Original provenance, owner, turn,
+sequence and URI are preserved. Final grant checks are repeated immediately
+before context assembly. Revocation, project changes or permission-epoch
+invalidation prevent old shared memory from reappearing. A worker does not
+gain access merely because it shares a project directory or belongs to the
+same coordination group as a controller.
+
+Offline/failed reads use normal bounded retry backoff; they do not claim that
+the missing memory was loaded or indefinitely prevent a worker from
+responding. The existing coordination tool allowlist remains unchanged:
+**this adds scoped historical context, not autonomous memory write permission
+or an unrestricted memory search tool**.
+
+Automated tests cover in-flight versus offline retry states, exclusion of
+foreign/controller-only history, bounded model context admission, and
+revocation after retrieval. Validation against the user's installed OpenViking
+server remains outstanding.
+
 ## Background project-read epoch and revocation safety
 
 The project-memory retrieval cache uses an explicit generation token on every
