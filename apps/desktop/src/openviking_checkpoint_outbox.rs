@@ -527,16 +527,27 @@ mod tests {
 
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 9).unwrap();
-        assert_eq!(Outbox::load(&path).unwrap().started_after_sequence(), Some(9));
+        assert_eq!(
+            Outbox::load(&path).unwrap().started_after_sequence(),
+            Some(9)
+        );
         assert_eq!(fs::read_to_string(&victim).unwrap(), "do not overwrite");
         assert_eq!(fs::read_link(&legacy_staging).unwrap(), victim);
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
 
         // Replacing an old permissive destination must not keep its mode.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        outbox.enqueue_durable(&path, "conversation-1", "turn-1", 10).unwrap();
+        outbox
+            .enqueue_durable(&path, "conversation-1", "turn-1", 10)
+            .unwrap();
         assert_eq!(Outbox::load(&path).unwrap().pending_count(), 1);
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(fs::read_to_string(&victim).unwrap(), "do not overwrite");
         let remaining = fs::read_dir(&root)
             .unwrap()
