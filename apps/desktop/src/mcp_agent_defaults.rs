@@ -82,8 +82,10 @@ impl ToolPolicy {
         }
     }
 }
-/// Append exact fixed-provider rules. OpenViking reads are automatic, but
-/// memory writes default to Ask. Existing exact user rules take priority.
+/// Append exact fixed-provider rules. OpenViking reads are automatic but
+/// model-authored memory writes default to Disabled: only the host-owned
+/// verified checkpoint lifecycle may write. Previously saved exact user
+/// policies are preserved, but the transport blocks the unsafe path.
 /// Never add a wildcard or authorize an unrecognized external stdio provider.
 fn append_missing_local_http_defaults(rules: &str) -> String {
     let mut updated = rules.to_owned();
@@ -98,7 +100,7 @@ fn append_missing_local_http_defaults(rules: &str) -> String {
                 updated.push('\n');
             }
             let mode = if provider == crate::local_http_mcp::OPENVIKING && operation == "write" {
-                "ask"
+                "disabled"
             } else {
                 "automatic"
             };
@@ -995,13 +997,13 @@ mod tests {
     }
 
     #[test]
-    fn fixed_http_defaults_keep_memory_writes_approval_gated() {
+    fn fixed_http_defaults_disable_model_memory_writes() {
         let defaults = AgentDefaults::default();
         defaults.validate().unwrap();
         for (provider, operation, _) in crate::local_http_mcp::registered_tools() {
             let expected = if provider == crate::local_http_mcp::OPENVIKING && operation == "write"
             {
-                ToolPolicy::Ask
+                ToolPolicy::Disabled
             } else {
                 ToolPolicy::Automatic
             };
