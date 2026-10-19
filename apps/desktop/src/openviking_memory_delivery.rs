@@ -563,8 +563,7 @@ impl ProjectMemoryGrants {
         // could redirect a permission write to an unrelated local file.
         // Unique create-new staging also prevents following a stale crash
         // artifact from an earlier save. Only the final rename replaces grants.
-        static STAGING_ORDINAL: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+        static STAGING_ORDINAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let ordinal = STAGING_ORDINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temporary = path.with_extension(format!(
             "json.tmp.{}.{}.{ordinal}",
@@ -587,9 +586,7 @@ impl ProjectMemoryGrants {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Err(error) =
-                file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            {
+            if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
                 drop(file);
                 let _ = std::fs::remove_file(&temporary);
                 return Err(format!("project memory permission file mode: {error}"));
@@ -599,7 +596,9 @@ impl ProjectMemoryGrants {
         if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
             drop(file);
             let _ = std::fs::remove_file(&temporary);
-            return Err(format!("project memory permission durable staging: {error}"));
+            return Err(format!(
+                "project memory permission durable staging: {error}"
+            ));
         }
         drop(file);
         if let Err(error) = std::fs::rename(&temporary, path) {
@@ -1272,19 +1271,12 @@ mod project_scope_tests {
             std::fs::read_to_string(&victim).unwrap(),
             "leave this unrelated file alone"
         );
-        assert_eq!(
-            std::fs::read_link(&predictable).unwrap(),
-            victim
-        );
+        assert_eq!(std::fs::read_link(&predictable).unwrap(), victim);
         assert!(ProjectMemoryGrants::load(&path).unwrap().grants.is_empty());
 
         // Replacing an older, overly permissive file must not preserve the
         // old permissions or change unrelated staged paths.
-        std::fs::set_permissions(
-            &path,
-            std::fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         grants.save_atomic(&path).unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
