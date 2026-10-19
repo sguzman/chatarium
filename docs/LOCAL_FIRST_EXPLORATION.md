@@ -91,6 +91,20 @@ Per-conversation state is isolated unless an explicit higher-level Chatarium fea
 
 This rule is especially important for future master/worker behavior: cross-session communication should be visible, attributable, durable, and policy-controlled rather than emerging from accidental shared hidden context.
 
+### Durable local catalog safeguards
+
+The local catalog stores explicit conversation titles, project folders, archive
+flags, assigned colors, timestamps, and the current selection separately from
+the authoritative append-only message journal. Automatic title derivation is
+bounded to the same 512-byte limit enforced when reloading catalog JSON, with
+UTF-8 boundary preservation. An oversized visible first message must not
+produce metadata that can be written but rejected on restart.
+
+Creating a local conversation is idempotent by identity: an accidental repeated
+create for an existing ID does not overwrite its title, project binding, color,
+archive state, timestamps, or the user's current selection. These safeguards do
+not merge or share the message history of different conversations.
+
 ### Shared native message rendering
 
 The active native reader reuses the same cached local-message projection as
