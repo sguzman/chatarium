@@ -616,6 +616,43 @@ mod tests {
     }
 
     #[test]
+    fn restart_recovers_summary_written_before_ready_transition_without_overwriting() {
+        // Simulate interruption after the summary file became visible but
+        // before the metadata-only outbox advanced to Ready.
+        let root = test_path("summary-interrupted");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox
+            .enqueue_durable(&path, "chat-abc", "turn-777", 11)
+            .unwrap();
+        let summary = "Project milestone completed; follow up on the live service probe.";
+        let body = format!(
+            "# Chatarium memory checkpoint\n\nConversation: chat-abc\nTurn: turn-777\nSource journal sequence: 11\n\n{summary}\n"
+        );
+        let file = Outbox::summary_path(&path, "chat-abc", "turn-777").unwrap();
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, &body).unwrap();
+        let mut restarted = Outbox::load(&path).unwrap();
+
+        // A different result must not silently replace a prior summary.
+        assert!(restarted
+            .save_summary_durable(&path, "chat-abc", "turn-777", 11, "different summary")
+            .is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), body);
+        assert_eq!(restarted.pending_count(), 1);
+
+        // Exact retry finishes the state transition without rewriting content.
+        assert!(restarted
+            .save_summary_durable(&path, "chat-abc", "turn-777", 11, summary)
+            .unwrap());
+        assert_eq!(Outbox::load(&path).unwrap().entries()[0].state, State::Ready);
+        assert_eq!(fs::read_to_string(&file).unwrap(), body);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn saved_checkpoint_body_is_separate_from_metadata_and_is_create_only() {
         let path = test_path("summary");
         let mut outbox = Outbox::default();
