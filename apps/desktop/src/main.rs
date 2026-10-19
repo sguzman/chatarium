@@ -1189,7 +1189,7 @@ struct ChatariumApp {
     local_conversation_project_directory: String,
     show_archived_local_conversations: bool,
     local_conversation_search_query: String,
-    local_conversation_search_selection: Option<usize>,
+    local_conversation_search_selection: Option<LocalConversationId>,
     events: Vec<EventEnvelope>,
     historical_catalog: Vec<HistoricalConversationCatalogEntry>,
     selected_historical_conversation: Option<LocalConversationId>,
@@ -15054,14 +15054,16 @@ impl eframe::App for ChatariumApp {
                             let match_kind = row.kind;
                             let hit_choice_id =
                                 egui::Id::new(("chatarium-native-hit-choice", entry.id));
-                            let old_choice = ctx
-                                .data_mut(|data| data.get_temp::<(String, usize)>(hit_choice_id));
-                            let mut hit_ordinal = old_choice
-                                .filter(|(query, _)| query == &self.local_conversation_search_query)
-                                .map(|(_, ordinal)| ordinal)
-                                .unwrap_or(0);
-                            hit_ordinal = hit_ordinal
-                                .min(row.matching_message_indices.len().saturating_sub(1));
+                            let old_choice = ctx.data_mut(|data| {
+                                data.get_temp::<(String, Option<u64>)>(hit_choice_id)
+                            });
+                            let mut hit_ordinal = native_conversation_search::selected_hit_ordinal(
+                                row,
+                                messages,
+                                old_choice
+                                    .filter(|(query, _)| query == &self.local_conversation_search_query)
+                                    .and_then(|(_, source_sequence)| source_sequence),
+                            );
                             if match_kind
                                 == native_conversation_search::NativeSearchMatch::Message
                             {
@@ -15078,7 +15080,7 @@ impl eframe::App for ChatariumApp {
                                 ),
                             ));
                             let keyboard_selected =
-                                self.local_conversation_search_selection == Some(result_index);
+                                self.local_conversation_search_selection == Some(entry.id);
                             let selected =
                                 !historical_mode && entry.id == self.local_conversation_id;
                             egui::Frame::default()
@@ -15206,17 +15208,23 @@ impl eframe::App for ChatariumApp {
                                             }
                                         });
                                     }
-                                    ctx.data_mut(|data| {
-                                        data.insert_temp(
-                                            hit_choice_id,
-                                            (self.local_conversation_search_query.clone(), hit_ordinal),
-                                        )
-                                    });
                                     let selected_message_index =
                                         native_conversation_search::selected_message_index(
                                             row,
                                             hit_ordinal,
                                         );
+                                    let selected_source_sequence =
+                                        native_conversation_search::selected_hit_sequence(
+                                            row,
+                                            messages,
+                                            hit_ordinal,
+                                        );
+                                    ctx.data_mut(|data| {
+                                        data.insert_temp(
+                                            hit_choice_id,
+                                            (self.local_conversation_search_query.clone(), selected_source_sequence),
+                                        )
+                                    });
                                     native_copy_candidates[result_index].1 = selected_message_index;
                                     let selected_preview = if hit_ordinal == 0 {
                                         row.preview.clone()
@@ -16152,7 +16160,7 @@ impl eframe::App for ChatariumApp {
         }
         if self
             .local_conversation_search_selection
-            .is_some_and(|index| index >= native_search_matches.len())
+            .is_some_and(|owner| !native_search_matches.contains(&owner))
         {
             self.local_conversation_search_selection = None;
         }
@@ -16163,16 +16171,16 @@ impl eframe::App for ChatariumApp {
             let mut move_message_hit = 0_isize;
             ctx.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                    self.local_conversation_search_selection = local_archive_search::move_selection(
+                    self.local_conversation_search_selection = native_conversation_search::move_identity_selection(
+                        &native_search_matches,
                         self.local_conversation_search_selection,
-                        native_search_matches.len(),
                         1,
                     );
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                    self.local_conversation_search_selection = local_archive_search::move_selection(
+                    self.local_conversation_search_selection = native_conversation_search::move_identity_selection(
+                        &native_search_matches,
                         self.local_conversation_search_selection,
-                        native_search_matches.len(),
                         -1,
                     );
                 }
@@ -16183,12 +16191,12 @@ impl eframe::App for ChatariumApp {
                     move_message_hit = -1;
                 }
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-                    select_local_requested = native_conversation_search::activate_selection(
+                    select_local_requested = native_conversation_search::activate_identity_selection(
                         &native_search_matches,
                         self.local_conversation_search_selection,
                     );
                     native_reader_target_message =
-                        native_conversation_search::activate_copy_selection(
+                        native_conversation_search::activate_identity_copy_selection(
                             &native_copy_candidates,
                             self.local_conversation_search_selection,
                         );
@@ -16214,15 +16222,22 @@ impl eframe::App for ChatariumApp {
                     self.show_archived_local_conversations,
                     &self.local_conversation_search_query,
                 );
-                let row_index = self.local_conversation_search_selection.unwrap_or(0);
+                let row_index = self.local_conversation_search_selection
+                    .and_then(|owner| native_search_matches.iter().position(|id| *id == owner))
+                    .unwrap_or(0);
                 if let Some(row) = rows.get(row_index) {
                     let conversation_id = native_entries[row.catalog_index].id;
                     let choice_id = egui::Id::new(("chatarium-native-hit-choice", conversation_id));
-                    let prior = ctx.data_mut(|data| data.get_temp::<(String, usize)>(choice_id));
-                    let ordinal = prior
-                        .filter(|(query, _)| query == &self.local_conversation_search_query)
-                        .map(|(_, ordinal)| ordinal)
-                        .unwrap_or(0);
+                    let prior = ctx.data_mut(|data| {
+                        data.get_temp::<(String, Option<u64>)>(choice_id)
+                    });
+                    let ordinal = native_conversation_search::selected_hit_ordinal(
+                        row,
+                        native_search_index.messages(conversation_id),
+                        prior
+                            .filter(|(query, _)| query == &self.local_conversation_search_query)
+                            .and_then(|(_, source_sequence)| source_sequence),
+                    );
                     if let Some((next_ordinal, message_index)) =
                         native_conversation_search::cycle_matching_message(
                             row,
@@ -16230,10 +16245,16 @@ impl eframe::App for ChatariumApp {
                             move_message_hit,
                         )
                     {
+                        let selected_source_sequence =
+                            native_conversation_search::selected_hit_sequence(
+                                row,
+                                native_search_index.messages(conversation_id),
+                                next_ordinal,
+                            );
                         ctx.data_mut(|data| {
                             data.insert_temp(
                                 choice_id,
-                                (self.local_conversation_search_query.clone(), next_ordinal),
+                                (self.local_conversation_search_query.clone(), selected_source_sequence),
                             )
                         });
                         if let Some(candidate) = native_copy_candidates.get_mut(row_index) {
@@ -16244,7 +16265,7 @@ impl eframe::App for ChatariumApp {
             }
             if copy_hit_requested {
                 if let Some((conversation_id, message_index)) =
-                    native_conversation_search::activate_copy_selection(
+                    native_conversation_search::activate_identity_copy_selection(
                         &native_copy_candidates,
                         self.local_conversation_search_selection,
                     )
@@ -16272,7 +16293,7 @@ impl eframe::App for ChatariumApp {
                 }
             }
             if stage_hit_requested {
-                stage_native_memory_requested = native_conversation_search::activate_copy_selection(
+                stage_native_memory_requested = native_conversation_search::activate_identity_copy_selection(
                     &native_copy_candidates,
                     self.local_conversation_search_selection,
                 );

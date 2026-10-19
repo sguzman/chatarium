@@ -102,6 +102,42 @@ pub fn activate_copy_selection(
     message_index.map(|index| (conversation_id, index))
 }
 
+/// Select a native conversation by identity, not a sidebar row number.
+/// A row reordering must keep the same owner highlighted and actionable.
+pub fn move_identity_selection(
+    matches: &[LocalConversationId],
+    current: Option<LocalConversationId>,
+    delta: isize,
+) -> Option<LocalConversationId> {
+    let position = current.and_then(|id| matches.iter().position(|candidate| *candidate == id));
+    super::local_archive_search::move_selection(position, matches.len(), delta)
+        .and_then(|index| matches.get(index).copied())
+}
+
+/// Missing explicit identities fail closed instead of selecting the first row.
+/// The first row remains the intentional default only when nothing is selected.
+pub fn activate_identity_selection(
+    matches: &[LocalConversationId],
+    selected: Option<LocalConversationId>,
+) -> Option<LocalConversationId> {
+    match selected {
+        Some(id) => matches.iter().find(|candidate| **candidate == id).copied(),
+        None => matches.first().copied(),
+    }
+}
+
+/// The same identity gate for copy, stage-as-memory, and reader navigation.
+pub fn activate_identity_copy_selection(
+    matches: &[(LocalConversationId, Option<usize>)],
+    selected: Option<LocalConversationId>,
+) -> Option<(LocalConversationId, usize)> {
+    let &(owner, message_index) = match selected {
+        Some(id) => matches.iter().find(|(owner, _)| *owner == id)?,
+        None => matches.first()?,
+    };
+    message_index.map(|index| (owner, index))
+}
+
 /// Produce an explicitly requested, provenance-bearing reference to exactly
 /// one projected native user/assistant message. Missing positions fail closed.
 /// Neither this projection nor its caller admits the text to model context.
@@ -160,6 +196,35 @@ pub fn selected_message_index(row: &NativeSearchRow, ordinal: usize) -> Option<u
     row.matching_message_indices
         .get(ordinal.min(row.matching_message_indices.len().checked_sub(1)?))
         .copied()
+}
+
+/// A selected message is remembered by its durable source event sequence.
+/// If an index projection reorders after an activity or assistant update,
+/// resolve that exact event rather than the old hit ordinal.
+pub fn selected_hit_ordinal(
+    row: &NativeSearchRow,
+    messages: &[DisplayMessage],
+    source_sequence: Option<u64>,
+) -> usize {
+    source_sequence
+        .and_then(|sequence| {
+            row.matching_message_indices.iter().position(|index| {
+                messages
+                    .get(*index)
+                    .is_some_and(|message| message.sequence == sequence)
+            })
+        })
+        .unwrap_or(0)
+}
+
+pub fn selected_hit_sequence(
+    row: &NativeSearchRow,
+    messages: &[DisplayMessage],
+    ordinal: usize,
+) -> Option<u64> {
+    selected_message_index(row, ordinal)
+        .and_then(|index| messages.get(index))
+        .map(|message| message.sequence)
 }
 
 /// Cycle a selected hit in one conversation without touching other rows,
@@ -888,6 +953,54 @@ mod tests {
             Some((second, 3))
         );
         assert_eq!(activate_copy_selection(&[], None), None);
+    }
+
+    #[test]
+    fn identity_selection_survives_reorder_and_rejects_missing_rows() {
+        let first = LocalConversationId::new();
+        let second = LocalConversationId::new();
+        let third = LocalConversationId::new();
+        let before = [first, second, third];
+        let after = [third, first, second];
+
+        assert_eq!(activate_identity_selection(&after, Some(second)), Some(second));
+        assert_eq!(move_identity_selection(&after, Some(second), -1), Some(first));
+        assert_eq!(move_identity_selection(&before, Some(second), 1), Some(third));
+        assert_eq!(activate_identity_selection(&after, None), Some(third));
+        assert_eq!(activate_identity_selection(&[first, third], Some(second)), None);
+        assert_eq!(activate_identity_copy_selection(
+            &[(first, Some(0)), (third, Some(5))],
+            Some(second),
+        ), None);
+        assert_eq!(activate_identity_copy_selection(
+            &[(third, None), (first, Some(5))],
+            Some(third),
+        ), None);
+        assert_eq!(activate_identity_copy_selection(
+            &[(third, None), (first, Some(5))],
+            Some(first),
+        ), Some((first, 5)));
+    }
+
+    #[test]
+    fn native_selected_hit_follows_event_sequence_when_positions_reorder() {
+        let message = |sequence, text: &str| DisplayMessage {
+            role: super::super::DisplayRole::User,
+            text: text.to_owned(),
+            sequence,
+            timestamp: None,
+            provenance_label: None,
+        };
+        let original = [message(17, "alpha match"), message(29, "beta match")];
+        let row = collect_native_search_row("match", 0, "test".to_owned(), &original).unwrap();
+        let selected_sequence = selected_hit_sequence(&row, &original, 1);
+        assert_eq!(selected_sequence, Some(29));
+        let reordered = [original[1].clone(), original[0].clone()];
+        let later = collect_native_search_row("match", 0, "test".to_owned(), &reordered).unwrap();
+        let ordinal = selected_hit_ordinal(&later, &reordered, selected_sequence);
+        assert_eq!(ordinal, 0);
+        assert_eq!(selected_hit_sequence(&later, &reordered, ordinal), Some(29));
+        assert_eq!(selected_hit_ordinal(&later, &reordered, Some(999)), 0);
     }
 
     fn author(
