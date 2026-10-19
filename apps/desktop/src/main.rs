@@ -23388,7 +23388,10 @@ fn persistence_worker(
                         continue;
                     }
                 };
-                if openviking_preflight_verified.as_ref() != Some(&selected) {
+                if !openviking_write_preflight::matches_ready(
+                    &selected,
+                    openviking_preflight_verified.as_ref(),
+                ) {
                     // Never reuse a proof for a different Ready checkpoint.
                     openviking_preflight_verified = None;
                     if openviking_preflight_retry_after.is_some_and(|until| Instant::now() < until) {
