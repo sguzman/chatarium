@@ -369,7 +369,10 @@ mod tests {
         let terms = relevance_terms("¿Qué sabemos de RUST y lingüística en México?");
         assert!(checkpoint_relevance(&evidence.text, &terms) >= 3);
         assert_eq!(
-            checkpoint_relevance(&evidence.text, &relevance_terms("conversation turn journal")),
+            checkpoint_relevance(
+                &evidence.text,
+                &relevance_terms("conversation turn journal")
+            ),
             0,
         );
         assert!(relevance_terms(&"token ".repeat(1000)).len() <= 1);
