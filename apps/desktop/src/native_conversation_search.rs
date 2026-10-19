@@ -3,7 +3,9 @@
 //! The journal and metadata catalog remain authoritative; the query is ephemeral.
 
 use super::local_conversations::LocalConversationEntry;
-use super::{DisplayMessage, DisplayRole, derived_conversation_title, projected_display_messages_iter};
+use super::{
+    DisplayMessage, DisplayRole, derived_conversation_title, projected_display_messages_iter,
+};
 use chatarium_core::{EventKind, LocalConversationId};
 use chatarium_store::EventEnvelope;
 use chatarium_store::authored::{
@@ -489,7 +491,9 @@ fn collect_native_search_row(
             .filter(|value| !value.is_empty()),
     };
     let message_index = matching_message_indices.first().copied();
-    let kind = if needle.is_empty() || (message_index.is_none() && title.to_lowercase().contains(needle)) {
+    let kind = if needle.is_empty()
+        || (message_index.is_none() && title.to_lowercase().contains(needle))
+    {
         NativeSearchMatch::Title
     } else if message_index.is_some() {
         NativeSearchMatch::Message
@@ -1134,8 +1138,7 @@ mod tests {
             display(DisplayRole::Activity, "Agent activity complete", 4),
         ];
         let listed = collect_native_search_row("", 0, "Chat".to_owned(), &messages).unwrap();
-        let matched =
-            collect_native_search_row("answer", 0, "Chat".to_owned(), &messages).unwrap();
+        let matched = collect_native_search_row("answer", 0, "Chat".to_owned(), &messages).unwrap();
         assert_eq!(listed.kind, NativeSearchMatch::Title);
         assert_eq!(matched.message_index, Some(1));
         assert_eq!(listed.summary, matched.summary);
