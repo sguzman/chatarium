@@ -211,9 +211,21 @@ impl Outbox {
         }
         let parent = path.parent().ok_or("checkpoint outbox parent missing")?;
         fs::create_dir_all(parent).map_err(|e| format!("checkpoint outbox directory: {e}"))?;
-        let temporary = path.with_extension("json.tmp");
+        // Avoid the old predictable .json.tmp filename: a symlink there could
+        // redirect a write into an unrelated file. create_new also prevents
+        // following stale temporary files left by a previous crash.
+        static STAGING_ORDINAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ordinal = STAGING_ORDINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary = path.with_extension(format!(
+            "json.tmp.{}.{}.{ordinal}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| format!("checkpoint outbox timestamp: {e}"))?
+                .as_nanos(),
+        ));
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -225,15 +237,23 @@ impl Outbox {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("checkpoint outbox permissions: {e}"))?;
+            if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+                drop(file);
+                let _ = fs::remove_file(&temporary);
+                return Err(format!("checkpoint outbox permissions: {error}"));
+            }
         }
         use std::io::Write;
-        file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|e| format!("checkpoint outbox durable write: {e}"))?;
-        fs::rename(&temporary, path)
-            .map_err(|e| format!("checkpoint outbox atomic rename: {e}"))?;
+        if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("checkpoint outbox durable write: {error}"));
+        }
+        drop(file);
+        if let Err(error) = fs::rename(&temporary, path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("checkpoint outbox atomic rename: {error}"));
+        }
         Ok(())
     }
 
@@ -490,6 +510,40 @@ mod tests {
             "chatarium-checkpoint-{label}-{}-{nonce}.json",
             std::process::id()
         ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outbox_replacement_is_private_and_does_not_follow_legacy_staging_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = test_path("private-outbox");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let victim = root.join("unrelated-file");
+        fs::write(&victim, "do not overwrite").unwrap();
+        let legacy_staging = path.with_extension("json.tmp");
+        symlink(&victim, &legacy_staging).unwrap();
+
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 9).unwrap();
+        assert_eq!(Outbox::load(&path).unwrap().started_after_sequence(), Some(9));
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "do not overwrite");
+        assert_eq!(fs::read_link(&legacy_staging).unwrap(), victim);
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+
+        // Replacing an old permissive destination must not keep its mode.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        outbox.enqueue_durable(&path, "conversation-1", "turn-1", 10).unwrap();
+        assert_eq!(Outbox::load(&path).unwrap().pending_count(), 1);
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "do not overwrite");
+        let remaining = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 3);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
