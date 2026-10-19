@@ -248,12 +248,59 @@ impl LocalConversationCatalog {
             "conversations": conversations,
         }))
         .map_err(|error| format!("failed to encode local conversation catalog: {error}"))?;
-        let temporary = path.with_extension("json.tmp");
-        fs::write(&temporary, bytes).map_err(|error| {
-            format!("failed to write temporary local conversation catalog: {error}")
-        })?;
-        fs::rename(&temporary, path)
-            .map_err(|error| format!("failed to replace local conversation catalog: {error}"))
+        // Do not reuse a predictable staging name. A legacy .json.tmp symlink
+        // could redirect a write to a different file; create_new prevents that
+        // and also avoids clobbering artifacts from interrupted saves.
+        static STAGING_ORDINAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ordinal = STAGING_ORDINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary = path.with_extension(format!(
+            "json.tmp.{}.{}.{ordinal}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| format!("local catalog staging timestamp: {error}"))?
+                .as_nanos(),
+        ));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
+            .map_err(|error| format!("failed to stage local conversation catalog: {error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(error) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+                drop(file);
+                let _ = fs::remove_file(&temporary);
+                return Err(format!("local conversation catalog permissions: {error}"));
+            }
+        }
+        use std::io::Write;
+        if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("failed to persist local conversation catalog: {error}"));
+        }
+        drop(file);
+        if let Err(error) = fs::rename(&temporary, path) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("failed to replace local conversation catalog: {error}"));
+        }
+        // Atomic rename is not crash-durable on Unix until the containing
+        // directory's metadata is synced too.
+        #[cfg(unix)]
+        {
+            let parent = path.parent().ok_or("local conversation catalog parent missing")?;
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| format!("local conversation catalog directory sync: {error}"))?;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -446,6 +493,48 @@ mod tests {
             "chatarium-local-conversations-{}-{nonce}.json",
             std::process::id()
         ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_is_private_and_ignores_legacy_staging_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = temp_path();
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("local-conversations.json");
+        let legacy_staging = path.with_extension("json.tmp");
+        let victim = root.join("unrelated-user-file");
+        fs::write(&victim, "do not overwrite").unwrap();
+        symlink(&victim, &legacy_staging).unwrap();
+
+        let id = LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        catalog.create(id, 1);
+        catalog.save_atomic(&path).unwrap();
+        assert_eq!(LocalConversationCatalog::load(&path).unwrap(), catalog);
+        assert_eq!(fs::read_link(&legacy_staging).unwrap(), victim);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "do not overwrite");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        catalog.rename(id, Some("Renamed".to_owned()), 2).unwrap();
+        catalog.save_atomic(&path).unwrap();
+        assert_eq!(LocalConversationCatalog::load(&path).unwrap(), catalog);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "do not overwrite");
+        let remaining = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 3);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
