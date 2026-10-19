@@ -73,8 +73,13 @@ checkpoint, verifies it, then intentionally attempts a second `create` on
 **that synthetic file only** with different content. It requires an explicit
 AlreadyExists/409 rejection AND re-verifies the original bytes. An alias that
 overwrites existing content fails the test and may overwrite the disposable
-synthetic QA file; no personal data or previous checkpoint is used. The
-diagnostic never runs automatically against the user's service.
+synthetic QA file; no personal data or previous checkpoint is used. The same synthetic exclusivity diagnostic also runs automatically as a
+background preflight before a production checkpoint is dispatched, with a
+five-minute successful compatibility lease and a 30-minute delay after
+failure. It mutates only a disposable randomly named QA file, never a real
+checkpoint or user content. For a collision surfaced as an exception, only
+an actual MCP HTTP 409 response with an explicit AlreadyExists reason can
+count as rejection; unrelated transport and JSON-RPC errors are not proof.
 If the installed version aliases `create` to `replace`, it is
 not suitable for this checkpoint-writing contract without an additional
 collision-safe storage mechanism or a verified compatible server version.
