@@ -559,11 +559,54 @@ impl ProjectMemoryGrants {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("project memory permission directory: {error}"))?;
         }
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, bytes)
+        // Never open the predictable .json.tmp path: a preexisting symlink
+        // could redirect a permission write to an unrelated local file.
+        // Unique create-new staging also prevents following a stale crash
+        // artifact from an earlier save. Only the final rename replaces grants.
+        static STAGING_ORDINAL: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let ordinal = STAGING_ORDINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary = path.with_extension(format!(
+            "json.tmp.{}.{}.{ordinal}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| format!("project memory permission timestamp: {error}"))?
+                .as_nanos(),
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
             .map_err(|error| format!("project memory permission staging: {error}"))?;
-        std::fs::rename(&temporary, path)
-            .map_err(|error| format!("project memory permission replacement: {error}"))
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(error) =
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            {
+                drop(file);
+                let _ = std::fs::remove_file(&temporary);
+                return Err(format!("project memory permission file mode: {error}"));
+            }
+        }
+        use std::io::Write;
+        if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("project memory permission durable staging: {error}"));
+        }
+        drop(file);
+        if let Err(error) = std::fs::rename(&temporary, path) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("project memory permission replacement: {error}"));
+        }
+        Ok(())
     }
 
     /// Explicit one-way opt-in. A caller must surface this as a user-reviewed
@@ -1193,6 +1236,68 @@ mod project_scope_tests {
             |_, _, _| Err("service is offline".to_owned()),
         );
         assert!(offline.unwrap_err().contains("offline"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_grant_saves_are_private_atomic_and_ignore_predictable_symlink_staging() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-private-grants-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(PROJECT_MEMORY_GRANTS_FILE_NAME);
+        let victim = root.join("other-local-file");
+        std::fs::write(&victim, "leave this unrelated file alone").unwrap();
+
+        // Older implementations used a predictable temporary path. A user
+        // or stale process may have left a symlink there; never follow it.
+        let predictable = path.with_extension("json.tmp");
+        symlink(&victim, &predictable).unwrap();
+
+        let grants = ProjectMemoryGrants::default();
+        grants.save_atomic(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "leave this unrelated file alone"
+        );
+        assert_eq!(
+            std::fs::read_link(&predictable).unwrap(),
+            victim
+        );
+        assert!(ProjectMemoryGrants::load(&path).unwrap().grants.is_empty());
+
+        // Replacing an older, overly permissive file must not preserve the
+        // old permissions or change unrelated staged paths.
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        grants.save_atomic(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let remaining = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 3);
+        assert!(remaining.contains(&"other-local-file".to_owned()));
+        assert!(remaining.contains(&"openviking-project-memory-grants.json".to_owned()));
+        assert!(remaining.contains(&"openviking-project-memory-grants.json.tmp".to_owned()));
         std::fs::remove_dir_all(root).unwrap();
     }
 
