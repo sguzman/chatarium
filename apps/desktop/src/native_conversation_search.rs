@@ -1025,25 +1025,18 @@ mod tests {
             Some(second)
         );
         assert_eq!(move_identity_selection(&[], Some(absent), 1), None);
+        let candidates = [(first, Some(0)), (third, Some(5))];
+        let title_only = [(third, None), (first, Some(5))];
         assert_eq!(
-            activate_identity_copy_selection(
-                &[(first, Some(0)), (third, Some(5))],
-                Some(second),
-            ),
+            activate_identity_copy_selection(&candidates, Some(second)),
             None
         );
         assert_eq!(
-            activate_identity_copy_selection(
-                &[(third, None), (first, Some(5))],
-                Some(third),
-            ),
+            activate_identity_copy_selection(&title_only, Some(third)),
             None
         );
         assert_eq!(
-            activate_identity_copy_selection(
-                &[(third, None), (first, Some(5))],
-                Some(first),
-            ),
+            activate_identity_copy_selection(&title_only, Some(first)),
             Some((first, 5))
         );
     }
