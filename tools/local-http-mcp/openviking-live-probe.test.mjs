@@ -146,6 +146,39 @@ test("ambiguous 409 or validation error cannot prove an exclusive-create collisi
     ["list", "write", "read", "write"]);
 });
 
+test("transport exceptions prove collisions only for HTTP 409 plus AlreadyExists", async () => {
+  for (const [error, compatible] of [
+    ["MCP HTTP 409: {\"code\":\"ALREADY_EXISTS\"}", true],
+    ["ALREADY_EXISTS", false],
+    ["MCP HTTP 500: {\"code\":\"ALREADY_EXISTS\"}", false],
+    ["MCP JSON-RPC error: {\"code\":\"ALREADY_EXISTS\"}", false],
+    ["MCP HTTP 409: request validation failed", false],
+  ]) {
+    const broker = syntheticBroker();
+    const original = broker.request.bind(broker);
+    let writes = 0;
+    broker.request = async request => {
+      if (request.name === "write" && ++writes === 2) {
+        broker.calls.push(request);
+        throw new Error(error);
+      }
+      return original(request);
+    };
+    const attempt = probeOpenViking({
+      broker, nonce: "http_collision_qa_123", verifyExclusiveCreate: true,
+      pause: async () => {},
+    });
+    if (compatible) {
+      const result = await attempt;
+      assert.equal(result.exclusiveCreateVerified, true);
+    } else {
+      await assert.rejects(attempt, /unsafe for checkpoint writes/);
+    }
+    assert.deepEqual(broker.calls.map(call => call.name ?? call.method),
+      ["list", "write", "read", "write", ...(compatible ? ["read"] : [])]);
+  }
+});
+
 test("bad identity fails before contacting transport", async () => {
   const broker = syntheticBroker();
   await assert.rejects(probeOpenViking({
@@ -206,11 +239,17 @@ async function withFakeHttpOpenViking(t, behavior = {}) {
       if (files.has(args.uri)) {
         // A repeated write is permitted ONLY in the explicit synthetic
         // create-exclusivity diagnostic; never as a production retry.
-        if (!behavior.exclusiveCreate && !behavior.permissiveCreate && !behavior.collisionFailure) {
+        if (!behavior.exclusiveCreate && !behavior.permissiveCreate && !behavior.collisionFailure
+            && !behavior.httpExclusiveCreate) {
           assert.fail("a second create must never be attempted");
         }
         if (behavior.exclusiveCreate) {
           reply({ isError: true, content: [{ type: "text", text: "409 ALREADY_EXISTS" }] });
+          return;
+        }
+        if (behavior.httpExclusiveCreate) {
+          response.writeHead(409, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ code: "ALREADY_EXISTS", message: "file already exists" }));
           return;
         }
         if (behavior.collisionFailure) {
@@ -313,6 +352,19 @@ test("explicit synthetic check proves exclusive-create semantics over MCP HTTP",
   assert.equal(files.size, 1);
   assert.equal(files.get(result.uri), calls[2].args.content);
   assert.notEqual(calls[2].args.content, calls[4].args.content);
+});
+
+test("real HTTP 409 AlreadyExists proves collision only after exact re-read", async t => {
+  const { broker, calls, files } = await withFakeHttpOpenViking(t, { httpExclusiveCreate: true });
+  const result = await probeOpenViking({
+    broker, nonce: "http_409_proof_123", verifyExclusiveCreate: true,
+    pause: async () => {},
+  });
+  assert.equal(result.exclusiveCreateVerified, true);
+  assert.deepEqual(calls.map(call => call.name ?? call.method),
+    ["initialize", "tools/list", "write", "read", "write", "read"]);
+  assert.equal(files.size, 1);
+  assert.equal(files.get(result.uri), calls[2].args.content);
 });
 
 test("permissive create alias is rejected as unsafe before enabling checkpoint writes", async t => {
