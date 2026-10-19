@@ -282,9 +282,12 @@ mod tests {
             ContextPlan, ContextPolicy, ContextSource, TranscriptMessage, TranscriptRole,
         };
         let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "chatarium-project-resume-{}-{nonce}", std::process::id()
+            "chatarium-project-resume-{}-{nonce}",
+            std::process::id()
         ));
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -300,15 +303,22 @@ mod tests {
             (foreign, root.as_path(), 3),
         ] {
             original.create(id, n);
-            original.set_project_directory(id,
-                Some(folder.display().to_string()), n + 1).unwrap();
+            original
+                .set_project_directory(id, Some(folder.display().to_string()), n + 1)
+                .unwrap();
         }
         original.save_atomic(&catalog_path).unwrap();
         let catalog = LocalConversationCatalog::load(&catalog_path).unwrap();
         let mut grants = ProjectMemoryGrants::default();
         crate::openviking_project_ui::change_permission_durable(
-            &grants_path, &catalog, &mut grants, source, dest, true,
-        ).unwrap();
+            &grants_path,
+            &catalog,
+            &mut grants,
+            source,
+            dest,
+            true,
+        )
+        .unwrap();
         let mut grants = ProjectMemoryGrants::load(&grants_path).unwrap();
         let now = Instant::now();
         let mut cache = RetrievalCache::default();
@@ -319,8 +329,10 @@ mod tests {
             source_turn_id: "resumed-turn".to_owned(),
             source_journal_sequence: 35,
             uri: crate::openviking_memory_delivery::checkpoint_uri(
-                &source.to_string(), "resumed-turn",
-            ).unwrap(),
+                &source.to_string(),
+                "resumed-turn",
+            )
+            .unwrap(),
             text: format!(
                 "# Chatarium memory checkpoint\n\nConversation: {source}\nTurn: resumed-turn\nSource journal sequence: 35\n\nShared milestone: beta passed."
             ),
@@ -330,9 +342,17 @@ mod tests {
             ..evidence.clone()
         };
         let generation = cache.begin(dest, now).unwrap();
-        assert_eq!(cache.finish(dest, generation,
-            Ok(vec![evidence.clone(), foreign_evidence]), now, &catalog, &grants),
-            Completion::Loaded);
+        assert_eq!(
+            cache.finish(
+                dest,
+                generation,
+                Ok(vec![evidence.clone(), foreign_evidence]),
+                now,
+                &catalog,
+                &grants
+            ),
+            Completion::Loaded
+        );
 
         let compose = |state: &RetrievalCache, grants: &ProjectMemoryGrants| {
             ContextPlan::compose_bounded(
@@ -340,50 +360,95 @@ mod tests {
                 "",
                 "",
                 [TranscriptMessage::durable(
-                    TranscriptRole::User, "Resume this project", 50,
+                    TranscriptRole::User,
+                    "Resume this project",
+                    50,
                 )]
                 .into_iter()
                 .chain(state.admitted_context(dest, &catalog, grants)),
-            ).unwrap()
+            )
+            .unwrap()
         };
         let sent = compose(&cache, &grants);
         assert_eq!(sent.openviking_checkpoint_count(), 1);
         assert_eq!(sent.messages.len(), 2);
         assert_eq!(sent.messages[0].content, "Resume this project");
         assert_eq!(sent.messages[1].role, "user");
-        assert!(sent.messages[1].content.contains("Shared milestone: beta passed."));
-        assert!(sent.messages[1].content.contains("explicitly granted project-shared"));
-        assert!(matches!(&sent.messages[1].source,
-            ContextSource::OpenVikingCheckpoint { source_journal_sequence: 35, .. }));
+        assert!(
+            sent.messages[1]
+                .content
+                .contains("Shared milestone: beta passed.")
+        );
+        assert!(
+            sent.messages[1]
+                .content
+                .contains("explicitly granted project-shared")
+        );
+        assert!(matches!(
+            &sent.messages[1].source,
+            ContextSource::OpenVikingCheckpoint {
+                source_journal_sequence: 35,
+                ..
+            }
+        ));
         let preview = ContextPlan::compose_bounded(
-            ContextPolicy::preview(), "", "",
+            ContextPolicy::preview(),
+            "",
+            "",
             [TranscriptMessage::durable(
-                TranscriptRole::User, "Resume this project", 50,
+                TranscriptRole::User,
+                "Resume this project",
+                50,
             )]
             .into_iter()
             .chain(cache.admitted_context(dest, &catalog, &grants)),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(sent.messages, preview.messages);
 
         // Even before cache invalidation, every Send checks current grants.
         crate::openviking_project_ui::change_permission_durable(
-            &grants_path, &catalog, &mut grants, source, dest, false,
-        ).unwrap();
+            &grants_path,
+            &catalog,
+            &mut grants,
+            source,
+            dest,
+            false,
+        )
+        .unwrap();
         let revoked = ProjectMemoryGrants::load(&grants_path).unwrap();
         assert_eq!(compose(&cache, &revoked).openviking_checkpoint_count(), 0);
         assert_eq!(compose(&cache, &revoked).messages.len(), 1);
         cache.invalidate();
         crate::openviking_project_ui::change_permission_durable(
-            &grants_path, &catalog, &mut grants, source, dest, true,
-        ).unwrap();
+            &grants_path,
+            &catalog,
+            &mut grants,
+            source,
+            dest,
+            true,
+        )
+        .unwrap();
         let regranted = ProjectMemoryGrants::load(&grants_path).unwrap();
         assert_eq!(compose(&cache, &regranted).openviking_checkpoint_count(), 0);
         let new_generation = cache.begin(dest, now).unwrap();
-        assert_eq!(cache.finish(dest, new_generation,
-            Ok(vec![evidence]), now, &catalog, &regranted),
-            Completion::Loaded);
+        assert_eq!(
+            cache.finish(
+                dest,
+                new_generation,
+                Ok(vec![evidence]),
+                now,
+                &catalog,
+                &regranted
+            ),
+            Completion::Loaded
+        );
         assert_eq!(compose(&cache, &regranted).openviking_checkpoint_count(), 1);
-        assert!(cache.admitted_context(source, &catalog, &regranted).is_empty());
+        assert!(
+            cache
+                .admitted_context(source, &catalog, &regranted)
+                .is_empty()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
