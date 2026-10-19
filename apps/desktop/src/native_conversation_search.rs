@@ -1027,12 +1027,7 @@ mod tests {
         // The old selected event disappeared but another matching text remains.
         // A new row position must not become the target of copy or memory stage.
         let replaced = [message(31, "a new match")];
-        let new_row = collect_native_search_row(
-            "match",
-            0,
-            "test".to_owned(),
-            &replaced,
-        ).unwrap();
+        let new_row = collect_native_search_row("match", 0, "test".to_owned(), &replaced).unwrap();
         assert_eq!(confirmed_hit_index(&new_row, &replaced, Some(29)), None);
         assert_eq!(confirmed_hit_index(&new_row, &replaced, None), Some(0));
     }
