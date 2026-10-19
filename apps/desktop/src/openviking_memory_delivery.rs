@@ -1496,6 +1496,147 @@ mod project_scope_tests {
     }
 
     #[test]
+    fn granted_project_history_preserves_newest_and_recalls_old_relevant_memory() {
+        let source = chatarium_core::LocalConversationId::new();
+        let foreign = chatarium_core::LocalConversationId::new();
+        let destination = chatarium_core::LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        let dir = std::env::current_dir().unwrap().display().to_string();
+        for (id, sequence) in [(source, 1), (foreign, 2), (destination, 3)] {
+            catalog.create(id, sequence);
+            catalog
+                .set_project_directory(id, Some(dir.clone()), sequence + 10)
+                .unwrap();
+        }
+        let mut grants = ProjectMemoryGrants::default();
+        grants.grant(&catalog, source, destination).unwrap();
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-project-history-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        for (owner, turn, seq, summary, confirm) in [
+            (source, "old-rust", 1, "Rust ownership borrow checker decision", true),
+            (foreign, "foreign", 2, "Rust ownership private controller data", true),
+            (source, "old-ui", 3, "UI typography spacing decision", true),
+            (source, "unconfirmed", 4, "Rust ownership unconfirmed", false),
+            (source, "recent", 5, "Newer weather checkpoint", true),
+            (source, "latest", 6, "Latest work and outstanding tasks", true),
+        ] {
+            let owner = owner.to_string();
+            outbox.enqueue_durable(&path, &owner, turn, seq).unwrap();
+            outbox
+                .save_summary_durable(&path, &owner, turn, seq, summary)
+                .unwrap();
+            if confirm {
+                outbox
+                    .transition_durable(&path, &owner, turn, seq, State::Ready, State::Dispatched)
+                    .unwrap();
+                outbox
+                    .transition_durable(&path, &owner, turn, seq, State::Dispatched, State::Confirmed)
+                    .unwrap();
+            }
+        }
+
+        let selected = select_confirmed_project_history(
+            &outbox, &path, &catalog, &grants, destination, "Review Rust ownership",
+        )
+        .unwrap();
+        let names: Vec<_> = selected.iter().map(|(entry, _)| entry.turn_id.as_str()).collect();
+        assert_eq!(names, ["latest", "old-rust"]);
+        assert!(!names.contains(&"foreign"));
+        assert!(!names.contains(&"unconfirmed"));
+
+        let mut remote_reads = Vec::new();
+        let retrieved = retrieve_confirmed_for_project_with_query_and_read(
+            &path,
+            &catalog,
+            &grants,
+            destination,
+            "Review Rust ownership",
+            |uri, owner, turn| {
+                assert_eq!(owner, source.to_string());
+                assert_eq!(uri, checkpoint_uri(owner, turn).unwrap());
+                remote_reads.push(turn.to_owned());
+                let path = Outbox::summary_path(&path, owner, turn).unwrap();
+                let bytes = std::fs::read_to_string(path).unwrap();
+                Ok(json!({"content": [{"type": "text", "text": bytes}]}))
+            },
+        )
+        .unwrap();
+        assert_eq!(remote_reads, ["latest", "old-rust"]);
+        assert_eq!(retrieved.len(), 2);
+        assert!(retrieved.iter().all(|memory| memory.source_conversation_id == source.to_string()));
+
+        // Empty query keeps the previous newest-per-source behavior.
+        let no_query = select_confirmed_project_history(
+            &outbox, &path, &catalog, &grants, destination, "",
+        )
+        .unwrap();
+        assert_eq!(no_query.len(), 1);
+        assert_eq!(no_query[0].0.turn_id, "latest");
+
+        assert!(grants.revoke(source, destination));
+        let revoked = retrieve_confirmed_for_project_with_query_and_read(
+            &path, &catalog, &grants, destination, "Rust ownership",
+            |_, _, _| panic!("revoked project must never issue a remote read"),
+        )
+        .unwrap();
+        assert!(revoked.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn historical_project_read_mismatch_fails_closed() {
+        let source = chatarium_core::LocalConversationId::new();
+        let dest = chatarium_core::LocalConversationId::new();
+        let mut catalog = LocalConversationCatalog::default();
+        let project = std::env::current_dir().unwrap().display().to_string();
+        for (id, n) in [(source, 1), (dest, 2)] {
+            catalog.create(id, n);
+            catalog.set_project_directory(id, Some(project.clone()), n + 2).unwrap();
+        }
+        let mut grants = ProjectMemoryGrants::default();
+        grants.grant(&catalog, source, dest).unwrap();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-project-drift-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, &source.to_string(), "turn", 1).unwrap();
+        outbox
+            .save_summary_durable(&path, &source.to_string(), "turn", 1, "verified Rust plan")
+            .unwrap();
+        outbox
+            .transition_durable(&path, &source.to_string(), "turn", 1, State::Ready, State::Dispatched)
+            .unwrap();
+        outbox
+            .transition_durable(&path, &source.to_string(), "turn", 1, State::Dispatched, State::Confirmed)
+            .unwrap();
+        let error = retrieve_confirmed_for_project_with_query_and_read(
+            &path, &catalog, &grants, dest, "Rust",
+            |_, _, _| Ok(json!({"content": [{"type": "text", "text": "TAMPERED"}]})),
+        )
+        .unwrap_err();
+        assert!(error.contains("differs from local evidence"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn source_scoped_transport_read_cannot_impersonate_destination() {
         let source = chatarium_core::LocalConversationId::new().to_string();
         let destination = chatarium_core::LocalConversationId::new().to_string();
