@@ -11,35 +11,9 @@ use std::time::{Duration, Instant};
 
 const RETRY_DELAY: Duration = Duration::from_secs(300);
 
-/// Deterministic, local-only lexical relevance hint. It never authorizes a
-/// memory, changes its body, or performs an external search. Its only purpose
-/// is to order already verified evidence before the bounded context composer.
-fn relevance_terms(text: &str) -> std::collections::BTreeSet<String> {
-    const STOP: &[&str] = &[
-        "about", "after", "also", "and", "are", "como", "con", "del", "does", "for", "from",
-        "have", "how", "las", "los", "para", "por", "que", "the", "this", "una", "was", "were",
-        "what", "when", "where", "which", "who", "will", "with", "you", "your",
-    ];
-    text.chars()
-        .take(4096)
-        .collect::<String>()
-        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-        .filter(|word| word.chars().count() >= 2)
-        .map(str::to_lowercase)
-        .filter(|word| !STOP.contains(&word.as_str()))
-        .take(96)
-        .collect()
-}
-
-fn relevance_score(
-    checkpoint: &RetrievedCheckpoint,
-    query: &std::collections::BTreeSet<String>,
-) -> usize {
-    // The first two Markdown sections are source metadata, not memory facts.
-    let body = checkpoint.text.splitn(3, "\n\n").nth(2).unwrap_or("");
-    let terms = relevance_terms(body);
-    query.intersection(&terms).count()
-}
+// Use the same bounded lexical rule for historical preselection and context
+// ordering. Owner/turn metadata must never increase a checkpoint's score.
+use crate::openviking_memory_delivery::{checkpoint_relevance, relevance_terms};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Completion {
@@ -122,7 +96,7 @@ impl RetrievalCache {
                     &destination.to_string(),
                 )
             {
-                evidence.push((relevance_score(checkpoint, &terms), message));
+                evidence.push((checkpoint_relevance(&checkpoint.text, &terms), message));
             }
         }
         for checkpoint in self.checkpoints(destination).into_iter().flatten() {
@@ -136,7 +110,7 @@ impl RetrievalCache {
                         grants,
                     )
             {
-                evidence.push((relevance_score(checkpoint, &terms), message));
+                evidence.push((checkpoint_relevance(&checkpoint.text, &terms), message));
             }
         }
         if !terms.is_empty() && evidence.iter().any(|(score, _)| *score > 0) {
@@ -393,9 +367,9 @@ mod tests {
             "Español México: TÉRMINOS de lingüística y Rust 3090.",
         );
         let terms = relevance_terms("¿Qué sabemos de RUST y lingüística en México?");
-        assert!(relevance_score(&evidence, &terms) >= 3);
+        assert!(checkpoint_relevance(&evidence.text, &terms) >= 3);
         assert_eq!(
-            relevance_score(&evidence, &relevance_terms("conversation turn journal")),
+            checkpoint_relevance(&evidence.text, &relevance_terms("conversation turn journal")),
             0,
         );
         assert!(relevance_terms(&"token ".repeat(1000)).len() <= 1);
