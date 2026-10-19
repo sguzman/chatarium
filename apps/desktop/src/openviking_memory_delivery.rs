@@ -336,15 +336,31 @@ mod tests {
         let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
-        outbox.enqueue_durable(&path, "owner", "turn-1", 17).unwrap();
+        outbox
+            .enqueue_durable(&path, "owner", "turn-1", 17)
+            .unwrap();
         outbox
             .save_summary_durable(&path, "owner", "turn-1", 17, "correct source")
             .unwrap();
         outbox
-            .transition_durable(&path, "owner", "turn-1", 17, State::Ready, State::Dispatched)
+            .transition_durable(
+                &path,
+                "owner",
+                "turn-1",
+                17,
+                State::Ready,
+                State::Dispatched,
+            )
             .unwrap();
         outbox
-            .transition_durable(&path, "owner", "turn-1", 17, State::Dispatched, State::Confirmed)
+            .transition_durable(
+                &path,
+                "owner",
+                "turn-1",
+                17,
+                State::Dispatched,
+                State::Confirmed,
+            )
             .unwrap();
 
         let summary = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
@@ -531,10 +547,19 @@ mod tests {
             |delay| pauses.push(delay.as_millis()),
         )
         .unwrap();
-        assert_eq!(calls.iter().filter(|(method, _)| method == "write").count(), 1);
-        assert_eq!(calls.iter().filter(|(method, _)| method == "read").count(), 3);
+        assert_eq!(
+            calls.iter().filter(|(method, _)| method == "write").count(),
+            1
+        );
+        assert_eq!(
+            calls.iter().filter(|(method, _)| method == "read").count(),
+            3
+        );
         assert_eq!(pauses, [250, 500]);
-        assert_ne!(calls[2].1, calls[3].1, "verification IDs must stay distinct");
+        assert_ne!(
+            calls[2].1, calls[3].1,
+            "verification IDs must stay distinct"
+        );
     }
 
     #[test]
@@ -1213,9 +1238,11 @@ mod project_scope_tests {
         let grants_path = root.join(PROJECT_MEMORY_GRANTS_FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&outbox_path, 0).unwrap();
-        assert!(outbox
-            .enqueue_durable(&outbox_path, &owner, turn, sequence)
-            .unwrap());
+        assert!(
+            outbox
+                .enqueue_durable(&outbox_path, &owner, turn, sequence)
+                .unwrap()
+        );
         outbox
             .save_summary_durable(
                 &outbox_path,
@@ -1235,10 +1262,9 @@ mod project_scope_tests {
                 State::Dispatched,
             )
             .unwrap();
-        let body = std::fs::read_to_string(
-            Outbox::summary_path(&outbox_path, &owner, turn).unwrap(),
-        )
-        .unwrap();
+        let body =
+            std::fs::read_to_string(Outbox::summary_path(&outbox_path, &owner, turn).unwrap())
+                .unwrap();
         let remote = RefCell::new(BTreeMap::<String, String>::new());
         let mut writes = 0;
         let mut reads = 0;
@@ -1322,42 +1348,50 @@ mod project_scope_tests {
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].text, body);
         assert_eq!(memories[0].source_journal_sequence, sequence);
-        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-            &memories[0],
-            destination,
-            &catalog,
-            &restarted_grants,
-        )
-        .unwrap()
-        .text
-        .contains("verified recall"));
-        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-            &memories[0],
-            other,
-            &catalog,
-            &restarted_grants,
-        )
-        .is_err());
+        assert!(
+            crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                &memories[0],
+                destination,
+                &catalog,
+                &restarted_grants,
+            )
+            .unwrap()
+            .text
+            .contains("verified recall")
+        );
+        assert!(
+            crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                &memories[0],
+                other,
+                &catalog,
+                &restarted_grants,
+            )
+            .is_err()
+        );
 
         assert!(restarted_grants.revoke(source, destination));
         restarted_grants.save_atomic(&grants_path).unwrap();
         let revoked = ProjectMemoryGrants::load(&grants_path).unwrap();
-        assert!(crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
-            &memories[0],
-            destination,
-            &catalog,
-            &revoked,
-        )
-        .is_err());
-        assert!(retrieve_confirmed_for_project_with_read(
-            &outbox_path,
-            &catalog,
-            &revoked,
-            destination,
-            |_, _, _| panic!("revoked source must not trigger a read"),
-        )
-        .unwrap()
-        .is_empty());
+        assert!(
+            crate::context_composer::TranscriptMessage::verified_project_openviking_checkpoint(
+                &memories[0],
+                destination,
+                &catalog,
+                &revoked,
+            )
+            .is_err()
+        );
+        assert!(
+            retrieve_confirmed_for_project_with_read(
+                &outbox_path,
+                &catalog,
+                &revoked,
+                destination,
+                |_, _, _| panic!("revoked source must not trigger a read"),
+            )
+            .unwrap()
+            .is_empty()
+        );
         assert_eq!(writes, 1);
         std::fs::remove_dir_all(root).unwrap();
     }
