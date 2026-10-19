@@ -189,9 +189,11 @@ replace, and a <=16 KiB Markdown checkpoint at
 Broad `remember`, `forget`, `edit`, resource import, skill and ACL
 operations remain blocked by the fixed allowlist.
 
-Scoped reads default to saved Automatic policy, while `write` defaults
-to Ask. A model cannot self-authorize durable checkpoint writes, and no
-agent tool proposal is yet an automatic host lifecycle trigger. See
+Scoped reads use the saved tool policy. OpenViking `write` is host-only:
+model-requested writes are rejected even under a previously saved Ask or
+Automatic policy, and cannot bypass the durable checkpoint queue and
+exclusive-create preflight. Automatic checkpoint scheduling is enforced
+by Chatarium's host lifecycle, not by an agent tool proposal. See
 [OpenViking memory lifecycle](OPENVIKING_MEMORY_LIFECYCLE.md).
 
 The initial MCP protocol is `2025-03-26`, using the stateless FastMCP
