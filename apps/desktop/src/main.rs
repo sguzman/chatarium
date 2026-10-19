@@ -8663,6 +8663,7 @@ impl eframe::App for ChatariumApp {
         let mut native_search_matches = Vec::<LocalConversationId>::new();
         let mut stage_native_memory_requested: Option<(LocalConversationId, usize)> = None;
         let mut native_reader_target_message: Option<(LocalConversationId, usize)> = None;
+        let mut native_reader_source_stale = false;
         let mut native_copy_candidates = Vec::<(LocalConversationId, Option<usize>)>::new();
         let mut native_message_hit_conversations = HashSet::<LocalConversationId>::new();
         let mut rename_local_requested = false;
@@ -15134,6 +15135,7 @@ impl eframe::App for ChatariumApp {
                                         // retarget the reader to the first new
                                         // matching message without an explicit
                                         // hit-selection action.
+                                        native_reader_source_stale = stale_hit;
                                         native_reader_target_message = if stale_hit {
                                             None
                                         } else {
@@ -16456,11 +16458,19 @@ impl eframe::App for ChatariumApp {
                 } else {
                     native_conversation_search::NativeSearchMatch::Title
                 };
-                self.reader_search_query = native_conversation_search::reader_query_for_result(
-                    &self.local_conversation_search_query,
-                    kind,
-                )
-                .unwrap_or_default();
+                // The ordinary reader search fallback selects hit zero. If
+                // this row's remembered source event vanished, even that
+                // fallback would silently retarget the user; open the chat
+                // without an automatic search selection instead.
+                self.reader_search_query = if native_reader_source_stale {
+                    String::new()
+                } else {
+                    native_conversation_search::reader_query_for_result(
+                        &self.local_conversation_search_query,
+                        kind,
+                    )
+                    .unwrap_or_default()
+                };
                 self.reader_search_hit = native_reader_target_message
                     .filter(|(owner, _)| *owner == local_conversation_id)
                     .and_then(|(_, position)| {
