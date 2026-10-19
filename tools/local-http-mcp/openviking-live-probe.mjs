@@ -33,10 +33,17 @@ export async function probeOpenViking({
     + "\nTurn: " + turn + "\nSource journal sequence: 1\n\n"
     + "Synthetic Chatarium live transport verification only. No user content.\n";
   // Create-only, no retries, no delete. This synthetic QA file persists.
-  await broker.request({
+  const writeResult = await broker.request({
     conversation_id: owner, provider: "openviking", method: "call",
     name: "write", arguments: { uri, content: body, mode: "create", wait: false },
   });
+  // MCP transports can return a successful JSON-RPC envelope containing a
+  // tool-level failure. The write may still have reached remote storage.
+  // Never mistake that response (or a coincidentally matching old file) for
+  // a confirmed create, and never try the same write again automatically.
+  if (writeResult?.isError === true) {
+    throw new Error("Synthetic create returned an MCP tool error; outcome unknown; NEVER auto-retry");
+  }
   const readback = await broker.request({
     conversation_id: owner, provider: "openviking", method: "call",
     name: "read", arguments: { uris: uri, limit: 100 },
