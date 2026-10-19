@@ -605,6 +605,18 @@ impl ProjectMemoryGrants {
             let _ = std::fs::remove_file(&temporary);
             return Err(format!("project memory permission replacement: {error}"));
         }
+        // A synced temporary file does not make its renamed directory entry
+        // durable. This matters especially for a revoked cross-chat grant:
+        // never acknowledge persistence without syncing the parent on Unix.
+        #[cfg(unix)]
+        {
+            let parent = path
+                .parent()
+                .ok_or("project memory permission parent missing")?;
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| format!("project memory permission directory sync: {error}"))?;
+        }
         Ok(())
     }
 
