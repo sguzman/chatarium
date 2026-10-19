@@ -218,12 +218,19 @@ pub fn retrieve_confirmed_for_conversation(
         }
         // Never partially inject a checkpoint that does not fit the budget.
         if size > (MAX_RETRIEVAL_BYTES - used_bytes) as u64 {
-            break;
+            // A large recent checkpoint must not prevent an older, smaller
+            // confirmed checkpoint from fitting the remaining context budget.
+            continue;
         }
         let expected = std::fs::read_to_string(&file)
             .map_err(|e| format!("cannot read confirmed checkpoint summary: {e}"))?;
-        if expected.is_empty() || expected.len() != size as usize {
-            return Err("confirmed checkpoint summary changed while reading".to_owned());
+        if expected.len() != size as usize
+            || !expected.starts_with(&format!(
+                "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {}\nSource journal sequence: {}\n\n",
+                entry.turn_id, entry.completed_sequence,
+            ))
+        {
+            return Err("confirmed checkpoint summary identity mismatch".to_owned());
         }
         let uri = checkpoint_uri(conversation, &entry.turn_id)?;
         let response = local_http_mcp::invoke(
@@ -312,6 +319,44 @@ mod tests {
         assert!(confirmed_sources(&outbox, "../escape").is_err());
         assert!(confirmed_sources(&outbox, "").is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn own_confirmed_memory_rejects_corrupt_owner_header_before_network_read() {
+        use crate::openviking_checkpoint_outbox::{Outbox, State};
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "chatarium-own-checkpoint-identity-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(crate::openviking_checkpoint_outbox::FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, "owner", "turn-1", 17).unwrap();
+        outbox
+            .save_summary_durable(&path, "owner", "turn-1", 17, "correct source")
+            .unwrap();
+        outbox
+            .transition_durable(&path, "owner", "turn-1", 17, State::Ready, State::Dispatched)
+            .unwrap();
+        outbox
+            .transition_durable(&path, "owner", "turn-1", 17, State::Dispatched, State::Confirmed)
+            .unwrap();
+
+        let summary = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
+        let contents = std::fs::read_to_string(&summary).unwrap();
+        std::fs::write(
+            &summary,
+            contents.replace("Conversation: owner", "Conversation: other"),
+        )
+        .unwrap();
+        let error = retrieve_confirmed_for_conversation(&path, "owner").unwrap_err();
+        assert!(error.contains("identity mismatch"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
