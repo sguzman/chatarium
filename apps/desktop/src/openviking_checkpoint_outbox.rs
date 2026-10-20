@@ -395,7 +395,9 @@ impl Outbox {
         // summaries that could only be returned in truncated form, rather
         // than dispatching a create we cannot prove by exact read-back.
         if body.lines().count() > MAX_MCP_CHECKPOINT_LINES {
-            return Err("checkpoint exceeds 100-line MCP readback limit; summary remains pending".to_owned());
+            return Err(
+                "checkpoint exceeds 100-line MCP readback limit; summary remains pending".to_owned(),
+            );
         }
         let parent = file
             .parent()
