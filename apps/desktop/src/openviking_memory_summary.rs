@@ -46,18 +46,12 @@ pub fn newest_confirmed_prior(
     let Some(source) = source else {
         return Ok(None);
     };
-    let path = Outbox::summary_path(outbox_path, conversation_id, &source.turn_id)?;
-    let size = std::fs::metadata(&path)
-        .map_err(|error| format!("confirmed prior summary metadata: {error}"))?
-        .len();
-    if size == 0 || size > MAX_PRIOR_CHECKPOINT_BYTES {
-        return Err("confirmed prior summary exceeds bounded size".to_owned());
-    }
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|error| format!("confirmed prior summary read: {error}"))?;
-    if contents.len() != size as usize {
-        return Err("confirmed prior summary changed during read".to_owned());
-    }
+    let contents = Outbox::read_summary_evidence(
+        outbox_path,
+        conversation_id,
+        &source.turn_id,
+        MAX_PRIOR_CHECKPOINT_BYTES as usize,
+    )?;
     let header = format!(
         "# Chatarium memory checkpoint\n\nConversation: {conversation_id}\nTurn: {}\nSource journal sequence: {}\n\n",
         source.turn_id, source.completed_sequence
