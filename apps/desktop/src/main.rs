@@ -47,6 +47,7 @@ mod network_health;
 mod offline_reader;
 mod reader_visual_qa;
 mod response_text_provenance;
+mod send_admission_gate;
 mod siwc_activity_transcript;
 mod siwc_bridge;
 mod system_fonts;
@@ -3282,6 +3283,7 @@ impl ChatariumApp {
             self.status = "attachment send requires an active ChatGPT connection".to_owned();
             return;
         }
+        let send_started = Instant::now();
         // Final Send admission cannot use a prior topic's verified checkpoint.
         // A newly typed topic may still be fetching; in that case proceed
         // without old-topic memory instead of smuggling stale evidence.
@@ -3311,9 +3313,12 @@ impl ChatariumApp {
                         return;
                     }
                 };
-                let routed_context = match admitted_routed_context_messages(
-                    &self.events,
-                    self.local_conversation_id,
+                let presence = send_admission_gate::Presence::from_kinds(
+                    self.events.iter().map(|event| event.kind),
+                );
+                let routed_context = match send_admission_gate::replay_when(
+                    presence.routed,
+                    || admitted_routed_context_messages(&self.events, self.local_conversation_id),
                 ) {
                     Ok(messages) => messages,
                     Err(error) => {
@@ -3321,9 +3326,9 @@ impl ChatariumApp {
                         return;
                     }
                 };
-                let tool_result_context = match admitted_tool_result_context_messages(
-                    &self.events,
-                    self.local_conversation_id,
+                let tool_result_context = match send_admission_gate::replay_when(
+                    presence.tools,
+                    || admitted_tool_result_context_messages(&self.events, self.local_conversation_id),
                 ) {
                     Ok(messages) => messages,
                     Err(error) => {
@@ -3331,9 +3336,9 @@ impl ChatariumApp {
                         return;
                     }
                 };
-                let mut local_memory_context = match admitted_local_memory_messages(
-                    &self.events,
-                    self.local_conversation_id,
+                let mut local_memory_context = match send_admission_gate::replay_when(
+                    presence.local_memory,
+                    || admitted_local_memory_messages(&self.events, self.local_conversation_id),
                 ) {
                     Ok(messages) => messages,
                     Err(error) => {
@@ -3377,9 +3382,9 @@ impl ChatariumApp {
                     .map(|memory| memory.memory_id)
                     .collect();
                 one_shot_memory_snapshot_after_sequence = snapshot_after_sequence;
-                let controller_result_context = match admitted_controller_worker_result_messages(
-                    &self.events,
-                    self.local_conversation_id,
+                let controller_result_context = match send_admission_gate::replay_when(
+                    presence.controller_results,
+                    || admitted_controller_worker_result_messages(&self.events, self.local_conversation_id),
                 ) {
                     Ok(messages) => messages,
                     Err(error) => {
@@ -3389,9 +3394,12 @@ impl ChatariumApp {
                     }
                 };
                 let controller_coordination_result_context =
-                    match admitted_controller_coordination_result_messages(
-                        &self.events,
-                        self.local_conversation_id,
+                    match send_admission_gate::replay_when(
+                        presence.coordination_results,
+                        || admitted_controller_coordination_result_messages(
+                            &self.events,
+                            self.local_conversation_id,
+                        ),
                     ) {
                         Ok(messages) => messages,
                         Err(error) => {
@@ -3436,6 +3444,17 @@ impl ChatariumApp {
                     },
                 );
             }
+        }
+        let send_elapsed = send_started.elapsed();
+        if send_elapsed >= Duration::from_millis(100) {
+            diagnostics::warn(
+                "send",
+                format!(
+                    "Send admission took {}ms across {} journal events",
+                    send_elapsed.as_millis(),
+                    self.events.len()
+                ),
+            );
         }
         match sender.send(PersistCommand::CommitMessage {
             request_id,
