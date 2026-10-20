@@ -342,6 +342,17 @@ This improves restart resilience without weakening the at-most-once create
 guarantee. Local and remote failure modes remain observable through the
 checkpoint state; confirm-only recovery invalidates the active memory cache.
 
+All three checkpoint-evidence consumers (uncertain-write recovery, confirmed
+checkpoint retrieval and rolling prior-checkpoint summarization) now use one
+bounded local reader. It verifies the expected private summary directories
+and rejects symlinked/special files before opening evidence. On Unix it also
+compares file identity across inspection and open. The read is capped and
+checked against the file's recorded size. An invalid local source fails closed
+before any recovery network call or context admission; it is never treated as
+confirmed evidence merely because matching bytes can be found through a
+redirected path. This is path-integrity hardening, not protection against
+an attacker who can race replacement of the entire directory hierarchy.
+
 ## Rolling checkpoint continuity
 
 Each new automatic checkpoint can now include the newest **earlier confirmed**
