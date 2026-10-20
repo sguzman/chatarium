@@ -349,6 +349,59 @@ impl Outbox {
             .join(format!("{turn}.md")))
     }
 
+    /// Read only a bounded, regular file from the expected private summary
+    /// tree. Recovery, retrieval and rolling summarization must not follow a
+    /// symlink that was substituted after the original Ready transition.
+    pub fn read_summary_evidence(
+        outbox_path: &Path,
+        conversation: &str,
+        turn: &str,
+        max_bytes: usize,
+    ) -> Result<String, String> {
+        use std::io::Read;
+
+        let file = Self::summary_path(outbox_path, conversation, turn)?;
+        let owner_dir = file.parent().ok_or("checkpoint evidence owner directory missing")?;
+        let summary_root = owner_dir.parent().ok_or("checkpoint evidence root missing")?;
+        for directory in [summary_root, owner_dir] {
+            let metadata = fs::symlink_metadata(directory)
+                .map_err(|e| format!("checkpoint evidence directory metadata: {e}"))?;
+            if !metadata.file_type().is_dir() {
+                return Err("checkpoint evidence directory is not a regular directory".to_owned());
+            }
+        }
+        let metadata = fs::symlink_metadata(&file)
+            .map_err(|e| format!("checkpoint evidence file metadata: {e}"))?;
+        if !metadata.file_type().is_file()
+            || metadata.len() == 0
+            || metadata.len() > max_bytes as u64
+        {
+            return Err("checkpoint evidence is not a bounded regular file".to_owned());
+        }
+        let mut source = fs::File::open(&file)
+            .map_err(|e| format!("checkpoint evidence open: {e}"))?;
+        // On Unix, reject replacement between the path inspection and open.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let opened = source
+                .metadata()
+                .map_err(|e| format!("checkpoint evidence open metadata: {e}"))?;
+            if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+                return Err("checkpoint evidence file changed during open".to_owned());
+            }
+        }
+        let mut contents = String::new();
+        source
+            .take(max_bytes as u64 + 1)
+            .read_to_string(&mut contents)
+            .map_err(|e| format!("checkpoint evidence read: {e}"))?;
+        if contents.len() != metadata.len() as usize || contents.len() > max_bytes {
+            return Err("checkpoint evidence changed during bounded read".to_owned());
+        }
+        Ok(contents)
+    }
+
     pub fn save_summary_durable(
         &mut self,
         outbox_path: &Path,
