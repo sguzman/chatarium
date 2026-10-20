@@ -691,6 +691,49 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn checkpoint_evidence_reads_reject_replaced_files_and_redirected_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_path("evidence-symlinks");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox
+            .enqueue_durable(&path, "owner", "turn-1", 17)
+            .unwrap();
+        outbox
+            .save_summary_durable(&path, "owner", "turn-1", 17, "Persisted history")
+            .unwrap();
+
+        let expected = Outbox::read_summary_evidence(&path, "owner", "turn-1", 16384).unwrap();
+        assert!(expected.contains("Persisted history"));
+        assert!(Outbox::read_summary_evidence(&path, "owner", "turn-1", expected.len() - 1).is_err());
+
+        let file = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
+        let elsewhere = root.join("external.md");
+        fs::rename(&file, &elsewhere).unwrap();
+        symlink(&elsewhere, &file).unwrap();
+        assert!(Outbox::read_summary_evidence(&path, "owner", "turn-1", 16384).is_err());
+        fs::remove_file(&file).unwrap();
+        fs::rename(&elsewhere, &file).unwrap();
+
+        let owner_dir = file.parent().unwrap();
+        let moved_owner = root.join("redirect-target");
+        fs::rename(owner_dir, &moved_owner).unwrap();
+        symlink(&moved_owner, owner_dir).unwrap();
+        assert!(Outbox::read_summary_evidence(&path, "owner", "turn-1", 16384).is_err());
+        fs::remove_file(owner_dir).unwrap();
+        fs::rename(&moved_owner, owner_dir).unwrap();
+        assert_eq!(
+            Outbox::read_summary_evidence(&path, "owner", "turn-1", 16384).unwrap(),
+            expected
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn private_summary_rejects_existing_symlink_even_with_matching_content() {
         use std::os::unix::fs::{PermissionsExt, symlink};
 
