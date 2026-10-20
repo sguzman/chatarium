@@ -156,8 +156,12 @@ or to return exactly `NO_MEMORY` for routine conversation.
 
 Summaries are saved in Chatarium's local
 `openviking-checkpoint-summaries/<conversation>/<turn>.md` directory.
-On Linux these new files are created with owner-only permissions; their
-contents never enter the metadata-only outbox. The summary transitions
+On Linux these new files are created with owner-only permissions, and the
+two summary-store directory levels are kept owner-only as well. Existing
+checkpoint summary symlinks and redirected summary directories are rejected
+before a checkpoint can become Ready; an exact matching, regular file still
+supports recovery after an interrupted transition. Their contents never enter
+the metadata-only outbox. The summary transitions
 `pending_summary -> ready` only after its own local write succeeds.
 On Unix, the summary's directory and newly created ancestors are synced
 before the outbox can mark it ready. If a create-new summary write fails,
