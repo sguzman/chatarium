@@ -695,7 +695,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn private_summary_rejects_redirected_directory_before_creating_file() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{PermissionsExt, symlink};
 
         let root = test_path("summary-dir-symlink");
         fs::create_dir_all(&root).unwrap();
@@ -708,6 +708,7 @@ mod tests {
 
         let redirected = root.join("unrelated-dir");
         fs::create_dir_all(&redirected).unwrap();
+        fs::set_permissions(&redirected, fs::Permissions::from_mode(0o750)).unwrap();
         let link = root.join("openviking-checkpoint-summaries");
         symlink(&redirected, &link).unwrap();
         assert!(
@@ -716,7 +717,11 @@ mod tests {
                 .is_err()
         );
         assert_eq!(outbox.entries()[0].state, State::PendingSummary);
-        assert!(!redirected.join("owner").join("turn-1.md").exists());
+        assert!(!redirected.join("owner").exists());
+        assert_eq!(
+            fs::metadata(&redirected).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
