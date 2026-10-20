@@ -404,6 +404,32 @@ impl Outbox {
             .parent()
             .ok_or("checkpoint summary directory missing")?;
         fs::create_dir_all(parent).map_err(|e| format!("summary directory: {e}"))?;
+        // These two directories are owned by the private summary store.
+        // Never follow an existing redirected path into unrelated files.
+        for directory in parent.ancestors().take(2) {
+            let metadata = fs::symlink_metadata(directory)
+                .map_err(|e| format!("checkpoint summary directory metadata: {e}"))?;
+            if !metadata.file_type().is_dir() {
+                return Err("checkpoint summary directory must not be a symlink".to_owned());
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+                    .map_err(|e| format!("checkpoint summary directory permissions: {e}"))?;
+            }
+        }
+        // A matching file may complete a crash-interrupted transition, but
+        // an existing symlink, directory or other special file cannot.
+        match fs::symlink_metadata(&file) {
+            Ok(metadata) if !metadata.file_type().is_file() => {
+                return Err("existing checkpoint summary must be a regular file".to_owned());
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(format!("checkpoint summary metadata: {error}"));
+            }
+            _ => {}
+        }
         if file.exists() {
             let existing = fs::read_to_string(&file)
                 .map_err(|e| format!("cannot inspect existing summary: {e}"))?;
