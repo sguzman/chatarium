@@ -167,6 +167,13 @@ exact completed summary but before its Ready transition can safely finish
 the metadata transition without rewriting the source.
 `NO_MEMORY` transitions to `skipped`, generating no external write.
 
+To keep exact read-back possible through OpenViking's bounded
+`read(uris, limit=100)` endpoint, the summarizer now rejects outputs over
+80 lines. The durable outbox independently checks that the entire checkpoint
+(including provenance header) fits within 100 lines before writing a local
+summary file or transitioning to Ready. An overlong summary remains PendingSummary;
+no remote create is attempted and no already-persisted checkpoint is overwritten.
+
 The persistence worker then records `ready -> dispatched` **before**
 launching a separate thread to call OpenViking `write`, with `mode=create`.
 It reads the exact file back through OpenViking MCP and transitions to
