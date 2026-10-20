@@ -1680,7 +1680,8 @@ impl ChatariumApp {
                         pending_remote_turn: None,
                         active_remote_turn: None,
                         agent_mcp_flow: None,
-                        openviking_checkpoint_status: "Awaiting an eligible completed assistant turn".to_owned(),
+                        openviking_checkpoint_status:
+                            "Awaiting an eligible completed assistant turn".to_owned(),
                         openviking_summary_in_flight: None,
                         openviking_summary_last_attempt: None,
                         openviking_write_last_attempt: None,
@@ -1951,7 +1952,8 @@ impl ChatariumApp {
             pending_remote_turn: None,
             active_remote_turn: None,
             agent_mcp_flow: None,
-            openviking_checkpoint_status: "Awaiting an eligible completed assistant turn".to_owned(),
+            openviking_checkpoint_status: "Awaiting an eligible completed assistant turn"
+                .to_owned(),
             openviking_summary_in_flight: None,
             openviking_summary_last_attempt: None,
             openviking_write_last_attempt: None,
@@ -3319,36 +3321,38 @@ impl ChatariumApp {
                 let presence = send_admission_gate::Presence::from_kinds(
                     self.events.iter().map(|event| event.kind),
                 );
-                let routed_context = match send_admission_gate::replay_when(
-                    presence.routed,
-                    || admitted_routed_context_messages(&self.events, self.local_conversation_id),
-                ) {
+                let routed_context = match send_admission_gate::replay_when(presence.routed, || {
+                    admitted_routed_context_messages(&self.events, self.local_conversation_id)
+                }) {
                     Ok(messages) => messages,
                     Err(error) => {
                         self.status = format!("cannot snapshot admitted routed context: {error}");
                         return;
                     }
                 };
-                let tool_result_context = match send_admission_gate::replay_when(
-                    presence.tools,
-                    || admitted_tool_result_context_messages(&self.events, self.local_conversation_id),
-                ) {
-                    Ok(messages) => messages,
-                    Err(error) => {
-                        self.status = format!("cannot snapshot admitted tool results: {error}");
-                        return;
-                    }
-                };
-                let mut local_memory_context = match send_admission_gate::replay_when(
-                    presence.local_memory,
-                    || admitted_local_memory_messages(&self.events, self.local_conversation_id),
-                ) {
-                    Ok(messages) => messages,
-                    Err(error) => {
-                        self.status = format!("cannot snapshot admitted local memory: {error}");
-                        return;
-                    }
-                };
+                let tool_result_context =
+                    match send_admission_gate::replay_when(presence.tools, || {
+                        admitted_tool_result_context_messages(
+                            &self.events,
+                            self.local_conversation_id,
+                        )
+                    }) {
+                        Ok(messages) => messages,
+                        Err(error) => {
+                            self.status = format!("cannot snapshot admitted tool results: {error}");
+                            return;
+                        }
+                    };
+                let mut local_memory_context =
+                    match send_admission_gate::replay_when(presence.local_memory, || {
+                        admitted_local_memory_messages(&self.events, self.local_conversation_id)
+                    }) {
+                        Ok(messages) => messages,
+                        Err(error) => {
+                            self.status = format!("cannot snapshot admitted local memory: {error}");
+                            return;
+                        }
+                    };
                 // Freeze the already verified, strictly same-conversation
                 // OpenViking evidence at Send click alongside local admissions.
                 // A later background result cannot mutate this request.
@@ -3385,25 +3389,27 @@ impl ChatariumApp {
                     .map(|memory| memory.memory_id)
                     .collect();
                 one_shot_memory_snapshot_after_sequence = snapshot_after_sequence;
-                let controller_result_context = match send_admission_gate::replay_when(
-                    presence.controller_results,
-                    || admitted_controller_worker_result_messages(&self.events, self.local_conversation_id),
-                ) {
-                    Ok(messages) => messages,
-                    Err(error) => {
-                        self.status =
-                            format!("cannot snapshot admitted controller results: {error}");
-                        return;
-                    }
-                };
-                let controller_coordination_result_context =
-                    match send_admission_gate::replay_when(
-                        presence.coordination_results,
-                        || admitted_controller_coordination_result_messages(
+                let controller_result_context =
+                    match send_admission_gate::replay_when(presence.controller_results, || {
+                        admitted_controller_worker_result_messages(
                             &self.events,
                             self.local_conversation_id,
-                        ),
-                    ) {
+                        )
+                    }) {
+                        Ok(messages) => messages,
+                        Err(error) => {
+                            self.status =
+                                format!("cannot snapshot admitted controller results: {error}");
+                            return;
+                        }
+                    };
+                let controller_coordination_result_context =
+                    match send_admission_gate::replay_when(presence.coordination_results, || {
+                        admitted_controller_coordination_result_messages(
+                            &self.events,
+                            self.local_conversation_id,
+                        )
+                    }) {
                         Ok(messages) => messages,
                         Err(error) => {
                             self.status = format!(
@@ -5472,18 +5478,24 @@ impl ChatariumApp {
                     .filter(|entry| entry.conversation_id == self.local_conversation_id.to_string())
                     .max_by_key(|entry| entry.completed_sequence)
                     .map(|entry| match entry.state {
-                        openviking_checkpoint_outbox::State::PendingSummary =>
-                            "Summary pending; waiting for idle model inference",
-                        openviking_checkpoint_outbox::State::Ready =>
-                            "Summary saved; awaiting safe write preflight",
-                        openviking_checkpoint_outbox::State::Dispatched =>
-                            "Write dispatched; exact verification pending",
-                        openviking_checkpoint_outbox::State::Confirmed =>
-                            "Checkpoint confirmed by exact read-back",
-                        openviking_checkpoint_outbox::State::Uncertain =>
-                            "Write uncertain; no automatic retry",
-                        openviking_checkpoint_outbox::State::Skipped =>
-                            "Checkpoint skipped; no durable memory",
+                        openviking_checkpoint_outbox::State::PendingSummary => {
+                            "Summary pending; waiting for idle model inference"
+                        }
+                        openviking_checkpoint_outbox::State::Ready => {
+                            "Summary saved; awaiting safe write preflight"
+                        }
+                        openviking_checkpoint_outbox::State::Dispatched => {
+                            "Write dispatched; exact verification pending"
+                        }
+                        openviking_checkpoint_outbox::State::Confirmed => {
+                            "Checkpoint confirmed by exact read-back"
+                        }
+                        openviking_checkpoint_outbox::State::Uncertain => {
+                            "Write uncertain; no automatic retry"
+                        }
+                        openviking_checkpoint_outbox::State::Skipped => {
+                            "Checkpoint skipped; no durable memory"
+                        }
                     })
                     .unwrap_or("No checkpoint yet; waiting for an eligible completed turn")
                     .to_owned()
