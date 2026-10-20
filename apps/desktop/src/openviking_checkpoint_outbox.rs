@@ -378,7 +378,7 @@ impl Outbox {
         {
             return Err("checkpoint evidence is not a bounded regular file".to_owned());
         }
-        let mut source = fs::File::open(&file)
+        let source = fs::File::open(&file)
             .map_err(|e| format!("checkpoint evidence open: {e}"))?;
         // On Unix, reject replacement between the path inspection and open.
         #[cfg(unix)]
