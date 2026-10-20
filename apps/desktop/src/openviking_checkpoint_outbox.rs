@@ -361,8 +361,12 @@ impl Outbox {
         use std::io::Read;
 
         let file = Self::summary_path(outbox_path, conversation, turn)?;
-        let owner_dir = file.parent().ok_or("checkpoint evidence owner directory missing")?;
-        let summary_root = owner_dir.parent().ok_or("checkpoint evidence root missing")?;
+        let owner_dir = file
+            .parent()
+            .ok_or("checkpoint evidence owner directory missing")?;
+        let summary_root = owner_dir
+            .parent()
+            .ok_or("checkpoint evidence root missing")?;
         for directory in [summary_root, owner_dir] {
             let metadata = fs::symlink_metadata(directory)
                 .map_err(|e| format!("checkpoint evidence directory metadata: {e}"))?;
@@ -378,8 +382,7 @@ impl Outbox {
         {
             return Err("checkpoint evidence is not a bounded regular file".to_owned());
         }
-        let source = fs::File::open(&file)
-            .map_err(|e| format!("checkpoint evidence open: {e}"))?;
+        let source = fs::File::open(&file).map_err(|e| format!("checkpoint evidence open: {e}"))?;
         // On Unix, reject replacement between the path inspection and open.
         #[cfg(unix)]
         {
@@ -708,7 +711,9 @@ mod tests {
 
         let expected = Outbox::read_summary_evidence(&path, "owner", "turn-1", 16384).unwrap();
         assert!(expected.contains("Persisted history"));
-        assert!(Outbox::read_summary_evidence(&path, "owner", "turn-1", expected.len() - 1).is_err());
+        assert!(
+            Outbox::read_summary_evidence(&path, "owner", "turn-1", expected.len() - 1).is_err()
+        );
 
         let file = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
         let elsewhere = root.join("external.md");
