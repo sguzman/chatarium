@@ -140,18 +140,13 @@ fn verify_uncertain_with_read(
     if completed_sequence == 0 {
         return Err("invalid uncertain checkpoint source sequence".to_owned());
     }
-    let file =
-        crate::openviking_checkpoint_outbox::Outbox::summary_path(outbox_path, conversation, turn)?;
-    let size = std::fs::metadata(&file)
-        .map_err(|e| format!("uncertain checkpoint summary metadata: {e}"))?
-        .len();
-    if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
-        return Err("uncertain checkpoint summary size invalid".to_owned());
-    }
-    let expected = std::fs::read_to_string(&file)
-        .map_err(|e| format!("uncertain checkpoint source unreadable: {e}"))?;
-    if expected.len() != size as usize
-        || !expected.starts_with(&format!(
+    let expected = crate::openviking_checkpoint_outbox::Outbox::read_summary_evidence(
+        outbox_path,
+        conversation,
+        turn,
+        MAX_CHECKPOINT_BYTES,
+    )?;
+    if !expected.starts_with(&format!(
             "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {turn}\nSource journal sequence: {completed_sequence}\n\n"
         ))
     {
@@ -210,21 +205,13 @@ fn read_confirmed_evidence(
     outbox_path: &std::path::Path,
     entry: &crate::openviking_checkpoint_outbox::Entry,
 ) -> Result<String, String> {
-    let file = crate::openviking_checkpoint_outbox::Outbox::summary_path(
+    let expected = crate::openviking_checkpoint_outbox::Outbox::read_summary_evidence(
         outbox_path,
         &entry.conversation_id,
         &entry.turn_id,
+        MAX_CHECKPOINT_BYTES,
     )?;
-    let size = std::fs::metadata(&file)
-        .map_err(|e| format!("confirmed checkpoint source metadata: {e}"))?
-        .len();
-    if size == 0 || size > MAX_CHECKPOINT_BYTES as u64 {
-        return Err("confirmed checkpoint has invalid local summary size".to_owned());
-    }
-    let expected = std::fs::read_to_string(&file)
-        .map_err(|e| format!("confirmed checkpoint source unreadable: {e}"))?;
-    if expected.len() != size as usize
-        || !expected.starts_with(&format!(
+    if !expected.starts_with(&format!(
             "# Chatarium memory checkpoint\n\nConversation: {}\nTurn: {}\nSource journal sequence: {}\n\n",
             entry.conversation_id, entry.turn_id, entry.completed_sequence,
         ))
