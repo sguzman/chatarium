@@ -396,7 +396,8 @@ impl Outbox {
         // than dispatching a create we cannot prove by exact read-back.
         if body.lines().count() > MAX_MCP_CHECKPOINT_LINES {
             return Err(
-                "checkpoint exceeds 100-line MCP readback limit; summary remains pending".to_owned(),
+                "checkpoint exceeds 100-line MCP readback limit; summary remains pending"
+                    .to_owned(),
             );
         }
         let parent = file
@@ -680,9 +681,7 @@ mod tests {
         let path = root.join(FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
-        outbox
-            .enqueue_durable(&path, "owner", "turn-1", 7)
-            .unwrap();
+        outbox.enqueue_durable(&path, "owner", "turn-1", 7).unwrap();
         let too_many = vec!["line"; 101].join("\n");
         let error = outbox
             .save_summary_durable(&path, "owner", "turn-1", 7, &too_many)
@@ -695,9 +694,11 @@ mod tests {
         );
         let summary_path = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
         assert!(!summary_path.exists());
-        assert!(outbox
-            .save_summary_durable(&path, "owner", "turn-1", 7, "readable summary")
-            .unwrap());
+        assert!(
+            outbox
+                .save_summary_durable(&path, "owner", "turn-1", 7, "readable summary")
+                .unwrap()
+        );
         assert_eq!(outbox.entries()[0].state, State::Ready);
         fs::remove_dir_all(root).unwrap();
     }
