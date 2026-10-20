@@ -40,11 +40,7 @@ pub(crate) fn replay_when<T>(
     admitted: bool,
     replay: impl FnOnce() -> Result<Vec<T>, String>,
 ) -> Result<Vec<T>, String> {
-    if admitted {
-        replay()
-    } else {
-        Ok(Vec::new())
-    }
+    if admitted { replay() } else { Ok(Vec::new()) }
 }
 
 #[cfg(test)]
@@ -59,18 +55,18 @@ mod tests {
         assert_eq!(skipped.unwrap(), Vec::<u64>::new());
         let actual: Result<Vec<u64>, String> = replay_when(true, || Ok(vec![4, 9]));
         assert_eq!(actual.unwrap(), vec![4, 9]);
-        let denied: Result<Vec<u64>, String> = replay_when(true, || Err("invalid provenance".into()));
+        let denied: Result<Vec<u64>, String> =
+            replay_when(true, || Err("invalid provenance".into()));
         assert_eq!(denied.unwrap_err(), "invalid provenance");
     }
 
     #[test]
     fn normal_conversation_journal_needs_no_heavy_admission_replay() {
-        let events = std::iter::repeat_n(EventKind::AssistantDeltaObserved, 200_000)
-            .chain([
-                EventKind::UserMessageCommitted,
-                EventKind::AssistantCompletionObserved,
-                EventKind::DraftChanged,
-            ]);
+        let events = std::iter::repeat_n(EventKind::AssistantDeltaObserved, 200_000).chain([
+            EventKind::UserMessageCommitted,
+            EventKind::AssistantCompletionObserved,
+            EventKind::DraftChanged,
+        ]);
         assert_eq!(Presence::from_kinds(events), Presence::default());
     }
 
