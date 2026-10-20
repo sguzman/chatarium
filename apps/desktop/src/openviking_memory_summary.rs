@@ -330,8 +330,18 @@ mod tests {
         );
         assert!(newest_confirmed_prior(&outbox, &path, "../escape", 20).is_err());
         let stored_path = Outbox::summary_path(&path, "owner", "old").unwrap();
+        let verified = std::fs::read_to_string(&stored_path).unwrap();
         std::fs::write(&stored_path, "forged memory document").unwrap();
         assert!(newest_confirmed_prior(&outbox, &path, "owner", 10).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let external = dir.join("matching-prior.md");
+            std::fs::write(&external, verified).unwrap();
+            std::fs::remove_file(&stored_path).unwrap();
+            symlink(&external, &stored_path).unwrap();
+            assert!(newest_confirmed_prior(&outbox, &path, "owner", 10).is_err());
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
