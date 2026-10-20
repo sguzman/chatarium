@@ -420,15 +420,13 @@ mod tests {
             .stdin
             .take()
             .unwrap()
-            .write_all(b"not-json\n")
+            .write_all(b"{\"id\":2}\n")
             .unwrap();
         let output = worker.wait_with_output().unwrap();
         assert!(output.status.success());
-        assert!(
-            String::from_utf8(output.stdout)
-                .unwrap()
-                .contains("Invalid MCP bridge request")
-        );
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"], "Invalid MCP bridge request");
         // The relocated preflight must also resolve its client import, but
         // invalid CLI usage must stop before touching a real OpenViking server.
         let probe = Command::new("node")
