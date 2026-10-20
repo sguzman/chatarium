@@ -388,7 +388,7 @@ A checkpoint is short, structured, and useful for resumption:
 Prefer an accurate 200-600 word checkpoint over a transcript dump. Skip
 routine chatter, repeated instructions, generic tool output, retrieved memory
 repetitions, unverified assertions, passwords, cookies, auth tokens, and other
-secrets. No private venting text may be copied into public repositories.
+secrets. Public documentation and fixtures must use synthetic, non-sensitive examples.
 The user does not have to type "remember this" for normal progress capture.
 For a trivial turn with no durable content, a recorded no-op is valid.
 
