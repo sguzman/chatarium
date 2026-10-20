@@ -1316,6 +1316,7 @@ struct ChatariumApp {
     pending_remote_turn: Option<PendingRemoteTurn>,
     active_remote_turn: Option<ActiveRemoteTurn>,
     agent_mcp_flow: Option<AgentMcpFlow>,
+    openviking_checkpoint_status: String,
     openviking_summary_in_flight: Option<OpenVikingSummaryAttempt>,
     openviking_summary_last_attempt: Option<Instant>,
     openviking_write_last_attempt: Option<Instant>,
@@ -1679,6 +1680,7 @@ impl ChatariumApp {
                         pending_remote_turn: None,
                         active_remote_turn: None,
                         agent_mcp_flow: None,
+                        openviking_checkpoint_status: "Awaiting an eligible completed assistant turn".to_owned(),
                         openviking_summary_in_flight: None,
                         openviking_summary_last_attempt: None,
                         openviking_write_last_attempt: None,
@@ -1949,6 +1951,7 @@ impl ChatariumApp {
             pending_remote_turn: None,
             active_remote_turn: None,
             agent_mcp_flow: None,
+            openviking_checkpoint_status: "Awaiting an eligible completed assistant turn".to_owned(),
             openviking_summary_in_flight: None,
             openviking_summary_last_attempt: None,
             openviking_write_last_attempt: None,
@@ -4191,6 +4194,7 @@ impl ChatariumApp {
                             "OpenViking checkpoint write uncertain; not automatically repeated"
                                 .to_owned()
                         };
+                        self.openviking_checkpoint_status = self.status.clone();
                     }
                 }
                 PersistNotice::OpenVikingMemorySummarySaved {
@@ -4214,6 +4218,7 @@ impl ChatariumApp {
                             "OpenViking summary durable locally; scheduling verified external write"
                                 .to_owned()
                         };
+                        self.openviking_checkpoint_status = self.status.clone();
                     }
                     if !skipped
                         && std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() != Ok("0")
@@ -5417,6 +5422,9 @@ impl ChatariumApp {
                         }
                     }
                     self.status = format!("{operation} failed: {error}");
+                    if operation.contains("OpenViking") || operation.contains("memory checkpoint") {
+                        self.openviking_checkpoint_status = self.status.clone();
+                    }
                 }
             }
         }
@@ -5447,9 +5455,39 @@ impl ChatariumApp {
         let path = self
             .journal_path
             .with_file_name(openviking_checkpoint_outbox::FILE_NAME);
-        let Ok(outbox) = openviking_checkpoint_outbox::Outbox::load(&path) else {
-            return;
+        let outbox = match openviking_checkpoint_outbox::Outbox::load(&path) {
+            Ok(outbox) => outbox,
+            Err(error) => {
+                self.openviking_checkpoint_status = format!("Queue unavailable: {error}");
+                return;
+            }
         };
+        self.openviking_checkpoint_status =
+            if std::env::var("CHATARIUM_OPENVIKING_AUTOCAPTURE").as_deref() == Ok("0") {
+                "Automatic checkpoints disabled".to_owned()
+            } else {
+                outbox
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.conversation_id == self.local_conversation_id.to_string())
+                    .max_by_key(|entry| entry.completed_sequence)
+                    .map(|entry| match entry.state {
+                        openviking_checkpoint_outbox::State::PendingSummary =>
+                            "Summary pending; waiting for idle model inference",
+                        openviking_checkpoint_outbox::State::Ready =>
+                            "Summary saved; awaiting safe write preflight",
+                        openviking_checkpoint_outbox::State::Dispatched =>
+                            "Write dispatched; exact verification pending",
+                        openviking_checkpoint_outbox::State::Confirmed =>
+                            "Checkpoint confirmed by exact read-back",
+                        openviking_checkpoint_outbox::State::Uncertain =>
+                            "Write uncertain; no automatic retry",
+                        openviking_checkpoint_outbox::State::Skipped =>
+                            "Checkpoint skipped; no durable memory",
+                    })
+                    .unwrap_or("No checkpoint yet; waiting for an eligible completed turn")
+                    .to_owned()
+            };
         if outbox.ready_entries().next().is_some() {
             if let Some(sender) = &self.persist_tx {
                 let _ = sender.send(PersistCommand::DispatchOpenVikingReadyWrite);
@@ -9032,6 +9070,14 @@ impl eframe::App for ChatariumApp {
                             .color(egui::Color32::from_rgb(112, 176, 137)),
                         );
 
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "OpenViking · {}",
+                                self.openviking_checkpoint_status
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(163, 186, 205)),
+                        );
                         ui.add_space(10.0);
                         // Conversation controls belong in the left workspace,
                         // not between the transcript and the composer.
