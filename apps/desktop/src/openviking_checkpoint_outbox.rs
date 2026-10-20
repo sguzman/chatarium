@@ -87,12 +87,44 @@ fn identity_valid(id: &str) -> bool {
 
 impl Outbox {
     pub fn load(path: &Path) -> Result<Self, String> {
-        if !path.exists() {
-            return Ok(Self::default());
+        use std::io::Read;
+
+        // A missing outbox means first run. A dangling symlink does not:
+        // never silently reset recovery state or read a redirected journal.
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(format!("checkpoint outbox metadata: {error}")),
+        };
+        if !metadata.file_type().is_file() {
+            return Err("checkpoint outbox must be a regular file, not a symlink".to_owned());
         }
-        let bytes = fs::read(path).map_err(|e| format!("checkpoint outbox read: {e}"))?;
-        if bytes.len() > MAX_FILE_BYTES {
+        if metadata.len() > MAX_FILE_BYTES as u64 {
             return Err("checkpoint outbox exceeds file limit".to_owned());
+        }
+        let source = fs::File::open(path).map_err(|e| format!("checkpoint outbox open: {e}"))?;
+        let opened = source
+            .metadata()
+            .map_err(|e| format!("checkpoint outbox open metadata: {e}"))?;
+        if !opened.is_file() || opened.len() > MAX_FILE_BYTES as u64 {
+            return Err("checkpoint outbox changed during open".to_owned());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+                return Err("checkpoint outbox changed during open".to_owned());
+            }
+        }
+        let mut bytes = Vec::new();
+        source
+            .take(MAX_FILE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("checkpoint outbox read: {e}"))?;
+        if bytes.len() != opened.len() as usize || bytes.len() > MAX_FILE_BYTES {
+            return Err("checkpoint outbox changed during bounded read".to_owned());
         }
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|e| format!("checkpoint outbox JSON: {e}"))?;
@@ -823,6 +855,50 @@ mod tests {
             fs::metadata(&redirected).unwrap().permissions().mode() & 0o777,
             0o750
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_refuses_symlinked_or_dangling_outbox_instead_of_resetting() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_path("redirected-outbox");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let external = root.join("external-state.json");
+        let mut queue = Outbox::default();
+        queue.activate_durable(&external, 4).unwrap();
+        queue.enqueue_durable(&external, "owner", "turn-1", 5).unwrap();
+        let before = fs::read(&external).unwrap();
+
+        symlink(&external, &path).unwrap();
+        assert!(Outbox::load(&path)
+            .unwrap_err()
+            .contains("regular file"));
+        assert_eq!(fs::read(&external).unwrap(), before);
+
+        fs::remove_file(&external).unwrap();
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        assert!(Outbox::load(&path)
+            .unwrap_err()
+            .contains("regular file"));
+
+        fs::remove_file(&path).unwrap();
+        assert!(Outbox::load(&path).unwrap().entries().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_rejects_oversized_outbox_before_parsing() {
+        let root = test_path("oversized-outbox");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_FILE_BYTES as u64 + 1).unwrap();
+        assert!(Outbox::load(&path)
+            .unwrap_err()
+            .contains("file limit"));
         fs::remove_dir_all(root).unwrap();
     }
 
