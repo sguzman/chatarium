@@ -2,7 +2,6 @@
 //! durably marked Dispatched. This runs ONLY on a background thread.
 use serde_json::Value;
 use std::io::Read;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -44,13 +43,9 @@ pub(crate) fn recently_attested(verified_at: Option<Instant>, now: Instant) -> b
 /// No user text or production URI is sent to the diagnostic. It may leave a
 /// synthetic QA file behind; an ambiguous outcome never authorizes the write.
 pub fn verify_before_checkpoint_write() -> Result<(), String> {
-    let script: PathBuf = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tools/local-http-mcp/openviking-live-probe.mjs");
-    if !script.is_file() {
-        return Err("OpenViking write preflight is missing; checkpoint remains Ready".to_owned());
-    }
+    let script = crate::local_http_mcp::helper_script("openviking-live-probe.mjs")?;
     let mut child = Command::new("node")
-        .arg(script)
+        .arg(script.path())
         .arg("--verify-exclusive-create")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
