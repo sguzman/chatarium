@@ -2,8 +2,9 @@
 //! The persistent Node transport keeps Mathematica MCP sessions per conversation.
 use serde_json::{Value, json};
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Mutex, OnceLock},
 };
@@ -73,21 +74,118 @@ pub fn registered_tools() -> impl Iterator<Item = (&'static str, &'static str, &
         }))
 }
 
+// The native executable must still find its fixed-loopback MCP helpers
+// after it is moved away from its build checkout. Embed the small audited
+// scripts and materialize them in a private, process-scoped temporary folder
+// only when the developer checkout no longer exists.
+const MCP_CLIENT: &str = include_str!("../../../tools/local-http-mcp/client.mjs");
+const MCP_WORKER: &str = include_str!("../../../tools/local-http-mcp/worker.mjs");
+const MCP_PROBE: &str = include_str!("../../../tools/local-http-mcp/openviking-live-probe.mjs");
+
+pub(crate) struct HelperScript {
+    path: PathBuf,
+    temporary_directory: Option<PathBuf>,
+}
+
+impl HelperScript {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn bundled(script_name: &str) -> Result<Self, String> {
+        if !matches!(script_name, "worker.mjs" | "openviking-live-probe.mjs") {
+            return Err("unsupported embedded MCP helper".to_owned());
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ordinal = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("MCP helper clock: {e}"))?
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "chatarium-mcp-helper-{}-{nonce}-{ordinal}",
+            std::process::id(),
+        ));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&directory)
+            .map_err(|e| format!("private MCP helper directory: {e}"))?;
+        let bundle = Self {
+            path: directory.join(script_name),
+            temporary_directory: Some(directory.clone()),
+        };
+        for (name, contents) in [
+            ("client.mjs", MCP_CLIENT),
+            ("worker.mjs", MCP_WORKER),
+            ("openviking-live-probe.mjs", MCP_PROBE),
+        ] {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options
+                .open(directory.join(name))
+                .map_err(|e| format!("private MCP helper creation: {e}"))?;
+            file.write_all(contents.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|e| format!("private MCP helper durable content: {e}"))?;
+        }
+        Ok(bundle)
+    }
+}
+
+impl Drop for HelperScript {
+    fn drop(&mut self) {
+        if let Some(directory) = &self.temporary_directory {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+}
+
+pub(crate) fn helper_script(script_name: &str) -> Result<HelperScript, String> {
+    if !matches!(script_name, "worker.mjs" | "openviking-live-probe.mjs") {
+        return Err("unsupported MCP helper script".to_owned());
+    }
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/local-http-mcp")
+        .join(script_name);
+    if checkout.is_file() {
+        return Ok(HelperScript {
+            path: checkout,
+            temporary_directory: None,
+        });
+    }
+    HelperScript::bundled(script_name)
+}
+
 struct Worker {
     _child: Child,
+    _script: HelperScript,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
 }
 
+impl Drop for Worker {
+    fn drop(&mut self) {
+        // Stop the worker before removing its private helper files.
+        let _ = self._child.kill();
+        let _ = self._child.wait();
+    }
+}
+
 impl Worker {
     fn new() -> Result<Self, String> {
-        let script: PathBuf = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tools/local-http-mcp/worker.mjs");
-        if !script.is_file() {
-            return Err(format!("local MCP transport missing: {}", script.display()));
-        }
+        let script = helper_script("worker.mjs")?;
         let mut child = Command::new("node")
-            .arg(script)
+            .arg(script.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -103,6 +201,7 @@ impl Worker {
             .ok_or("MCP transport stdout unavailable")?;
         Ok(Self {
             _child: child,
+            _script: script,
             input,
             output: BufReader::new(output),
         })
@@ -281,6 +380,48 @@ fn invoke_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_mcp_helpers_survive_outside_checkout_and_clean_up() {
+        use std::process::Command;
+        assert!(helper_script("unexpected.mjs").is_err());
+        let bundle = HelperScript::bundled("worker.mjs").unwrap();
+        let parent = bundle.path().parent().unwrap().to_owned();
+        assert_eq!(
+            fs::read_to_string(parent.join("client.mjs")).unwrap(),
+            MCP_CLIENT
+        );
+        assert_eq!(fs::read_to_string(bundle.path()).unwrap(), MCP_WORKER);
+        assert_eq!(
+            fs::read_to_string(parent.join("openviking-live-probe.mjs")).unwrap(),
+            MCP_PROBE
+        );
+        for name in ["worker.mjs", "openviking-live-probe.mjs"] {
+            let result = Command::new("node")
+                .arg("--check")
+                .arg(parent.join(name))
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "embedded {name} failed JavaScript syntax check"
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(bundle.path()).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        drop(bundle);
+        assert!(!parent.exists());
+    }
 
     #[test]
     fn both_servers_have_exact_explicit_allowlists() {
