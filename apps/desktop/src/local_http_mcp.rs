@@ -429,6 +429,15 @@ mod tests {
                 .unwrap()
                 .contains("Invalid MCP bridge request")
         );
+        // The relocated preflight must also resolve its client import, but
+        // invalid CLI usage must stop before touching a real OpenViking server.
+        let probe = Command::new("node")
+            .arg(parent.join("openviking-live-probe.mjs"))
+            .arg("--not-a-probe-mode")
+            .output()
+            .unwrap();
+        assert_eq!(probe.status.code(), Some(2));
+        assert!(String::from_utf8(probe.stderr).unwrap().contains("Usage:"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
