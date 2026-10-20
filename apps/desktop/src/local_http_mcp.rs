@@ -151,18 +151,9 @@ impl Drop for HelperScript {
 }
 
 pub(crate) fn helper_script(script_name: &str) -> Result<HelperScript, String> {
-    if !matches!(script_name, "worker.mjs" | "openviking-live-probe.mjs") {
-        return Err("unsupported MCP helper script".to_owned());
-    }
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tools/local-http-mcp")
-        .join(script_name);
-    if checkout.is_file() {
-        return Ok(HelperScript {
-            path: checkout,
-            temporary_directory: None,
-        });
-    }
+    // Run the exact helpers embedded at compile time. A source checkout may
+    // change independently of the executable, including the exclusive-create
+    // preflight that gates production checkpoint writes.
     HelperScript::bundled(script_name)
 }
 
@@ -380,6 +371,20 @@ fn invoke_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_helpers_are_pinned_to_the_compiled_bundle() {
+        for script_name in ["worker.mjs", "openviking-live-probe.mjs"] {
+            let script = helper_script(script_name).unwrap();
+            assert!(script.temporary_directory.is_some());
+            let expected = if script_name == "worker.mjs" {
+                MCP_WORKER
+            } else {
+                MCP_PROBE
+            };
+            assert_eq!(fs::read_to_string(script.path()).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn embedded_mcp_helpers_survive_outside_checkout_and_clean_up() {
