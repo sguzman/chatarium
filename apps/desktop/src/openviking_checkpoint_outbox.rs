@@ -403,18 +403,36 @@ impl Outbox {
         let parent = file
             .parent()
             .ok_or("checkpoint summary directory missing")?;
+        let private_root = parent
+            .parent()
+            .ok_or("checkpoint summary store root missing")?;
+        // Reject an already-redirected store before creating any child path.
+        // Otherwise create_dir_all could make directories under a symlink.
+        for directory in [private_root, parent] {
+            match fs::symlink_metadata(directory) {
+                Ok(metadata) if !metadata.file_type().is_dir() => {
+                    return Err("checkpoint summary directory must not be a symlink".to_owned());
+                }
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(format!("checkpoint summary directory metadata: {error}"));
+                }
+                _ => {}
+            }
+        }
         fs::create_dir_all(parent).map_err(|e| format!("summary directory: {e}"))?;
-        // These two directories are owned by the private summary store.
-        // Never follow an existing redirected path into unrelated files.
-        for directory in parent.ancestors().take(2) {
+        // Validate both levels again before changing permissions. Neither
+        // symlinks nor other special files are acceptable store directories.
+        for directory in [private_root, parent] {
             let metadata = fs::symlink_metadata(directory)
                 .map_err(|e| format!("checkpoint summary directory metadata: {e}"))?;
             if !metadata.file_type().is_dir() {
                 return Err("checkpoint summary directory must not be a symlink".to_owned());
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for directory in [private_root, parent] {
                 fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
                     .map_err(|e| format!("checkpoint summary directory permissions: {e}"))?;
             }
