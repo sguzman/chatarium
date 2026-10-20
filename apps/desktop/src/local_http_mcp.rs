@@ -407,6 +407,28 @@ mod tests {
                 "embedded {name} failed JavaScript syntax check"
             );
         }
+        // Unlike a syntax check, this executes the detached bridge and its
+        // relative import of client.mjs, with no live MCP network request.
+        let mut worker = Command::new("node")
+            .arg(bundle.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        worker
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"not-json\n")
+            .unwrap();
+        let output = worker.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("Invalid MCP bridge request")
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
