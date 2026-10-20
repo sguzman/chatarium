@@ -770,7 +770,10 @@ mod tests {
         // Reject before replacing any existing durable file.
         fs::write(&path, "preserve existing bytes").unwrap();
         assert!(outbox.save_atomic(&path).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "preserve existing bytes");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "preserve existing bytes"
+        );
 
         // The same ambiguity in a manually corrupted on-disk document must
         // be rejected on startup, before either entry can be dispatched.
