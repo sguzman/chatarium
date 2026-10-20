@@ -54,6 +54,9 @@ jobs:
           node --check tools/run-desktop.mjs
           node --check tools/run-desktop.test.mjs
           node --test tools/run-desktop.test.mjs
+          node --check tools/run-openviking-qa.mjs
+          node --check tools/run-openviking-qa.test.mjs
+          node --test tools/run-openviking-qa.test.mjs
       - name: Fixed localhost MCP HTTP transport tests
         run: |
           node --check tools/local-http-mcp/client.mjs
@@ -112,6 +115,9 @@ jobs:
           node --check tools/run-desktop.mjs
           node --check tools/run-desktop.test.mjs
           node --test tools/run-desktop.test.mjs
+          node --check tools/run-openviking-qa.mjs
+          node --check tools/run-openviking-qa.test.mjs
+          node --test tools/run-openviking-qa.test.mjs
       - name: Fixed localhost MCP HTTP transport tests
         run: |
           node --check tools/local-http-mcp/client.mjs
