@@ -618,6 +618,75 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_summary_rejects_existing_symlink_even_with_matching_content() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = test_path("summary-symlink");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, "owner", "turn-1", 12).unwrap();
+
+        let file = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let victim = root.join("unrelated.md");
+        let body = "# Chatarium memory checkpoint\n\nConversation: owner\nTurn: turn-1\nSource journal sequence: 12\n\nSafe checkpoint\n";
+        fs::write(&victim, body).unwrap();
+        symlink(&victim, &file).unwrap();
+
+        assert!(outbox
+            .save_summary_durable(&path, "owner", "turn-1", 12, "Safe checkpoint")
+            .is_err());
+        assert_eq!(outbox.entries()[0].state, State::PendingSummary);
+        assert_eq!(fs::read_to_string(&victim).unwrap(), body);
+        assert!(fs::symlink_metadata(&file).unwrap().file_type().is_symlink());
+
+        fs::remove_file(&file).unwrap();
+        assert!(outbox
+            .save_summary_durable(&path, "owner", "turn-1", 12, "Safe checkpoint")
+            .unwrap());
+        assert_eq!(outbox.entries()[0].state, State::Ready);
+        assert_eq!(fs::read_to_string(&file).unwrap(), body);
+        for directory in file.parent().unwrap().ancestors().take(2) {
+            assert_eq!(
+                fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_summary_rejects_redirected_directory_before_creating_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_path("summary-dir-symlink");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox.enqueue_durable(&path, "owner", "turn-1", 13).unwrap();
+
+        let redirected = root.join("unrelated-dir");
+        fs::create_dir_all(&redirected).unwrap();
+        let link = root.join("openviking-checkpoint-summaries");
+        symlink(&redirected, &link).unwrap();
+        assert!(outbox
+            .save_summary_durable(&path, "owner", "turn-1", 13, "Private summary")
+            .is_err());
+        assert_eq!(outbox.entries()[0].state, State::PendingSummary);
+        assert!(!redirected.join("owner").join("turn-1.md").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn restart_recovers_one_exact_pending_source_without_transcript_body() {
         let path = test_path("restart");
