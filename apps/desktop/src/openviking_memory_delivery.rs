@@ -627,6 +627,16 @@ mod tests {
         .unwrap();
         let error = retrieve_confirmed_for_conversation(&path, "owner").unwrap_err();
         assert!(error.contains("identity mismatch"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let external = root.join("matching-confirmed.md");
+            std::fs::write(&external, contents).unwrap();
+            std::fs::remove_file(&summary).unwrap();
+            symlink(&external, &summary).unwrap();
+            let error = retrieve_confirmed_for_conversation(&path, "owner").unwrap_err();
+            assert!(error.contains("checkpoint evidence"));
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
