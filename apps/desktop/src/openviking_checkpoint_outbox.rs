@@ -173,10 +173,12 @@ impl Outbox {
             if !identity_valid(&entry.conversation_id)
                 || !identity_valid(&entry.turn_id)
                 || entry.completed_sequence == 0
+                // Remote checkpoint URIs are keyed by conversation + turn,
+                // not by journal sequence. A second sequence for the same
+                // target must never survive loading or saving the outbox.
                 || !keys.insert((
                     entry.conversation_id.as_str(),
                     entry.turn_id.as_str(),
-                    entry.completed_sequence,
                 ))
             {
                 return Err("duplicate or invalid checkpoint outbox entry".to_owned());
@@ -745,6 +747,54 @@ mod tests {
                 .unwrap()
                 .exists()
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn one_remote_checkpoint_target_cannot_have_two_source_sequences() {
+        let path = test_path("duplicate-target");
+        let first = Entry {
+            conversation_id: "owner".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            completed_sequence: 10,
+            state: State::Ready,
+        };
+        let mut outbox = Outbox::default();
+        outbox.entries.push(first.clone());
+        outbox.entries.push(Entry {
+            completed_sequence: 11,
+            state: State::Uncertain,
+            ..first
+        });
+
+        // Reject before replacing any existing durable file.
+        fs::write(&path, "preserve existing bytes").unwrap();
+        assert!(outbox.save_atomic(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "preserve existing bytes");
+
+        // The same ambiguity in a manually corrupted on-disk document must
+        // be rejected on startup, before either entry can be dispatched.
+        let fixture = json!({
+            "schema": SCHEMA,
+            "version": 1,
+            "started_after_sequence": 0,
+            "entries": [
+                {
+                    "conversation_id": "owner",
+                    "turn_id": "turn-1",
+                    "completed_sequence": 10,
+                    "state": "ready"
+                },
+                {
+                    "conversation_id": "owner",
+                    "turn_id": "turn-1",
+                    "completed_sequence": 11,
+                    "state": "uncertain"
+                }
+            ]
+        });
+        fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        assert!(Outbox::load(&path).is_err());
         let _ = fs::remove_file(path);
     }
 
