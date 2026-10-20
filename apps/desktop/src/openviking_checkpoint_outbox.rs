@@ -873,16 +873,12 @@ mod tests {
         let before = fs::read(&external).unwrap();
 
         symlink(&external, &path).unwrap();
-        assert!(Outbox::load(&path)
-            .unwrap_err()
-            .contains("regular file"));
+        assert!(Outbox::load(&path).unwrap_err().contains("regular file"));
         assert_eq!(fs::read(&external).unwrap(), before);
 
         fs::remove_file(&external).unwrap();
         assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
-        assert!(Outbox::load(&path)
-            .unwrap_err()
-            .contains("regular file"));
+        assert!(Outbox::load(&path).unwrap_err().contains("regular file"));
 
         fs::remove_file(&path).unwrap();
         assert!(Outbox::load(&path).unwrap().entries().is_empty());
@@ -896,9 +892,7 @@ mod tests {
         let path = root.join(FILE_NAME);
         let file = fs::File::create(&path).unwrap();
         file.set_len(MAX_FILE_BYTES as u64 + 1).unwrap();
-        assert!(Outbox::load(&path)
-            .unwrap_err()
-            .contains("file limit"));
+        assert!(Outbox::load(&path).unwrap_err().contains("file limit"));
         fs::remove_dir_all(root).unwrap();
     }
 
