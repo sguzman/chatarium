@@ -147,6 +147,12 @@ successful enqueue preserves the request, and restart reconciliation scans journ
 that fell into the gap between terminal append and outbox enqueue. The first
 enabled run uses a durable high-water baseline to avoid mass historical export.
 
+Startup reads the outbox only when the path is an actual regular file.
+Symlinked or special-file outboxes, including dangling symlinks, fail closed
+instead of being treated as missing or importing unrelated checkpoint state.
+The reader also bounds bytes before parsing and checks file identity across
+open on Unix. Only an absent file initializes an empty first-run outbox.
+
 A pending outbox entry is **not** a stored memory. Chatarium now runs a
 bounded separate summarization inference when idle, using at most eight
 recent authorized user/assistant messages and a 5,400-character source
