@@ -165,13 +165,14 @@ services. CI runs these tests on Windows and Linux.
 
 The tool transport is implemented by `tools/local-http-mcp/client.mjs`,
 `tools/local-http-mcp/worker.mjs` and
-`apps/desktop/src/local_http_mcp.rs`. Development builds first use the
-source checkout's scripts. If that checkout is unavailable after moving or
-installing the native executable, the compiled binary has an embedded copy
-of the exact MCP client, worker and OpenViking preflight modules. It
-materializes them in a private temporary directory for the helper process,
-then removes that directory when the helper is dropped. CI smoke-tests the
-detached worker and its relative import without contacting any live daemon.
+`apps/desktop/src/local_http_mcp.rs`. The native executable embeds
+the exact MCP client, worker, and OpenViking preflight scripts at build time.
+Both development and installed builds run those embedded versions, even when
+an older or modified source checkout is present. This keeps the preflight
+and transport implementation consistent with the compiled binary.
+Chatarium materializes the scripts in a private temporary directory and
+removes it when the helper is dropped. CI smoke-tests the detached worker
+and its relative import without contacting any live daemon.
 **Node 22+ must still be installed**; bundling the helper files does not
 embed the Node runtime or establish live OpenViking compatibility.
 
