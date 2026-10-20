@@ -869,7 +869,9 @@ mod tests {
         let external = root.join("external-state.json");
         let mut queue = Outbox::default();
         queue.activate_durable(&external, 4).unwrap();
-        queue.enqueue_durable(&external, "owner", "turn-1", 5).unwrap();
+        queue
+            .enqueue_durable(&external, "owner", "turn-1", 5)
+            .unwrap();
         let before = fs::read(&external).unwrap();
 
         symlink(&external, &path).unwrap();
@@ -877,7 +879,12 @@ mod tests {
         assert_eq!(fs::read(&external).unwrap(), before);
 
         fs::remove_file(&external).unwrap();
-        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert!(Outbox::load(&path).unwrap_err().contains("regular file"));
 
         fs::remove_file(&path).unwrap();
