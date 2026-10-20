@@ -270,9 +270,7 @@ mod tests {
         let within_budget = vec!["checkpoint fact"; MAX_SUMMARY_LINES].join("\n");
         assert_eq!(validate_summary(&within_budget).unwrap(), within_budget);
         let too_many = vec!["checkpoint fact"; MAX_SUMMARY_LINES + 1].join("\n");
-        assert!(validate_summary(&too_many)
-            .unwrap_err()
-            .contains("80-line"));
+        assert!(validate_summary(&too_many).unwrap_err().contains("80-line"));
         assert_eq!(validate_summary("NO_MEMORY").unwrap(), "NO_MEMORY");
     }
 
