@@ -10,6 +10,8 @@ use std::path::Path;
 
 const MAX_SOURCE_CHARS: usize = 5400;
 const MAX_RESPONSE_BYTES: usize = 8192;
+// Leave headroom for checkpoint metadata within the 100-line MCP read limit.
+const MAX_SUMMARY_LINES: usize = 80;
 const MAX_PRIOR_CHECKPOINT_BYTES: u64 = 10 * 1024;
 
 /// A previously write-verified, locally persisted checkpoint of the SAME
@@ -95,7 +97,7 @@ pub const GUIDANCE: &str = concat!(
     "answer NO_MEMORY solely because the newest excerpt is trivial. ",
     "Do not invent facts, commit IDs or ",
     "outcomes; distinguish unverified reports. Write concise Markdown, under ",
-    "1500 characters. If no durable information is present, output exactly ",
+    "1500 characters and no more than 80 lines. If no durable information is present, output exactly ",
     "NO_MEMORY and nothing else."
 );
 
@@ -186,6 +188,9 @@ pub fn validate_summary(output: &str) -> Result<String, String> {
     {
         return Err("OpenViking summary contains forbidden control characters".to_owned());
     }
+    if result.lines().count() > MAX_SUMMARY_LINES {
+        return Err("OpenViking summary exceeds the 80-line checkpoint budget".to_owned());
+    }
     Ok(result.to_owned())
 }
 
@@ -258,6 +263,17 @@ mod tests {
                 .to_string()
                 .contains("Prior confirmed checkpoint")
         );
+    }
+
+    #[test]
+    fn summary_line_budget_preserves_exact_full_readback() {
+        let within_budget = vec!["checkpoint fact"; MAX_SUMMARY_LINES].join("\n");
+        assert_eq!(validate_summary(&within_budget).unwrap(), within_budget);
+        let too_many = vec!["checkpoint fact"; MAX_SUMMARY_LINES + 1].join("\n");
+        assert!(validate_summary(&too_many)
+            .unwrap_err()
+            .contains("80-line"));
+        assert_eq!(validate_summary("NO_MEMORY").unwrap(), "NO_MEMORY");
     }
 
     #[test]
