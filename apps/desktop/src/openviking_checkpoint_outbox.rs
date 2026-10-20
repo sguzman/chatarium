@@ -673,7 +673,9 @@ mod tests {
 
     #[test]
     fn checkpoint_too_long_for_mcp_readback_never_advances_ready() {
-        let path = test_path("readback-lines");
+        let root = test_path("readback-lines");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
         outbox
@@ -695,8 +697,7 @@ mod tests {
             .save_summary_durable(&path, "owner", "turn-1", 7, "readable summary")
             .unwrap());
         assert_eq!(outbox.entries()[0].state, State::Ready);
-        fs::remove_dir_all(path.parent().unwrap().join("openviking-checkpoint-summaries")).unwrap();
-        let _ = fs::remove_file(path);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
