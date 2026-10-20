@@ -628,7 +628,9 @@ mod tests {
         let path = root.join(FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
-        outbox.enqueue_durable(&path, "owner", "turn-1", 12).unwrap();
+        outbox
+            .enqueue_durable(&path, "owner", "turn-1", 12)
+            .unwrap();
 
         let file = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
         fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -637,17 +639,26 @@ mod tests {
         fs::write(&victim, body).unwrap();
         symlink(&victim, &file).unwrap();
 
-        assert!(outbox
-            .save_summary_durable(&path, "owner", "turn-1", 12, "Safe checkpoint")
-            .is_err());
+        assert!(
+            outbox
+                .save_summary_durable(&path, "owner", "turn-1", 12, "Safe checkpoint")
+                .is_err()
+        );
         assert_eq!(outbox.entries()[0].state, State::PendingSummary);
         assert_eq!(fs::read_to_string(&victim).unwrap(), body);
-        assert!(fs::symlink_metadata(&file).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&file)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
 
         fs::remove_file(&file).unwrap();
-        assert!(outbox
-            .save_summary_durable(&path, "owner", "turn-1", 12, "Safe checkpoint")
-            .unwrap());
+        assert!(
+            outbox
+                .save_summary_durable(&path, "owner", "turn-1", 12, "Safe checkpoint")
+                .unwrap()
+        );
         assert_eq!(outbox.entries()[0].state, State::Ready);
         assert_eq!(fs::read_to_string(&file).unwrap(), body);
         for directory in file.parent().unwrap().ancestors().take(2) {
@@ -673,15 +684,19 @@ mod tests {
         let path = root.join(FILE_NAME);
         let mut outbox = Outbox::default();
         outbox.activate_durable(&path, 0).unwrap();
-        outbox.enqueue_durable(&path, "owner", "turn-1", 13).unwrap();
+        outbox
+            .enqueue_durable(&path, "owner", "turn-1", 13)
+            .unwrap();
 
         let redirected = root.join("unrelated-dir");
         fs::create_dir_all(&redirected).unwrap();
         let link = root.join("openviking-checkpoint-summaries");
         symlink(&redirected, &link).unwrap();
-        assert!(outbox
-            .save_summary_durable(&path, "owner", "turn-1", 13, "Private summary")
-            .is_err());
+        assert!(
+            outbox
+                .save_summary_durable(&path, "owner", "turn-1", 13, "Private summary")
+                .is_err()
+        );
         assert_eq!(outbox.entries()[0].state, State::PendingSummary);
         assert!(!redirected.join("owner").join("turn-1.md").exists());
         fs::remove_dir_all(root).unwrap();
