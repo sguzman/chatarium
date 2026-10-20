@@ -11,6 +11,7 @@ pub const FILE_NAME: &str = "openviking-checkpoint-outbox.json";
 const SCHEMA: &str = "chatarium-openviking-checkpoint-outbox";
 const MAX_ITEMS: usize = 4096;
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MCP_CHECKPOINT_LINES: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -390,6 +391,12 @@ impl Outbox {
         let body = format!(
             "# Chatarium memory checkpoint\n\nConversation: {conversation}\nTurn: {turn}\nSource journal sequence: {completed_sequence}\n\n{summary}\n"
         );
+        // The downstream MCP read uses limit=100. Refuse locally valid
+        // summaries that could only be returned in truncated form, rather
+        // than dispatching a create we cannot prove by exact read-back.
+        if body.lines().count() > MAX_MCP_CHECKPOINT_LINES {
+            return Err("checkpoint exceeds 100-line MCP readback limit; summary remains pending".to_owned());
+        }
         let parent = file
             .parent()
             .ok_or("checkpoint summary directory missing")?;
@@ -662,6 +669,34 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&file).unwrap(), body);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_too_long_for_mcp_readback_never_advances_ready() {
+        let path = test_path("readback-lines");
+        let mut outbox = Outbox::default();
+        outbox.activate_durable(&path, 0).unwrap();
+        outbox
+            .enqueue_durable(&path, "owner", "turn-1", 7)
+            .unwrap();
+        let too_many = vec!["line"; 101].join("\n");
+        let error = outbox
+            .save_summary_durable(&path, "owner", "turn-1", 7, &too_many)
+            .unwrap_err();
+        assert!(error.contains("100-line MCP readback limit"));
+        assert_eq!(outbox.entries()[0].state, State::PendingSummary);
+        assert_eq!(
+            Outbox::load(&path).unwrap().entries()[0].state,
+            State::PendingSummary
+        );
+        let summary_path = Outbox::summary_path(&path, "owner", "turn-1").unwrap();
+        assert!(!summary_path.exists());
+        assert!(outbox
+            .save_summary_durable(&path, "owner", "turn-1", 7, "readable summary")
+            .unwrap());
+        assert_eq!(outbox.entries()[0].state, State::Ready);
+        fs::remove_dir_all(path.parent().unwrap().join("openviking-checkpoint-summaries")).unwrap();
+        let _ = fs::remove_file(path);
     }
 
     #[test]
