@@ -748,6 +748,20 @@ mod tests {
             })
             .is_err()
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let external = dir.join("matching-outside.md");
+            std::fs::write(&external, &content).unwrap();
+            std::fs::remove_file(&source).unwrap();
+            symlink(&external, &source).unwrap();
+            assert!(
+                verify_uncertain_with_read(&path, "owner", "turn-1", 12, |_| {
+                    panic!("remote read must not run for redirected source")
+                })
+                .is_err()
+            );
+        }
         assert!(
             outbox
                 .transition_durable(
