@@ -147,7 +147,15 @@ Chatarium is not a claim that ChatGPT exposes a supported public consumer API. I
 
 ## Development
 
-For the current desktop alpha, launch the actual GUI binary explicitly:
+For the first live OpenViking checkpoint test, use the single read-only
+service-check + normal GUI launcher described in
+[OpenViking first live QA](docs/OPENVIKING_FIRST_LIVE_QA.md):
+
+```sh
+node tools/run-openviking-qa.mjs
+```
+
+For ordinary desktop alpha development, launch the actual GUI binary explicitly:
 
 ```sh
 cargo run -p chatarium-desktop --bin chatarium-desktop
