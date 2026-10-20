@@ -165,17 +165,22 @@ services. CI runs these tests on Windows and Linux.
 
 The tool transport is implemented by `tools/local-http-mcp/client.mjs`,
 `tools/local-http-mcp/worker.mjs` and
-`apps/desktop/src/local_http_mcp.rs`. When running directly from a source
-checkout, the Node worker script is found relative to Chatarium's source
-directory. An independently packaged binary needs an explicit installation
-layout for that worker; installed-binary portability is not yet certified.
+`apps/desktop/src/local_http_mcp.rs`. Development builds first use the
+source checkout's scripts. If that checkout is unavailable after moving or
+installing the native executable, the compiled binary has an embedded copy
+of the exact MCP client, worker and OpenViking preflight modules. It
+materializes them in a private temporary directory for the helper process,
+then removes that directory when the helper is dropped. CI smoke-tests the
+detached worker and its relative import without contacting any live daemon.
+**Node 22+ must still be installed**; bundling the helper files does not
+embed the Node runtime or establish live OpenViking compatibility.
 
 ## OpenViking integration: fixed, scoped transport
 
 Chatarium reuses the existing OpenViking service at
 `http://127.0.0.1:1933/mcp`; it never installs or starts another memory
 daemon. Supported tools: `find`, `search`, `read`, and `write`.
-This is the **first transport slice**, not yet automatic memory checkpointing.
+This transport also supports the separately implemented host-controlled, durable automatic checkpoint lifecycle; live installed-service acceptance remains pending.
 
 The transport binds every request to
 `viking://~/chatarium/conversations/<requesting-conversation-id>`.
