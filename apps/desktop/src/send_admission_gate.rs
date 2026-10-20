@@ -34,9 +34,34 @@ impl Presence {
     }
 }
 
+/// An absent admission category has no payload to validate or admit.
+/// Categories that do exist still execute the original strict replay.
+pub(crate) fn replay_when<T>(
+    admitted: bool,
+    replay: impl FnOnce() -> Result<Vec<T>, String>,
+) -> Result<Vec<T>, String> {
+    if admitted {
+        replay()
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absent_admission_skips_costly_replay_without_losing_present_errors() {
+        let skipped: Result<Vec<u64>, String> = replay_when(false, || {
+            panic!("no expensive replay should run for an absent category")
+        });
+        assert_eq!(skipped.unwrap(), Vec::<u64>::new());
+        let actual: Result<Vec<u64>, String> = replay_when(true, || Ok(vec![4, 9]));
+        assert_eq!(actual.unwrap(), vec![4, 9]);
+        let denied: Result<Vec<u64>, String> = replay_when(true, || Err("invalid provenance".into()));
+        assert_eq!(denied.unwrap_err(), "invalid provenance");
+    }
 
     #[test]
     fn normal_conversation_journal_needs_no_heavy_admission_replay() {
