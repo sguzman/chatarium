@@ -332,6 +332,42 @@ Deliverables:
 
 Exit criterion: the user can supervise several ChatGPT sessions and MCP/tools from one Chatarium surface, delegate/continue work without manual copy-paste, positively recognize worker completion, and inspect or veto cross-session/tool traffic before or after dispatch according to policy.
 
+## P7.A2A — deferred agent-to-agent interoperability (NOT STARTED)
+
+**Future-only. Do not implement or add dependencies yet.** Keep OpenViking
+as Chatarium's permanent context/memory layer. A2A would extend the existing
+durable master/worker supervisory plane to independently harnessed remote
+agents; it would not replace OpenViking, MCP, Chatarium routing, or the remote
+agent's harness. See [A2A future integration](A2A_FUTURE_INTEGRATION.md).
+
+**Hard entry gate:** first complete the live OpenViking normal-turn checkpoint,
+exclusive create/read-back, restart and verified recall test described in
+[OPENVIKING_FIRST_LIVE_QA.md](OPENVIKING_FIRST_LIVE_QA.md). Then require an
+explicit decision to activate A2A; passing OpenViking QA is not automatic
+permission to begin this work.
+
+Future roadmap tasks (all unchecked and unstarted):
+
+- [ ] 🔎 A2A-1: verify protocol revision and official Rust SDK; pin and record an ADR.
+- [ ] 🔐 A2A-2: opt-in native A2A peer discovery/client with authenticated,
+      allowlisted endpoints, capability checks and existing `RouteGate` approval.
+- [ ] 🧾 A2A-3: correlate remote task/context IDs with distinct local identities;
+      journal intent, dispatch, observed progress/artifacts and uncertain outcomes.
+- [ ] 🔁 A2A-4: add bounded polling/optional streaming, idempotent reconciliation,
+      cancellation/needs-input, checkpoint recovery and no blind mutating retries.
+- [ ] ✅ A2A-5: connect independent artifact verification and bounded supervisory
+      continuation with user-visible egui veto/inspection.
+- [ ] 🧪 A2A-6: automated cross-SDK interoperability, restart/ambiguity, policy,
+      security, and OpenViking memory-isolation regression gates.
+- [ ] 🔌 A2A-7: only if independently justified, expose an authenticated inbound
+      A2A endpoint or a hosted-ChatGPT adapter built on a **verified supported**
+      interface. Do not assume ChatGPT natively speaks A2A.
+
+Exit criterion: an authorized external A2A peer can complete one supervised,
+durably correlated task with verifiable evidence and no duplicate dispatch
+after interruption; A2A disabled must leave local conversations, OpenViking,
+and MCP behavior unchanged.
+
 ## Continuous work — protocol revision response
 
 Whenever the official client changes materially:

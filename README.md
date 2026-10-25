@@ -19,6 +19,12 @@ The original XML-like tool-call/result envelope has been recovered from the Chat
 
 These capabilities are sequenced after the reliability/protocol foundations; they are not a reason to skip them, and they are not optional evidence that Chatarium should be narrowed back to “just a chat client.”
 
+Future A2A agent interoperability is **design-only and deferred until live OpenViking
+checkpoint/read-back/recall acceptance is complete**. It would extend the
+existing supervisory control plane to external agents without replacing
+OpenViking or assuming hosted ChatGPT natively speaks A2A. See
+[`docs/A2A_FUTURE_INTEGRATION.md`](docs/A2A_FUTURE_INTEGRATION.md).
+
 See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for the formal product intent and [`docs/SELF_SUSTAINING_TRANSPORT.md`](docs/SELF_SUSTAINING_TRANSPORT.md) for the hard native-transport viability contract.
 
 A browser may be used for protocol observation or occasional authentication bootstrap, but **Chromium-per-request is not an acceptable end state**. Ordinary conversation listing, retrieval, creation, continuation, send, and response streaming must ultimately be native Chatarium operations. Hiding or backgrounding Chromium does not satisfy this requirement.
