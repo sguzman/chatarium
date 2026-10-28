@@ -104,7 +104,8 @@ fn run() -> Result<(), String> {
                     "recorded"
                 }
             );
-            println!("projection status: NOT FILTERED (non-operative evidence only)");
+            println!("active desktop/worker view: validated source exclusion on next startup");
+            println!("physical journal/SQLite evidence: preserved and unfiltered");
             Ok(())
         }
         [command, fixture, read_index, data_dir] if command == "read-fixture" => {
