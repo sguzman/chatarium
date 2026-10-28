@@ -20,20 +20,20 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **verified complete** |
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **verified complete** |
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **verified complete** |
-| R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | **active** |
+| R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | **verified complete** |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **verified complete** |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | **verified complete** |
 | R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **verified complete** |
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **verified complete** |
-| R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | pending |
+| R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | **active** |
 | R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | pending |
 | R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | pending |
 | R40 ⚡ | Verify egui reader/search behavior and frame-time discipline with existing QA/perf checks | 4 | R13,R20 | pending |
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 73% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 75% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R16 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -156,3 +156,10 @@ A separate feature branch exercises a structural split into the original coordin
 - **R21 verified (+5pp):** the separate `refactor/coordination-modules-20261028` branch's native model/persistence/topology/messages/wake/identity/UI/test split passed [full CI 40748666850](https://github.com/sguzman/chatarium/actions/runs/40748666850) and [visual QA 40748666809](https://github.com/sguzman/chatarium/actions/runs/40748666809) at `88ebaf2`. Main was **fast-forwarded** from `871a7dd` to `88ebaf2`, with no history rewrite. The branch's passing state is now main.
 - **Verified progress: 62% → 73% (+11pp)**. All-or-nothing weights and 100% stopping boundary unchanged.
 - **R16 active:** root `main.rs` remains ~11,695 lines; next split isolates the remaining persistence and rendering helpers into real Rust modules. Avoid changing data flow, parent module visibility, or the single-writer ordering until verified.
+
+## Round 9 — Bootstrap extraction accepted; parked account-bridge split in validation
+
+- **R16 verified: 73% → 75% (+2pp).** Root `apps/desktop/src/main.rs` is **113 lines**. Removed 47 journal admission helpers into `journal_ops.rs`, 15 reusable egui drawing/reader helpers into `ui_helpers.rs`, and 24 remaining `ChatariumApp` methods into named action/lifecycle modules. Root state, shared imports and boot/runtime helpers now live in the desktop's typed `app/model.rs`, `prelude.rs` and dedicated `app/` modules. No additional crates/dependencies or new features. The exact commit [236ba97](https://github.com/sguzman/chatarium/commit/236ba97d5954dff5936d5ed26923f5d96cbaeff2) passed [full Windows/Linux CI 40757164744](https://github.com/sguzman/chatarium/actions/runs/40757164744) and [native visual QA 40757164742](https://github.com/sguzman/chatarium/actions/runs/40757164742). Main fast-forwarded to that commit with no rewrite.
+- **R30 active, no points yet:** Parked browser account bridge split into runtime shell, provider, proof parser, HTTP server and tests on isolated `refactor/chatarium-r30-account-bridge-20261028` branch. Initial CI identified that `chatarium-qa` also loads `account_bridge.rs` with `#[path]`, so submodule resolution needs explicit paths; corrected in [db4540c](https://github.com/sguzman/chatarium/commit/db4540c39cb55cc1f31ef46d6459d41faaac2c85). Do not reactivate browser transport or credit R30 until CI and GUI QA both pass.
+- **R31/R32 mechanical extractions prepared but not merged/verified:** Edge capture and flight recorder have separate candidate modules and tests. Preserve all existing run isolation, profile locks, cleanup and fail-closed sanitization behavior. Accept only after their dependency predecessors and platform CI tests pass.
+- **R40** remains pending the final cross-platform reader/search and frame-thread regression review; R41/R42 remain pending cleanup/integration. **Stop at verified 100%.**
