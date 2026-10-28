@@ -63,9 +63,15 @@ same exclusive lease but refuses a missing journal or torn tail **without
 repairing, truncating, or creating the journal**. Evidence-sensitive mutation
 commands must use this mode and revalidate their source while owning the lease.
 
-A source-quarantine apply command is *not* implemented yet. It must acquire
-this writer lease before revalidating source evidence and appending a decision;
-a read-only preflight journal SHA by itself cannot prevent concurrent changes.
+The importer exposes `quarantine-record` for explicit, durable,
+**non-operative** source quarantine decisions. It opens the journal strictly,
+then re-runs the source preflight and replay admission while holding the
+exclusive lease. Repeated recording is idempotent; source re-import is refused.
+
+An active source-quarantine apply operation is *not* implemented yet.
+No desktop, worker, or SQLite projection currently excludes the recorded
+source's events. A read-only preflight journal SHA by itself cannot prevent
+concurrent changes; use the strict writer lease for any future operation.
 
 ## Source quarantine decision audit (non-operative)
 
