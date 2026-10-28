@@ -144,6 +144,16 @@ impl eframe::App for ChatariumApp {
         let mut mirror_remote_requested = sidebar.mirror_remote_requested;
         let mut sync_live_requested = sidebar.sync_live_requested;
         self.render_coordination_window(ctx);
+        let rename_local_requested = sidebar.rename_local_requested;
+        let save_project_directory_requested = sidebar.save_project_directory_requested;
+        let project_memory_permission_request = sidebar.project_memory_permission_request;
+        let archive_local_requested = sidebar.archive_local_requested;
+        let open_reader_from_transcript_search = sidebar.open_reader_from_transcript_search;
+        let refresh_history_requested = sidebar.refresh_history_requested;
+        let mirror_start_requested = sidebar.mirror_start_requested;
+        let mirror_recheck_requested = sidebar.mirror_recheck_requested;
+        let mirror_pause_requested = sidebar.mirror_pause_requested;
+        let mirror_resume_requested = sidebar.mirror_resume_requested;
 
         if rename_local_requested {
             self.rename_current_local_conversation();

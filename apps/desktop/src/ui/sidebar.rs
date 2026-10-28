@@ -10,6 +10,16 @@ pub(super) struct SidebarOutcome {
     pub(super) header_conversation_title: String,
     pub(super) mirror_remote_requested: Option<String>,
     pub(super) sync_live_requested: Option<LocalConversationId>,
+    pub(super) rename_local_requested: bool,
+    pub(super) save_project_directory_requested: bool,
+    pub(super) project_memory_permission_request: Option<(LocalConversationId, bool)>,
+    pub(super) archive_local_requested: bool,
+    pub(super) open_reader_from_transcript_search: bool,
+    pub(super) refresh_history_requested: bool,
+    pub(super) mirror_start_requested: bool,
+    pub(super) mirror_recheck_requested: bool,
+    pub(super) mirror_pause_requested: bool,
+    pub(super) mirror_resume_requested: bool,
 }
 
 impl ChatariumApp {
@@ -7920,6 +7930,16 @@ impl ChatariumApp {
             header_conversation_title,
             mirror_remote_requested,
             sync_live_requested,
+            rename_local_requested,
+            save_project_directory_requested,
+            project_memory_permission_request,
+            archive_local_requested,
+            open_reader_from_transcript_search,
+            refresh_history_requested,
+            mirror_start_requested,
+            mirror_recheck_requested,
+            mirror_pause_requested,
+            mirror_resume_requested,
         }
     }
 }
