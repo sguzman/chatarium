@@ -5,6 +5,7 @@
 //! validation. GUI construction, egui and application runtime setup never run
 //! on the loader thread.
 
+use eframe::egui;
 use chatarium_store::JsonlEventStore;
 use chatarium_store::effective_event_store::EffectiveEventStore;
 use std::path::PathBuf;
