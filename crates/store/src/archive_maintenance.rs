@@ -663,6 +663,13 @@ pub fn restore_backup(
     // entirely on Windows) and allow split-brain journal ownership.
     let _restore_writer_guard = crate::acquire_archive_restore_lease(target)
         .map_err(|error| err(format!("restore refuses active journal writer: {error}")))?;
+    if target.is_dir() {
+        // Older app versions did not hold the parent lease. This detects an
+        // already-running legacy writer; a true mixed-version race still
+        // requires stopping every older app before publication.
+        crate::reject_active_legacy_journal_writer(target)
+            .map_err(|error| err(format!("restore refuses legacy journal writer: {error}")))?;
+    }
     let staging = parent.join(format!(".chatarium-restore-{}", std::process::id()));
     if staging.exists() {
         return Err(err("restore staging path already exists"));
