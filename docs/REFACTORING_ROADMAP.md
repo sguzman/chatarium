@@ -18,7 +18,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R11 🖥️ | Move `eframe::App` implementation into `src/ui/`; build and reader tests pass unchanged | 6 | R01 | **verified complete** |
 | R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **verified complete** |
 | R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **active** |
-| R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **active** |
+| R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **verified complete** |
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **active** |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 25% (R00 + R01 + R10 + R11 + R12), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 30% (R00 + R01 + R10 + R11 + R12 + R14), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -91,3 +91,11 @@ Five line-wrap changes were applied verbatim from the latest Windows rustfmt out
 ### CI follow-up: module-aware visual-QA triggering
 
 The first nine-handler notice split reached Windows `cargo fmt -- --check` and produced 19 formatting-only diffs; the output of rustfmt was applied to the corresponding extracted modules. The native-reader visual-QA workflow's path filter now includes `apps/desktop/src/app/**` and `apps/desktop/src/ui/**` to ensure the freshly relocated code always triggers screenshot testing. R14 still needs CI verification; R13 remains partially implemented. No additional percentage points are counted at this stage.
+
+## Recovered continuation — 2026-10-28
+
+**R14 verified: 25% → 30% (+5 percentage points)**. Exact commit [3955c4f](https://github.com/sguzman/chatarium/commit/3955c4f7f413c53d8babcceb50f0aae9af677784) has [CI run 40718373736](https://github.com/sguzman/chatarium/actions/runs/40718373736) fully **success** (Linux and Windows), and [native reader visual-QA 40718373753](https://github.com/sguzman/chatarium/actions/runs/40718373753) fully **success**. The feature-owned dispatcher is ~101 lines, and all 57 PersistNotice variants are represented in the nine handlers; existing test and GUI coverage passed.
+
+**R15 active (verification pending):** Extract 36 additional existing `ChatariumApp` methods into conversation, draft/composer, coordination wake, and inference/settings action modules. This complements the existing routing, tools, memory and worker action modules. No functional changes, no new dependencies, no paused remote-history track activation. Keep progress at 30% until this slice is verified.
+
+**R13 ongoing:** The root frame update still contains an enormous sidebar surface. An extraction into `ui/sidebar.rs` is prepared separately and must be independently validated after R15; do not count it as done yet.

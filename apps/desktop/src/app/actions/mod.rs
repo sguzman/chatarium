@@ -1,4 +1,8 @@
-//! Thin feature-owned action handlers on the shared desktop app state.
+//! Feature-owned action methods on shared durable desktop state.
+mod composer;
+mod conversations;
+mod coordination;
+mod inference;
 mod memory;
 mod routing;
 mod tools;
