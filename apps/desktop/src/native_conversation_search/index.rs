@@ -372,6 +372,15 @@ struct NativeSearchCache {
 /// Ephemeral egui-frame projection; metadata and journal remain authoritative.
 /// When only unrelated journal events append, advance the cache cursor without
 /// cloning or rebuilding the potentially large message corpus.
+/// Seed the egui cache with an index already built on the background
+/// journal loader. The Vec backing allocation must be moved, not cloned,
+/// when the matching event snapshot is handed to the desktop.
+pub(crate) fn seed_index(ctx: &egui::Context, index: Arc<NativeConversationSearchIndex>) {
+    let id = egui::Id::new("chatarium-native-conversation-search-index");
+    let observed = index.revision.clone();
+    ctx.data_mut(|data| data.insert_temp(id, NativeSearchCache { observed, index }));
+}
+
 pub fn cached_index(
     ctx: &egui::Context,
     events: &[EventEnvelope],
