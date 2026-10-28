@@ -27,13 +27,13 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **verified complete** |
 | R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | **verified complete** |
-| R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | **active** |
-| R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | **active** |
-| R40 ⚡ | Verify egui reader/search behavior and frame-time discipline with existing QA/perf checks | 4 | R13,R20 | pending |
-| R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
+| R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | **verified complete** |
+| R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | **verified complete** |
+| R40 ⚡ | Verify egui reader/search behavior and frame-time discipline with existing QA/perf checks | 4 | R13,R20 | **verified complete** |
+| R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | **verified complete** |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 80% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R16 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 97% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R16 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -176,3 +176,10 @@ A separate feature branch exercises a structural split into the original coordin
 - **R32 candidate:** branch `refactor/chatarium-r32-recorder-20261028` commit `2ddbfd7` passed [CI 40759171612](https://github.com/sguzman/chatarium/actions/runs/40759171612) including Windows/Linux workspace tests; contains the exact R31 source blobs plus flight recorder stream/read/derive/selection/policy/tests module split. No features or new dependencies.
 - **Integration:** apply precisely those 14 previously tested Rust file blobs to main on top of the verified R30 state. Preserve independent main roadmap updates, branch ancestry and other files. Add visual-QA workflow path filters for relocated legacy modules so a merged code change triggers the actual desktop reader QA in addition to Windows/Linux CI. Check the final main merge before accepting R31/R32.
 - **Evidence still needed:** full **main** CI and visual QA green, no new regression or sanitation weakness. Only then R31/R32 may earn +10pp (80% → 90%).
+
+## Round 12 — Legacy integrations, reader QA and Clippy accepted (97%)
+
+- **R31/R32 verified (+10pp):** On [main integration commit b5ee89b](https://github.com/sguzman/chatarium/commit/b5ee89bfc553b4f2387001ba2f52b83d9941ed65), the exact previously tested Edge/flight Rust blobs passed [full Windows + Linux CI 40761223108](https://github.com/sguzman/chatarium/actions/runs/40761223108), including workspace tests and protocol corpus validation; [production/native-reader visual QA 40761222959](https://github.com/sguzman/chatarium/actions/runs/40761222959) also passed. Parked capture/recorder functionality remains parked.
+- **R40 verified (+4pp):** Same passing GUI QA exercised the actual production workspace, synthetic reader, 1.25-scaled screenshots, per-conversation unsent draft restoration, and a seeded 257-message long reader. The Linux synthetic search profile passed on 128 conversations and 16,384 messages (cold index median **481,189 microseconds**, 100 cached queries **1,988 microseconds total** in debug CI). Treat wall times as diagnostic, not production SLA; no UI render path code changed in the legacy integration. See [architecture notes](REFACTORING_ARCHITECTURE.md) for pre-existing click-triggered I/O, which this behavior-preserving refactor did not introduce or remove.
+- **R41 verified (+3pp):** Source integration touched no `Cargo.toml` or `Cargo.lock`, created no new crates and no new public library boundary. Structurally private feature modules retain necessary sibling-visible methods. Existing Rustfmt, Windows workspace compilation/test, Linux builds and protocol corpus validation passed on the same integrated source. Full workspace **Clippy** (`cargo clippy --workspace --all-targets`) completed successfully in the Windows `rust` job of [CI 40761579323](https://github.com/sguzman/chatarium/actions/runs/40761579323) on an identical-source verification branch; the extra Clippy step is carried into main. Passing Clippy is not a claim of zero warnings.
+- **Progress: 80% → 97% (+17pp)**. R42 alone remains pending, requiring the final main CI, visual QA evidence, final roadmap/documentation, clean pushed state, and an explicit stop. No change to the scope boundary.

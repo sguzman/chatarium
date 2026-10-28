@@ -73,6 +73,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check
         run: cargo check --workspace
+      - name: Clippy workspace all targets
+        run: cargo clippy --workspace --all-targets
       - name: Lockfile unchanged
         run: git diff --exit-code -- Cargo.lock
       - name: Protocol corpus validation
