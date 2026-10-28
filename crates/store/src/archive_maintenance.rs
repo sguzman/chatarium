@@ -1193,6 +1193,41 @@ mod tests {
     }
 
     #[test]
+    fn restore_detects_writer_that_only_holds_legacy_in_directory_lock() {
+        let root = temp("legacy-restore-writer");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        let mut writer = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        writer.append(EventKind::DraftChanged, "source".into()).unwrap();
+        drop(writer);
+        create_backup(&source, &backup).unwrap();
+        fs::write(target.join("keep.txt"), b"keep").unwrap();
+
+        // Simulate a previous app version holding only the historical
+        // journal.jsonl.writer-lock.sqlite3 lease.
+        let legacy = rusqlite::Connection::open(
+            target.join("journal.jsonl.writer-lock.sqlite3")
+        )
+        .unwrap();
+        legacy.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let error = restore_backup(&backup, &target).unwrap_err();
+        assert!(error.to_string().contains("legacy journal writer"));
+        assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep");
+        drop(legacy);
+
+        restore_backup(&backup, &target).unwrap();
+        assert_eq!(
+            fs::read(target.join(JOURNAL_FILE)).unwrap(),
+            fs::read(backup.join(JOURNAL_FILE)).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn restore_lease_blocks_concurrent_publication_even_for_absent_target() {
         let root = temp("restore-parent-lease");
         let _ = fs::remove_dir_all(&root);
