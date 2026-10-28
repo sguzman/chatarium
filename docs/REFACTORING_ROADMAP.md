@@ -27,8 +27,8 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **verified complete** |
 | R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | **verified complete** |
-| R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | pending |
-| R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | pending |
+| R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | **active** |
+| R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | **active** |
 | R40 ⚡ | Verify egui reader/search behavior and frame-time discipline with existing QA/perf checks | 4 | R13,R20 | pending |
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
@@ -168,3 +168,11 @@ A separate feature branch exercises a structural split into the original coordin
 
 - **R30 verified: 75% → 80% (+5pp).** The account bridge splits into a root transport/runtime shell, separate provider, response/proof parser, loopback HTTP service, and isolated tests, without resuming previously parked browser experiments. [Commit db4540c](https://github.com/sguzman/chatarium/commit/db4540c39cb55cc1f31ef46d6459d41faaac2c85) passed the exact [Windows and Linux CI run 40757868072](https://github.com/sguzman/chatarium/actions/runs/40757868072) and [production/native-reader QA 40757867987](https://github.com/sguzman/chatarium/actions/runs/40757867987). Explicit Rust submodule paths preserve compilation in both the desktop binary and the separately included QA binary. Integrated as an ancestry-preserving merge with the independent roadmap documentation update on main.
 - **R31/R32 remain uncredited:** Their separate Edge and recorder branches contain moved legacy implementations. Both require their own tests and a verified combined integration before R31/R32 acceptance.
+
+## Round 11 — Integrate independently green legacy module extractions (pending main CI)
+
+- **Baseline: 80% verified** at main `6f23540786b0`. R31/R32 remain **active**, not credited yet; the stopping boundary stays fixed at 100%.
+- **R31 candidate:** branch `refactor/chatarium-r31-edge-20261028` commit `b291829` passed full [CI 40759139016](https://github.com/sguzman/chatarium/actions/runs/40759139016) including Windows workspace tests and Linux checks. Moves the original parked Edge driver into lifecycle, launched-session, process, diagnostics, readiness, plain/browser and tests modules; retains existing lock and cleanup utilities.
+- **R32 candidate:** branch `refactor/chatarium-r32-recorder-20261028` commit `2ddbfd7` passed [CI 40759171612](https://github.com/sguzman/chatarium/actions/runs/40759171612) including Windows/Linux workspace tests; contains the exact R31 source blobs plus flight recorder stream/read/derive/selection/policy/tests module split. No features or new dependencies.
+- **Integration:** apply precisely those 14 previously tested Rust file blobs to main on top of the verified R30 state. Preserve independent main roadmap updates, branch ancestry and other files. Add visual-QA workflow path filters for relocated legacy modules so a merged code change triggers the actual desktop reader QA in addition to Windows/Linux CI. Check the final main merge before accepting R31/R32.
+- **Evidence still needed:** full **main** CI and visual QA green, no new regression or sanitation weakness. Only then R31/R32 may earn +10pp (80% → 90%).
