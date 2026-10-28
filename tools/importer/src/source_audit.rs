@@ -84,7 +84,7 @@ fn audit_events(events: &[EventEnvelope], source_sha256: &str) -> Result<SourceA
     })
 }
 
-fn matched_source(event: &EventEnvelope, source_sha256: &str) -> Option<&'static str> {
+pub(crate) fn matched_source(event: &EventEnvelope, source_sha256: &str) -> Option<&'static str> {
     let payload: Value = serde_json::from_str(&event.payload).ok()?;
     let schema = payload.get("schema")?.as_str()?;
     match event.kind {
