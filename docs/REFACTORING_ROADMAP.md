@@ -22,7 +22,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **verified complete** |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **verified complete** |
-| R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
+| R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | **active** |
 | R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **verified complete** |
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **active** |
@@ -145,3 +145,7 @@ The large extracted advanced panel was further decomposed into independent modul
 - **R23 verified: 57% → 62% (+5pp).** [Commit ee15470](https://github.com/sguzman/chatarium/commit/ee1547018c7bf3c953bc4ff68c95c78cea3af7ee) passed [full Windows/Linux CI 40745433434](https://github.com/sguzman/chatarium/actions/runs/40745433434). The initial [visual QA 40745431740](https://github.com/sguzman/chatarium/actions/runs/40745431740) had an intermittent first production-window startup timeout, despite later draft and long-reader checks passing. Retrying the single failed job **succeeded**, including production GUI, synthetic reader, scaling, draft recovery and long-reader checks. Preserve that initial startup flake as a R40 verification concern; never describe the first attempt as green.
 - **R24 active, +0 pending:** Refactor `openviking_memory_delivery.rs` into `checkpoint.rs` (at-most-once claim, create/read-back and conversation-scoped retrieval), `project.rs` (explicit cross-conversation permission grants and project-scoped retrieval), and dedicated test modules. Existing request path, retry semantics, grant checks, and read-after-write confirmation remain unchanged. CI must verify the exact split before accepting the 6 points.
 - **R21 and R16 remain pending:** Source decompositions were prepared separately and have not been pushed or accepted. Keep unchanged feature scope and no new dependencies.
+
+### R21 isolation branch: coordination workspace decomposition (not verified)
+
+A separate feature branch exercises a structural split into the original coordination types, named `storage`, `topology`, `messages`, `wake`, `identity`, `ui` and `tests` Rust modules. Its same durable save, authority, membership, rate/claim and human consent methods are preserved. No new behavior, packages or remote transport. This branch does not advance the verified percentage or change main until GitHub CI and GUI QA pass and the predecessor R24 is accepted.
