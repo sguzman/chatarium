@@ -1202,17 +1202,17 @@ mod tests {
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&target).unwrap();
         let mut writer = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
-        writer.append(EventKind::DraftChanged, "source".into()).unwrap();
+        writer
+            .append(EventKind::DraftChanged, "source".into())
+            .unwrap();
         drop(writer);
         create_backup(&source, &backup).unwrap();
         fs::write(target.join("keep.txt"), b"keep").unwrap();
 
         // Simulate a previous app version holding only the historical
         // journal.jsonl.writer-lock.sqlite3 lease.
-        let legacy = rusqlite::Connection::open(
-            target.join("journal.jsonl.writer-lock.sqlite3")
-        )
-        .unwrap();
+        let legacy =
+            rusqlite::Connection::open(target.join("journal.jsonl.writer-lock.sqlite3")).unwrap();
         legacy.execute_batch("BEGIN EXCLUSIVE").unwrap();
         let error = restore_backup(&backup, &target).unwrap_err();
         assert!(error.to_string().contains("legacy journal writer"));
