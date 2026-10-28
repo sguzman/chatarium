@@ -108,9 +108,10 @@ impl<S: EventStore> EventStore for EffectiveEventStore<S> {
                 "quarantined import scope is protected from new writes",
             ));
         }
-        if import_source_hash(&payload)
-            .as_deref()
-            .is_some_and(|hash| self.quarantined_sources.contains(hash))
+        if !self.quarantined_sources.is_empty()
+            && import_source_hash(&payload)
+                .as_deref()
+                .is_some_and(|hash| self.quarantined_sources.contains(hash))
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
