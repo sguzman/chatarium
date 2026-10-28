@@ -75,8 +75,10 @@ stable, hashed `.chatarium-archive-writer-*.sqlite3` sibling in the archive
 directory's parent. Both leases are held until the writer is dropped. Desktop,
 importer and archive restore share the parent lease, so a restore cannot move
 an actively written archive, nor can a new writer enter while a restore
-replaces its directory. The older in-directory lease is retained to prevent
-mixed-version writers from bypassing existing coordination.
+replaces its directory. The older in-directory lease is retained, and restore
+checks it for an already-running old-version writer before publication.
+**Stop older Chatarium versions before restoring:** older binaries do not
+honor the parent lease, so a later-starting old writer cannot be serialized.
 
 `restore_backup` verifies the source, acquires the **parent** lease before
 staging and publication, and refuses active writers and concurrent restores.
