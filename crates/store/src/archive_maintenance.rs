@@ -649,17 +649,18 @@ pub fn restore_backup(
     // Use the same exclusive OS-backed lease as JsonlEventStore, held through
     // staged verification and publication. No journal bytes are opened for
     // append or recovery by the restore path.
-    let _restore_writer_guard = match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.file_type().is_dir() => Some(
-            crate::acquire_journal_writer_lock(&target.join(JOURNAL_FILE))
-                .map_err(|error| err(format!("restore refuses active journal writer: {error}")))?,
-        ),
-        Ok(_) => return Err(err("restore target must be a real directory, not a file or symlink")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
+    if let Ok(metadata) = fs::symlink_metadata(target) {
+        if !metadata.file_type().is_dir() {
+            return Err(err("restore target must be a real directory, not a file or symlink"));
+        }
+    }
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
+    // Keep this lock in the target's PARENT throughout publication. A lock
+    // file inside target would move with the directory (or prevent rename
+    // entirely on Windows) and allow split-brain journal ownership.
+    let _restore_writer_guard = crate::acquire_archive_restore_lease(target)
+        .map_err(|error| err(format!("restore refuses active journal writer: {error}")))?;
     let staging = parent.join(format!(".chatarium-restore-{}", std::process::id()));
     if staging.exists() {
         return Err(err("restore staging path already exists"));
