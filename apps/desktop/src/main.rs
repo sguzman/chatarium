@@ -15,10 +15,10 @@ mod journal_ops;
 mod ui_helpers;
 pub(crate) use journal_ops::*;
 pub(crate) use ui_helpers::*;
+mod startup;
 #[cfg(test)]
 mod tests;
 mod ui;
-mod startup;
 mod worker;
 use worker::persistence_worker;
 mod attachment_intake;
