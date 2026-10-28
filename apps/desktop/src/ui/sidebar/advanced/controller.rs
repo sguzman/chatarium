@@ -13,17 +13,12 @@ impl ChatariumApp {
             .color(egui::Color32::from_rgb(139, 143, 153)),
         );
 
-        match local_conversation_topology(
-            &self.events,
-            self.local_conversation_id,
-        ) {
+        match local_conversation_topology(&self.events, self.local_conversation_id) {
             Err(error) => {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "controller topology projection blocked: {error}"
-                    ))
-                    .size(9.0)
-                    .color(egui::Color32::from_rgb(186, 108, 108)),
+                    egui::RichText::new(format!("controller topology projection blocked: {error}"))
+                        .size(9.0)
+                        .color(egui::Color32::from_rgb(186, 108, 108)),
                 );
             }
             Ok(None) => {
@@ -51,18 +46,15 @@ impl ChatariumApp {
                         Ok(workers),
                     ) => {
                         let current_session = sessions.iter().find(|record| {
-                            record.session_id
-                                == controller_topology.current_session_id
+                            record.session_id == controller_topology.current_session_id
                         });
                         let current_is_worker = current_session
                             .and_then(|record| record.worker_binding)
                             .is_some();
-                        let designated = supervision.controllers.iter().any(
-                            |record| {
-                                record.designation.session_id()
-                                    == controller_topology.current_session_id
-                            },
-                        );
+                        let designated = supervision.controllers.iter().any(|record| {
+                            record.designation.session_id()
+                                == controller_topology.current_session_id
+                        });
 
                         ui.horizontal_wrapped(|ui| {
                             ui.label(
@@ -84,12 +76,9 @@ impl ChatariumApp {
                                 if ui
                                     .add_enabled(
                                         !current_is_worker
-                                            && !self
-                                                .supervision_command_pending
+                                            && !self.supervision_command_pending
                                             && self.persist_tx.is_some(),
-                                        egui::Button::new(
-                                            "Designate as controller",
-                                        ),
+                                        egui::Button::new("Designate as controller"),
                                     )
                                     .clicked()
                                 {
@@ -103,41 +92,27 @@ impl ChatariumApp {
 
                         if designated {
                             let mut shown = 0_usize;
-                            let controller_conversation_id =
-                                self.local_conversation_id;
+                            let controller_conversation_id = self.local_conversation_id;
                             for topology in topologies {
-                                if topology.conversation_id
-                                    == controller_conversation_id
-                                {
+                                if topology.conversation_id == controller_conversation_id {
                                     continue;
                                 }
-                                let Some(worker_binding) = worker_bindings
-                                    .iter()
-                                    .find(|binding| {
-                                        binding.conversation_id
-                                            == topology.conversation_id
-                                    })
-                                else {
+                                let Some(worker_binding) = worker_bindings.iter().find(|binding| {
+                                    binding.conversation_id == topology.conversation_id
+                                }) else {
                                     continue;
                                 };
                                 shown = shown.saturating_add(1);
 
-                                let active = active_worker_session(
-                                    &sessions,
-                                    worker_binding.worker_id,
-                                );
-                                let active_current = active.is_some_and(
-                                    |record| {
-                                        record.session_id
-                                            == topology.current_session_id
-                                    },
-                                );
-                                let existing = supervision.bindings.iter().find(
-                                    |record| {
-                                        record.binding.worker_session_id()
-                                            == topology.current_session_id
-                                    },
-                                );
+                                let active =
+                                    active_worker_session(&sessions, worker_binding.worker_id);
+                                let active_current = active.is_some_and(|record| {
+                                    record.session_id == topology.current_session_id
+                                });
+                                let existing = supervision.bindings.iter().find(|record| {
+                                    record.binding.worker_session_id()
+                                        == topology.current_session_id
+                                });
                                 let title = local_conversation_display_title(
                                     &self.local_conversation_catalog,
                                     topology.conversation_id,
@@ -464,19 +439,15 @@ impl ChatariumApp {
                                         "no other local conversations have WorkerIds yet",
                                     )
                                     .size(9.0)
-                                    .color(egui::Color32::from_rgb(
-                                        139, 143, 153,
-                                    )),
+                                    .color(egui::Color32::from_rgb(139, 143, 153)),
                                 );
                             }
 
                             ui.add_space(6.0);
                             ui.label(
-                                egui::RichText::new(
-                                    "Controller control routes",
-                                )
-                                .strong()
-                                .size(10.0),
+                                egui::RichText::new("Controller control routes")
+                                    .strong()
+                                    .size(10.0),
                             );
                             ui.label(
                                 egui::RichText::new(
@@ -504,63 +475,45 @@ impl ChatariumApp {
                                 ) => {
                                     let mut shown_controls = 0_usize;
                                     for provenance_record in provenance {
-                                        if provenance_record
-                                            .provenance
-                                            .issuer()
+                                        if provenance_record.provenance.issuer()
                                             != ControlIssuer::ControllerSession(
-                                                controller_topology
-                                                    .current_session_id,
+                                                controller_topology.current_session_id,
                                             )
                                         {
                                             continue;
                                         }
-                                        let control_id = provenance_record
-                                            .provenance
-                                            .control_id();
-                                        let Some(control) = controls.iter().find(
-                                            |record| {
-                                                record.control_id == control_id
-                                            },
-                                        ) else {
+                                        let control_id = provenance_record.provenance.control_id();
+                                        let Some(control) = controls
+                                            .iter()
+                                            .find(|record| record.control_id == control_id)
+                                        else {
                                             continue;
                                         };
-                                        let Some(binding) = bindings.iter().find(
-                                            |record| {
-                                                record.binding.control_id()
-                                                    == control_id
-                                            },
-                                        ) else {
+                                        let Some(binding) = bindings.iter().find(|record| {
+                                            record.binding.control_id() == control_id
+                                        }) else {
                                             continue;
                                         };
-                                        let Some(route) = routes.iter().find(
-                                            |record| {
-                                                record.request.id
-                                                    == binding.binding.route_id()
-                                            },
-                                        ) else {
+                                        let Some(route) = routes.iter().find(|record| {
+                                            record.request.id == binding.binding.route_id()
+                                        }) else {
                                             continue;
                                         };
-                                        let delivery = deliveries.iter().find(
-                                            |record| {
-                                                record.route_id == route.request.id
-                                            },
-                                        );
-                                        shown_controls =
-                                            shown_controls.saturating_add(1);
+                                        let delivery = deliveries
+                                            .iter()
+                                            .find(|record| record.route_id == route.request.id);
+                                        shown_controls = shown_controls.saturating_add(1);
 
                                         let next_sequence = self
                                             .events
                                             .last()
-                                            .map_or(1, |event| {
-                                                event.sequence.saturating_add(1)
-                                            });
-                                        let fresh =
-                                            validate_control_freshness_before(
-                                                &self.events,
-                                                control,
-                                                next_sequence,
-                                            )
-                                            .is_ok();
+                                            .map_or(1, |event| event.sequence.saturating_add(1));
+                                        let fresh = validate_control_freshness_before(
+                                            &self.events,
+                                            control,
+                                            next_sequence,
+                                        )
+                                        .is_ok();
 
                                         ui.group(|ui| {
                                             ui.horizontal_wrapped(|ui| {
@@ -692,11 +645,7 @@ impl ChatariumApp {
                                                 "no controller-issued controls yet",
                                             )
                                             .size(9.0)
-                                            .color(
-                                                egui::Color32::from_rgb(
-                                                    139, 143, 153,
-                                                ),
-                                            ),
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
                                         );
                                     }
                                 }
@@ -710,22 +659,16 @@ impl ChatariumApp {
                                             "controller control projection blocked: {error}"
                                         ))
                                         .size(9.0)
-                                        .color(
-                                            egui::Color32::from_rgb(
-                                                186, 108, 108,
-                                            ),
-                                        ),
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
                                     );
                                 }
                             }
 
                             ui.add_space(6.0);
                             ui.label(
-                                egui::RichText::new(
-                                    "Controller result inbox",
-                                )
-                                .strong()
-                                .size(10.0),
+                                egui::RichText::new("Controller result inbox")
+                                    .strong()
+                                    .size(10.0),
                             );
                             ui.label(
                                 egui::RichText::new(
@@ -746,24 +689,14 @@ impl ChatariumApp {
                                             "controller result projection blocked: {error}"
                                         ))
                                         .size(9.0)
-                                        .color(
-                                            egui::Color32::from_rgb(
-                                                186, 108, 108,
-                                            ),
-                                        ),
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
                                     );
                                 }
                                 Ok(results) if results.is_empty() => {
                                     ui.label(
-                                        egui::RichText::new(
-                                            "no terminal worker results yet",
-                                        )
-                                        .size(9.0)
-                                        .color(
-                                            egui::Color32::from_rgb(
-                                                139, 143, 153,
-                                            ),
-                                        ),
+                                        egui::RichText::new("no terminal worker results yet")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(139, 143, 153)),
                                     );
                                 }
                                 Ok(results) => {
@@ -1048,9 +981,7 @@ impl ChatariumApp {
                                                 "coordination context projection blocked: {error}"
                                             ))
                                             .size(9.0)
-                                            .color(egui::Color32::from_rgb(
-                                                186, 108, 108,
-                                            )),
+                                            .color(egui::Color32::from_rgb(186, 108, 108)),
                                         );
                                         None
                                     }
@@ -1063,9 +994,7 @@ impl ChatariumApp {
                                             "controller coordination projection blocked: {error}"
                                         ))
                                         .size(9.0)
-                                        .color(egui::Color32::from_rgb(
-                                            186, 108, 108,
-                                        )),
+                                        .color(egui::Color32::from_rgb(186, 108, 108)),
                                     );
                                 }
                                 Ok(records) => {
@@ -1213,17 +1142,11 @@ impl ChatariumApp {
                                                 record.coordination_turn_id,
                                             ) {
                                                 Ok(Some(output)) => {
-                                                    ui.collapsing(
-                                                        "Coordination output",
-                                                        |ui| {
-                                                            ui.label(
-                                                                egui::RichText::new(
-                                                                    output,
-                                                                )
-                                                                .size(10.0),
-                                                            );
-                                                        },
-                                                    );
+                                                    ui.collapsing("Coordination output", |ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(output).size(10.0),
+                                                        );
+                                                    });
                                                 }
                                                 Ok(None) => {
                                                     ui.label(
@@ -1231,11 +1154,9 @@ impl ChatariumApp {
                                                             "no durable coordination output text",
                                                         )
                                                         .size(9.0)
-                                                        .color(
-                                                            egui::Color32::from_rgb(
-                                                                139, 143, 153,
-                                                            ),
-                                                        ),
+                                                        .color(egui::Color32::from_rgb(
+                                                            139, 143, 153,
+                                                        )),
                                                     );
                                                 }
                                                 Err(error) => {
@@ -1251,9 +1172,7 @@ impl ChatariumApp {
                                                 }
                                             }
 
-                                            if outcome
-                                                == ControllerCoordinationOutcome::Completed
-                                            {
+                                            if outcome == ControllerCoordinationOutcome::Completed {
                                                 ui.collapsing(
                                                     "Model suggestion candidates · UNTRUSTED",
                                                     |ui| {
@@ -1579,22 +1498,15 @@ impl ChatariumApp {
                                                 );
                                             }
 
-                                            let current_decision =
-                                                coordination_context_records
-                                                    .as_ref()
-                                                    .and_then(|records| {
-                                                        records.iter().find(
-                                                            |context_record| {
-                                                                context_record
-                                                                    .coordination_turn_id
-                                                                    == record
-                                                                        .coordination_turn_id
-                                                            },
-                                                        )
+                                            let current_decision = coordination_context_records
+                                                .as_ref()
+                                                .and_then(|records| {
+                                                    records.iter().find(|context_record| {
+                                                        context_record.coordination_turn_id
+                                                            == record.coordination_turn_id
                                                     })
-                                                    .map(|context_record| {
-                                                        context_record.decision
-                                                    });
+                                                })
+                                                .map(|context_record| context_record.decision);
                                             ui.horizontal_wrapped(|ui| {
                                                 ui.label(
                                                     egui::RichText::new(
@@ -1664,15 +1576,11 @@ impl ChatariumApp {
                                     }
 
                                     let unfinished = latest
-                                        .is_some_and(|record| {
-                                            record.result_sequence.is_none()
-                                        });
-                                    let count =
-                                        admitted_result_count.unwrap_or_default();
+                                        .is_some_and(|record| record.result_sequence.is_none());
+                                    let count = admitted_result_count.unwrap_or_default();
                                     let can_start = count > 0
                                         && !unfinished
-                                        && !self
-                                            .controller_coordination_command_pending
+                                        && !self.controller_coordination_command_pending
                                         && self.persist_tx.is_some();
                                     if ui
                                         .add_enabled(
@@ -1714,11 +1622,9 @@ impl ChatariumApp {
                     | (_, _, _, Err(error), _)
                     | (_, _, _, _, Err(error)) => {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "supervision projection blocked: {error}"
-                            ))
-                            .size(9.0)
-                            .color(egui::Color32::from_rgb(186, 108, 108)),
+                            egui::RichText::new(format!("supervision projection blocked: {error}"))
+                                .size(9.0)
+                                .color(egui::Color32::from_rgb(186, 108, 108)),
                         );
                     }
                 }

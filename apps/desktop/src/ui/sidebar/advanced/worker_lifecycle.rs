@@ -16,18 +16,15 @@ impl ChatariumApp {
         match local_worker_binding(&self.events, self.local_conversation_id) {
             Err(error) => {
                 ui.label(
-                    egui::RichText::new(format!(
-                        "worker binding projection blocked: {error}"
-                    ))
-                    .size(9.0)
-                    .color(egui::Color32::from_rgb(186, 108, 108)),
+                    egui::RichText::new(format!("worker binding projection blocked: {error}"))
+                        .size(9.0)
+                        .color(egui::Color32::from_rgb(186, 108, 108)),
                 );
             }
             Ok(None) => {
                 let clicked = ui
                     .add_enabled(
-                        !self.lifecycle_command_pending
-                            && self.persist_tx.is_some(),
+                        !self.lifecycle_command_pending && self.persist_tx.is_some(),
                         egui::Button::new("Enable worker lifecycle"),
                     )
                     .clicked();
@@ -66,20 +63,14 @@ impl ChatariumApp {
                                         .add_enabled(
                                             !self.supervision_command_pending
                                                 && self.persist_tx.is_some(),
-                                            egui::Button::new(
-                                                "Bind worker to current session",
-                                            ),
+                                            egui::Button::new("Bind worker to current session"),
                                         )
                                         .clicked()
                                     {
-                                        self.bind_worker_to_current_session(
-                                            binding.worker_id,
-                                        );
+                                        self.bind_worker_to_current_session(binding.worker_id);
                                     }
                                 }
-                                Some(active)
-                                    if active == current_session_id =>
-                                {
+                                Some(active) if active == current_session_id => {
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "worker session {} · ACTIVE",
@@ -103,15 +94,11 @@ impl ChatariumApp {
                                         .add_enabled(
                                             !self.supervision_command_pending
                                                 && self.persist_tx.is_some(),
-                                            egui::Button::new(
-                                                "Advance worker to current session",
-                                            ),
+                                            egui::Button::new("Advance worker to current session"),
                                         )
                                         .clicked()
                                     {
-                                        self.bind_worker_to_current_session(
-                                            binding.worker_id,
-                                        );
+                                        self.bind_worker_to_current_session(binding.worker_id);
                                     }
                                 }
                             }
@@ -185,10 +172,7 @@ impl ChatariumApp {
                             WorkerPhase::Ready => {
                                 ui.horizontal_wrapped(|ui| {
                                     if ui
-                                        .add_enabled(
-                                            enabled,
-                                            egui::Button::new("Start"),
-                                        )
+                                        .add_enabled(enabled, egui::Button::new("Start"))
                                         .clicked()
                                     {
                                         self.transition_worker(
@@ -197,12 +181,7 @@ impl ChatariumApp {
                                             WorkerAction::StartOrResume,
                                         );
                                     }
-                                    if ui
-                                        .add_enabled(
-                                            enabled,
-                                            egui::Button::new("Fail"),
-                                        )
-                                        .clicked()
+                                    if ui.add_enabled(enabled, egui::Button::new("Fail")).clicked()
                                     {
                                         self.transition_worker(
                                             binding.worker_id,
@@ -210,12 +189,7 @@ impl ChatariumApp {
                                             WorkerAction::Fail,
                                         );
                                     }
-                                    if ui
-                                        .add_enabled(
-                                            enabled,
-                                            egui::Button::new("Stop"),
-                                        )
-                                        .clicked()
+                                    if ui.add_enabled(enabled, egui::Button::new("Stop")).clicked()
                                     {
                                         self.transition_worker(
                                             binding.worker_id,
@@ -235,10 +209,7 @@ impl ChatariumApp {
                                         ("Stop", WorkerAction::Stop),
                                     ] {
                                         if ui
-                                            .add_enabled(
-                                                enabled,
-                                                egui::Button::new(label),
-                                            )
+                                            .add_enabled(enabled, egui::Button::new(label))
                                             .clicked()
                                         {
                                             self.transition_worker(
@@ -253,10 +224,7 @@ impl ChatariumApp {
                             WorkerPhase::NeedsInput | WorkerPhase::Blocked => {
                                 ui.horizontal_wrapped(|ui| {
                                     if ui
-                                        .add_enabled(
-                                            enabled,
-                                            egui::Button::new("Resume"),
-                                        )
+                                        .add_enabled(enabled, egui::Button::new("Resume"))
                                         .clicked()
                                     {
                                         self.transition_worker(
@@ -265,12 +233,7 @@ impl ChatariumApp {
                                             WorkerAction::StartOrResume,
                                         );
                                     }
-                                    if ui
-                                        .add_enabled(
-                                            enabled,
-                                            egui::Button::new("Fail"),
-                                        )
-                                        .clicked()
+                                    if ui.add_enabled(enabled, egui::Button::new("Fail")).clicked()
                                     {
                                         self.transition_worker(
                                             binding.worker_id,
@@ -278,12 +241,7 @@ impl ChatariumApp {
                                             WorkerAction::Fail,
                                         );
                                     }
-                                    if ui
-                                        .add_enabled(
-                                            enabled,
-                                            egui::Button::new("Stop"),
-                                        )
-                                        .clicked()
+                                    if ui.add_enabled(enabled, egui::Button::new("Stop")).clicked()
                                     {
                                         self.transition_worker(
                                             binding.worker_id,
@@ -293,14 +251,9 @@ impl ChatariumApp {
                                     }
                                 });
                             }
-                            WorkerPhase::Completed
-                            | WorkerPhase::Failed
-                            | WorkerPhase::Stopped => {
+                            WorkerPhase::Completed | WorkerPhase::Failed | WorkerPhase::Stopped => {
                                 if ui
-                                    .add_enabled(
-                                        enabled,
-                                        egui::Button::new("Assign new goal"),
-                                    )
+                                    .add_enabled(enabled, egui::Button::new("Assign new goal"))
                                     .clicked()
                                 {
                                     self.assign_next_worker_goal(binding.worker_id);
