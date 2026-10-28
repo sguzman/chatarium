@@ -24,6 +24,7 @@ pub mod controller_coordination_context_audit;
 pub mod controller_coordination_suggestion_audit;
 pub mod controller_result_context_audit;
 pub mod controller_result_inbox;
+pub mod effective_journal_view;
 pub mod historical_conversation_audit;
 pub mod historical_transcript;
 pub mod import_source_quarantine_audit;

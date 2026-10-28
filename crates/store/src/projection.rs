@@ -4,6 +4,7 @@
 //! queryable. A projection may be deleted and rebuilt without losing authorship or evidence.
 
 use crate::EventEnvelope;
+use crate::effective_journal_view::EffectiveJournalView;
 use crate::turn_projection::{
     AuthoredTurnRow, assistant_evidence_name, derive_authored_turns, local_evidence_name,
     parse_assistant_evidence, parse_local_evidence, parse_remote_evidence, remote_evidence_name,
@@ -240,6 +241,32 @@ impl SqliteProjection {
         })?;
 
         collect_projected_rows(rows)
+    }
+
+    /// Read only effective events after verifying the SQLite cache is identical
+    /// to the supplied authoritative raw journal snapshot.
+    ///
+    /// This is intentionally NOT a no-argument cache query: a stale SQLite
+    /// projection might not contain a recently appended quarantine decision,
+    /// and returning its unfiltered rows would leak excluded source content.
+    /// No journal/SQLite physical rows are deleted or renumbered.
+    pub fn effective_events_verified(
+        &self,
+        authoritative_events: &[EventEnvelope],
+    ) -> Result<Vec<EventEnvelope>, ProjectionError> {
+        let projected = self.events()?;
+        if projected != authoritative_events {
+            return Err(ProjectionError::InvalidProjection(
+                "SQLite projection is stale or divergent from authoritative journal".to_owned(),
+            ));
+        }
+        let selection = EffectiveJournalView::from_raw(authoritative_events)
+            .map_err(ProjectionError::InvalidProjection)?;
+        Ok(selection
+            .visible_events()
+            .iter()
+            .map(|event| (*event).clone())
+            .collect())
     }
 
     /// Read projected events for one exact scope in durable sequence order.
@@ -1008,6 +1035,99 @@ mod tests {
         assert_eq!(projection.authored_turns().unwrap(), original_rows);
         assert_eq!(projection.events().unwrap(), original);
 
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn effective_sqlite_read_preserves_original_rows_and_excludes_only_verified_import() {
+        let path = temp_path("effective-source-quarantine");
+        let hash = "a".repeat(64);
+        let imported = |key: &str, details: serde_json::Value| {
+            serde_json::json!({
+                "schema": "chatarium-imported-observation",
+                "source": {
+                    "format": "chatarium-flight-recorder-export",
+                    "sha256": hash,
+                    "event_key": key
+                },
+                "details": details,
+            })
+            .to_string()
+        };
+        let mut store = MemoryEventStore::default();
+        store
+            .append(
+                EventKind::ImportStarted,
+                imported(
+                    "import:start",
+                    serde_json::json!({
+                        "archive": format!("imports/flight-recorder/{hash}.json")
+                    }),
+                ),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some("remote:example".to_owned()),
+                EventKind::DraftChanged,
+                imported("draft:1", serde_json::json!({})),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some("local:native".to_owned()),
+                EventKind::DraftChanged,
+                "native original".to_owned(),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                imported(
+                    "import:complete",
+                    serde_json::json!({"semantic_event_count": 1}),
+                ),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                serde_json::json!({
+                    "schema": "chatarium-source-quarantine-audit",
+                    "version": 1,
+                    "record": "source_quarantine_recorded",
+                    "source_format": "chatarium-flight-recorder-export",
+                    "source_sha256": hash,
+                    "preflight_journal_sha256": "b".repeat(64),
+                    "matching_event_count": 3,
+                    "first_sequence": 1,
+                    "last_sequence": 4,
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        let original = store.events().to_vec();
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&original).unwrap();
+        assert_eq!(projection.events().unwrap(), original);
+        let effective = projection.effective_events_verified(&original).unwrap();
+        assert_eq!(
+            effective
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![3, 5]
+        );
+        assert_eq!(effective[0].payload, "native original");
+        assert_eq!(projection.last_sequence().unwrap(), Some(5));
+        assert_eq!(projection.event_count().unwrap(), 5);
+        let mut changed = original.clone();
+        changed[1].payload = "changed but same sequence".to_owned();
+        assert!(projection.effective_events_verified(&changed).is_err());
+        let incomplete = &original[..4];
+        assert!(projection.effective_events_verified(incomplete).is_err());
         drop(projection);
         let _ = fs::remove_file(path);
     }

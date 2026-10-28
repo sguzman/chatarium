@@ -73,6 +73,25 @@ No desktop, worker, or SQLite projection currently excludes the recorded
 source's events. A read-only preflight journal SHA by itself cannot prevent
 concurrent changes; use the strict writer lease for any future operation.
 
+## Replay-verified effective event selection (opt-in)
+
+`EffectiveJournalView::from_raw` selects effective journal references
+without editing the raw append-only evidence or renumbering source sequences.
+It first replays and validates all quarantine decisions and rejects malformed
+or noncontiguous input. The resulting excluded-sequence set and visible
+events are distinct from the original evidence view. A decision that cannot
+be verified is an error, not permission to hide source data.
+
+SQLite's `SqliteProjection::events()` continues to return the **full raw**
+materialization. Its separate `effective_events_verified(authoritative_events)` method
+first requires byte-equivalent logical rows to the supplied raw journal
+snapshot, then applies the same replay-verified exclusion. This prevents a
+stale SQLite cache from silently omitting a newer quarantine decision and
+exposing its source records. Neither query deletes or mutates SQLite rows. These are **opt-in APIs**, not
+an active desktop-wide cleanup: Q30 still requires consistent integration
+through GUI, worker, recovery and other read surfaces. Do not claim imported
+content is hidden until those integrations and regression tests are verified.
+
 ## Source quarantine decision audit (non-operative)
 
 The journal event `import_source_quarantine_recorded` is a versioned, unscoped
