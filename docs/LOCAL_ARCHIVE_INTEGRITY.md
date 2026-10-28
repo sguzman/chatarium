@@ -92,6 +92,22 @@ an active desktop-wide cleanup: Q30 still requires consistent integration
 through GUI, worker, recovery and other read surfaces. Do not claim imported
 content is hidden until those integrations and regression tests are verified.
 
+## Attested SQLite effective read facade
+
+The physical SQLite cache preserves every original event and its sequence.
+`SqliteProjection::effective_read_view_verified(raw_events)` validates that
+the *entire* cache matches the supplied authoritative journal (including
+quarantine decisions), then constructs an owned `SqliteEffectiveReadView`.
+Its event, exact-scope and event-kind query methods return **only effective
+records**, without rewriting source sequences or querying excluded physical
+rows. Stale/divergent caches fail closed; after new journal appends callers
+must request a fresh attested view.
+
+Raw `events()`, `events_for_scope()`, `events_of_kind()`, and physical
+turn projections remain evidence APIs. They must not be used directly as
+quarantine-aware user-facing views. Desktop/worker and external reader
+integration still need comprehensive acceptance testing.
+
 ## Source quarantine decision audit (non-operative)
 
 The journal event `import_source_quarantine_recorded` is a versioned, unscoped
