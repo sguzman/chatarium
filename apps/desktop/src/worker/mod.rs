@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) fn persistence_worker(
-    mut store: JsonlEventStore,
+    mut store: chatarium_store::effective_event_store::EffectiveEventStore<JsonlEventStore>,
     data_dir: PathBuf,
     commands: Receiver<PersistCommand>,
     completion_tx: Sender<PersistCommand>,
