@@ -354,7 +354,7 @@ impl EventStore for JsonlEventStore {
 /// The lease is held as long as the returned connection lives. Lock files must
 /// never be unlinked to "unlock" them, because unlink/recreate can split a lease
 /// across different inodes on Unix.
-fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connection> {
+pub(crate) fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connection> {
     // Canonicalize the already-created parent so relative and symlinked data
     // directory spellings resolve to the same filesystem lock location.
     let parent = journal
