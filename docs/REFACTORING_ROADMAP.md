@@ -19,7 +19,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **verified complete** |
 | R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **active** |
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **verified complete** |
-| R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **active** |
+| R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **verified complete** |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | pending |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 30% (R00 + R01 + R10 + R11 + R12 + R14), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 36% (R00 + R01 + R10 + R11 + R12 + R14 + R15), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -103,3 +103,9 @@ The first nine-handler notice split reached Windows `cargo fmt -- --check` and p
 ### CI parse regression — recovered continuation
 
 The first action-extraction CI [run 40719854721](https://github.com/sguzman/chatarium/actions/runs/40719854721) failed Windows `cargo fmt --check` because a method doc comment was orphaned at the end of `app/actions/composer.rs`. A second orphaned comment existed at the end of `app/actions/coordination.rs`. Both comments were restored to the next methods they document (latest coordination wake status and OpenViking query observation). This is a mechanical correction of extraction boundaries; R15 stays active pending CI/build/test confirmation. No additional percentage points awarded.
+
+## Round 3 — 2026-10-28 (recovery)
+
+- **R15 verified (+6pp; 30% → 36%):** [commit b595a25](https://github.com/sguzman/chatarium/commit/b595a253ca6d3e9e754e32096b45727946ee4fbf) passed [full Windows/Linux CI 40720847862](https://github.com/sguzman/chatarium/actions/runs/40720847862) and [native reader visual QA 40720847812](https://github.com/sguzman/chatarium/actions/runs/40720847812). Conversation, composer, coordination, inference, routing, MCP tools, memory and worker action methods now live in focused modules. Original journal ordering and approval gates remain tested.
+- **R13 active:** Mechanical extraction of ~7,889 lines (sidebar navigation, search, advanced controls and post-selection actions) from `ui/mod.rs` into `ui/sidebar.rs`. The frame calls `render_sidebar` once and receives a typed `SidebarOutcome`. Search, ID salts, callbacks, and action sequencing stay inside the extracted method. The sidebar's advanced subsections must still be split; `update()` must be reduced to ~150 lines, and CI + visual QA must pass before R13 receives its 12 points.
+- **Verification pending for this extraction:** No points claimed for R13 until the exact commit builds and passes regression/visual checks.
