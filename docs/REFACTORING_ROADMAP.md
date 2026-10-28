@@ -24,8 +24,8 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **verified complete** |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
 | R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **verified complete** |
-| R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **active** |
-| R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | pending |
+| R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
+| R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **active** |
 | R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | pending |
 | R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | pending |
 | R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 57% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20 + R22), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 62% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20 + R22 + R23), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -139,3 +139,9 @@ The large extracted advanced panel was further decomposed into independent modul
 - **R22 verified: 52% → 57% (+5pp).** The context composer extraction, including follow-up rustfmt correction, passed [full Linux/Windows CI 40743937739](https://github.com/sguzman/chatarium/actions/runs/40743937739) and [production/native-reader visual QA 40743937755](https://github.com/sguzman/chatarium/actions/runs/40743937755) at commit [a508b9a](https://github.com/sguzman/chatarium/commit/a508b9ac848e544149d1ab2e8f2aef4b1c5471db). The same provenance, bounded-input, controller capability and tool admission tests passed.
 - **R23 active, not verified:** `mcp_dispatch_manifest.rs` is mechanically separated into `capture.rs` (admission evidence/dispatch attachment), `history.rs` (durable-event validation and exact history), `provenance.rs` (reverse per-call tracing), `render.rs` (read-only egui display and cache), and `tests.rs`. Preserve unchanged admission/transport/authority semantics. CI, focused MCP tests, and visual QA must pass on the new commit before awarding its 5 points.
 - **Additional R21/R24 preparation:** Coordination and OpenViking module splits have been structurally mapped but are not yet pushed, tested, or counted. They remain pending until independently verified.
+
+## Round 7 — MCP manifest verified; OpenViking delivery split begun
+
+- **R23 verified: 57% → 62% (+5pp).** [Commit ee15470](https://github.com/sguzman/chatarium/commit/ee1547018c7bf3c953bc4ff68c95c78cea3af7ee) passed [full Windows/Linux CI 40745433434](https://github.com/sguzman/chatarium/actions/runs/40745433434). The initial [visual QA 40745431740](https://github.com/sguzman/chatarium/actions/runs/40745431740) had an intermittent first production-window startup timeout, despite later draft and long-reader checks passing. Retrying the single failed job **succeeded**, including production GUI, synthetic reader, scaling, draft recovery and long-reader checks. Preserve that initial startup flake as a R40 verification concern; never describe the first attempt as green.
+- **R24 active, +0 pending:** Refactor `openviking_memory_delivery.rs` into `checkpoint.rs` (at-most-once claim, create/read-back and conversation-scoped retrieval), `project.rs` (explicit cross-conversation permission grants and project-scoped retrieval), and dedicated test modules. Existing request path, retry semantics, grant checks, and read-after-write confirmation remain unchanged. CI must verify the exact split before accepting the 6 points.
+- **R21 and R16 remain pending:** Source decompositions were prepared separately and have not been pushed or accepted. Keep unchanged feature scope and no new dependencies.
