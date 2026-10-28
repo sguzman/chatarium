@@ -1019,6 +1019,48 @@ mod tests {
     }
 
     #[test]
+    fn failed_restore_publish_rolls_back_original_directory() {
+        let root = temp("publish-rollback");
+        let _ = fs::remove_dir_all(&root);
+        let target = root.join("target");
+        let staging = root.join("staging");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(target.join("original.txt"), b"original").unwrap();
+        fs::write(staging.join("new.txt"), b"new").unwrap();
+
+        let error = publish_staged_restore(&staging, &target, &root, true)
+            .expect_err("simulated failed publication must roll back");
+        assert!(error.to_string().contains("original target preserved"));
+        assert_eq!(fs::read(target.join("original.txt")).unwrap(), b"original");
+        assert!(!target.join("new.txt").exists());
+        assert_eq!(fs::read(staging.join("new.txt")).unwrap(), b"new");
+
+        publish_staged_restore(&staging, &target, &root, false).unwrap();
+        assert_eq!(fs::read(target.join("new.txt")).unwrap(), b"new");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_copy_is_reverified_against_manifest() {
+        let root = temp("staged-hash");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.json");
+        fs::write(&path, b"verified").unwrap();
+        let (size, digest) = sha256(&path).unwrap();
+        let manifest_entry = json!({
+            "path": "source.json",
+            "size_bytes": size,
+            "sha256": digest,
+        });
+        verify_staged_file(&manifest_entry, &path).unwrap();
+        fs::write(&path, b"mutated!").unwrap();
+        assert!(verify_staged_file(&manifest_entry, &path).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn corrupted_backup_is_rejected_without_restore() {
         let root = temp("corrupt");
         let _ = fs::remove_dir_all(&root);
