@@ -74,6 +74,7 @@ pub mod worker_audit;
 pub use turn_projection::AuthoredTurnRow;
 
 use chatarium_core::EventKind;
+use sha2::{Digest, Sha256};
 use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -219,7 +220,7 @@ pub struct JsonlEventStore {
     events: Vec<EventEnvelope>,
     // Own the entire lifetime of the SQLite EXCLUSIVE transaction. Dropping
     // this connection releases the OS-managed lock even after a process crash.
-    _writer_lock: rusqlite::Connection,
+    _writer_lock: JournalWriterLease,
 }
 
 impl JsonlEventStore {
@@ -354,14 +355,21 @@ impl EventStore for JsonlEventStore {
 /// The lease is held as long as the returned connection lives. Lock files must
 /// never be unlinked to "unlock" them, because unlink/recreate can split a lease
 /// across different inodes on Unix.
-pub(crate) fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connection> {
-    // Canonicalize the already-created parent so relative and symlinked data
-    // directory spellings resolve to the same filesystem lock location.
-    let parent = journal
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    let parent = parent.unwrap_or_else(|| Path::new("."));
-    let canonical_parent = fs::canonicalize(parent)?;
+#[derive(Debug)]
+struct JournalWriterLease {
+    // Stable above the data directory: survives archive directory replacement.
+    _parent: rusqlite::Connection,
+    // Existing per-journal lock: preserves compatibility with earlier writers.
+    _journal: rusqlite::Connection,
+}
+
+fn acquire_journal_writer_lock(journal: &Path) -> io::Result<JournalWriterLease> {
+    let directory = journal.parent().filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // Always acquire in this order, including archive restore, to avoid
+    // deadlocks between a data writer and directory publication.
+    let parent_lock = acquire_archive_restore_lease(directory)?;
+    let canonical_parent = fs::canonicalize(directory)?;
     let filename = journal.file_name().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "journal filename is missing")
     })?;
@@ -369,7 +377,37 @@ pub(crate) fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite
         "{}.writer-lock.sqlite3",
         filename.to_string_lossy()
     ));
-    let connection = rusqlite::Connection::open(&lock_path)
+    let journal_lock = acquire_exclusive_sqlite_lease(&lock_path)?;
+    Ok(JournalWriterLease {
+        _parent: parent_lock,
+        _journal: journal_lock,
+    })
+}
+
+/// Exclusive lock for archive directory publication. Its file is deliberately
+/// a sibling of the archive, not inside a directory about to be renamed.
+pub(crate) fn acquire_archive_restore_lease(directory: &Path) -> io::Result<rusqlite::Connection> {
+    let full_directory = if directory.is_dir() {
+        fs::canonicalize(directory)?
+    } else {
+        let parent = directory.parent().filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let basename = directory.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "archive directory name is missing")
+        })?;
+        fs::canonicalize(parent)?.join(basename)
+    };
+    let lock_parent = full_directory.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "archive directory has no parent")
+    })?;
+    let digest = Sha256::digest(full_directory.to_string_lossy().as_bytes());
+    acquire_exclusive_sqlite_lease(
+        &lock_parent.join(format!(".chatarium-archive-writer-{digest:x}.sqlite3"))
+    )
+}
+
+fn acquire_exclusive_sqlite_lease(path: &Path) -> io::Result<rusqlite::Connection> {
+    let connection = rusqlite::Connection::open(path)
         .map_err(|error| io::Error::other(format!("open journal writer lock: {error}")))?;
     connection
         .busy_timeout(Duration::ZERO)
@@ -382,10 +420,7 @@ pub(crate) fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite
                     if matches!(
                         sqlite_error.code,
                         rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                    ) =>
-                {
-                    io::ErrorKind::WouldBlock
-                }
+                    ) => io::ErrorKind::WouldBlock,
                 _ => io::ErrorKind::Other,
             };
             io::Error::new(
