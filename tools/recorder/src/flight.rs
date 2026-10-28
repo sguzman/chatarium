@@ -179,10 +179,6 @@ fn stable_placeholder(map: &mut HashMap<String, String>, raw: &str, kind: &str) 
     value
 }
 
-/// Ingest a Flight Recorder export and write deterministic sanitized evidence plus inventory.
-#[cfg(test)]
-#[path = "flight/tests.rs"]
-mod tests;
 #[path = "flight/derive.rs"]
 mod derive;
 #[path = "flight/policy.rs"]
@@ -193,6 +189,10 @@ mod read;
 mod selection;
 #[path = "flight/stream.rs"]
 mod stream;
+/// Ingest a Flight Recorder export and write deterministic sanitized evidence plus inventory.
+#[cfg(test)]
+#[path = "flight/tests.rs"]
+mod tests;
 pub(super) use derive::*;
 pub(super) use policy::*;
 pub(super) use read::*;
@@ -318,4 +318,3 @@ pub fn snapshot_flight(
     println!("sanitized-sha256: {}", sha256_hex(&sanitized));
     Ok(())
 }
-

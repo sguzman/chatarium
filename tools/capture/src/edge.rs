@@ -495,4 +495,3 @@ impl EdgeCleanupStatus {
         self.process_exited && self.harness_lock_absent && self.active_port_file_absent
     }
 }
-

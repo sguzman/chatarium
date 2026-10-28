@@ -302,7 +302,11 @@ pub(super) fn sanitize_sse_frame(
     })
 }
 
-pub(super) fn observe_frame_shape(frame: &SseFrame, payload: &Value, inventory: &mut StreamInventory) {
+pub(super) fn observe_frame_shape(
+    frame: &SseFrame,
+    payload: &Value,
+    inventory: &mut StreamInventory,
+) {
     if frame.event.as_deref() == Some("delta_encoding") {
         if let Some(value) = payload.as_str() {
             inventory.delta_encodings.insert(if value == "v1" {
