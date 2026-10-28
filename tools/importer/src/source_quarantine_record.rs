@@ -211,6 +211,107 @@ mod tests {
     }
 
     #[test]
+    fn full_quarantine_flow_preserves_raw_evidence_across_restart_and_sqlite_rebuild() {
+        use chatarium_store::effective_event_store::EffectiveEventStore;
+        use chatarium_store::projection::SqliteProjection;
+
+        let (dir, hash) = fixture();
+        let journal = dir.join("journal.jsonl");
+        let source_archive = dir.join(format!("imports/flight-recorder/{hash}.json"));
+        let source_bytes = fs::read(&source_archive).unwrap();
+
+        // A native event is interleaved with source evidence in the same
+        // authoritative journal. It must survive the decision, replay, and
+        // SQLite rebuild without any sequence reassignment.
+        let mut initial = JsonlEventStore::open_strict(&journal).unwrap();
+        let native_sequence = initial
+            .append_scoped(
+                Some("local:authored".to_owned()),
+                EventKind::DraftChanged,
+                "private native draft must remain".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(native_sequence, 4);
+        drop(initial);
+
+        let original_bytes = fs::read(&journal).unwrap();
+        let preview = preflight(&dir, &hash).unwrap();
+        assert!(preview.candidate_isolated(), "{:?}", preview.blockers);
+        assert_eq!(preview.matching_events, 3);
+        assert_eq!(preview.journal_events, 4);
+        assert_eq!((preview.first_sequence, preview.last_sequence), (1, 3));
+
+        let decision = record(&dir, &hash).unwrap();
+        assert_eq!(decision.recorded_sequence, 5);
+        assert!(!decision.already_recorded);
+        let after_decision = fs::read(&journal).unwrap();
+        assert!(after_decision.starts_with(&original_bytes));
+        assert_eq!(fs::read(&source_archive).unwrap(), source_bytes);
+
+        let raw = JsonlEventStore::open_strict(&journal).unwrap();
+        let mut active = EffectiveEventStore::new(raw).unwrap();
+        assert_eq!(active.authoritative_events().len(), 5);
+        assert_eq!(active.excluded_count(), 3);
+        assert_eq!(
+            active.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![4, 5]
+        );
+        assert_eq!(active.events()[0].payload, "private native draft must remain");
+
+        let mut sqlite = SqliteProjection::open(dir.join("journal-cache.sqlite3")).unwrap();
+        sqlite.rebuild(active.authoritative_events()).unwrap();
+        let view = sqlite
+            .effective_read_view_verified(active.authoritative_events())
+            .unwrap();
+        assert!(view.events_for_scope("remote:example").is_empty());
+        assert_eq!(view.events_for_scope("local:authored").len(), 1);
+        assert_eq!(view.events_of_kind(EventKind::DraftChanged).len(), 1);
+        assert_eq!(sqlite.events_for_scope("remote:example").unwrap().len(), 1);
+        assert_eq!(sqlite.event_count().unwrap(), 5);
+
+        // New native work still uses the raw monotonic sequence. A previously
+        // attested SQLite cache must fail closed until explicitly rebuilt.
+        let next = active
+            .append_scoped(
+                Some("local:authored".to_owned()),
+                EventKind::DraftChanged,
+                "native draft after quarantine".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(next, 6);
+        assert!(sqlite
+            .effective_read_view_verified(active.authoritative_events())
+            .is_err());
+        sqlite.rebuild(active.authoritative_events()).unwrap();
+        let refreshed = sqlite
+            .effective_read_view_verified(active.authoritative_events())
+            .unwrap();
+        assert_eq!(refreshed.events_for_scope("local:authored").len(), 2);
+        assert!(refreshed.events_for_scope("remote:example").is_empty());
+        assert_eq!(refreshed.events_of_kind(EventKind::DraftChanged).len(), 2);
+        assert_eq!(sqlite.event_count().unwrap(), 6);
+        drop(sqlite);
+        drop(active);
+
+        // Restart simulation: release the single writer lease, re-open the
+        // unchanged journal and rediscover the same effective event selection.
+        let already = record(&dir, &hash).unwrap();
+        assert!(already.already_recorded);
+        assert_eq!(already.recorded_sequence, 5);
+        let restarted = JsonlEventStore::open_strict(&journal).unwrap();
+        let active = EffectiveEventStore::new(restarted).unwrap();
+        assert_eq!(
+            active.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![4, 5, 6]
+        );
+        assert_eq!(active.authoritative_events().len(), 6);
+        assert_eq!(active.excluded_count(), 3);
+        assert_eq!(fs::read(&source_archive).unwrap(), source_bytes);
+        drop(active);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn active_writer_and_incomplete_journal_fail_without_mutation() {
         let (dir, hash) = fixture();
         let journal = dir.join("journal.jsonl");
