@@ -45,7 +45,10 @@ pub fn replay_import_source_quarantine_audit(
             continue;
         }
         if event.scope.is_some() {
-            return Err(format!("quarantine decision at sequence {} must be unscoped", event.sequence));
+            return Err(format!(
+                "quarantine decision at sequence {} must be unscoped",
+                event.sequence
+            ));
         }
         let payload: Value = serde_json::from_str(&event.payload)
             .map_err(|_| format!("malformed quarantine audit at sequence {}", event.sequence))?;
@@ -54,7 +57,10 @@ pub fn replay_import_source_quarantine_audit(
             || payload.get("record").and_then(Value::as_str) != Some("source_quarantine_recorded")
             || payload.get("source_format").and_then(Value::as_str) != Some(SOURCE_FORMAT)
         {
-            return Err(format!("unsupported quarantine audit schema at sequence {}", event.sequence));
+            return Err(format!(
+                "unsupported quarantine audit schema at sequence {}",
+                event.sequence
+            ));
         }
         let source_sha256 = required_hash(&payload, "source_sha256")?;
         let preflight_journal_sha256 = required_hash(&payload, "preflight_journal_sha256")?;
@@ -64,7 +70,8 @@ pub fn replay_import_source_quarantine_audit(
         if !decided_sources.insert(source_sha256.clone()) {
             return Err("duplicate source quarantine decision".to_owned());
         }
-        if first_sequence == 0 || last_sequence < first_sequence || last_sequence >= event.sequence {
+        if first_sequence == 0 || last_sequence < first_sequence || last_sequence >= event.sequence
+        {
             return Err("invalid source quarantine event sequence range".to_owned());
         }
 
@@ -85,7 +92,9 @@ pub fn replay_import_source_quarantine_audit(
             }
             let value: Value = serde_json::from_str(&original.payload)
                 .map_err(|_| "malformed source event in quarantine evidence".to_owned())?;
-            let key = value.pointer("/source/event_key").and_then(Value::as_str)
+            let key = value
+                .pointer("/source/event_key")
+                .and_then(Value::as_str)
                 .ok_or_else(|| "missing event key in source evidence".to_owned())?;
             if !keys.insert(key.to_owned()) {
                 return Err("duplicated imported source event key".to_owned());
@@ -124,7 +133,9 @@ pub fn replay_import_source_quarantine_audit(
             || matches[matches.len() - 1].scope.is_some()
             || first.pointer("/source/event_key").and_then(Value::as_str) != Some("import:start")
             || last.pointer("/source/event_key").and_then(Value::as_str) != Some("import:complete")
-            || last.pointer("/details/semantic_event_count").and_then(Value::as_u64)
+            || last
+                .pointer("/details/semantic_event_count")
+                .and_then(Value::as_u64)
                 != Some(matching_event_count - 2)
         {
             return Err("invalid quarantine import framing or semantic count".to_owned());
@@ -180,10 +191,14 @@ pub fn replay_import_source_quarantine_audit(
 }
 
 fn required_hash(value: &Value, key: &str) -> Result<String, String> {
-    let text = value.get(key).and_then(Value::as_str)
+    let text = value
+        .get(key)
+        .and_then(Value::as_str)
         .ok_or_else(|| format!("missing quarantine hash field {key}"))?;
     if text.len() != 64
-        || !text.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
         return Err(format!("invalid quarantine SHA-256 field {key}"));
     }
@@ -191,7 +206,9 @@ fn required_hash(value: &Value, key: &str) -> Result<String, String> {
 }
 
 fn required_u64(value: &Value, key: &str) -> Result<u64, String> {
-    value.get(key).and_then(Value::as_u64)
+    value
+        .get(key)
+        .and_then(Value::as_u64)
         .ok_or_else(|| format!("missing quarantine integer field {key}"))
 }
 
@@ -202,17 +219,26 @@ fn source_provenance(event: &EventEnvelope) -> Option<String> {
     {
         return None;
     }
-    value.pointer("/source/sha256")?.as_str().map(ToOwned::to_owned)
+    value
+        .pointer("/source/sha256")?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 fn valid_import_kind(kind: EventKind) -> bool {
-    matches!(kind,
-        EventKind::ImportStarted | EventKind::ImportCompleted
-        | EventKind::DraftChanged | EventKind::UserMessageCommitted
-        | EventKind::DispatchAttempted | EventKind::RemoteAcceptanceObserved
-        | EventKind::TranscriptUserMessageObserved | EventKind::AssistantSnapshotObserved
-        | EventKind::AssistantStatusObserved | EventKind::AssistantCompletionObserved
-        | EventKind::ClientErrorObserved
+    matches!(
+        kind,
+        EventKind::ImportStarted
+            | EventKind::ImportCompleted
+            | EventKind::DraftChanged
+            | EventKind::UserMessageCommitted
+            | EventKind::DispatchAttempted
+            | EventKind::RemoteAcceptanceObserved
+            | EventKind::TranscriptUserMessageObserved
+            | EventKind::AssistantSnapshotObserved
+            | EventKind::AssistantStatusObserved
+            | EventKind::AssistantCompletionObserved
+            | EventKind::ClientErrorObserved
     )
 }
 
@@ -236,7 +262,8 @@ mod tests {
             "schema": "chatarium-imported-observation",
             "source": {"format": SOURCE_FORMAT, "sha256": hash, "event_key": key},
             "details": details
-        }).to_string()
+        })
+        .to_string()
     }
 
     fn decision(hash: &str, count: u64) -> String {
@@ -250,19 +277,34 @@ mod tests {
             "matching_event_count": count,
             "first_sequence": 1,
             "last_sequence": 3
-        }).to_string()
+        })
+        .to_string()
     }
 
     fn valid() -> MemoryEventStore {
         let mut store = MemoryEventStore::default();
-        store.append(EventKind::ImportStarted, source("import:start", None)).unwrap();
-        store.append_scoped(
-            Some("remote:safe".to_owned()),
-            EventKind::DraftChanged,
-            source("draft:1", None)
-        ).unwrap();
-        store.append(EventKind::ImportCompleted, source("import:complete", Some(1))).unwrap();
-        store.append(EventKind::ImportSourceQuarantineRecorded, decision(&hash(), 3)).unwrap();
+        store
+            .append(EventKind::ImportStarted, source("import:start", None))
+            .unwrap();
+        store
+            .append_scoped(
+                Some("remote:safe".to_owned()),
+                EventKind::DraftChanged,
+                source("draft:1", None),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                source("import:complete", Some(1)),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                decision(&hash(), 3),
+            )
+            .unwrap();
         store
     }
 
@@ -279,34 +321,66 @@ mod tests {
     #[test]
     fn rejects_duplicate_decision_and_reimport_after_decision() {
         let mut store = valid();
-        store.append(EventKind::ImportSourceQuarantineRecorded, decision(&hash(), 3)).unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                decision(&hash(), 3),
+            )
+            .unwrap();
         assert!(replay_import_source_quarantine_audit(store.events()).is_err());
         let mut store = valid();
-        store.append(EventKind::DraftChanged, source("draft:2", None)).unwrap();
+        store
+            .append(EventKind::DraftChanged, source("draft:2", None))
+            .unwrap();
         assert!(replay_import_source_quarantine_audit(store.events()).is_err());
     }
 
     #[test]
     fn refuses_forged_scope_and_foreign_scope_ownership() {
         let mut store = valid();
-        store.append_scoped(
-            Some("remote:safe".to_owned()),
-            EventKind::DraftChanged,
-            "native".to_owned()
-        ).unwrap();
+        store
+            .append_scoped(
+                Some("remote:safe".to_owned()),
+                EventKind::DraftChanged,
+                "native".to_owned(),
+            )
+            .unwrap();
         assert!(replay_import_source_quarantine_audit(store.events()).is_err());
         let mut store = MemoryEventStore::default();
-        store.append(EventKind::ImportSourceQuarantineRecorded, decision(&hash(), 3)).unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                decision(&hash(), 3),
+            )
+            .unwrap();
         assert!(replay_import_source_quarantine_audit(store.events()).is_err());
     }
 
     #[test]
     fn invalid_hash_or_count_fails_closed() {
         let mut store = MemoryEventStore::default();
-        store.append(EventKind::ImportStarted, source("import:start", None)).unwrap();
-        store.append_scoped(Some("remote:safe".to_owned()), EventKind::DraftChanged, source("draft:1", None)).unwrap();
-        store.append(EventKind::ImportCompleted, source("import:complete", Some(1))).unwrap();
-        store.append(EventKind::ImportSourceQuarantineRecorded, decision(&hash(), 4)).unwrap();
+        store
+            .append(EventKind::ImportStarted, source("import:start", None))
+            .unwrap();
+        store
+            .append_scoped(
+                Some("remote:safe".to_owned()),
+                EventKind::DraftChanged,
+                source("draft:1", None),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                source("import:complete", Some(1)),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                decision(&hash(), 4),
+            )
+            .unwrap();
         assert!(replay_import_source_quarantine_audit(store.events()).is_err());
     }
 }
