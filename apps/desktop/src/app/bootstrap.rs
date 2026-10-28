@@ -53,6 +53,20 @@ pub(crate) fn run_production_mirror_acceptance() {
             return;
         }
     };
+    let store = match chatarium_store::effective_event_store::EffectiveEventStore::new(store) {
+        Ok(store) => store,
+        Err(error) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "terminal_state": "quarantine_replay_failed",
+                    "error": error,
+                    "remote_http_used": false,
+                })
+            );
+            return;
+        }
+    };
     let initial_events = store.events().to_vec();
     let before = match derive_remote_mirror_queue(
         &catalog
