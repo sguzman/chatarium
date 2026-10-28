@@ -3,7 +3,11 @@
 use super::*;
 
 impl ChatariumApp {
-    pub(super) fn render_next_request_context(&mut self, ui: &mut egui::Ui, local_display_messages: &[DisplayMessage]) {
+    pub(super) fn render_next_request_context(
+        &mut self,
+        ui: &mut egui::Ui,
+        local_display_messages: &[DisplayMessage],
+    ) {
         ui.collapsing("Exact next-request context", |ui| {
             let mut transcript = context_transcript(&local_display_messages);
             match admitted_routed_context_messages(
