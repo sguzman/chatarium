@@ -71,6 +71,7 @@ const LOCAL_CONVERSATION_CATALOG_FILE: &str = "local-conversations.json";
 const CAPABILITY_PROBE_REPORT_FILE: &str = "siwc-capability-probes.json";
 const LOCAL_INFERENCE_CONTRACT_FILE: &str = "local-inference-contract.json";
 const JOURNAL_FILE: &str = "journal.jsonl";
+const FLIGHT_ARCHIVE_DIR: &str = "imports/flight-recorder";
 const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_SCHEMA: &str = "chatarium-local-archive-backup";
 const MANIFEST_VERSION: u64 = 1;
@@ -188,7 +189,16 @@ pub fn check_archive(
         .collect::<Vec<_>>();
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
     replay_local_conversation_topologies(&events).map_err(err)?;
-    replay_import_source_quarantine_audit(&events).map_err(err)?;
+    let quarantine = replay_import_source_quarantine_audit(&events).map_err(err)?;
+    for decision in quarantine {
+        let relative = format!("{FLIGHT_ARCHIVE_DIR}/{}.json", decision.source_sha256);
+        let source = data_dir.join(relative);
+        let (_, digest) = sha256(&source)
+            .map_err(|_| err("quarantine source archive is missing or unreadable"))?;
+        if digest != decision.source_sha256 {
+            return Err(err("quarantine source archive SHA-256 mismatch"));
+        }
+    }
     replay_supervision_audit(&events).map_err(err)?;
     replay_tool_provider_audit(&events).map_err(err)?;
     replay_tool_call_audit(&events).map_err(err)?;
@@ -311,6 +321,75 @@ fn safe_relative(name: &str) -> Result<&Path, ArchiveMaintenanceError> {
     Ok(path)
 }
 
+/// Enumerate all content-addressed Flight Recorder archives safely. No
+/// symlinks, nested paths, partial files, or unverifiable names are admitted.
+fn flight_source_archives(data_dir: &Path) -> Result<Vec<String>, ArchiveMaintenanceError> {
+    let dir = data_dir.join(FLIGHT_ARCHIVE_DIR);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    if !fs::symlink_metadata(&dir)?.file_type().is_dir()
+        || !fs::symlink_metadata(data_dir.join("imports"))?.file_type().is_dir()
+    {
+        return Err(err("import source archive directory is not a real directory"));
+    }
+    let mut archives = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            return Err(err("import source archive entry is not a regular file"));
+        }
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| err("import source archive has a non-UTF8 filename"))?;
+        let Some(hash) = name.strip_suffix(".json") else {
+            return Err(err("import source archive has an unexpected filename"));
+        };
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(err("import source archive filename is not lowercase SHA-256"));
+        }
+        let (_, digest) = sha256(&entry.path())?;
+        if digest != hash {
+            return Err(err("import source archive bytes do not match filename SHA-256"));
+        }
+        archives.push(format!("{FLIGHT_ARCHIVE_DIR}/{name}"));
+    }
+    archives.sort();
+    Ok(archives)
+}
+
+fn allowed_backup_path(name: &str) -> bool {
+    if [
+        JOURNAL_FILE,
+        CACHE_FILE,
+        INFERENCE_SETTINGS_FILE,
+        BEHAVIOR_PROFILES_FILE,
+        MCP_AGENT_DEFAULTS_FILE,
+        LOCAL_CONVERSATION_CATALOG_FILE,
+        CAPABILITY_PROBE_REPORT_FILE,
+        LOCAL_INFERENCE_CONTRACT_FILE,
+    ]
+    .contains(&name)
+    {
+        return true;
+    }
+    let Some(hash_name) = name.strip_prefix("imports/flight-recorder/") else {
+        return false;
+    };
+    let Some(hash) = hash_name.strip_suffix(".json") else {
+        return false;
+    };
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
 /// Create an inspectable directory backup. Existing output is never overwritten.
 pub fn create_backup(
     data_dir: impl AsRef<Path>,
@@ -343,6 +422,12 @@ pub fn create_backup(
             let (size, hash) = copy_consistent(&source, &temporary.join(name))?;
             files.push(json!({"path": name, "size_bytes": size, "sha256": hash}));
         }
+    }
+    for name in flight_source_archives(data_dir)? {
+        let destination = temporary.join(&name);
+        fs::create_dir_all(destination.parent().ok_or_else(|| err("invalid archive path"))?)?;
+        let (size, hash) = copy_consistent(&data_dir.join(&name), &destination)?;
+        files.push(json!({"path": name, "size_bytes": size, "sha256": hash}));
     }
     if !temporary.join(JOURNAL_FILE).exists() {
         fs::write(temporary.join(JOURNAL_FILE), [])?;
@@ -413,15 +498,33 @@ pub fn verify_backup(
             .and_then(Value::as_str)
             .ok_or_else(|| err("manifest path missing"))?;
         let relative = safe_relative(name)?;
+        if !allowed_backup_path(name) {
+            return Err(err("backup manifest contains unsupported path"));
+        }
         if !names.insert(name) {
             return Err(err("backup manifest contains duplicate file"));
         }
         let path = backup.join(relative);
+        if !fs::symlink_metadata(&path)?.file_type().is_file() {
+            return Err(err("backup manifest file is not a regular file"));
+        }
+        if name.starts_with("imports/") {
+            for directory in ["imports", FLIGHT_ARCHIVE_DIR] {
+                if !fs::symlink_metadata(backup.join(directory))?.file_type().is_dir() {
+                    return Err(err("backup import directory must not be a symlink"));
+                }
+            }
+        }
         let (size, hash) = sha256(&path)?;
         if file.get("size_bytes").and_then(Value::as_u64) != Some(size)
             || file.get("sha256").and_then(Value::as_str) != Some(hash.as_str())
         {
             return Err(err("backup file hash or size mismatch"));
+        }
+    }
+    for name in flight_source_archives(backup)? {
+        if !names.contains(name.as_str()) {
+            return Err(err("backup manifest omits an archived import source"));
         }
     }
     let archive = check_archive(backup)?;
@@ -464,20 +567,22 @@ pub fn restore_backup(
         return Err(err("restore staging path already exists"));
     }
     fs::create_dir_all(&staging)?;
-    for name in [
-        JOURNAL_FILE,
-        CACHE_FILE,
-        INFERENCE_SETTINGS_FILE,
-        BEHAVIOR_PROFILES_FILE,
-        MCP_AGENT_DEFAULTS_FILE,
-        LOCAL_CONVERSATION_CATALOG_FILE,
-        CAPABILITY_PROBE_REPORT_FILE,
-        LOCAL_INFERENCE_CONTRACT_FILE,
-    ] {
-        let source = backup.join(name);
-        if source.exists() {
-            fs::copy(source, staging.join(name))?;
+    let manifest: Value = serde_json::from_slice(&fs::read(backup.join(MANIFEST_FILE))?)
+        .map_err(|error| err(format!("manifest JSON: {error}")))?;
+    let files = manifest.get("files").and_then(Value::as_array)
+        .ok_or_else(|| err("verified manifest has no files"))?;
+    for file in files {
+        let name = file.get("path").and_then(Value::as_str)
+            .ok_or_else(|| err("verified manifest path missing"))?;
+        let relative = safe_relative(name)?;
+        if !allowed_backup_path(name) {
+            return Err(err("verified manifest has unsupported path"));
         }
+        let destination = staging.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(backup.join(relative), destination)?;
     }
     check_archive(&staging)?;
     if target.exists() {
