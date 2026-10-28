@@ -104,6 +104,19 @@ exposing its source records. Neither query deletes or mutates SQLite rows. These
 integrated, but other direct raw readers and final recovery testing still
 require audit. Do not equate a raw SQLite query with an effective view.
 
+## Nonblocking journal bootstrap
+
+Desktop startup now displays a lightweight loading frame while a named
+background worker opens the authoritative JSONL journal and constructs the
+validated `EffectiveEventStore`. This moves full raw journal disk IO and
+quarantine replay out of the GUI constructor/render thread. Once validated,
+the worker transfers ownership of the live single-writer lease to GUI startup;
+the GUI hands that same store to the persistence worker, never reopening it.
+Invalid or missing evidence fails closed to no-persistence UI state, not an
+unfiltered fallback. Background loading is tested with an exclusive-writer
+handoff and monotonic append sequence. Remaining GUI-side catalog/cache
+construction is separate work and may still be expensive for huge archives.
+
 ## Active desktop/worker effective replay
 
 The desktop now wraps the authoritative JSONL writer with a validated
