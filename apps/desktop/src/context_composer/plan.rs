@@ -486,4 +486,3 @@ fn content_lines(text: &str) -> usize {
         text.bytes().filter(|byte| *byte == b'\n').count() + 1
     }
 }
-

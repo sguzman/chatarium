@@ -30,16 +30,8 @@ fn composition_keeps_instructions_separate_and_developer_first() {
 
 #[test]
 fn tool_result_is_nonprivileged_provenance_wrapped_and_policy_gated() {
-    let message = TranscriptMessage::tool_result(
-        " exact <tool_result> body ",
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        "result",
-    );
+    let message =
+        TranscriptMessage::tool_result(" exact <tool_result> body ", 1, 2, 3, 4, 5, 6, "result");
     assert_eq!(message.order_sequence(), 6);
     let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", [message.clone()]);
     assert_eq!(plan.tool_result_count(), 1);
@@ -459,8 +451,7 @@ fn controller_worker_result_can_be_excluded_by_context_policy() {
         include_controller_worker_results: false,
         ..ContextPolicy::dispatch()
     };
-    let result =
-        TranscriptMessage::controller_worker_result(1, 2, 3, 4, 5, 6, "status", "working");
+    let result = TranscriptMessage::controller_worker_result(1, 2, 3, 4, 5, 6, "status", "working");
     let plan = ContextPlan::compose(policy, "", "", [result]);
 
     assert_eq!(plan.controller_worker_result_count(), 0);
@@ -548,8 +539,7 @@ fn long_context_keeps_recent_turns_and_verified_checkpoint_before_old_turns() {
             source_conversation_id: "owner".to_owned(),
             source_turn_id: "checkpoint-8".to_owned(),
             source_journal_sequence: 8,
-            uri: "viking://~/chatarium/conversations/owner/checkpoints/checkpoint-8.md"
-                .to_owned(),
+            uri: "viking://~/chatarium/conversations/owner/checkpoints/checkpoint-8.md".to_owned(),
         },
     });
     let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", transcript);
