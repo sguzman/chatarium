@@ -577,6 +577,67 @@ pub fn verify_backup(
     })
 }
 
+/// Clean failed restore staging without touching the pre-existing target.
+struct RestoreStagingCleanup(PathBuf);
+
+impl Drop for RestoreStagingCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn verify_staged_file(
+    manifest_file: &Value,
+    copied: &Path,
+) -> Result<(), ArchiveMaintenanceError> {
+    let (size, hash) = sha256(copied)?;
+    if manifest_file.get("size_bytes").and_then(Value::as_u64) != Some(size)
+        || manifest_file.get("sha256").and_then(Value::as_str) != Some(hash.as_str())
+    {
+        return Err(err("restored staged file differs from verified backup manifest"));
+    }
+    Ok(())
+}
+
+/// Publish a validated staging tree, rolling back the original directory if
+/// the second rename fails. The simulation flag is only enabled by tests.
+fn publish_staged_restore(
+    staging: &Path,
+    target: &Path,
+    parent: &Path,
+    simulate_failure: bool,
+) -> Result<(), ArchiveMaintenanceError> {
+    let safety = if target.exists() {
+        let safety = parent.join(format!(".chatarium-pre-restore-{}", unix_ms()));
+        if safety.exists() {
+            return Err(err("restore safety snapshot path already exists"));
+        }
+        fs::rename(target, &safety)?;
+        Some(safety)
+    } else {
+        None
+    };
+    let published = if simulate_failure {
+        Err(io::Error::other("synthetic restore publication failure"))
+    } else {
+        fs::rename(staging, target)
+    };
+    if let Err(error) = published {
+        if let Some(safety) = &safety {
+            if let Err(rollback_error) = fs::rename(safety, target) {
+                return Err(err(format!(
+                    "restore activation failed ({error}); rollback also failed ({rollback_error}); original preserved at {}",
+                    safety.display()
+                )));
+            }
+        }
+        return Err(err(format!(
+            "restore activation failed; original target preserved: {error}"
+        )));
+    }
+    Ok(())
+}
+
 /// Verify a package in isolation, then atomically replace the target while retaining a safety copy.
 pub fn restore_backup(
     backup: impl AsRef<Path>,
@@ -592,6 +653,7 @@ pub fn restore_backup(
         return Err(err("restore staging path already exists"));
     }
     fs::create_dir_all(&staging)?;
+    let _staging_cleanup = RestoreStagingCleanup(staging.clone());
     let manifest: Value = serde_json::from_slice(&fs::read(backup.join(MANIFEST_FILE))?)
         .map_err(|error| err(format!("manifest JSON: {error}")))?;
     let files = manifest
@@ -611,14 +673,13 @@ pub fn restore_backup(
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(backup.join(relative), destination)?;
+        fs::copy(backup.join(relative), &destination)?;
+        // Re-hash staged bytes; a source changed after verify_backup
+        // must not be published.
+        verify_staged_file(file, &destination)?;
     }
     check_archive(&staging)?;
-    if target.exists() {
-        let safety = parent.join(format!(".chatarium-pre-restore-{}", unix_ms()));
-        fs::rename(target, safety)?;
-    }
-    fs::rename(&staging, target)?;
+    publish_staged_restore(&staging, target, parent, false)?;
     Ok(verification)
 }
 
