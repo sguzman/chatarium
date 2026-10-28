@@ -19,7 +19,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **verified complete** |
 | R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **active** |
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **active** |
-| R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | pending |
+| R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **active** |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | pending |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
@@ -69,3 +69,7 @@ Following the first extraction, the long-reader GUI smoke failed with `IndexErro
 The 183-line conversation header is already extracted into `ui/header.rs`; this slice also extracts the ~297-line native composer panel into `ui/composer.rs`. Refactoring moves the same rendering/actions behind a typed method, and returns the two existing mirror/sync requests through mutable references. No active remote history transport is enabled. R13 remains active and receives no percentage credit until `update()` has been fully decomposed and verified.
 
 The `app/notices.rs` module currently contains the original ordered ~1,331-line notice handler. This is organization only; R14 still requires actual responsibility-specific handler decomposition. An existing synthetic reader QA process exits early without diagnostic output, so the QA harness will report its exit status on failure; this improves evidence, not product functionality.
+
+### Additional structural extraction slice — awaiting CI
+
+Moved 53 method implementations from the root `ChatariumApp` implementation to four feature modules in `src/app/actions/`: `routing.rs`, `tools.rs`, `memory.rs` and `workers.rs`. Methods are `pub(crate)` during transitional reorganization so existing sibling egui modules can invoke them; R41 must review visibility after call sites settle. No journal/policy/transport implementation was rewritten. Also moved the coordination pop-up and navigation logic into `src/ui/coordination_window.rs`. R13 and R15 remain **active** until the rest of their accepted scope and verification passes. This changes no completion percentage.

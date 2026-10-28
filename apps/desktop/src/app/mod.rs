@@ -1,2 +1,3 @@
-//! Desktop application event-handling modules.
+//! Desktop application event-handling and user-action modules.
+mod actions;
 mod notices;
