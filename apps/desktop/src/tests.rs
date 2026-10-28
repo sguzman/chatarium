@@ -4019,6 +4019,9 @@ fn restart_reconciles_committed_memory_work_without_bulk_importing_old_transcrip
     assert_eq!(queued.entries()[0].turn_id, active.turn_id.to_string());
     assert_eq!(reconcile_checkpoint_outbox(&reopened, &outbox_path), Ok(0));
 
+    // A restart transfers journal ownership; never keep the old writer open
+    // while reopening the same authoritative journal for another writer.
+    drop(reopened);
     let unowned = LocalTurnId::new();
     let mut unowned_store = JsonlEventStore::open(&path).unwrap();
     unowned_store
