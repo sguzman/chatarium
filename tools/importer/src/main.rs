@@ -4,6 +4,7 @@ mod openai_export;
 mod read_fixture;
 mod source_audit;
 mod source_quarantine;
+mod source_quarantine_record;
 
 use chatarium_core::EventKind;
 use chatarium_store::{EventStore, JsonlEventStore};
@@ -90,6 +91,22 @@ fn run() -> Result<(), String> {
                 Err("quarantine preflight BLOCKED; no changes made".to_owned())
             }
         }
+        [command, source_hash, data_dir] if command == "quarantine-record" => {
+            let summary = source_quarantine_record::record(Path::new(data_dir), source_hash)?;
+            println!("source sha256: {}", summary.source_sha256);
+            println!("matching imported events: {}", summary.matching_events);
+            println!("decision sequence: {}", summary.recorded_sequence);
+            println!(
+                "durable decision: {}",
+                if summary.already_recorded {
+                    "already recorded"
+                } else {
+                    "recorded"
+                }
+            );
+            println!("projection status: NOT FILTERED (non-operative evidence only)");
+            Ok(())
+        }
         [command, fixture, read_index, data_dir] if command == "read-fixture" => {
             let selected_index = read_index.parse::<usize>().map_err(|_| {
                 format!("read-fixture index must be a non-negative integer, got {read_index:?}")
@@ -120,7 +137,7 @@ fn run() -> Result<(), String> {
         ),
         _ => {
             eprintln!(
-                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>\n  chatarium-importer quarantine-preflight <source-sha256> <data-dir>"
+                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>\n  chatarium-importer quarantine-preflight <source-sha256> <data-dir>\n  chatarium-importer quarantine-record <source-sha256> <data-dir>"
             );
             Err("invalid arguments".to_owned())
         }
@@ -174,6 +191,17 @@ fn import_bytes(bytes: &[u8], data_dir: &Path) -> Result<ImportSummary, String> 
     let journal_path = data_dir.join("journal.jsonl");
     let mut store = JsonlEventStore::open(&journal_path)
         .map_err(|error| format!("open {}: {error}", journal_path.display()))?;
+    let quarantined =
+        chatarium_store::import_source_quarantine_audit::replay_import_source_quarantine_audit(
+            store.events(),
+        )
+        .map_err(|error| format!("replay quarantine source decisions: {error}"))?;
+    if quarantined
+        .iter()
+        .any(|record| record.source_sha256 == sha256)
+    {
+        return Err("source is quarantined: refusing Flight Recorder re-import".to_owned());
+    }
     let mut existing = existing_import_keys(store.events(), &sha256);
     let plan = build_plan(&export, &sha256, &archive_path, data_dir)?;
 
@@ -1022,6 +1050,23 @@ mod tests {
             ]
         }))
         .expect("serialize sample")
+    }
+
+    #[test]
+    fn recorded_source_quarantine_refuses_reimport_without_journal_rewrite() {
+        let dir = temp_dir("quarantined-reimport");
+        let bytes = sample_export();
+        let imported = import_bytes(&bytes, &dir).expect("first import");
+        let decision = source_quarantine_record::record(&dir, &imported.sha256)
+            .expect("record non-operative decision");
+        assert!(!decision.already_recorded);
+        let journal = dir.join("journal.jsonl");
+        let before = fs::read(&journal).expect("source journal bytes");
+        let error =
+            import_bytes(&bytes, &dir).expect_err("quarantined source may not be reimported");
+        assert!(error.contains("source is quarantined"));
+        assert_eq!(fs::read(&journal).unwrap(), before);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

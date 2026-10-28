@@ -44,6 +44,35 @@ atomically installs the candidate. Existing backups are never deleted automatica
 The desktop Diagnostics panel provides CHECK ARCHIVE, CREATE BACKUP, VERIFY BACKUP, and RESTORE
 BACKUP. Restore always requires an explicit confirmation and preserves the previous active data.
 
+## Single-writer journal ownership
+
+Every `JsonlEventStore::open` now acquires an exclusive SQLite transaction in
+`journal.jsonl.writer-lock.sqlite3`, alongside its journal. It holds that
+lease until the writer is dropped. Desktop and importer writers share this
+entrypoint, so concurrent journal opens refuse with a lock error rather than
+racing append sequence numbers or tail recovery. Journal reads through
+`inspect_jsonl_journal` remain available and never acquire a writer lease.
+
+SQLite releases the lease automatically after process termination; the lock
+database is non-authoritative runtime coordination state, not a projection
+or source archive. **Do not delete the lock database as an unlock mechanism.**
+Doing so could let two processes hold leases on different inodes.
+
+The store also offers `JsonlEventStore::open_strict`, which acquires the
+same exclusive lease but refuses a missing journal or torn tail **without
+repairing, truncating, or creating the journal**. Evidence-sensitive mutation
+commands must use this mode and revalidate their source while owning the lease.
+
+The importer exposes `quarantine-record` for explicit, durable,
+**non-operative** source quarantine decisions. It opens the journal strictly,
+then re-runs the source preflight and replay admission while holding the
+exclusive lease. Repeated recording is idempotent; source re-import is refused.
+
+An active source-quarantine apply operation is *not* implemented yet.
+No desktop, worker, or SQLite projection currently excludes the recorded
+source's events. A read-only preflight journal SHA by itself cannot prevent
+concurrent changes; use the strict writer lease for any future operation.
+
 ## Source quarantine decision audit (non-operative)
 
 The journal event `import_source_quarantine_recorded` is a versioned, unscoped

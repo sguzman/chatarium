@@ -23,6 +23,8 @@ pub struct QuarantinePreflight {
     pub journal_sha256: String,
     pub journal_events: usize,
     pub matching_events: usize,
+    pub first_sequence: u64,
+    pub last_sequence: u64,
     pub matching_scope_count: usize,
     pub source_bytes: usize,
     pub blockers: Vec<&'static str>,
@@ -180,6 +182,8 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
         journal_sha256,
         journal_events: inspection.events.len(),
         matching_events: matching.len(),
+        first_sequence: attribution.first_sequence,
+        last_sequence: attribution.last_sequence,
         matching_scope_count: scopes.len(),
         source_bytes,
         blockers,
@@ -297,6 +301,7 @@ mod tests {
         let plan = preflight(&dir, &hash.to_ascii_uppercase()).unwrap();
         assert!(plan.candidate_isolated(), "{:?}", plan.blockers);
         assert_eq!(plan.matching_events, 3);
+        assert_eq!((plan.first_sequence, plan.last_sequence), (1, 3));
         assert_eq!(plan.matching_scope_count, 1);
         assert_eq!(plan.journal_events, 3);
         assert_eq!(plan.journal_sha256, hash_bytes(&before));

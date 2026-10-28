@@ -76,6 +76,7 @@ use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const JOURNAL_WRITE_VERSION: u64 = 2;
@@ -214,11 +215,26 @@ pub struct JsonlEventStore {
     path: PathBuf,
     file: File,
     events: Vec<EventEnvelope>,
+    // Own the entire lifetime of the SQLite EXCLUSIVE transaction. Dropping
+    // this connection releases the OS-managed lock even after a process crash.
+    _writer_lock: rusqlite::Connection,
 }
 
 impl JsonlEventStore {
-    /// Open or create a journal and rebuild its in-memory event projection.
+    /// Open or create a journal, repairing only an unterminated final write.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_internal(path, true)
+    }
+
+    /// Open an existing journal without ever truncating or repairing its bytes.
+    ///
+    /// This is the required entrypoint for evidence-sensitive mutation tools,
+    /// including any future source quarantine decision recorder.
+    pub fn open_strict(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_internal(path, false)
+    }
+
+    fn open_internal(path: impl AsRef<Path>, allow_torn_tail_repair: bool) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path
             .parent()
@@ -227,8 +243,13 @@ impl JsonlEventStore {
             fs::create_dir_all(parent)?;
         }
 
+        // Acquire the cross-process writer lock *before* touching the journal:
+        // recovery may truncate a torn tail, and append assigns sequences.
+        // All desktop and importer writers use this same entry point.
+        let writer_lock = acquire_journal_writer_lock(&path)?;
+
         let mut recovery_file = OpenOptions::new()
-            .create(true)
+            .create(allow_torn_tail_repair)
             .read(true)
             .write(true)
             .open(&path)?;
@@ -240,6 +261,11 @@ impl JsonlEventStore {
             .rposition(|byte| *byte == b'\n')
             .map_or(0, |index| index + 1);
         if complete_len < bytes.len() {
+            if !allow_torn_tail_repair {
+                return Err(invalid_data(
+                    "strict journal open refuses an unterminated final record",
+                ));
+            }
             recovery_file.set_len(u64::try_from(complete_len).map_err(invalid_data)?)?;
             recovery_file.sync_data()?;
             bytes.truncate(complete_len);
@@ -266,8 +292,16 @@ impl JsonlEventStore {
             events.push(event);
         }
 
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self { path, file, events })
+        let file = OpenOptions::new()
+            .create(allow_torn_tail_repair)
+            .append(true)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file,
+            events,
+            _writer_lock: writer_lock,
+        })
     }
 
     /// Filesystem path backing this journal.
@@ -306,6 +340,58 @@ impl EventStore for JsonlEventStore {
     fn events(&self) -> &[EventEnvelope] {
         &self.events
     }
+}
+
+/// Acquire a crash-released, cross-process, single-writer lease for one journal.
+///
+/// We intentionally keep a distinct SQLite file per journal path: the durable
+/// JSONL evidence and its SQLite event projection remain untouched. SQLite's
+/// rollback-journal EXCLUSIVE transaction supplies an OS-backed advisory lock
+/// without stale PID files, unsafe code, or an extra dependency.
+///
+/// The lease is held as long as the returned connection lives. Lock files must
+/// never be unlinked to "unlock" them, because unlink/recreate can split a lease
+/// across different inodes on Unix.
+fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connection> {
+    // Canonicalize the already-created parent so relative and symlinked data
+    // directory spellings resolve to the same filesystem lock location.
+    let parent = journal
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    let canonical_parent = fs::canonicalize(parent)?;
+    let filename = journal.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "journal filename is missing")
+    })?;
+    let lock_path = canonical_parent.join(format!(
+        "{}.writer-lock.sqlite3",
+        filename.to_string_lossy()
+    ));
+    let connection = rusqlite::Connection::open(&lock_path)
+        .map_err(|error| io::Error::other(format!("open journal writer lock: {error}")))?;
+    connection
+        .busy_timeout(Duration::ZERO)
+        .map_err(|error| io::Error::other(format!("configure journal writer lock: {error}")))?;
+    connection
+        .execute_batch("BEGIN EXCLUSIVE")
+        .map_err(|error| {
+            let kind = match error {
+                rusqlite::Error::SqliteFailure(ref sqlite_error, _)
+                    if matches!(
+                        sqlite_error.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) =>
+                {
+                    io::ErrorKind::WouldBlock
+                }
+                _ => io::ErrorKind::Other,
+            };
+            io::Error::new(
+                kind,
+                format!("journal already has a writer or lock failed: {error}"),
+            )
+        })?;
+    Ok(connection)
 }
 
 fn next_sequence(events: &[EventEnvelope]) -> io::Result<u64> {
@@ -504,6 +590,84 @@ mod tests {
         assert_eq!(reopened.events()[1].payload, "after recovery");
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn one_journal_writer_at_a_time_and_read_only_inspection_remains_available() {
+        let root = temp_path("writer-lock").with_extension("dir");
+        fs::create_dir_all(&root).expect("isolated test directory");
+        let path = root.join("journal.jsonl");
+
+        let mut first = JsonlEventStore::open(&path).expect("first writer");
+        first
+            .append(EventKind::DraftChanged, "durable".to_owned())
+            .expect("first append");
+        let before = fs::read(&path).expect("snapshot");
+
+        let second = JsonlEventStore::open(&path).expect_err("concurrent writer must fail closed");
+        assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(fs::read(&path).expect("journal"), before);
+        let read_only =
+            inspect_jsonl_journal(&path).expect("read-only inspection during writer lease");
+        assert_eq!(read_only.events.len(), 1);
+        assert_eq!(read_only.events[0].payload, "durable");
+
+        // Relative spelling aliases of the same parent resolve to one lease.
+        let alias = root.join(".").join("journal.jsonl");
+        let duplicate = JsonlEventStore::open(&alias).expect_err("alias must not bypass lease");
+        assert_eq!(duplicate.kind(), io::ErrorKind::WouldBlock);
+
+        drop(first);
+        let mut reopened = JsonlEventStore::open(&path).expect("lease released after drop");
+        reopened
+            .append(EventKind::DraftChanged, "next".to_owned())
+            .expect("second writer append");
+        assert_eq!(reopened.events()[1].sequence, 2);
+        drop(reopened);
+        fs::remove_dir_all(root).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn rejected_writer_does_not_recover_torn_tail_behind_active_owner() {
+        let root = temp_path("torn-writer-lock").with_extension("dir");
+        fs::create_dir_all(&root).expect("isolated test directory");
+        let path = root.join("journal.jsonl");
+        let first = JsonlEventStore::open(&path).expect("first writer");
+        fs::write(&path, b"unterminated").expect("synthetic torn tail");
+        let error = JsonlEventStore::open(&path).expect_err("second writer must not repair");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(fs::read(&path).expect("journal unchanged"), b"unterminated");
+        drop(first);
+        fs::remove_dir_all(root).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn strict_open_refuses_missing_or_torn_journal_without_repair() {
+        let root = temp_path("strict-no-repair").with_extension("dir");
+        fs::create_dir_all(&root).expect("isolated test directory");
+        let path = root.join("journal.jsonl");
+        let missing = JsonlEventStore::open_strict(&path).expect_err("missing journal");
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert!(!path.exists(), "strict open must not create a journal");
+
+        {
+            let mut writer = JsonlEventStore::open(&path).expect("create");
+            writer
+                .append(EventKind::DraftChanged, "intact".to_owned())
+                .expect("append");
+        }
+        let mut raw = fs::read(&path).expect("read");
+        raw.extend_from_slice(b"torn");
+        fs::write(&path, &raw).expect("synthetic incomplete write");
+        let error = JsonlEventStore::open_strict(&path).expect_err("reject torn tail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&path).expect("read unchanged"), raw);
+
+        let repaired = JsonlEventStore::open(&path).expect("ordinary startup recovery");
+        assert_eq!(repaired.events().len(), 1);
+        assert_eq!(repaired.events()[0].payload, "intact");
+        drop(repaired);
+        fs::remove_dir_all(root).expect("remove isolated test directory");
     }
 
     #[test]
