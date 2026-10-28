@@ -47,7 +47,7 @@ BACKUP. Restore always requires an explicit confirmation and preserves the previ
 ## Backup and restore of source-quarantine evidence
 
 Content-addressed archives under `imports/flight-recorder/<sha256>.json`
-are now included in the signed-by-hash *local backup manifest* and restored
+are now included in the SHA-256-verified local backup manifest and restored
 alongside the authoritative journal. Source filename, path structure, regular
 file type, and SHA-256 byte integrity are verified. Unknown import-directory
 entries, symlinks and unlisted source archives fail backup verification;
