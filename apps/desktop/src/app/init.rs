@@ -6,16 +6,49 @@ impl ChatariumApp {
     /// complete raw archive without blocking the GUI render/event thread.
     pub(crate) fn load_journal_for_bootstrap(
         journal_path: &std::path::Path,
-    ) -> Result<chatarium_store::effective_event_store::EffectiveEventStore<JsonlEventStore>, String>
-    {
+    ) -> Result<crate::startup::LoadedJournal, String> {
         diagnostics::info(
             "startup",
             format!("opening durable journal at {}", journal_path.display()),
         );
-        let store = JsonlEventStore::open(journal_path)
+        let raw = JsonlEventStore::open(journal_path)
             .map_err(|error| format!("failed to open journal: {error}"))?;
-        chatarium_store::effective_event_store::EffectiveEventStore::new(store)
-            .map_err(|error| format!("journal source quarantine validation failed: {error}"))
+        let mut store = chatarium_store::effective_event_store::EffectiveEventStore::new(raw)
+            .map_err(|error| format!("journal source quarantine validation failed: {error}"))?;
+        // Recovery can replay many turns and append durable interruptions.
+        // Do both the scan and the initial full snapshot off the GUI thread.
+        let recovery = recover_interrupted_remote_turns(&mut store);
+        let events = store.events().to_vec();
+        let local_path = local_conversation_catalog_path(journal_path);
+        let (catalog, conversation_id, status) =
+            match load_local_conversation_workspace(&local_path, &events) {
+                Ok((catalog, id)) => (catalog, id, "journal ready".to_owned()),
+                Err(error) => {
+                    let fallback = projected_local_conversation_id(&events)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    let mut catalog = local_conversations::LocalConversationCatalog::default();
+                    catalog.create(fallback, unix_now_ms());
+                    (
+                        catalog,
+                        fallback,
+                        format!("journal ready; local conversation catalog warning: {error}"),
+                    )
+                }
+            };
+        let draft = projected_working_draft(&events, conversation_id);
+        Ok(crate::startup::LoadedJournal {
+            store,
+            events,
+            recovery,
+            workspace: crate::startup::LoadedWorkspace {
+                catalog,
+                conversation_id,
+                status,
+                draft,
+            },
+        })
     }
 
     /// UI-thread phase: consume the loaded, validated journal and construct
@@ -23,20 +56,20 @@ impl ChatariumApp {
     pub(crate) fn from_loaded_journal(
         repaint: &egui::Context,
         journal_path: PathBuf,
-        loaded: Result<
-            chatarium_store::effective_event_store::EffectiveEventStore<JsonlEventStore>,
-            String,
-        >,
+        loaded: Result<crate::startup::LoadedJournal, String>,
     ) -> Self {
         let data_dir = journal_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .to_path_buf();
         match loaded {
-            Ok(mut store) => {
+            Ok(crate::startup::LoadedJournal {
+                store,
+                events,
+                recovery,
+                workspace,
+            }) => {
                 let excluded_count = store.excluded_count();
-                let recovery = recover_interrupted_remote_turns(&mut store);
-                let events = store.events().to_vec();
                 if excluded_count > 0 {
                     diagnostics::info(
                         "startup",
@@ -49,32 +82,12 @@ impl ChatariumApp {
                     "startup",
                     format!("journal replay complete: {} events", events.len()),
                 );
-                let local_conversation_catalog_path =
-                    local_conversation_catalog_path(&journal_path);
-                let (local_conversation_catalog, local_conversation_id, mut startup_status) =
-                    match load_local_conversation_workspace(
-                        &local_conversation_catalog_path,
-                        &events,
-                    ) {
-                        Ok((catalog, id)) => (catalog, id, "journal ready".to_owned()),
-                        Err(error) => {
-                            let fallback = projected_local_conversation_id(&events)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default();
-                            let mut catalog =
-                                local_conversations::LocalConversationCatalog::default();
-                            catalog.create(fallback, unix_now_ms());
-                            (
-                                catalog,
-                                fallback,
-                                format!(
-                                    "journal ready; local conversation catalog warning: {error}"
-                                ),
-                            )
-                        }
-                    };
-                let draft = projected_working_draft(&events, local_conversation_id);
+                let crate::startup::LoadedWorkspace {
+                    catalog: local_conversation_catalog,
+                    conversation_id: local_conversation_id,
+                    status: mut startup_status,
+                    draft,
+                } = workspace;
                 match recovery {
                     Ok(0) => {}
                     Ok(count) => {
