@@ -4111,7 +4111,6 @@ impl ChatariumApp {
         own_ready && project_ready
     }
 
-
     fn draft_state(&self) -> &'static str {
         if self.persist_tx.is_none() {
             "NOT DURABLE"

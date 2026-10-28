@@ -69,8 +69,10 @@ wait_state() {
             return 0
         fi
         if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "Reader QA process ended" >&2
-            cat "$OUT/reader.log"
+            exit_status=0
+            wait "$app_pid" || exit_status=$?
+            echo "Reader QA process ended: exit_status=$exit_status" >&2
+            cat "$OUT/reader.log" >&2 || true
             exit 1
         fi
         sleep 0.2

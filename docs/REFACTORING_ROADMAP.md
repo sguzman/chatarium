@@ -63,3 +63,9 @@ Following the first extraction, the long-reader GUI smoke failed with `IndexErro
 - **R13 active (not yet verified):** extract native conversation header renderer from the 9,414-line frame method into `ui/header.rs`, preserving the same panel ID, height, execution ordering and action callback behavior.
 - **R14 active (not yet verified):** move the ordered journal notice dispatch into `app/notices.rs` without altering match arms. Further functional decomposition into smaller handlers is still outstanding.
 - **Verification plan:** Latest Windows and Linux CI, native GUI smoke, synthetic reader QA; preserve the pre-existing sandbox failure classification; no refactor extraction earns points until accepted.
+
+### Second desktop/UI extraction slice — awaiting CI
+
+The 183-line conversation header is already extracted into `ui/header.rs`; this slice also extracts the ~297-line native composer panel into `ui/composer.rs`. Refactoring moves the same rendering/actions behind a typed method, and returns the two existing mirror/sync requests through mutable references. No active remote history transport is enabled. R13 remains active and receives no percentage credit until `update()` has been fully decomposed and verified.
+
+The `app/notices.rs` module currently contains the original ordered ~1,331-line notice handler. This is organization only; R14 still requires actual responsibility-specific handler decomposition. An existing synthetic reader QA process exits early without diagnostic output, so the QA harness will report its exit status on failure; this improves evidence, not product functionality.

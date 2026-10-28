@@ -1332,5 +1332,4 @@ impl ChatariumApp {
             }
         }
     }
-
 }
