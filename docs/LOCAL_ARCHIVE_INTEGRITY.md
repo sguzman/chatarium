@@ -58,6 +58,11 @@ database is non-authoritative runtime coordination state, not a projection
 or source archive. **Do not delete the lock database as an unlock mechanism.**
 Doing so could let two processes hold leases on different inodes.
 
+The store also offers `JsonlEventStore::open_strict`, which acquires the
+same exclusive lease but refuses a missing journal or torn tail **without
+repairing, truncating, or creating the journal**. Evidence-sensitive mutation
+commands must use this mode and revalidate their source while owning the lease.
+
 A source-quarantine apply command is *not* implemented yet. It must acquire
 this writer lease before revalidating source evidence and appending a decision;
 a read-only preflight journal SHA by itself cannot prevent concurrent changes.
