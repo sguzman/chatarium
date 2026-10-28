@@ -124,6 +124,20 @@ exposing its source records. Neither query deletes or mutates SQLite rows. These
 integrated, but other direct raw readers and final recovery testing still
 require audit. Do not equate a raw SQLite query with an effective view.
 
+## Background replay ownership and event-buffer transfer
+
+The bootstrap worker now computes the initial remote-health event replay
+alongside the native search index. After transferring the validated
+`LoadedJournal` to the GUI, `ChatariumApp` moves the already-owned effective
+event `Vec` directly into its state instead of cloning every event payload.
+The existing search-index handoff still checks its revision and reuses the
+precomputed search corpus. The persistence worker continues to own the
+authoritative single writer through the effective event adapter.
+
+The GUI render path performs neither initial remote-health replay nor an
+archive-sized event-buffer clone. Source exclusions are validated before the
+off-thread projections are constructed.
+
 ## Nonblocking journal bootstrap
 
 Desktop startup now displays a lightweight loading frame while a named
