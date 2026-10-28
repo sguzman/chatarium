@@ -65,7 +65,10 @@ impl ChatariumApp {
     /// Nonblocking on the render thread: consume only an already completed
     /// message, never wait for a scan, verification, filesystem copy or lock.
     pub(crate) fn poll_archive_operation(&mut self, ctx: &egui::Context) {
-        let result = self.archive_maintenance_result.as_ref().map(Receiver::try_recv);
+        let result = self
+            .archive_maintenance_result
+            .as_ref()
+            .map(Receiver::try_recv);
         match result {
             Some(Ok(message)) => {
                 self.archive_maintenance_status = message;
@@ -97,18 +100,26 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "chatarium-archive-async-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let source = root.join("source");
         let backup = root.join("backup");
         fs::create_dir_all(&source).unwrap();
         let mut store = JsonlEventStore::open(source.join("journal.jsonl")).unwrap();
-        store.append(EventKind::DraftChanged, "native preserved".to_owned()).unwrap();
+        store
+            .append(EventKind::DraftChanged, "native preserved".to_owned())
+            .unwrap();
         let original = fs::read(source.join("journal.jsonl")).unwrap();
 
-        assert!(perform_archive_operation(ArchiveOperation::Check {
-            data_dir: source.clone(),
-        }).contains("1 events"));
+        assert!(
+            perform_archive_operation(ArchiveOperation::Check {
+                data_dir: source.clone(),
+            })
+            .contains("1 events")
+        );
         assert_eq!(
             perform_archive_operation(ArchiveOperation::Backup {
                 data_dir: source.clone(),
