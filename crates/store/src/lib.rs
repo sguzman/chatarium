@@ -335,7 +335,9 @@ impl EventStore for JsonlEventStore {
 fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connection> {
     // Canonicalize the already-created parent so relative and symlinked data
     // directory spellings resolve to the same filesystem lock location.
-    let parent = journal.parent().filter(|parent| !parent.as_os_str().is_empty());
+    let parent = journal
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
     let parent = parent.unwrap_or_else(|| Path::new("."));
     let canonical_parent = fs::canonicalize(parent)?;
     let filename = journal.file_name().ok_or_else(|| {
@@ -350,17 +352,25 @@ fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connectio
     connection
         .busy_timeout(Duration::ZERO)
         .map_err(|error| io::Error::other(format!("configure journal writer lock: {error}")))?;
-    connection.execute_batch("BEGIN EXCLUSIVE").map_err(|error| {
-        let kind = match error {
-            rusqlite::Error::SqliteFailure(ref sqlite_error, _)
-                if matches!(
-                    sqlite_error.code,
-                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                ) => io::ErrorKind::WouldBlock,
-            _ => io::ErrorKind::Other,
-        };
-        io::Error::new(kind, format!("journal already has a writer or lock failed: {error}"))
-    })?;
+    connection
+        .execute_batch("BEGIN EXCLUSIVE")
+        .map_err(|error| {
+            let kind = match error {
+                rusqlite::Error::SqliteFailure(ref sqlite_error, _)
+                    if matches!(
+                        sqlite_error.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) =>
+                {
+                    io::ErrorKind::WouldBlock
+                }
+                _ => io::ErrorKind::Other,
+            };
+            io::Error::new(
+                kind,
+                format!("journal already has a writer or lock failed: {error}"),
+            )
+        })?;
     Ok(connection)
 }
 
@@ -577,7 +587,8 @@ mod tests {
         let second = JsonlEventStore::open(&path).expect_err("concurrent writer must fail closed");
         assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
         assert_eq!(fs::read(&path).expect("journal"), before);
-        let read_only = inspect_jsonl_journal(&path).expect("read-only inspection during writer lease");
+        let read_only =
+            inspect_jsonl_journal(&path).expect("read-only inspection during writer lease");
         assert_eq!(read_only.events.len(), 1);
         assert_eq!(read_only.events[0].payload, "durable");
 
