@@ -23,8 +23,8 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **verified complete** |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
-| R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **active** |
-| R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | pending |
+| R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **verified complete** |
+| R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **active** |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | pending |
 | R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | pending |
 | R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 52% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 57% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20 + R22), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -133,3 +133,9 @@ The large extracted advanced panel was further decomposed into independent modul
 - **R20 verified (+4pp, 48% → 52%)** at [commit 0471403](https://github.com/sguzman/chatarium/commit/0471403064b4ba5f9e64cf1b05eaa06e9967bd5b). [Full CI 40741358660](https://github.com/sguzman/chatarium/actions/runs/40741358660) Windows and Linux **success**, [native visual QA 40741358379](https://github.com/sguzman/chatarium/actions/runs/40741358379) **success**, [optimized native search profiling 40741358199](https://github.com/sguzman/chatarium/actions/runs/40741358199) **success**. The index and cache preserve the Arc projection identity and stale selection/provenance checks; no new user features.
 - **R22 active, not verified:** Context composer is now mechanically divided into provenance/source rules, typed transcript constructors, bounded context plan, explicit capability gates, and isolated tests. Request assembly behavior must pass CI before counting its 5 points.
 - Visual QA's workflow paths now watch the entire desktop source tree, so moved feature modules continue to trigger visual verification.
+
+## Round 6 — Context composer verified; MCP manifest split begun
+
+- **R22 verified: 52% → 57% (+5pp).** The context composer extraction, including follow-up rustfmt correction, passed [full Linux/Windows CI 40743937739](https://github.com/sguzman/chatarium/actions/runs/40743937739) and [production/native-reader visual QA 40743937755](https://github.com/sguzman/chatarium/actions/runs/40743937755) at commit [a508b9a](https://github.com/sguzman/chatarium/commit/a508b9ac848e544149d1ab2e8f2aef4b1c5471db). The same provenance, bounded-input, controller capability and tool admission tests passed.
+- **R23 active, not verified:** `mcp_dispatch_manifest.rs` is mechanically separated into `capture.rs` (admission evidence/dispatch attachment), `history.rs` (durable-event validation and exact history), `provenance.rs` (reverse per-call tracing), `render.rs` (read-only egui display and cache), and `tests.rs`. Preserve unchanged admission/transport/authority semantics. CI, focused MCP tests, and visual QA must pass on the new commit before awarding its 5 points.
+- **Additional R21/R24 preparation:** Coordination and OpenViking module splits have been structurally mapped but are not yet pushed, tested, or counted. They remain pending until independently verified.
