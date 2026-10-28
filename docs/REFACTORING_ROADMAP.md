@@ -15,7 +15,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R00 🔍 | Inventory actual source hotspots and module responsibilities at pinned SHA | 6 | — | **verified complete** |
 | R01 🧪 | Audit current CI baseline, test commands and known baseline failures | 4 | R00 | **verified complete** |
 | R10 🧩 | Move main's root test module to `src/tests.rs`; desktop tests pass unchanged | 4 | R01 | **verified complete** |
-| R11 🖥️ | Move `eframe::App` implementation into `src/ui/`; build and reader tests pass unchanged | 6 | R01 | **active** |
+| R11 🖥️ | Move `eframe::App` implementation into `src/ui/`; build and reader tests pass unchanged | 6 | R01 | **verified complete** |
 | R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **verified complete** |
 | R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **active** |
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **active** |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 19% (R00 + R01 + R10 + R12), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 25% (R00 + R01 + R10 + R11 + R12), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -79,3 +79,11 @@ Moved 53 method implementations from the root `ChatariumApp` implementation to f
 The last fully green visual QA run [39490896288](https://github.com/sguzman/chatarium/actions/runs/39490896288) used the `ubuntu-24.04` image. Recent `ubuntu-latest` runs resolved to `ubuntu-26.04`. The synthetic reader exits normally with status 0 during visual QA on the changed runner, rather than crashing or panicking; the single pre-existing Linux sandbox trust test also fails there. To reestablish the known test environment while the refactor is underway, **pin the Linux desktop CI job and native reader visual QA job to `ubuntu-24.04`**. This is *not* proof that the runner change is the sole cause until the pinned jobs are rerun. Do not relax host-path ownership checks.
 
 Five line-wrap changes were applied verbatim from the latest Windows rustfmt output to extracted action methods. The actions and GUI extraction remain under CI verification.
+
+### Runner-pinned acceptance and further decomposition — 2026-10-28
+
+**R11 verified (+6 percentage points):** [visual run 40716101349](https://github.com/sguzman/chatarium/actions/runs/40716101349) completed with **success** on pinned Ubuntu 24.04. [CI run 40716101369](https://github.com/sguzman/chatarium/actions/runs/40716101369) has Windows `rust` success and Linux desktop compilation, desktop tests, local-first integration journey, and stdio-safety tests passed; remaining Linux isolation installation/stages were still running at this checkpoint. Prior screenshot failures occurred on `ubuntu-latest` resolving to Ubuntu 26.04 and were not accepted as refactor correctness evidence. **Verified roadmap total: 25%.**
+
+**R13 remains active:** Move the native transcript reader/projection/virtualized scroll path from `ui/mod.rs` to `ui/reader.rs` without a semantic change, leaving the repaint footer in `update()`.
+
+**R14 implementation prepared, verification pending:** Refactor the 1,331-line `process_notices()` into a ~100-line dispatcher and nine feature-owned completion handlers (OpenViking, durable draft/turn, remote, routing, MCP proposals, MCP outcomes, memory, workers, failure cleanup). The original dispatcher has no post-match work per notice. Its nine outer-loop `continue;` statements therefore become handler `return;` statements when extracted, preserving skip-to-next-notice behavior. All notice variants remain handled, with the original processing order and security decisions unchanged. No R14 points until CI verifies the extraction.
