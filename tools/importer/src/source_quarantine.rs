@@ -40,8 +40,8 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
     let attribution = audit_source(data_dir, source_sha256)?;
     let hash = attribution.source_sha256;
     let path = data_dir.join("journal.jsonl");
-    let before = fs::read(&path)
-        .map_err(|error| format!("read journal for source preflight: {error}"))?;
+    let before =
+        fs::read(&path).map_err(|error| format!("read journal for source preflight: {error}"))?;
     let inspection = inspect_jsonl_journal(&path)
         .map_err(|error| format!("inspect journal for source preflight: {error}"))?;
     if inspection.unterminated_tail_bytes != 0 {
@@ -68,8 +68,9 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
             .join("imports")
             .join("flight-recorder")
             .join(format!("{hash}.json"));
-        let source = fs::read(source_path)
-            .map_err(|_| "source archive missing or unreadable; cannot validate quarantine".to_owned())?;
+        let source = fs::read(source_path).map_err(|_| {
+            "source archive missing or unreadable; cannot validate quarantine".to_owned()
+        })?;
         if hash_bytes(&source) != hash {
             return Err("source archive SHA-256 mismatch; quarantine refused".to_owned());
         }
@@ -96,9 +97,11 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
     // Unrecognized claims to the same source must not be silently ignored. The
     // source audit intentionally counts only recognized importer formats; the
     // preflight also inspects known provenance shapes for impostors/corruption.
-    if inspection.events.iter().any(|event| {
-        claims_hash(event, &hash) && matched_source(event, &hash).is_none()
-    }) {
+    if inspection
+        .events
+        .iter()
+        .any(|event| claims_hash(event, &hash) && matched_source(event, &hash).is_none())
+    {
         blockers.push("unrecognized_source_provenance");
     }
     if matching.iter().any(|event| !valid_flight_kind(event.kind)) {
@@ -109,7 +112,10 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
     // derived from another source, or part of a later native turn. Never assume
     // such a scope is exclusively owned by the candidate import.
     if inspection.events.iter().any(|event| {
-        event.scope.as_deref().is_some_and(|scope| scopes.contains(scope))
+        event
+            .scope
+            .as_deref()
+            .is_some_and(|scope| scopes.contains(scope))
             && matched_source(event, &hash).is_none()
     }) {
         blockers.push("foreign_event_shares_import_scope");
@@ -224,13 +230,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "chatarium-quarantine-plan-{label}-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(dir.join("imports/flight-recorder")).unwrap();
         let source = json!({
             "format": FLIGHT_SOURCE_FORMAT,
             "version": FLIGHT_SOURCE_VERSION
-        }).to_string();
+        })
+        .to_string();
         let hash = hash_bytes(source.as_bytes());
         fs::write(
             dir.join(format!("imports/flight-recorder/{hash}.json")),
@@ -238,13 +248,25 @@ mod tests {
         )
         .unwrap();
         let mut journal = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
-        journal.append(EventKind::ImportStarted, payload(&hash, "import:start", None)).unwrap();
-        journal.append_scoped(
-            Some("remote:test".to_owned()),
-            EventKind::DraftChanged,
-            payload(&hash, "draft:1", None),
-        ).unwrap();
-        journal.append(EventKind::ImportCompleted, payload(&hash, "import:complete", Some(1))).unwrap();
+        journal
+            .append(
+                EventKind::ImportStarted,
+                payload(&hash, "import:start", None),
+            )
+            .unwrap();
+        journal
+            .append_scoped(
+                Some("remote:test".to_owned()),
+                EventKind::DraftChanged,
+                payload(&hash, "draft:1", None),
+            )
+            .unwrap();
+        journal
+            .append(
+                EventKind::ImportCompleted,
+                payload(&hash, "import:complete", Some(1)),
+            )
+            .unwrap();
         (dir, hash)
     }
 
@@ -263,7 +285,8 @@ mod tests {
                 "event_key": key
             },
             "details": details
-        }).to_string()
+        })
+        .to_string()
     }
 
     #[test]
@@ -284,11 +307,13 @@ mod tests {
     fn foreign_event_at_same_scope_blocks_quarantine() {
         let (dir, hash) = fixture("foreign");
         let mut store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
-        store.append_scoped(
-            Some("remote:test".to_owned()),
-            EventKind::UserMessageCommitted,
-            "native-user-authored".to_owned(),
-        ).unwrap();
+        store
+            .append_scoped(
+                Some("remote:test".to_owned()),
+                EventKind::UserMessageCommitted,
+                "native-user-authored".to_owned(),
+            )
+            .unwrap();
         drop(store);
         let plan = preflight(&dir, &hash).unwrap();
         assert!(plan.blockers.contains(&"foreign_event_shares_import_scope"));
@@ -299,10 +324,12 @@ mod tests {
     fn hash_collision_claim_and_truncated_tail_fail_closed() {
         let (dir, hash) = fixture("collision");
         let mut store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
-        store.append(
-            EventKind::DraftChanged,
-            json!({"source_sha256": hash}).to_string()
-        ).unwrap();
+        store
+            .append(
+                EventKind::DraftChanged,
+                json!({"source_sha256": hash}).to_string(),
+            )
+            .unwrap();
         drop(store);
         let plan = preflight(&dir, &hash).unwrap();
         assert!(plan.blockers.contains(&"unrecognized_source_provenance"));
@@ -333,14 +360,19 @@ mod tests {
     fn import_with_duplicate_or_missing_completion_is_blocked() {
         let (dir, hash) = fixture("duplicate");
         let mut store = JsonlEventStore::open(dir.join("journal.jsonl")).unwrap();
-        store.append(
-            EventKind::ImportCompleted,
-            payload(&hash, "import:complete", Some(1))
-        ).unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                payload(&hash, "import:complete", Some(1)),
+            )
+            .unwrap();
         drop(store);
         let plan = preflight(&dir, &hash).unwrap();
         assert!(plan.blockers.contains(&"duplicate_import_event_key"));
-        assert!(plan.blockers.contains(&"incomplete_or_duplicated_import_markers"));
+        assert!(
+            plan.blockers
+                .contains(&"incomplete_or_duplicated_import_markers")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }
