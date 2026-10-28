@@ -41,7 +41,11 @@ impl<S: EventStore> EffectiveEventStore<S> {
             .iter()
             .map(|decision| decision.source_sha256.clone())
             .collect();
-        let visible = selection.visible_events().iter().map(|event| (*event).clone()).collect();
+        let visible = selection
+            .visible_events()
+            .iter()
+            .map(|event| (*event).clone())
+            .collect();
         Ok(Self {
             raw,
             visible,
@@ -131,7 +135,6 @@ fn import_source_hash(payload: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,7 +211,11 @@ mod tests {
         assert_eq!(effective.authoritative_events().len(), 5);
         assert_eq!(effective.excluded_count(), 3);
         assert_eq!(
-            effective.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            effective
+                .events()
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
             vec![3, 5]
         );
         assert_eq!(effective.events()[0].payload, "native must remain visible");
@@ -236,13 +243,16 @@ mod tests {
             EventKind::DraftChanged,
             "native same scope".to_owned(),
         );
-        assert_eq!(conflict.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-
-        let reimport = effective.append(
-            EventKind::DraftChanged,
-            imported("draft:2", json!({})),
+        assert_eq!(
+            conflict.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
         );
-        assert_eq!(reimport.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+
+        let reimport = effective.append(EventKind::DraftChanged, imported("draft:2", json!({})));
+        assert_eq!(
+            reimport.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
         assert_eq!(effective.authoritative_events().len(), before);
     }
 
@@ -257,10 +267,7 @@ mod tests {
 
         let mut invalid = with_decision();
         invalid
-            .append(
-                EventKind::ImportSourceQuarantineRecorded,
-                "{}".to_owned(),
-            )
+            .append(EventKind::ImportSourceQuarantineRecorded, "{}".to_owned())
             .unwrap();
         assert!(EffectiveEventStore::new(invalid).is_err());
     }
@@ -268,7 +275,8 @@ mod tests {
     #[test]
     fn without_decisions_all_raw_events_remain_visible() {
         let mut raw = MemoryEventStore::default();
-        raw.append(EventKind::DraftChanged, "native".to_owned()).unwrap();
+        raw.append(EventKind::DraftChanged, "native".to_owned())
+            .unwrap();
         let effective = EffectiveEventStore::new(raw).unwrap();
         assert_eq!(effective.excluded_count(), 0);
         assert_eq!(effective.events(), effective.authoritative_events());
