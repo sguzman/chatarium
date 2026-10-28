@@ -158,7 +158,12 @@ mod tests {
         assert_eq!(loaded.store.events(), loaded.events);
         assert_eq!(loaded.store.authoritative_events(), loaded.store.events());
         assert_eq!(loaded.recovery, Ok(0));
-        assert!(loaded.native_index.messages(loaded.workspace.conversation_id).is_empty());
+        assert!(
+            loaded
+                .native_index
+                .messages(loaded.workspace.conversation_id)
+                .is_empty()
+        );
         assert!(loaded.workspace.status.starts_with("journal ready"));
         assert!(root.join("local-conversations.json").exists());
         // The background loader's lease is handed to the consumer, without a
