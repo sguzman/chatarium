@@ -133,7 +133,7 @@ impl EdgeProcess {
 }
 
 #[cfg(windows)]
-fn pipe_readiness_retryable(error: &TransportError) -> bool {
+pub(super) fn pipe_readiness_retryable(error: &TransportError) -> bool {
     match error {
         TransportError::CommandOutcomeUnknown { reason, .. } => reason.contains("timed out"),
         TransportError::Timeout { .. } => true,
@@ -142,7 +142,7 @@ fn pipe_readiness_retryable(error: &TransportError) -> bool {
 }
 
 #[cfg(windows)]
-fn journal_pipe_readiness_failure(
+pub(super) fn journal_pipe_readiness_failure(
     run: &mut CaptureRun,
     attempts: u32,
     primary: &TransportError,
@@ -160,7 +160,7 @@ fn journal_pipe_readiness_failure(
 }
 
 #[cfg(windows)]
-fn fail_pipe_startup(
+pub(super) fn fail_pipe_startup(
     launched: &mut LaunchedEdge,
     run: &mut CaptureRun,
     error: TransportError,
