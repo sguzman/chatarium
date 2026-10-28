@@ -1170,7 +1170,10 @@ mod tests {
         assert_eq!(effective[0].payload, "native original");
         let view = projection.effective_read_view_verified(&original).unwrap();
         assert_eq!(
-            view.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            view.events()
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
             vec![3, 5]
         );
         assert_eq!(view.events_for_scope("local:native").len(), 1);
@@ -1178,7 +1181,10 @@ mod tests {
         assert_eq!(view.events_of_kind(EventKind::DraftChanged).len(), 1);
         assert_eq!(view.events_for_scope("local:native")[0].sequence, 3);
         // Physical evidence remains inspectable through explicitly raw APIs.
-        assert_eq!(projection.events_for_scope("remote:example").unwrap().len(), 1);
+        assert_eq!(
+            projection.events_for_scope("remote:example").unwrap().len(),
+            1
+        );
         assert_eq!(projection.last_sequence().unwrap(), Some(5));
         assert_eq!(projection.event_count().unwrap(), 5);
         let mut changed = original.clone();
