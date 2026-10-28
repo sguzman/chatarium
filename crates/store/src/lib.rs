@@ -358,7 +358,7 @@ impl EventStore for JsonlEventStore {
 #[derive(Debug)]
 struct JournalWriterLease {
     // Stable above the data directory: survives archive directory replacement.
-    _parent: rusqlite::Connection,
+    _parent: Option<rusqlite::Connection>,
     // Existing per-journal lock: preserves compatibility with earlier writers.
     _journal: rusqlite::Connection,
 }
@@ -370,11 +370,20 @@ fn acquire_journal_writer_lock(journal: &Path) -> io::Result<JournalWriterLease>
         .unwrap_or_else(|| Path::new("."));
     // Always acquire in this order, including archive restore, to avoid
     // deadlocks between a data writer and directory publication.
-    let parent_lock = acquire_archive_restore_lease(directory)?;
     let canonical_parent = fs::canonicalize(directory)?;
     let filename = journal.file_name().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "journal filename is missing")
     })?;
+    // Archive restore always targets the canonical journal.jsonl. Standalone
+    // diagnostic/test JSONL files can live directly in a shared directory
+    // such as /tmp, whose parent (/) need not be writable. They still hold
+    // their existing per-file exclusive lease, and cannot be restored using
+    // archive maintenance's fixed journal.jsonl layout.
+    let parent_lock = if filename == std::ffi::OsStr::new("journal.jsonl") {
+        Some(acquire_archive_restore_lease(directory)?)
+    } else {
+        None
+    };
     let lock_path = canonical_parent.join(format!(
         "{}.writer-lock.sqlite3",
         filename.to_string_lossy()
