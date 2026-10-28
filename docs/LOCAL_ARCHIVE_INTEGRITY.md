@@ -130,6 +130,21 @@ loading is tested with an exclusive-writer handoff and monotonic append
 sequence. Other UI-side cached search/index work remains a separate
 performance audit before claiming fully nonblocking large-archive startup.
 
+## Native reader index preparation off the GUI thread
+
+The journal bootstrap worker now builds the initial native conversation search
+index and remote-health replay before handing the owned event snapshot to the
+GUI. The complete event `Vec` moves into the desktop without cloning its
+potentially large payloads. The existing egui cache receives the prebuilt
+`Arc` with its original journal-revision identity, so the first render frame
+reuses the index rather than scanning the entire archive again. All source
+exclusions were already validated by the effective journal store before this
+index was constructed.
+
+Subsequent journal appends continue using the existing incremental
+search-index update logic; this change specifically removes full initial
+search-index construction from the UI/render thread.
+
 ## Active desktop/worker effective replay
 
 The desktop now wraps the authoritative JSONL writer with a validated
