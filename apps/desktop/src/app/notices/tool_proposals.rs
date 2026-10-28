@@ -32,9 +32,7 @@ impl ChatariumApp {
                 self.events.extend(appended_events);
                 self.tool_command_pending = false;
                 let matches_flow = self.agent_mcp_flow.as_ref().is_some_and(|flow| {
-                    flow.turn_id == turn_id
-                        && flow.pending_call.is_none()
-                        && flow.policy == policy
+                    flow.turn_id == turn_id && flow.pending_call.is_none() && flow.policy == policy
                 });
                 if !matches_flow {
                     self.status = "MCP proposal was recorded, but its agent session is no longer active. No tool launched.".to_owned();

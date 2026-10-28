@@ -61,8 +61,7 @@ impl ChatariumApp {
                 if added {
                     self.local_memory_label_drafts.remove(&memory_id);
                 }
-                self.status =
-                    format!("local memory {} labels durably updated", memory_id.get());
+                self.status = format!("local memory {} labels durably updated", memory_id.get());
             }
             _ => unreachable!("unexpected memory notice"),
         }

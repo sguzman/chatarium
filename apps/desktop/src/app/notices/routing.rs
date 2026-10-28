@@ -10,9 +10,8 @@ impl ChatariumApp {
                 let count = appended_events.len();
                 self.events.extend(appended_events);
                 self.topology_command_pending = false;
-                self.status = format!(
-                    "local orchestration topology durably initialized · {count} events"
-                );
+                self.status =
+                    format!("local orchestration topology durably initialized · {count} events");
             }
             PersistNotice::RouteEndpointBound { event } => {
                 self.events.push(event);
@@ -29,8 +28,7 @@ impl ChatariumApp {
                 self.events.push(event);
                 self.route_payload_command_pending = false;
                 self.route_payload_drafts.remove(&route_id);
-                self.status =
-                    format!("local route {} payload durably attached", route_id.get());
+                self.status = format!("local route {} payload durably attached", route_id.get());
             }
             PersistNotice::LocalRouteDispatchUpdated {
                 route_id,

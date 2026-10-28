@@ -72,8 +72,7 @@ impl ChatariumApp {
             PersistNotice::ControllerCoordinationStarted { turn_id, event } => {
                 self.events.push(event);
                 self.controller_coordination_command_pending = false;
-                self.status =
-                    format!("controller coordination turn {} durably started", turn_id);
+                self.status = format!("controller coordination turn {} durably started", turn_id);
             }
             PersistNotice::ControllerCoordinationResultRecorded { turn_id, event } => {
                 self.events.push(event);

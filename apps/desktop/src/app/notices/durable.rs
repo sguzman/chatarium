@@ -54,11 +54,10 @@ impl ChatariumApp {
                             return;
                         }
                         let remote_request_id = message.turn_id.to_string();
-                        let mut transcript =
-                            context_transcript(&projected_local_display_messages(
-                                &self.events,
-                                message.conversation_id,
-                            ));
+                        let mut transcript = context_transcript(&projected_local_display_messages(
+                            &self.events,
+                            message.conversation_id,
+                        ));
                         transcript.extend(intent.routed_context);
                         // The Send-click admission snapshot is frozen in this
                         // pending intent. Do not re-read live admissions after
@@ -86,8 +85,7 @@ impl ChatariumApp {
                         }
                         transcript.extend(intent.controller_result_context);
                         transcript.extend(intent.controller_coordination_result_context);
-                        transcript
-                            .sort_by_key(context_composer::TranscriptMessage::order_sequence);
+                        transcript.sort_by_key(context_composer::TranscriptMessage::order_sequence);
                         let context_plan = match context_composer::ContextPlan::compose_bounded(
                             context_composer::ContextPolicy::dispatch(),
                             intent.instructions.as_deref().unwrap_or_default(),
@@ -126,8 +124,7 @@ impl ChatariumApp {
                         ) {
                             Ok(payload) => payload,
                             Err(error) => {
-                                self.status =
-                                    format!("cannot journal outgoing context: {error}");
+                                self.status = format!("cannot journal outgoing context: {error}");
                                 return;
                             }
                         };
@@ -150,8 +147,7 @@ impl ChatariumApp {
                         let payload = if let Some(attachment) = intent.attachment.as_ref() {
                             let mut evidence: Value = serde_json::from_str(&payload)
                                 .expect("validated dispatch observation JSON");
-                            evidence["details"]["attachment_intake"] =
-                                attachment.timing_metadata();
+                            evidence["details"]["attachment_intake"] = attachment.timing_metadata();
                             serde_json::to_string(&evidence)
                                 .expect("bounded attachment metadata serializes")
                         } else {
@@ -275,17 +271,14 @@ impl ChatariumApp {
                                 &pending.request_id,
                                 Some(&pending.model),
                                 None,
-                                Some(
-                                    "wake denied before bridge send; no network request issued",
-                                ),
+                                Some("wake denied before bridge send; no network request issued"),
                             );
                             let _ = self.queue_turn_event(
                                 turn_id,
                                 EventKind::TransportInterrupted,
                                 interrupted,
                             );
-                            self.status =
-                                "coordination wake stopped before remote send".to_owned();
+                            self.status = "coordination wake stopped before remote send".to_owned();
                             return;
                         }
                     }
@@ -323,10 +316,8 @@ impl ChatariumApp {
                                     }
                                 }
                             }
-                            self.delivery.set(
-                                &pending.request_id,
-                                delivery_telemetry::Phase::BridgeQueued,
-                            );
+                            self.delivery
+                                .set(&pending.request_id, delivery_telemetry::Phase::BridgeQueued);
                             self.active_remote_turn = Some(ActiveRemoteTurn {
                                 conversation_id: pending.conversation_id,
                                 turn_id,

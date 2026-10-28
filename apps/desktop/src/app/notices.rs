@@ -21,78 +21,78 @@ impl ChatariumApp {
 
         for notice in notices {
             match notice {
-                notice @ (
-                    PersistNotice::ProjectOpenVikingRetrievalFinished { .. }
-                    | PersistNotice::OpenVikingRetrievalFinished { .. }
-                    | PersistNotice::OpenVikingMemoryWriteFinished { .. }
-                    | PersistNotice::OpenVikingMemorySummarySaved { .. }
-                ) => self.apply_openviking_notice(notice),
-                notice @ (
-                    PersistNotice::DraftSaved { .. }
-                    | PersistNotice::MessageCommitted { .. }
-                    | PersistNotice::AgentActivityAppended { .. }
-                    | PersistNotice::MemoryCheckpointQueued { .. }
-                    | PersistNotice::TurnEventAppended { .. }
-                ) => self.apply_durable_notice(notice),
-                notice @ (
-                    PersistNotice::HistoricalConversationLoaded { .. }
-                    | PersistNotice::HistoricalConversationLoadFailed { .. }
-                    | PersistNotice::LiveConversationLoaded { .. }
-                    | PersistNotice::LiveConversationLoadFailed { .. }
-                    | PersistNotice::HistoricalLiveMirrorPromoted { .. }
-                    | PersistNotice::HistoricalLiveMirrorPromotionFailed { .. }
-                    | PersistNotice::DiscoveredLiveMirrorPromoted { .. }
-                    | PersistNotice::DiscoveredLiveMirrorPromotionFailed { .. }
-                    | PersistNotice::MirrorQueueUpdated { .. }
-                    | PersistNotice::RemoteHealthUpdated { .. }
-                ) => self.apply_remote_notice(notice),
-                notice @ (
-                    PersistNotice::OrchestrationTopologyInitialized { .. }
-                    | PersistNotice::RouteEndpointBound { .. }
-                    | PersistNotice::LocalRoutePolicyEventAppended { .. }
-                    | PersistNotice::LocalRoutePayloadAttached { .. }
-                    | PersistNotice::LocalRouteDispatchUpdated { .. }
-                    | PersistNotice::LocalRouteContextDecisionUpdated { .. }
-                ) => self.apply_routing_notice(notice),
-                notice @ (
-                    PersistNotice::ToolProviderUpdated { .. }
-                    | PersistNotice::AgentMcpCallProposed { .. }
-                ) => self.apply_tool_proposals_notice(notice),
-                notice @ (
-                    PersistNotice::ToolCallProposed { .. }
-                    | PersistNotice::ToolCallRoutePolicyUpdated { .. }
-                    | PersistNotice::HostShellDispatched { .. }
-                    | PersistNotice::BuiltinHelloDispatched { .. }
-                    | PersistNotice::SandboxHostChecked { .. }
-                    | PersistNotice::StdioToolDispatchReserved { .. }
-                    | PersistNotice::StdioToolDispatchFinished { .. }
-                    | PersistNotice::ToolResultContextDecisionUpdated { .. }
-                ) => self.apply_tool_outcomes_notice(notice),
-                notice @ (
-                    PersistNotice::LocalMemoryArtifactRecorded { .. }
-                    | PersistNotice::LocalMemoryContextDecisionUpdated { .. }
-                    | PersistNotice::LocalMemorySupersessionRecorded { .. }
-                    | PersistNotice::LocalMemoryLabelUpdated { .. }
-                ) => self.apply_memory_notice(notice),
-                notice @ (
-                    PersistNotice::LifecycleEventAppended { .. }
-                    | PersistNotice::SupervisionEventAppended { .. }
-                    | PersistNotice::ControllerContinuationLeaseCreated { .. }
-                    | PersistNotice::ControllerControlProposed { .. }
-                    | PersistNotice::ControllerControlRoutePolicyUpdated { .. }
-                    | PersistNotice::ControllerControlDispatched { .. }
-                    | PersistNotice::ControllerWorkerResultContextDecisionUpdated { .. }
-                    | PersistNotice::ControllerCoordinationStarted { .. }
-                    | PersistNotice::ControllerCoordinationResultRecorded { .. }
-                    | PersistNotice::ControllerCoordinationResultContextDecisionUpdated { .. }
-                    | PersistNotice::ControllerCoordinationSuggestionRecorded { .. }
-                    | PersistNotice::ControllerCoordinationSuggestionPromoted { .. }
-                    | PersistNotice::WorkerControlAcknowledged { .. }
-                    | PersistNotice::WorkerControlStatusResultRecorded { .. }
-                    | PersistNotice::WorkerControlActionAdvanced { .. }
-                    | PersistNotice::WorkerContinuationExecutionStarted { .. }
-                    | PersistNotice::WorkerContinuationExecutionResultRecorded { .. }
-                ) => self.apply_workers_notice(notice),
+                notice @ (PersistNotice::ProjectOpenVikingRetrievalFinished { .. }
+                | PersistNotice::OpenVikingRetrievalFinished { .. }
+                | PersistNotice::OpenVikingMemoryWriteFinished { .. }
+                | PersistNotice::OpenVikingMemorySummarySaved { .. }) => {
+                    self.apply_openviking_notice(notice)
+                }
+                notice @ (PersistNotice::DraftSaved { .. }
+                | PersistNotice::MessageCommitted { .. }
+                | PersistNotice::AgentActivityAppended { .. }
+                | PersistNotice::MemoryCheckpointQueued { .. }
+                | PersistNotice::TurnEventAppended { .. }) => self.apply_durable_notice(notice),
+                notice @ (PersistNotice::HistoricalConversationLoaded { .. }
+                | PersistNotice::HistoricalConversationLoadFailed { .. }
+                | PersistNotice::LiveConversationLoaded { .. }
+                | PersistNotice::LiveConversationLoadFailed { .. }
+                | PersistNotice::HistoricalLiveMirrorPromoted { .. }
+                | PersistNotice::HistoricalLiveMirrorPromotionFailed { .. }
+                | PersistNotice::DiscoveredLiveMirrorPromoted { .. }
+                | PersistNotice::DiscoveredLiveMirrorPromotionFailed { .. }
+                | PersistNotice::MirrorQueueUpdated { .. }
+                | PersistNotice::RemoteHealthUpdated { .. }) => self.apply_remote_notice(notice),
+                notice @ (PersistNotice::OrchestrationTopologyInitialized { .. }
+                | PersistNotice::RouteEndpointBound { .. }
+                | PersistNotice::LocalRoutePolicyEventAppended { .. }
+                | PersistNotice::LocalRoutePayloadAttached { .. }
+                | PersistNotice::LocalRouteDispatchUpdated { .. }
+                | PersistNotice::LocalRouteContextDecisionUpdated { .. }) => {
+                    self.apply_routing_notice(notice)
+                }
+                notice @ (PersistNotice::ToolProviderUpdated { .. }
+                | PersistNotice::AgentMcpCallProposed { .. }) => {
+                    self.apply_tool_proposals_notice(notice)
+                }
+                notice @ (PersistNotice::ToolCallProposed { .. }
+                | PersistNotice::ToolCallRoutePolicyUpdated { .. }
+                | PersistNotice::HostShellDispatched { .. }
+                | PersistNotice::BuiltinHelloDispatched { .. }
+                | PersistNotice::SandboxHostChecked { .. }
+                | PersistNotice::StdioToolDispatchReserved { .. }
+                | PersistNotice::StdioToolDispatchFinished { .. }
+                | PersistNotice::ToolResultContextDecisionUpdated { .. }) => {
+                    self.apply_tool_outcomes_notice(notice)
+                }
+                notice @ (PersistNotice::LocalMemoryArtifactRecorded { .. }
+                | PersistNotice::LocalMemoryContextDecisionUpdated { .. }
+                | PersistNotice::LocalMemorySupersessionRecorded { .. }
+                | PersistNotice::LocalMemoryLabelUpdated { .. }) => {
+                    self.apply_memory_notice(notice)
+                }
+                notice @ (PersistNotice::LifecycleEventAppended { .. }
+                | PersistNotice::SupervisionEventAppended { .. }
+                | PersistNotice::ControllerContinuationLeaseCreated { .. }
+                | PersistNotice::ControllerControlProposed { .. }
+                | PersistNotice::ControllerControlRoutePolicyUpdated { .. }
+                | PersistNotice::ControllerControlDispatched { .. }
+                | PersistNotice::ControllerWorkerResultContextDecisionUpdated {
+                    ..
+                }
+                | PersistNotice::ControllerCoordinationStarted { .. }
+                | PersistNotice::ControllerCoordinationResultRecorded { .. }
+                | PersistNotice::ControllerCoordinationResultContextDecisionUpdated {
+                    ..
+                }
+                | PersistNotice::ControllerCoordinationSuggestionRecorded { .. }
+                | PersistNotice::ControllerCoordinationSuggestionPromoted { .. }
+                | PersistNotice::WorkerControlAcknowledged { .. }
+                | PersistNotice::WorkerControlStatusResultRecorded { .. }
+                | PersistNotice::WorkerControlActionAdvanced { .. }
+                | PersistNotice::WorkerContinuationExecutionStarted { .. }
+                | PersistNotice::WorkerContinuationExecutionResultRecorded { .. }) => {
+                    self.apply_workers_notice(notice)
+                }
                 notice @ PersistNotice::Failed { .. } => self.apply_failures_notice(notice),
             }
         }

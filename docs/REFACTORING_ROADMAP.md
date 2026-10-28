@@ -87,3 +87,7 @@ Five line-wrap changes were applied verbatim from the latest Windows rustfmt out
 **R13 remains active:** Move the native transcript reader/projection/virtualized scroll path from `ui/mod.rs` to `ui/reader.rs` without a semantic change, leaving the repaint footer in `update()`.
 
 **R14 implementation prepared, verification pending:** Refactor the 1,331-line `process_notices()` into a ~100-line dispatcher and nine feature-owned completion handlers (OpenViking, durable draft/turn, remote, routing, MCP proposals, MCP outcomes, memory, workers, failure cleanup). The original dispatcher has no post-match work per notice. Its nine outer-loop `continue;` statements therefore become handler `return;` statements when extracted, preserving skip-to-next-notice behavior. All notice variants remain handled, with the original processing order and security decisions unchanged. No R14 points until CI verifies the extraction.
+
+### CI follow-up: module-aware visual-QA triggering
+
+The first nine-handler notice split reached Windows `cargo fmt -- --check` and produced 19 formatting-only diffs; the output of rustfmt was applied to the corresponding extracted modules. The native-reader visual-QA workflow's path filter now includes `apps/desktop/src/app/**` and `apps/desktop/src/ui/**` to ensure the freshly relocated code always triggers screenshot testing. R14 still needs CI verification; R13 remains partially implemented. No additional percentage points are counted at this stage.

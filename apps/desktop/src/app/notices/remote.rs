@@ -39,8 +39,7 @@ impl ChatariumApp {
                 messages,
             } => {
                 if self.selected_historical_conversation == Some(local_conversation_id) {
-                    self.historical_messages =
-                        remote_display_messages(messages, snapshot_sequence);
+                    self.historical_messages = remote_display_messages(messages, snapshot_sequence);
                     self.loaded_historical_conversation = Some(local_conversation_id);
                     self.historical_load_pending = None;
                     self.live_mirror_truncated_before = truncated_before;
@@ -116,9 +115,8 @@ impl ChatariumApp {
                     } else {
                         self.historical_messages =
                             remote_display_messages(messages, snapshot_sequence);
-                        self.status = format!(
-                            "ChatGPT live mirror durable at event #{snapshot_sequence}"
-                        );
+                        self.status =
+                            format!("ChatGPT live mirror durable at event #{snapshot_sequence}");
                     }
                 } else {
                     self.status =
@@ -154,8 +152,7 @@ impl ChatariumApp {
                 );
                 self.events.extend(appended_events);
                 self.refresh_live_mirror_catalog();
-                if self.remote_discovery_pending.as_deref()
-                    == Some(remote_conversation_id.as_str())
+                if self.remote_discovery_pending.as_deref() == Some(remote_conversation_id.as_str())
                 {
                     self.remote_discovery_pending = None;
                 }
@@ -205,8 +202,7 @@ impl ChatariumApp {
                         "live mirror is durable, but visible transcript projection is blocked: {error}"
                     );
                 } else {
-                    self.historical_messages =
-                        remote_display_messages(messages, snapshot_sequence);
+                    self.historical_messages = remote_display_messages(messages, snapshot_sequence);
                     self.status = format!(
                         "remote ChatGPT conversation mirrored locally at event #{snapshot_sequence}"
                     );
@@ -223,8 +219,7 @@ impl ChatariumApp {
                         diagnostics::short_id(&remote_conversation_id)
                     ),
                 );
-                if self.remote_discovery_pending.as_deref()
-                    == Some(remote_conversation_id.as_str())
+                if self.remote_discovery_pending.as_deref() == Some(remote_conversation_id.as_str())
                 {
                     self.remote_discovery_pending = None;
                 }
