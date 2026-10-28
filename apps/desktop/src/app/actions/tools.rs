@@ -695,7 +695,11 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn decide_tool_call_route(&mut self, route_id: RouteId, decision: RouteUserDecision) {
+    pub(crate) fn decide_tool_call_route(
+        &mut self,
+        route_id: RouteId,
+        decision: RouteUserDecision,
+    ) {
         if self.tool_command_pending {
             return;
         }

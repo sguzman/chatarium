@@ -172,7 +172,11 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn remove_local_memory_label(&mut self, memory_id: LocalMemoryId, label: LocalMemoryLabel) {
+    pub(crate) fn remove_local_memory_label(
+        &mut self,
+        memory_id: LocalMemoryId,
+        label: LocalMemoryLabel,
+    ) {
         if self.local_memory_command_pending {
             return;
         }

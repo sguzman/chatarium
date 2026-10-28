@@ -91,7 +91,10 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn propose_local_session_route(&mut self, destination_conversation_id: LocalConversationId) {
+    pub(crate) fn propose_local_session_route(
+        &mut self,
+        destination_conversation_id: LocalConversationId,
+    ) {
         if self.route_policy_command_pending {
             return;
         }
@@ -167,7 +170,11 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn decide_local_session_route(&mut self, route_id: RouteId, decision: RouteUserDecision) {
+    pub(crate) fn decide_local_session_route(
+        &mut self,
+        route_id: RouteId,
+        decision: RouteUserDecision,
+    ) {
         if self.route_policy_command_pending {
             return;
         }

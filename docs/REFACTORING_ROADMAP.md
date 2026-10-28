@@ -73,3 +73,9 @@ The `app/notices.rs` module currently contains the original ordered ~1,331-line 
 ### Additional structural extraction slice — awaiting CI
 
 Moved 53 method implementations from the root `ChatariumApp` implementation to four feature modules in `src/app/actions/`: `routing.rs`, `tools.rs`, `memory.rs` and `workers.rs`. Methods are `pub(crate)` during transitional reorganization so existing sibling egui modules can invoke them; R41 must review visibility after call sites settle. No journal/policy/transport implementation was rewritten. Also moved the coordination pop-up and navigation logic into `src/ui/coordination_window.rs`. R13 and R15 remain **active** until the rest of their accepted scope and verification passes. This changes no completion percentage.
+
+### CI runner environment regression investigation
+
+The last fully green visual QA run [39490896288](https://github.com/sguzman/chatarium/actions/runs/39490896288) used the `ubuntu-24.04` image. Recent `ubuntu-latest` runs resolved to `ubuntu-26.04`. The synthetic reader exits normally with status 0 during visual QA on the changed runner, rather than crashing or panicking; the single pre-existing Linux sandbox trust test also fails there. To reestablish the known test environment while the refactor is underway, **pin the Linux desktop CI job and native reader visual QA job to `ubuntu-24.04`**. This is *not* proof that the runner change is the sole cause until the pinned jobs are rerun. Do not relax host-path ownership checks.
+
+Five line-wrap changes were applied verbatim from the latest Windows rustfmt output to extracted action methods. The actions and GUI extraction remain under CI verification.

@@ -77,7 +77,10 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn supervise_local_conversation(&mut self, worker_conversation_id: LocalConversationId) {
+    pub(crate) fn supervise_local_conversation(
+        &mut self,
+        worker_conversation_id: LocalConversationId,
+    ) {
         if self.supervision_command_pending {
             return;
         }
