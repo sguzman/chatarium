@@ -9,16 +9,19 @@ use chatarium_store::JsonlEventStore;
 use chatarium_store::effective_event_store::EffectiveEventStore;
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use crate::local_conversations::LocalConversationCatalog;
+use crate::native_conversation_search::NativeConversationSearchIndex;
 use crate::{ChatariumApp, EventEnvelope, LocalConversationId, default_journal_path};
 
 /// Completed off-thread snapshot; UI receives already reconciled native state.
 pub(crate) struct LoadedJournal {
     pub(crate) store: EffectiveEventStore<JsonlEventStore>,
     pub(crate) events: Vec<EventEnvelope>,
+    pub(crate) native_index: Arc<NativeConversationSearchIndex>,
     pub(crate) recovery: Result<usize, String>,
     pub(crate) workspace: LoadedWorkspace,
 }
@@ -155,6 +158,12 @@ mod tests {
         assert_eq!(loaded.store.events(), loaded.events);
         assert_eq!(loaded.store.authoritative_events(), loaded.store.events());
         assert_eq!(loaded.recovery, Ok(0));
+        assert!(
+            loaded
+                .native_index
+                .messages(loaded.workspace.conversation_id)
+                .is_empty()
+        );
         assert!(loaded.workspace.status.starts_with("journal ready"));
         assert!(root.join("local-conversations.json").exists());
         // The background loader's lease is handed to the consumer, without a

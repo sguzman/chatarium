@@ -127,8 +127,12 @@ conversation catalog, conversation titles and working draft, so those full
 archive passes never run on the GUI/render thread. It hands the writer and
 precomputed native workspace to UI construction in one message. Background
 loading is tested with an exclusive-writer handoff and monotonic append
-sequence. Other UI-side cached search/index work remains a separate
-performance audit before claiming fully nonblocking large-archive startup.
+sequence. The full native conversation-search index is also built against
+the effective event snapshot on the bootstrap worker and validated/seeded into
+the egui cache before the first render; the UI never needs an initial
+full-archive index rebuild. Sidebar result summaries and per-query searching
+may still scan visible messages when their cache keys change, so those
+incremental UI costs remain under performance review.
 
 ## Active desktop/worker effective replay
 
