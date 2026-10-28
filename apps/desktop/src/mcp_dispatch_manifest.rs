@@ -29,12 +29,12 @@ mod tests;
 
 pub use capture::{attach_to_dispatch_payload, capture};
 pub use history::{
-    DispatchTransportTrace, ListedToolEvidence, RecordedDispatchManifest,
-    ToolCompositionReason, dispatch_history, portable_audit_json,
+    DispatchTransportTrace, ListedToolEvidence, RecordedDispatchManifest, ToolCompositionReason,
+    dispatch_history, portable_audit_json,
 };
 pub use provenance::{
-    ToolProvenanceDisposition, ToolProvenanceEntry, ToolProvenanceReport,
-    reverse_query_id, reverse_tool_provenance, reverse_tool_provenance_json, select_reverse_provenance,
+    ToolProvenanceDisposition, ToolProvenanceEntry, ToolProvenanceReport, reverse_query_id,
+    reverse_tool_provenance, reverse_tool_provenance_json, select_reverse_provenance,
 };
 pub use render::render_dispatches;
 

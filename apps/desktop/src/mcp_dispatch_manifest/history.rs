@@ -143,7 +143,9 @@ pub struct RecordedDispatchManifest {
 /// Reject malformed *manifested* dispatches rather than guessing. Old
 /// DispatchAttempted events without the new field remain valid legacy history
 /// and are not misrepresented as having captured outgoing evidence.
-pub(super) fn parse_dispatch(event: &EventEnvelope) -> Result<Option<RecordedDispatchManifest>, String> {
+pub(super) fn parse_dispatch(
+    event: &EventEnvelope,
+) -> Result<Option<RecordedDispatchManifest>, String> {
     if event.kind != EventKind::DispatchAttempted {
         return Ok(None);
     }

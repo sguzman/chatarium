@@ -78,11 +78,7 @@ fn manifest_for_reverse_test(
     }
 }
 
-fn reverse_evidence(
-    call_id: u64,
-    admitted_sequence: u64,
-    included: bool,
-) -> ListedToolEvidence {
+fn reverse_evidence(call_id: u64, admitted_sequence: u64, included: bool) -> ListedToolEvidence {
     ListedToolEvidence {
         call_id,
         route_id: call_id + 100,
@@ -156,10 +152,8 @@ fn truncated_absence_is_unknown_even_with_other_known_results() {
 #[test]
 fn exact_result_identity_must_match_across_dispatches_but_readmission_can_change() {
     let owner = LocalConversationId::new();
-    let first =
-        manifest_for_reverse_test(10, owner, vec![reverse_evidence(7, 19, false)], false);
-    let second =
-        manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 25, true)], false);
+    let first = manifest_for_reverse_test(10, owner, vec![reverse_evidence(7, 19, false)], false);
+    let second = manifest_for_reverse_test(20, owner, vec![reverse_evidence(7, 25, true)], false);
     assert!(reverse_tool_provenance(&[second, first], 7).is_ok());
     let mut corrupted = reverse_evidence(7, 30, true);
     corrupted.source_session_id = 999;
@@ -253,8 +247,7 @@ fn captures_only_actual_composed_tool_sources_without_raw_content() {
 fn specialized_dispatch_reports_admitted_but_not_included() {
     let owner = LocalConversationId::new();
     let plan = ContextPlan::compose(ContextPolicy::dispatch(), "", "", []);
-    let manifest =
-        capture(owner, "worker_continuation", &[admitted_source(12)], &plan).unwrap();
+    let manifest = capture(owner, "worker_continuation", &[admitted_source(12)], &plan).unwrap();
     assert_eq!(manifest["eligible_tool_results"], 1);
     assert_eq!(manifest["included_tool_results"], 0);
     assert_eq!(manifest["omitted_tool_results"], 1);

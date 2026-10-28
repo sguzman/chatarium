@@ -218,7 +218,11 @@ impl DispatchHistoryCache {
         }
     }
 
-    pub(super) fn matches(&self, events: &[EventEnvelope], conversation_id: LocalConversationId) -> bool {
+    pub(super) fn matches(
+        &self,
+        events: &[EventEnvelope],
+        conversation_id: LocalConversationId,
+    ) -> bool {
         self.conversation_id == conversation_id.to_string()
             && self.high_water == JournalHighWater::capture(events)
     }
