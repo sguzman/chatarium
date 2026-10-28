@@ -1,8 +1,8 @@
 mod account_bridge;
-mod ui;
-mod worker;
 #[cfg(test)]
 mod tests;
+mod ui;
+mod worker;
 use worker::persistence_worker;
 mod attachment_intake;
 mod behavior_profile;
@@ -8689,7 +8689,6 @@ fn readable_byte_size(bytes: u64) -> String {
     }
 }
 
-
 fn delivery_status_color(
     attempt: &delivery_telemetry::Attempt,
     slow_warning_seconds: u32,
@@ -13811,7 +13810,6 @@ fn reconcile_checkpoint_outbox(
     Ok(recovered)
 }
 
-
 fn controller_record_health_signal(
     notices: &Sender<MirrorControllerNotice>,
     signal: RemoteHealthSignal,
@@ -16395,4 +16393,3 @@ fn main() -> eframe::Result<()> {
     }
     result
 }
-

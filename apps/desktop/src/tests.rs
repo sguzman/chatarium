@@ -28,12 +28,8 @@ fn in_chat_mcp_status_follows_durable_approval_dispatch_and_outcome() {
     assert!(!pending.automatically_authorized);
     assert!(project_inline_mcp_status(store.events(), other).is_none());
 
-    append_tool_call_route_user_decision_checked(
-        &mut store,
-        route_id,
-        RouteUserDecision::Allow,
-    )
-    .unwrap();
+    append_tool_call_route_user_decision_checked(&mut store, route_id, RouteUserDecision::Allow)
+        .unwrap();
     let allowed = project_inline_mcp_status(store.events(), conversation).unwrap();
     assert_eq!(
         allowed.stage,
@@ -166,9 +162,7 @@ fn persist_notice_name(notice: &PersistNotice) -> &'static str {
             "orchestration_topology_initialized"
         }
         PersistNotice::RouteEndpointBound { .. } => "route_endpoint_bound",
-        PersistNotice::LocalRoutePolicyEventAppended { .. } => {
-            "local_route_policy_event_appended"
-        }
+        PersistNotice::LocalRoutePolicyEventAppended { .. } => "local_route_policy_event_appended",
         PersistNotice::LocalRoutePayloadAttached { .. } => "local_route_payload_attached",
         PersistNotice::LocalRouteDispatchUpdated { .. } => "local_route_dispatch_updated",
         PersistNotice::LocalRouteContextDecisionUpdated { .. } => {
@@ -207,9 +201,7 @@ fn persist_notice_name(notice: &PersistNotice) -> &'static str {
         PersistNotice::ControllerWorkerResultContextDecisionUpdated { .. } => {
             "controller_worker_result_context_decision_updated"
         }
-        PersistNotice::ControllerCoordinationStarted { .. } => {
-            "controller_coordination_started"
-        }
+        PersistNotice::ControllerCoordinationStarted { .. } => "controller_coordination_started",
         PersistNotice::ControllerCoordinationResultRecorded { .. } => {
             "controller_coordination_result_recorded"
         }
@@ -268,8 +260,7 @@ fn live_stdio_dispatch_worker_contract_records_exact_terminal_observation() {
         ToolProviderName::new("external.test").unwrap(),
     )
     .unwrap();
-    append_tool_provider_endpoint_checked(&mut store, provider, RouteEndpointId::new(50))
-        .unwrap();
+    append_tool_provider_endpoint_checked(&mut store, provider, RouteEndpointId::new(50)).unwrap();
 
     // Real sandbox process emits one valid bounded MCP response to
     // the immutable, explicitly approved tool request.
@@ -576,8 +567,7 @@ fn approved_builtin_hello_dispatch_is_durable_and_one_shot() {
         .unwrap();
     assert_eq!(outcome.kind, ToolCallOutcomeKind::Result);
     let wire =
-        chatarium_protocol::tool_envelope::parse_legacy_tool_result(outcome.text.as_str())
-            .unwrap();
+        chatarium_protocol::tool_envelope::parse_legacy_tool_result(outcome.text.as_str()).unwrap();
     assert_eq!(wire.id, "legacy-test");
     assert_eq!(wire.payload["message"], "hello");
 
@@ -826,12 +816,8 @@ fn manual_local_route_policy_is_durable_and_requires_current_addressability() {
         }
     );
 
-    append_local_route_user_decision_checked(
-        &mut store,
-        RouteId::new(1),
-        RouteUserDecision::Deny,
-    )
-    .unwrap();
+    append_local_route_user_decision_checked(&mut store, RouteId::new(1), RouteUserDecision::Deny)
+        .unwrap();
     assert_eq!(
         replay_routing_audit(store.events()).unwrap()[0].gate_state,
         RouteGateState::Denied {
@@ -845,14 +831,9 @@ fn manual_local_route_policy_is_durable_and_requires_current_addressability() {
 
     let before_missing = store.events().len();
     assert!(
-        append_local_session_route_proposal_checked(
-            &mut store,
-            RouteId::new(2),
-            source,
-            missing,
-        )
-        .unwrap_err()
-        .contains("not currently addressable")
+        append_local_session_route_proposal_checked(&mut store, RouteId::new(2), source, missing,)
+            .unwrap_err()
+            .contains("not currently addressable")
     );
     assert_eq!(store.events().len(), before_missing);
 }
@@ -892,13 +873,8 @@ fn delivered_routed_context_is_explicit_reversible_and_not_transcript_authorship
     )
     .unwrap();
 
-    append_local_session_route_proposal_checked(
-        &mut store,
-        RouteId::new(1),
-        source,
-        destination,
-    )
-    .unwrap();
+    append_local_session_route_proposal_checked(&mut store, RouteId::new(1), source, destination)
+        .unwrap();
     append_local_route_payload_checked(
         &mut store,
         RoutePayloadId::new(1),
@@ -906,12 +882,8 @@ fn delivered_routed_context_is_explicit_reversible_and_not_transcript_authorship
         "peer payload".to_owned(),
     )
     .unwrap();
-    append_local_route_user_decision_checked(
-        &mut store,
-        RouteId::new(1),
-        RouteUserDecision::Allow,
-    )
-    .unwrap();
+    append_local_route_user_decision_checked(&mut store, RouteId::new(1), RouteUserDecision::Allow)
+        .unwrap();
     let delivery_events =
         append_local_route_dispatch_and_delivery_checked(&mut store, RouteId::new(1)).unwrap();
     assert_eq!(delivery_events.len(), 2);
@@ -1071,13 +1043,8 @@ fn one_shot_local_memory_is_turn_scoped_durable_and_not_persistent_admission() {
     let memory_id = LocalMemoryId::new(1);
     let mut store = chatarium_store::MemoryEventStore::default();
 
-    append_local_memory_artifact_checked(
-        &mut store,
-        memory_id,
-        source,
-        "one shot fact".to_owned(),
-    )
-    .unwrap();
+    append_local_memory_artifact_checked(&mut store, memory_id, source, "one shot fact".to_owned())
+        .unwrap();
     let snapshot_after_sequence = store.events().last().unwrap().sequence;
 
     let first = AuthoredUserMessage::new(
@@ -1106,8 +1073,7 @@ fn one_shot_local_memory_is_turn_scoped_durable_and_not_persistent_admission() {
             .is_empty()
     );
 
-    let one_shot =
-        one_shot_local_memory_messages_for_turn(store.events(), first.turn_id).unwrap();
+    let one_shot = one_shot_local_memory_messages_for_turn(store.events(), first.turn_id).unwrap();
     assert_eq!(one_shot.len(), 1);
     assert_eq!(one_shot[0].role, context_composer::TranscriptRole::User);
     assert!(one_shot[0].text.contains("NEXT REQUEST ONLY"));
@@ -1196,13 +1162,8 @@ fn local_memory_supersession_preserves_history_and_requires_fresh_successor_admi
     let successor = LocalMemoryId::new(2);
     let mut store = chatarium_store::MemoryEventStore::default();
 
-    append_local_memory_artifact_checked(
-        &mut store,
-        predecessor,
-        source,
-        "old fact".to_owned(),
-    )
-    .unwrap();
+    append_local_memory_artifact_checked(&mut store, predecessor, source, "old fact".to_owned())
+        .unwrap();
     append_local_memory_artifact_checked(
         &mut store,
         successor,
@@ -1298,12 +1259,9 @@ fn checked_local_controller_supervision_requires_explicit_worker_session_role() 
     .unwrap();
     append_local_worker_binding_checked(&mut store, worker_conversation, worker_id).unwrap();
 
-    let worker_session = append_current_session_worker_binding_checked(
-        &mut store,
-        worker_conversation,
-        worker_id,
-    )
-    .unwrap();
+    let worker_session =
+        append_current_session_worker_binding_checked(&mut store, worker_conversation, worker_id)
+            .unwrap();
     assert_eq!(worker_session.kind, EventKind::WorkerSessionBound);
     assert_eq!(
         active_worker_session(&replay_session_audit(store.events()).unwrap(), worker_id)
@@ -1320,11 +1278,9 @@ fn checked_local_controller_supervision_requires_explicit_worker_session_role() 
     );
     assert_eq!(store.events().len(), before_role_conflict);
 
-    let controller = append_current_session_controller_designation_checked(
-        &mut store,
-        controller_conversation,
-    )
-    .unwrap();
+    let controller =
+        append_current_session_controller_designation_checked(&mut store, controller_conversation)
+            .unwrap();
     assert_eq!(controller.kind, EventKind::ControllerSessionDesignated);
 
     let supervised = append_local_controller_worker_binding_checked(
@@ -1415,13 +1371,8 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         )
         .unwrap();
         append_worker_goal_checked(store, worker_id, goal_id).unwrap();
-        append_worker_transition_checked(
-            store,
-            worker_id,
-            goal_id,
-            WorkerAction::StartOrResume,
-        )
-        .unwrap();
+        append_worker_transition_checked(store, worker_id, goal_id, WorkerAction::StartOrResume)
+            .unwrap();
 
         (
             controller_conversation,
@@ -1432,8 +1383,7 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
     }
 
     let mut store = chatarium_store::MemoryEventStore::default();
-    let (controller, worker_conversation, worker_id, goal_id) =
-        ready_supervised_pair(&mut store);
+    let (controller, worker_conversation, worker_id, goal_id) = ready_supervised_pair(&mut store);
 
     let (control_id, route_id, proposed) = append_controller_worker_control_proposal_checked(
         &mut store,
@@ -1489,20 +1439,16 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
     assert_eq!(delivery.controller_session_id, SessionId::new(1));
 
     let inbox =
-        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation)
-            .unwrap();
+        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation).unwrap();
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].control_id, control_id);
     assert_eq!(inbox[0].kind, WorkerControlKind::Stop);
     assert_eq!(inbox[0].goal_id, goal_id);
     assert_eq!(inbox[0].acknowledged_sequence, None);
 
-    let acknowledgement = append_worker_control_acknowledgement_checked(
-        &mut store,
-        worker_conversation,
-        route_id,
-    )
-    .unwrap();
+    let acknowledgement =
+        append_worker_control_acknowledgement_checked(&mut store, worker_conversation, route_id)
+            .unwrap();
     assert_eq!(acknowledgement.kind, EventKind::WorkerControlAcknowledged);
     let acknowledgement_record = replay_worker_control_acknowledgement_audit(store.events())
         .unwrap()
@@ -1516,8 +1462,7 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
     );
 
     let acknowledged_inbox =
-        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation)
-            .unwrap();
+        replay_worker_control_inbox_for_conversation(store.events(), worker_conversation).unwrap();
     assert_eq!(
         acknowledged_inbox[0].acknowledged_sequence,
         Some(acknowledgement.sequence)
@@ -1525,13 +1470,9 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
 
     let before_duplicate_ack = store.events().len();
     assert!(
-        append_worker_control_acknowledgement_checked(
-            &mut store,
-            worker_conversation,
-            route_id,
-        )
-        .unwrap_err()
-        .contains("already acknowledged")
+        append_worker_control_acknowledgement_checked(&mut store, worker_conversation, route_id,)
+            .unwrap_err()
+            .contains("already acknowledged")
     );
     assert_eq!(store.events().len(), before_duplicate_ack);
 
@@ -1654,11 +1595,9 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
     );
     assert_eq!(replayed_status.recorded_sequence, status_result.sequence);
 
-    let controller_results = replay_controller_worker_results_for_conversation(
-        status_store.events(),
-        status_controller,
-    )
-    .unwrap();
+    let controller_results =
+        replay_controller_worker_results_for_conversation(status_store.events(), status_controller)
+            .unwrap();
     assert_eq!(controller_results.len(), 1);
     assert_eq!(controller_results[0].route_id, status_route);
     assert_eq!(
@@ -1717,8 +1656,7 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
     assert_eq!(context_plan.controller_worker_result_count(), 1);
 
     let (coordination_turn_id, coordination_start) =
-        append_controller_coordination_start_checked(&mut status_store, status_controller)
-            .unwrap();
+        append_controller_coordination_start_checked(&mut status_store, status_controller).unwrap();
     assert_eq!(
         coordination_start.kind,
         EventKind::ControllerCoordinationTurnStarted
@@ -1816,12 +1754,10 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
             ),
         )
         .unwrap();
-    let coordination_result = append_controller_coordination_result_if_terminal(
-        &mut status_store,
-        coordination_turn_id,
-    )
-    .unwrap()
-    .expect("terminal coordination result");
+    let coordination_result =
+        append_controller_coordination_result_if_terminal(&mut status_store, coordination_turn_id)
+            .unwrap()
+            .expect("terminal coordination result");
     assert_eq!(
         coordination_result.kind,
         EventKind::ControllerCoordinationTurnResultRecorded
@@ -1843,12 +1779,9 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         Some(coordination_output.as_str())
     );
     assert!(
-        admitted_controller_coordination_result_messages(
-            status_store.events(),
-            status_controller,
-        )
-        .unwrap()
-        .is_empty()
+        admitted_controller_coordination_result_messages(status_store.events(), status_controller,)
+            .unwrap()
+            .is_empty()
     );
 
     let before_candidate_projection = status_store.events().len();
@@ -2056,11 +1989,9 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         coordination_admit.kind,
         EventKind::ControllerCoordinationResultContextDecisionRecorded
     );
-    let admitted_coordination = admitted_controller_coordination_result_messages(
-        status_store.events(),
-        status_controller,
-    )
-    .unwrap();
+    let admitted_coordination =
+        admitted_controller_coordination_result_messages(status_store.events(), status_controller)
+            .unwrap();
     assert_eq!(admitted_coordination.len(), 1);
     assert_eq!(
         admitted_coordination[0].role,
@@ -2094,12 +2025,9 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
     )
     .unwrap();
     assert!(
-        admitted_controller_coordination_result_messages(
-            status_store.events(),
-            status_controller,
-        )
-        .unwrap()
-        .is_empty()
+        admitted_controller_coordination_result_messages(status_store.events(), status_controller,)
+            .unwrap()
+            .is_empty()
     );
     let terminal_after_exclude = replay_controller_coordination_audit(status_store.events())
         .unwrap()
@@ -2161,14 +2089,13 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
 
     let mut recovery_store = chatarium_store::MemoryEventStore::default();
     let (controller, worker_conversation, _, _) = ready_supervised_pair(&mut recovery_store);
-    let (recovery_control, recovery_route, _) =
-        append_controller_worker_control_proposal_checked(
-            &mut recovery_store,
-            controller,
-            worker_conversation,
-            ControllerControlAction::Stop,
-        )
-        .unwrap();
+    let (recovery_control, recovery_route, _) = append_controller_worker_control_proposal_checked(
+        &mut recovery_store,
+        controller,
+        worker_conversation,
+        ControllerControlAction::Stop,
+    )
+    .unwrap();
     append_controller_control_route_decision_checked(
         &mut recovery_store,
         recovery_route,
@@ -2183,12 +2110,10 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         .unwrap();
     let mut gate = route_gate_before_dispatch(&route).unwrap();
     let permit = gate.authorize_dispatch(recovery_route).unwrap();
-    let original_dispatch_sequence =
-        record_route_dispatched(&mut recovery_store, permit).unwrap();
+    let original_dispatch_sequence = record_route_dispatched(&mut recovery_store, permit).unwrap();
 
     let recovered_events =
-        append_controller_control_dispatch_checked(&mut recovery_store, recovery_route)
-            .unwrap();
+        append_controller_control_dispatch_checked(&mut recovery_store, recovery_route).unwrap();
     assert_eq!(recovered_events.len(), 1);
     assert_eq!(recovered_events[0].kind, EventKind::WorkerControlDelivered);
 
@@ -2342,12 +2267,11 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         execution.kind,
         EventKind::WorkerContinuationExecutionStarted
     );
-    let execution_record =
-        replay_worker_continuation_execution_audit(continuation_store.events())
-            .unwrap()
-            .into_iter()
-            .find(|record| record.route_id == continue_route)
-            .unwrap();
+    let execution_record = replay_worker_continuation_execution_audit(continuation_store.events())
+        .unwrap()
+        .into_iter()
+        .find(|record| record.route_id == continue_route)
+        .unwrap();
     assert_eq!(execution_record.control_id, continue_control);
     assert_eq!(execution_record.worker_id, continuation_worker_id);
     assert_eq!(execution_record.goal_id, continuation_goal_id);
@@ -2358,10 +2282,9 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         acknowledgement.sequence
     );
     assert_eq!(execution_record.started_sequence, execution.sequence);
-    let worker_after_execution =
-        worker_record(continuation_store.events(), continuation_worker_id)
-            .unwrap()
-            .unwrap();
+    let worker_after_execution = worker_record(continuation_store.events(), continuation_worker_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         worker_after_execution.lifecycle.phase(),
         worker_before_execution.lifecycle.phase()
@@ -2548,22 +2471,17 @@ fn checked_controller_controls_require_approval_and_revalidate_freshness() {
         .iter()
         .all(|message| message.text != "continued worker output")
     );
-    let worker_after_result =
-        worker_record(continuation_store.events(), continuation_worker_id)
-            .unwrap()
-            .unwrap();
+    let worker_after_result = worker_record(continuation_store.events(), continuation_worker_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         worker_after_result.lifecycle.phase(),
         worker_before_execution.lifecycle.phase()
     );
 
     let mut stranded_store = chatarium_store::MemoryEventStore::default();
-    let (
-        stranded_controller,
-        stranded_worker_conversation,
-        stranded_worker_id,
-        stranded_goal_id,
-    ) = ready_supervised_pair(&mut stranded_store);
+    let (stranded_controller, stranded_worker_conversation, stranded_worker_id, stranded_goal_id) =
+        ready_supervised_pair(&mut stranded_store);
     append_controller_continuation_lease_checked(
         &mut stranded_store,
         stranded_controller,
@@ -2674,13 +2592,8 @@ fn worker_control_application_is_crash_recoverable_and_correlation_safe() {
         )
         .unwrap();
         append_worker_goal_checked(store, worker_id, goal_id).unwrap();
-        append_worker_transition_checked(
-            store,
-            worker_id,
-            goal_id,
-            WorkerAction::StartOrResume,
-        )
-        .unwrap();
+        append_worker_transition_checked(store, worker_id, goal_id, WorkerAction::StartOrResume)
+            .unwrap();
 
         let (control_id, route_id, _) = append_controller_worker_control_proposal_checked(
             store,
@@ -2689,12 +2602,8 @@ fn worker_control_application_is_crash_recoverable_and_correlation_safe() {
             ControllerControlAction::Stop,
         )
         .unwrap();
-        append_controller_control_route_decision_checked(
-            store,
-            route_id,
-            RouteUserDecision::Allow,
-        )
-        .unwrap();
+        append_controller_control_route_decision_checked(store, route_id, RouteUserDecision::Allow)
+            .unwrap();
         append_controller_control_dispatch_checked(store, route_id).unwrap();
         let acknowledgement =
             append_worker_control_acknowledgement_checked(store, worker_conversation, route_id)
@@ -2818,8 +2727,7 @@ fn worker_control_application_is_crash_recoverable_and_correlation_safe() {
     )
     .unwrap();
     let recovered =
-        append_worker_control_action_checked(&mut after_transition, conversation, route)
-            .unwrap();
+        append_worker_control_action_checked(&mut after_transition, conversation, route).unwrap();
     assert_eq!(recovered.len(), 1);
     assert_eq!(
         recovered[0].kind,
@@ -3042,8 +2950,7 @@ fn zero_item_discovery_retains_last_known_catalog() {
         update_time: None,
     }];
 
-    let (merged, current_pass_observed) =
-        merge_history_discovery_catalog(existing.clone(), &[]);
+    let (merged, current_pass_observed) = merge_history_discovery_catalog(existing.clone(), &[]);
 
     assert_eq!(current_pass_observed, 0);
     assert_eq!(merged, existing);
@@ -3294,8 +3201,7 @@ fn attachment_reader_shows_only_verified_metadata_and_never_encoded_bytes() {
     assert!(origin.contains("read 1.2 ms") || origin.contains("read 1.3 ms"));
     assert!(!origin.contains("YWJj"));
     assert!(!projected[0].text.contains("YWJj"));
-    let cached =
-        native_conversation_search::NativeConversationSearchIndex::build(store.events());
+    let cached = native_conversation_search::NativeConversationSearchIndex::build(store.events());
     assert_eq!(
         cached.messages(message.conversation_id)[0].provenance_label,
         projected[0].provenance_label
