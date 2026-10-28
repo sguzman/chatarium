@@ -53,3 +53,21 @@ The report gives counts by importer source and event kind, the total journal eve
 It verifies the exact content-addressed source-file SHA-256 against the existing archived bytes, its export format/version, recognized journal event kinds, unique event keys, complete import start/end framing, expected semantic count, and the absence of foreign events under any affected exact journal scope. Unknown/mixed provenance claims and conflicting scope ownership are explicit blockers. A blocked result returns a nonzero exit status for automation, after listing fixed blocker codes. The report includes a journal SHA-256 that downstream implementation can bind to, avoiding a stale preflight. It contains only hashes, counts, and fixed blocker codes, never imported text or account identifiers.
 
 A report of **CANDIDATE** is **not authorization to quarantine**. It does not prove that cross-scope references, later tool/routing records, or application projections are safe to exclude; no mutation or projection rebuilding is implemented by this command. No authoritative journal data or SQL cache changes are made, and torn/corrupt journals fail closed. Any future apply operation must re-run these checks against the exact unchanged journal and implement a durable, dependency-aware event-sourced exclusion rather than deleting matching JSONL records or merely editing SQLite.
+
+## Explicit durable decision recording (non-operative)
+
+`quarantine-record <source-sha256> <data-dir>` appends **only** a validated,
+unscoped quarantine decision event for an already archived Flight Recorder
+source. It acquires the store's cross-process single-writer lease using
+`JsonlEventStore::open_strict`, which never repairs a torn journal or creates
+a missing one. The command re-runs source hash, import marker, provenance and
+scope checks while owning the writer lease; it predicts and validates ledger
+replay **before** appending a single synced decision event. Repeated recording
+is idempotent, and later Flight Recorder re-import of the same source is refused.
+
+**This is not an active quarantine.** The original imported events, source
+archive and event sequences remain fully readable and unchanged. Current
+desktop, worker, SQLite and historical projections are **not filtered** by
+this decision yet. Command output makes that limitation explicit. Until
+those consumers share an authoritative effective-event view, use the
+command only to record the durable decision, not as a cleanup action.
