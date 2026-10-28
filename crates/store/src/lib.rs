@@ -563,6 +563,54 @@ mod tests {
     }
 
     #[test]
+    fn one_journal_writer_at_a_time_and_read_only_inspection_remains_available() {
+        let root = temp_path("writer-lock").with_extension("dir");
+        fs::create_dir_all(&root).expect("isolated test directory");
+        let path = root.join("journal.jsonl");
+
+        let mut first = JsonlEventStore::open(&path).expect("first writer");
+        first
+            .append(EventKind::DraftChanged, "durable".to_owned())
+            .expect("first append");
+        let before = fs::read(&path).expect("snapshot");
+
+        let second = JsonlEventStore::open(&path).expect_err("concurrent writer must fail closed");
+        assert_eq!(second.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(fs::read(&path).expect("journal"), before);
+        let read_only = inspect_jsonl_journal(&path).expect("read-only inspection during writer lease");
+        assert_eq!(read_only.events.len(), 1);
+        assert_eq!(read_only.events[0].payload, "durable");
+
+        // Relative spelling aliases of the same parent resolve to one lease.
+        let alias = root.join(".").join("journal.jsonl");
+        let duplicate = JsonlEventStore::open(&alias).expect_err("alias must not bypass lease");
+        assert_eq!(duplicate.kind(), io::ErrorKind::WouldBlock);
+
+        drop(first);
+        let mut reopened = JsonlEventStore::open(&path).expect("lease released after drop");
+        reopened
+            .append(EventKind::DraftChanged, "next".to_owned())
+            .expect("second writer append");
+        assert_eq!(reopened.events()[1].sequence, 2);
+        drop(reopened);
+        fs::remove_dir_all(root).expect("remove isolated test directory");
+    }
+
+    #[test]
+    fn rejected_writer_does_not_recover_torn_tail_behind_active_owner() {
+        let root = temp_path("torn-writer-lock").with_extension("dir");
+        fs::create_dir_all(&root).expect("isolated test directory");
+        let path = root.join("journal.jsonl");
+        let first = JsonlEventStore::open(&path).expect("first writer");
+        fs::write(&path, b"unterminated").expect("synthetic torn tail");
+        let error = JsonlEventStore::open(&path).expect_err("second writer must not repair");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(fs::read(&path).expect("journal unchanged"), b"unterminated");
+        drop(first);
+        fs::remove_dir_all(root).expect("remove isolated test directory");
+    }
+
+    #[test]
     fn malformed_complete_record_is_not_silently_discarded() {
         let path = temp_path("malformed");
         fs::write(&path, b"{\"v\":2,\"broken\":true}\n").expect("write malformed");
