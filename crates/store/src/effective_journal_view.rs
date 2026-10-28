@@ -47,6 +47,7 @@ impl<'a> EffectiveJournalView<'a> {
             .collect::<BTreeMap<_, _>>();
         let mut visible = Vec::with_capacity(events.len());
         let mut excluded_sequences = BTreeSet::new();
+        let mut excluded_counts = BTreeMap::<String, usize>::new();
 
         for event in events {
             let owned_hash = source_hash(event);
@@ -60,19 +61,21 @@ impl<'a> EffectiveJournalView<'a> {
                     return Err("quarantined source event outside verified sequence span".to_owned());
                 }
                 excluded_sequences.insert(event.sequence);
+                *excluded_counts
+                    .entry(record.source_sha256.clone())
+                    .or_insert(0) += 1;
             } else {
                 visible.push(event);
             }
         }
 
         for decision in &decisions {
-            let count = events
-                .iter()
-                .filter(|event| {
-                    source_hash(event).as_deref() == Some(decision.source_sha256.as_str())
-                })
-                .count();
-            if count != decision.matching_event_count as usize {
+            if excluded_counts
+                .get(&decision.source_sha256)
+                .copied()
+                .unwrap_or(0)
+                != decision.matching_event_count as usize
+            {
                 return Err("quarantine effective view count differs from decision".to_owned());
             }
         }
