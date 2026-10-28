@@ -69,12 +69,24 @@ filtering state in user-facing projections; Q30 remains a separate boundary.
 
 ## Single-writer journal ownership
 
-Every `JsonlEventStore::open` now acquires an exclusive SQLite transaction in
-`journal.jsonl.writer-lock.sqlite3`, alongside its journal. It holds that
-lease until the writer is dropped. Desktop and importer writers share this
-entrypoint, so concurrent journal opens refuse with a lock error rather than
-racing append sequence numbers or tail recovery. Journal reads through
-`inspect_jsonl_journal` remain available and never acquire a writer lease.
+Every `JsonlEventStore::open` for the canonical `journal.jsonl` archive acquires **two** exclusive SQLite leases:
+the existing `journal.jsonl.writer-lock.sqlite3` alongside the journal and a
+stable, hashed `.chatarium-archive-writer-*.sqlite3` sibling in the archive
+directory's parent. Both leases are held until the writer is dropped. Desktop,
+importer and archive restore share the parent lease, so a restore cannot move
+an actively written archive, nor can a new writer enter while a restore
+replaces its directory. Standalone JSONL files with other names continue to use only their
+per-file SQLite lease; they are not valid archive-restore targets.
+The older in-directory lease is retained, and restore
+checks it for an already-running old-version writer before publication.
+**Stop older Chatarium versions before restoring:** older binaries do not
+honor the parent lease, so a later-starting old writer cannot be serialized.
+
+`restore_backup` verifies the source, acquires the **parent** lease before
+staging and publication, and refuses active writers and concurrent restores.
+The parent lease is not moved during directory rename, which is essential for
+safe replacement on Windows. Journal reads through `inspect_jsonl_journal`
+remain available and never acquire a writer lease.
 
 SQLite releases the lease automatically after process termination; the lock
 database is non-authoritative runtime coordination state, not a projection

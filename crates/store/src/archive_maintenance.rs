@@ -645,8 +645,31 @@ pub fn restore_backup(
     let backup = backup.as_ref();
     let target = target.as_ref();
     let verification = verify_backup(backup)?;
+    // Never rename the active data directory out from under a running desktop.
+    // Use the same exclusive OS-backed lease as JsonlEventStore, held through
+    // staged verification and publication. No journal bytes are opened for
+    // append or recovery by the restore path.
+    if let Ok(metadata) = fs::symlink_metadata(target) {
+        if !metadata.file_type().is_dir() {
+            return Err(err(
+                "restore target must be a real directory, not a file or symlink",
+            ));
+        }
+    }
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
+    // Keep this lock in the target's PARENT throughout publication. A lock
+    // file inside target would move with the directory (or prevent rename
+    // entirely on Windows) and allow split-brain journal ownership.
+    let _restore_writer_guard = crate::acquire_archive_restore_lease(target)
+        .map_err(|error| err(format!("restore refuses active journal writer: {error}")))?;
+    if target.is_dir() {
+        // Older app versions did not hold the parent lease. This detects an
+        // already-running legacy writer; a true mixed-version race still
+        // requires stopping every older app before publication.
+        crate::reject_active_legacy_journal_writer(target)
+            .map_err(|error| err(format!("restore refuses legacy journal writer: {error}")))?;
+    }
     let staging = parent.join(format!(".chatarium-restore-{}", std::process::id()));
     if staging.exists() {
         return Err(err("restore staging path already exists"));
@@ -1124,6 +1147,108 @@ mod tests {
             assert!(check_archive(&root).is_err());
             let _ = fs::remove_dir_all(root);
         }
+    }
+
+    #[test]
+    fn restore_refuses_active_journal_writer_and_preserves_original_bytes() {
+        let root = temp("restore-live-writer");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        let mut source_store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        source_store
+            .append(EventKind::DraftChanged, "restored source".into())
+            .unwrap();
+        drop(source_store);
+        create_backup(&source, &backup).unwrap();
+
+        let mut active = JsonlEventStore::open(target.join(JOURNAL_FILE)).unwrap();
+        active
+            .append(EventKind::DraftChanged, "live user data".into())
+            .unwrap();
+        let original = fs::read(target.join(JOURNAL_FILE)).unwrap();
+        let error = restore_backup(&backup, &target).expect_err("live writer must block restore");
+        assert!(error.to_string().contains("active journal writer"));
+        assert_eq!(fs::read(target.join(JOURNAL_FILE)).unwrap(), original);
+        active
+            .append(EventKind::DraftChanged, "still alive".into())
+            .unwrap();
+        assert_eq!(active.events().len(), 2);
+        drop(active);
+
+        let outcome = restore_backup(&backup, &target).unwrap();
+        assert!(outcome.valid);
+        assert_eq!(
+            fs::read(target.join(JOURNAL_FILE)).unwrap(),
+            fs::read(backup.join(JOURNAL_FILE)).unwrap()
+        );
+        let reopened = JsonlEventStore::open(target.join(JOURNAL_FILE)).unwrap();
+        assert_eq!(reopened.events().len(), 1);
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_detects_writer_that_only_holds_legacy_in_directory_lock() {
+        let root = temp("legacy-restore-writer");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        let mut writer = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        writer
+            .append(EventKind::DraftChanged, "source".into())
+            .unwrap();
+        drop(writer);
+        create_backup(&source, &backup).unwrap();
+        fs::write(target.join("keep.txt"), b"keep").unwrap();
+
+        // Simulate a previous app version holding only the historical
+        // journal.jsonl.writer-lock.sqlite3 lease.
+        let legacy =
+            rusqlite::Connection::open(target.join("journal.jsonl.writer-lock.sqlite3")).unwrap();
+        legacy.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let error = restore_backup(&backup, &target).unwrap_err();
+        assert!(error.to_string().contains("legacy journal writer"));
+        assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep");
+        drop(legacy);
+
+        restore_backup(&backup, &target).unwrap();
+        assert_eq!(
+            fs::read(target.join(JOURNAL_FILE)).unwrap(),
+            fs::read(backup.join(JOURNAL_FILE)).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_lease_blocks_concurrent_publication_even_for_absent_target() {
+        let root = temp("restore-parent-lease");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        let target = root.join("target");
+        let backup = root.join("backup");
+        fs::create_dir_all(&source).unwrap();
+        let mut source_store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
+        source_store
+            .append(EventKind::DraftChanged, "good".into())
+            .unwrap();
+        drop(source_store);
+        create_backup(&source, &backup).unwrap();
+
+        let guard = crate::acquire_archive_restore_lease(&target).unwrap();
+        assert!(restore_backup(&backup, &target).is_err());
+        assert!(!target.exists(), "refused restore must not publish target");
+        drop(guard);
+        assert!(restore_backup(&backup, &target).unwrap().valid);
+        assert!(target.join(JOURNAL_FILE).exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
