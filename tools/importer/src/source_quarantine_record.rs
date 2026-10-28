@@ -1,4 +1,4 @@
-//! Explicit durable quarantine decision recording, not active projection filtering.
+//! Explicit durable quarantine decision recording for validated effective replay.
 //!
 //! The strict journal writer lease, exact archived source verification, replay
 //! admission, and preflight journal digest are all required before appending a
@@ -22,10 +22,11 @@ pub struct RecordSummary {
     pub already_recorded: bool,
 }
 
-/// Durably record a non-operative source quarantine decision.
+/// Durably record an audited source quarantine decision.
 ///
-/// This command never removes events, alters SQLite, or claims that the
-/// desktop/worker currently filters quarantined source data.
+/// This command never removes raw events or alters SQLite. Eligible desktop
+/// and worker effective readers honor the decision on their next startup;
+/// physical evidence APIs remain deliberately unfiltered.
 pub fn record(data_dir: &Path, source_sha256: &str) -> Result<RecordSummary, String> {
     if source_sha256.len() != 64 || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("source SHA-256 must be exactly 64 hexadecimal characters".to_owned());
@@ -85,8 +86,8 @@ pub fn record(data_dir: &Path, source_sha256: &str) -> Result<RecordSummary, Str
     })
     .to_string();
 
-    // Fail before appending on every replay invariant the durable ledger
-    // enforces. This does not constitute active-event filtering.
+    // Fail before appending on every durable replay invariant. The
+    // importer itself never changes active views in a running process.
     let next_sequence = store.events().last().map_or(1, |event| event.sequence + 1);
     let mut proposed = store.events().to_vec();
     proposed.push(EventEnvelope {
