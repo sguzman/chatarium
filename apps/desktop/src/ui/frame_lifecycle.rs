@@ -4,6 +4,7 @@ use super::*;
 impl ChatariumApp {
     pub(super) fn poll_frame_updates(&mut self, ctx: &egui::Context) {
         self.process_notices();
+        self.poll_archive_operation(ctx);
         self.network_health.poll(ctx);
         // Only rate-limit queues auto-release; human approval and manual
         // queues remain frozen until explicitly decided.
