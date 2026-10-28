@@ -76,6 +76,7 @@ use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const JOURNAL_WRITE_VERSION: u64 = 2;
@@ -214,6 +215,9 @@ pub struct JsonlEventStore {
     path: PathBuf,
     file: File,
     events: Vec<EventEnvelope>,
+    // Own the entire lifetime of the SQLite EXCLUSIVE transaction. Dropping
+    // this connection releases the OS-managed lock even after a process crash.
+    _writer_lock: rusqlite::Connection,
 }
 
 impl JsonlEventStore {
@@ -226,6 +230,11 @@ impl JsonlEventStore {
         {
             fs::create_dir_all(parent)?;
         }
+
+        // Acquire the cross-process writer lock *before* touching the journal:
+        // recovery may truncate a torn tail, and append assigns sequences.
+        // All desktop and importer writers use this same entry point.
+        let writer_lock = acquire_journal_writer_lock(&path)?;
 
         let mut recovery_file = OpenOptions::new()
             .create(true)
@@ -267,7 +276,12 @@ impl JsonlEventStore {
         }
 
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self { path, file, events })
+        Ok(Self {
+            path,
+            file,
+            events,
+            _writer_lock: writer_lock,
+        })
     }
 
     /// Filesystem path backing this journal.
@@ -306,6 +320,48 @@ impl EventStore for JsonlEventStore {
     fn events(&self) -> &[EventEnvelope] {
         &self.events
     }
+}
+
+/// Acquire a crash-released, cross-process, single-writer lease for one journal.
+///
+/// We intentionally keep a distinct SQLite file per journal path: the durable
+/// JSONL evidence and its SQLite event projection remain untouched. SQLite's
+/// rollback-journal EXCLUSIVE transaction supplies an OS-backed advisory lock
+/// without stale PID files, unsafe code, or an extra dependency.
+///
+/// The lease is held as long as the returned connection lives. Lock files must
+/// never be unlinked to "unlock" them, because unlink/recreate can split a lease
+/// across different inodes on Unix.
+fn acquire_journal_writer_lock(journal: &Path) -> io::Result<rusqlite::Connection> {
+    // Canonicalize the already-created parent so relative and symlinked data
+    // directory spellings resolve to the same filesystem lock location.
+    let parent = journal.parent().filter(|parent| !parent.as_os_str().is_empty());
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    let canonical_parent = fs::canonicalize(parent)?;
+    let filename = journal.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "journal filename is missing")
+    })?;
+    let lock_path = canonical_parent.join(format!(
+        "{}.writer-lock.sqlite3",
+        filename.to_string_lossy()
+    ));
+    let connection = rusqlite::Connection::open(&lock_path)
+        .map_err(|error| io::Error::other(format!("open journal writer lock: {error}")))?;
+    connection
+        .busy_timeout(Duration::ZERO)
+        .map_err(|error| io::Error::other(format!("configure journal writer lock: {error}")))?;
+    connection.execute_batch("BEGIN EXCLUSIVE").map_err(|error| {
+        let kind = match error {
+            rusqlite::Error::SqliteFailure(ref sqlite_error, _)
+                if matches!(
+                    sqlite_error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) => io::ErrorKind::WouldBlock,
+            _ => io::ErrorKind::Other,
+        };
+        io::Error::new(kind, format!("journal already has a writer or lock failed: {error}"))
+    })?;
+    Ok(connection)
 }
 
 fn next_sequence(events: &[EventEnvelope]) -> io::Result<u64> {
