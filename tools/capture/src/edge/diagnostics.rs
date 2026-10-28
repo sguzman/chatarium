@@ -38,7 +38,11 @@ pub(super) fn pipe_smoke_arguments(profile: &Path) -> Vec<String> {
 }
 
 #[cfg(windows)]
-pub(super) fn pipe_profile_arguments(profile: &Path, start_url: &str, incognito: bool) -> Vec<String> {
+pub(super) fn pipe_profile_arguments(
+    profile: &Path,
+    start_url: &str,
+    incognito: bool,
+) -> Vec<String> {
     let mut arguments = vec![
         format!("--user-data-dir={}", profile.display()),
         "--no-first-run".to_owned(),

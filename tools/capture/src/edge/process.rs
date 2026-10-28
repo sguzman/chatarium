@@ -52,7 +52,10 @@ impl EdgeProcess {
             .ok_or_else(|| "owned Edge child is missing".to_owned())
     }
 
-    pub(super) fn wait_for_exit_preserving_lock(&mut self, timeout: Duration) -> Result<Option<i32>, String> {
+    pub(super) fn wait_for_exit_preserving_lock(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<i32>, String> {
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(code) = self.try_wait_preserving_lock()? {
