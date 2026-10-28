@@ -17,11 +17,11 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R10 🧩 | Move main's root test module to `src/tests.rs`; desktop tests pass unchanged | 4 | R01 | **verified complete** |
 | R11 🖥️ | Move `eframe::App` implementation into `src/ui/`; build and reader tests pass unchanged | 6 | R01 | **verified complete** |
 | R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **verified complete** |
-| R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **active** |
+| R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **verified complete** |
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **verified complete** |
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **verified complete** |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
-| R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | pending |
+| R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **active** |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
 | R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | pending |
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 36% (R00 + R01 + R10 + R11 + R12 + R14 + R15), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 48% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -121,3 +121,9 @@ The frame `update()` was reduced from ~235 to ~74 lines in `ui/mod.rs` by moving
 ### R13 advanced panel split — extended (CI pending)
 
 The large extracted advanced panel was further decomposed into independent modules for worker lifecycle (~316 lines) and controller supervision (~1,729 lines), alongside existing routed inbox, routing directory, local memory, MCP tools, worker inbox, admitted MCP evidence and exact request context. The advanced parent now has ~416 lines; `ui/sidebar.rs` has ~2,076 lines; `eframe::App::update` is ~74 lines. These are mechanical moves of existing egui closures with the same render order, permission gates, and widget identifiers. Only after full CI and native reader/production visual QA for this exact state passes should R13 be considered verified. Baseline progress remains 36% pending that evidence.
+
+## Round 4 — UI acceptance and native search (2026-10-28)
+
+- **R13 verified (+12 percentage points, 36% → 48%):** [commit 88fd0db](https://github.com/sguzman/chatarium/commit/88fd0db3a3afdfc557ceee9172fbbe7e7aa546d3) passed [full Windows and Linux CI 40739603354](https://github.com/sguzman/chatarium/actions/runs/40739603354) and [production/native reader visual QA 40739603363](https://github.com/sguzman/chatarium/actions/runs/40739603363). `eframe::App::update` is ~74 lines. The sidebar, advanced panels, reader, composer, coordination, header and frame lifecycle/navigation have named modules; existing behavior and egui IDs are covered by the verified suites.
+- **R20 active, no credit yet:** Extract `native_conversation_search.rs` into dedicated matching, identity/reader navigation, sidebar/reader caches, incremental typed journal index, and tests. The parent becomes a small reexport/types façade. Preserve ownership boundaries, cached Arc identity and index invalidation; run Windows/Linux CI and native reader search/stress/visual QA before accepting the 4 points.
+- **R16 and other roadmap items remain pending:** No bootstrap or unrelated service modifications in this slice; no new Cargo dependencies.
