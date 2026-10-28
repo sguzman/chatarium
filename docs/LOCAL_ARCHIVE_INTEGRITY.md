@@ -44,6 +44,21 @@ atomically installs the candidate. Existing backups are never deleted automatica
 The desktop Diagnostics panel provides CHECK ARCHIVE, CREATE BACKUP, VERIFY BACKUP, and RESTORE
 BACKUP. Restore always requires an explicit confirmation and preserves the previous active data.
 
+## Source quarantine decision audit (non-operative)
+
+The journal event `import_source_quarantine_recorded` is a versioned, unscoped
+provenance fact for a specific Flight Recorder source SHA-256 and preflight
+journal SHA-256. `check_archive` replays and validates its recorded event
+span and import framing. It rejects duplicate decisions, forged counts,
+shared imported/native scopes and subsequent source re-import or scope reuse.
+The source journal events remain in place, with their original sequences.
+
+This **does not yet implement quarantine**. No import command can record
+such a decision, and ordinary GUI/worker/SQLite projections do not yet filter
+on it. The apply path still needs an exclusive writer boundary, fresh source
+verification, and consistent source-exclusion projections. Treating an
+unapplied audit fact as proof that imported content disappeared is prohibited.
+
 For disaster recovery, stop the desktop, run `archive-verify` against a local backup, restore it
 to the configured data directory only after verification succeeds, then run `archive-check` and
 rebuild local search/read projections. No network or browser step is part of recovery, and old
