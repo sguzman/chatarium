@@ -55,10 +55,10 @@ impl<'a> EffectiveJournalView<'a> {
                 .as_deref()
                 .and_then(|hash| decisions_by_hash.get(hash))
             {
-                if event.sequence < record.first_sequence
-                    || event.sequence > record.last_sequence
-                {
-                    return Err("quarantined source event outside verified sequence span".to_owned());
+                if event.sequence < record.first_sequence || event.sequence > record.last_sequence {
+                    return Err(
+                        "quarantined source event outside verified sequence span".to_owned()
+                    );
                 }
                 excluded_sequences.insert(event.sequence);
                 *excluded_counts
@@ -201,7 +201,10 @@ mod tests {
         assert_eq!(view.original_event_count(), 5);
         assert_eq!(view.decisions().len(), 1);
         assert_eq!(
-            view.excluded_sequences().iter().copied().collect::<Vec<_>>(),
+            view.excluded_sequences()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             vec![1, 2, 4]
         );
         assert_eq!(
