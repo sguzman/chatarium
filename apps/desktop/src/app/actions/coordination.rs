@@ -158,7 +158,11 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn dispatch_durable_coordination_wake(&mut self, turn_id: LocalTurnId, start: &EventEnvelope) {
+    pub(crate) fn dispatch_durable_coordination_wake(
+        &mut self,
+        turn_id: LocalTurnId,
+        start: &EventEnvelope,
+    ) {
         let Some((pending_id, conversation_id, inbox_ids)) = self.coordination_pending_wake.take()
         else {
             return;
@@ -437,5 +441,4 @@ impl ChatariumApp {
             self.coordination_auto_wake_targets.clear();
         }
     }
-
 }

@@ -177,7 +177,11 @@ impl ChatariumApp {
         self.openviking_project_cache.invalidate();
     }
 
-    pub(crate) fn change_project_memory_permission(&mut self, source: LocalConversationId, allow: bool) {
+    pub(crate) fn change_project_memory_permission(
+        &mut self,
+        source: LocalConversationId,
+        allow: bool,
+    ) {
         if self.local_conversation_busy() {
             self.status =
                 "finish the active turn before changing project memory sharing".to_owned();
@@ -241,7 +245,10 @@ impl ChatariumApp {
         self.status = "local conversation archived".to_owned();
     }
 
-    pub(crate) fn select_historical_conversation(&mut self, local_conversation_id: LocalConversationId) {
+    pub(crate) fn select_historical_conversation(
+        &mut self,
+        local_conversation_id: LocalConversationId,
+    ) {
         self.selected_remote_catalog_id = None;
         if self.selected_historical_conversation == Some(local_conversation_id)
             && self.loaded_historical_conversation == Some(local_conversation_id)

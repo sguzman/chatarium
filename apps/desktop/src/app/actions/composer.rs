@@ -244,7 +244,12 @@ impl ChatariumApp {
         }
     }
 
-    pub(crate) fn queue_turn_event(&mut self, turn_id: LocalTurnId, kind: EventKind, payload: String) -> bool {
+    pub(crate) fn queue_turn_event(
+        &mut self,
+        turn_id: LocalTurnId,
+        kind: EventKind,
+        payload: String,
+    ) -> bool {
         let Some(sender) = &self.persist_tx else {
             self.status = "cannot persist remote turn evidence: persistence unavailable".to_owned();
             return false;
@@ -259,5 +264,4 @@ impl ChatariumApp {
         }
         true
     }
-
 }
