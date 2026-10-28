@@ -254,10 +254,17 @@ mod tests {
         assert_eq!(active.authoritative_events().len(), 5);
         assert_eq!(active.excluded_count(), 3);
         assert_eq!(
-            active.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            active
+                .events()
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
             vec![4, 5]
         );
-        assert_eq!(active.events()[0].payload, "private native draft must remain");
+        assert_eq!(
+            active.events()[0].payload,
+            "private native draft must remain"
+        );
 
         let mut sqlite = SqliteProjection::open(dir.join("journal-cache.sqlite3")).unwrap();
         sqlite.rebuild(active.authoritative_events()).unwrap();
@@ -280,9 +287,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(next, 6);
-        assert!(sqlite
-            .effective_read_view_verified(active.authoritative_events())
-            .is_err());
+        assert!(
+            sqlite
+                .effective_read_view_verified(active.authoritative_events())
+                .is_err()
+        );
         sqlite.rebuild(active.authoritative_events()).unwrap();
         let refreshed = sqlite
             .effective_read_view_verified(active.authoritative_events())
@@ -302,7 +311,11 @@ mod tests {
         let restarted = JsonlEventStore::open_strict(&journal).unwrap();
         let active = EffectiveEventStore::new(restarted).unwrap();
         assert_eq!(
-            active.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            active
+                .events()
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
             vec![4, 5, 6]
         );
         assert_eq!(active.authoritative_events().len(), 6);
