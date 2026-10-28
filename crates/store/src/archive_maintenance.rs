@@ -201,11 +201,12 @@ pub fn check_archive(
         let source_bytes = fs::read(&source)?;
         let parsed: Value = serde_json::from_slice(&source_bytes)
             .map_err(|_| err("quarantine source archive is not valid JSON"))?;
-        if parsed.get("format").and_then(Value::as_str)
-            != Some("chatarium-flight-recorder-export")
+        if parsed.get("format").and_then(Value::as_str) != Some("chatarium-flight-recorder-export")
             || parsed.get("version").and_then(Value::as_u64) != Some(3)
         {
-            return Err(err("quarantine source archive has unsupported format or version"));
+            return Err(err(
+                "quarantine source archive has unsupported format or version",
+            ));
         }
     }
     replay_supervision_audit(&events).map_err(err)?;
@@ -338,9 +339,13 @@ fn flight_source_archives(data_dir: &Path) -> Result<Vec<String>, ArchiveMainten
         return Ok(Vec::new());
     }
     if !fs::symlink_metadata(&dir)?.file_type().is_dir()
-        || !fs::symlink_metadata(data_dir.join("imports"))?.file_type().is_dir()
+        || !fs::symlink_metadata(data_dir.join("imports"))?
+            .file_type()
+            .is_dir()
     {
-        return Err(err("import source archive directory is not a real directory"));
+        return Err(err(
+            "import source archive directory is not a real directory",
+        ));
     }
     let mut archives = Vec::new();
     for entry in fs::read_dir(&dir)? {
@@ -360,11 +365,15 @@ fn flight_source_archives(data_dir: &Path) -> Result<Vec<String>, ArchiveMainten
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
-            return Err(err("import source archive filename is not lowercase SHA-256"));
+            return Err(err(
+                "import source archive filename is not lowercase SHA-256",
+            ));
         }
         let (_, digest) = sha256(&entry.path())?;
         if digest != hash {
-            return Err(err("import source archive bytes do not match filename SHA-256"));
+            return Err(err(
+                "import source archive bytes do not match filename SHA-256",
+            ));
         }
         archives.push(format!("{FLIGHT_ARCHIVE_DIR}/{name}"));
     }
@@ -434,7 +443,11 @@ pub fn create_backup(
     }
     for name in flight_source_archives(data_dir)? {
         let destination = temporary.join(&name);
-        fs::create_dir_all(destination.parent().ok_or_else(|| err("invalid archive path"))?)?;
+        fs::create_dir_all(
+            destination
+                .parent()
+                .ok_or_else(|| err("invalid archive path"))?,
+        )?;
         let (size, hash) = copy_consistent(&data_dir.join(&name), &destination)?;
         files.push(json!({"path": name, "size_bytes": size, "sha256": hash}));
     }
@@ -519,7 +532,10 @@ pub fn verify_backup(
         }
         if name.starts_with("imports/") {
             for directory in ["imports", FLIGHT_ARCHIVE_DIR] {
-                if !fs::symlink_metadata(backup.join(directory))?.file_type().is_dir() {
+                if !fs::symlink_metadata(backup.join(directory))?
+                    .file_type()
+                    .is_dir()
+                {
                     return Err(err("backup import directory must not be a symlink"));
                 }
             }
@@ -578,10 +594,14 @@ pub fn restore_backup(
     fs::create_dir_all(&staging)?;
     let manifest: Value = serde_json::from_slice(&fs::read(backup.join(MANIFEST_FILE))?)
         .map_err(|error| err(format!("manifest JSON: {error}")))?;
-    let files = manifest.get("files").and_then(Value::as_array)
+    let files = manifest
+        .get("files")
+        .and_then(Value::as_array)
         .ok_or_else(|| err("verified manifest has no files"))?;
     for file in files {
-        let name = file.get("path").and_then(Value::as_str)
+        let name = file
+            .get("path")
+            .and_then(Value::as_str)
             .ok_or_else(|| err("verified manifest path missing"))?;
         let relative = safe_relative(name)?;
         if !allowed_backup_path(name) {
@@ -721,33 +741,42 @@ mod tests {
             })
             .to_string()
         };
-        store.append(
-            EventKind::ImportStarted,
-            imported_payload("import:start", json!({"archive": archive_name})),
-        ).unwrap();
-        store.append_scoped(
-            Some("remote:source".to_owned()),
-            EventKind::DraftChanged,
-            imported_payload("draft:one", json!({})),
-        ).unwrap();
-        store.append(
-            EventKind::ImportCompleted,
-            imported_payload("import:complete", json!({"semantic_event_count": 1})),
-        ).unwrap();
-        store.append(
-            EventKind::ImportSourceQuarantineRecorded,
-            json!({
-                "schema": "chatarium-source-quarantine-audit",
-                "version": 1,
-                "record": "source_quarantine_recorded",
-                "source_format": "chatarium-flight-recorder-export",
-                "source_sha256": hash,
-                "preflight_journal_sha256": "b".repeat(64),
-                "matching_event_count": 3,
-                "first_sequence": 1,
-                "last_sequence": 3,
-            }).to_string(),
-        ).unwrap();
+        store
+            .append(
+                EventKind::ImportStarted,
+                imported_payload("import:start", json!({"archive": archive_name})),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some("remote:source".to_owned()),
+                EventKind::DraftChanged,
+                imported_payload("draft:one", json!({})),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                imported_payload("import:complete", json!({"semantic_event_count": 1})),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                json!({
+                    "schema": "chatarium-source-quarantine-audit",
+                    "version": 1,
+                    "record": "source_quarantine_recorded",
+                    "source_format": "chatarium-flight-recorder-export",
+                    "source_sha256": hash,
+                    "preflight_journal_sha256": "b".repeat(64),
+                    "matching_event_count": 3,
+                    "first_sequence": 1,
+                    "last_sequence": 3,
+                })
+                .to_string(),
+            )
+            .unwrap();
         drop(store);
 
         check_archive(&data_dir).unwrap();
@@ -788,9 +817,10 @@ mod tests {
         assert_eq!(create_backup(&original, &backup).unwrap().manifest_files, 2);
         let manifest = backup.join(MANIFEST_FILE);
         let mut data: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
-        data["files"].as_array_mut().unwrap().retain(|file| {
-            file["path"].as_str() != Some(archive_name.as_str())
-        });
+        data["files"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|file| file["path"].as_str() != Some(archive_name.as_str()));
         fs::write(&manifest, serde_json::to_vec(&data).unwrap()).unwrap();
         assert!(verify_backup(&backup).is_err());
         let _ = fs::remove_dir_all(root);
