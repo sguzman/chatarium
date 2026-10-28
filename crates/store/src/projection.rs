@@ -1031,6 +1031,74 @@ mod tests {
     }
 
     #[test]
+    fn effective_sqlite_read_preserves_original_rows_and_excludes_only_verified_import() {
+        let path = temp_path("effective-source-quarantine");
+        let hash = "a".repeat(64);
+        let imported = |key: &str, details: serde_json::Value| {
+            serde_json::json!({
+                "schema": "chatarium-imported-observation",
+                "source": {
+                    "format": "chatarium-flight-recorder-export",
+                    "sha256": hash,
+                    "event_key": key
+                },
+                "details": details,
+            })
+            .to_string()
+        };
+        let mut store = MemoryEventStore::default();
+        store.append(
+            EventKind::ImportStarted,
+            imported("import:start", serde_json::json!({
+                "archive": format!("imports/flight-recorder/{hash}.json")
+            })),
+        ).unwrap();
+        store.append_scoped(
+            Some("remote:example".to_owned()),
+            EventKind::DraftChanged,
+            imported("draft:1", serde_json::json!({})),
+        ).unwrap();
+        store.append_scoped(
+            Some("local:native".to_owned()),
+            EventKind::DraftChanged,
+            "native original".to_owned(),
+        ).unwrap();
+        store.append(
+            EventKind::ImportCompleted,
+            imported("import:complete", serde_json::json!({"semantic_event_count": 1})),
+        ).unwrap();
+        store.append(
+            EventKind::ImportSourceQuarantineRecorded,
+            serde_json::json!({
+                "schema": "chatarium-source-quarantine-audit",
+                "version": 1,
+                "record": "source_quarantine_recorded",
+                "source_format": "chatarium-flight-recorder-export",
+                "source_sha256": hash,
+                "preflight_journal_sha256": "b".repeat(64),
+                "matching_event_count": 3,
+                "first_sequence": 1,
+                "last_sequence": 4,
+            }).to_string(),
+        ).unwrap();
+
+        let original = store.events().to_vec();
+        let mut projection = SqliteProjection::open(&path).unwrap();
+        projection.rebuild(&original).unwrap();
+        assert_eq!(projection.events().unwrap(), original);
+        let effective = projection.effective_events().unwrap();
+        assert_eq!(
+            effective.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![3, 5]
+        );
+        assert_eq!(effective[0].payload, "native original");
+        assert_eq!(projection.last_sequence().unwrap(), Some(5));
+        assert_eq!(projection.event_count().unwrap(), 5);
+        drop(projection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn invalid_sequence_is_rejected_before_projection_mutation() {
         let path = temp_path("sequence");
         let mut projection = SqliteProjection::open(&path).expect("open projection");
