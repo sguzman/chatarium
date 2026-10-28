@@ -121,9 +121,14 @@ quarantine replay out of the GUI constructor/render thread. Once validated,
 the worker transfers ownership of the live single-writer lease to GUI startup;
 the GUI hands that same store to the persistence worker, never reopening it.
 Invalid or missing evidence fails closed to no-persistence UI state, not an
-unfiltered fallback. Background loading is tested with an exclusive-writer
-handoff and monotonic append sequence. Remaining GUI-side catalog/cache
-construction is separate work and may still be expensive for huge archives.
+unfiltered fallback. The background phase also reconciles interrupted turns,
+captures the first effective-event snapshot, and loads/updates the local
+conversation catalog, conversation titles and working draft, so those full
+archive passes never run on the GUI/render thread. It hands the writer and
+precomputed native workspace to UI construction in one message. Background
+loading is tested with an exclusive-writer handoff and monotonic append
+sequence. Other UI-side cached search/index work remains a separate
+performance audit before claiming fully nonblocking large-archive startup.
 
 ## Active desktop/worker effective replay
 
