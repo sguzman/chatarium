@@ -108,6 +108,33 @@ fn run() -> Result<(), String> {
             println!("physical journal/SQLite evidence: preserved and unfiltered");
             Ok(())
         }
+        [command, backup_dir, data_dir] if command == "archive-restore" => {
+            let backup = fs::canonicalize(backup_dir)
+                .map_err(|error| format!("explicit backup path is not accessible: {error}"))?;
+            let target = Path::new(data_dir);
+            let target_path = if target.exists() {
+                fs::canonicalize(target)
+                    .map_err(|error| format!("explicit target path is not accessible: {error}"))?
+            } else {
+                let parent = target.parent().filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."));
+                let basename = target.file_name()
+                    .ok_or_else(|| "explicit archive target directory name is required".to_owned())?;
+                fs::canonicalize(parent)
+                    .map_err(|error| format!("explicit target parent is not accessible: {error}"))?
+                    .join(basename)
+            };
+            if target_path.starts_with(&backup) || backup.starts_with(&target_path) {
+                return Err("backup and restore target must be separate, non-nested directories".to_owned());
+            }
+            let verified = chatarium_store::archive_maintenance::restore_backup(
+                &backup, &target_path
+            ).map_err(|error| format!("offline restore refused: {error}"))?;
+            println!("offline restore verified: {}", verified.valid);
+            println!("restored journal events: {}", verified.archive.journal_event_count);
+            println!("active source quarantine decisions remain replayable after restart");
+            Ok(())
+        }
         [command, fixture, read_index, data_dir] if command == "read-fixture" => {
             let selected_index = read_index.parse::<usize>().map_err(|_| {
                 format!("read-fixture index must be a non-negative integer, got {read_index:?}")
@@ -128,6 +155,9 @@ fn run() -> Result<(), String> {
             );
             Ok(())
         }
+        [command, _backup] if command == "archive-restore" => Err(
+            "refusing to restore without an explicit target data directory; usage: chatarium-importer archive-restore <backup-dir> <data-dir>".to_owned()
+        ),
         [command, _export] if command == "openai-export" => Err(
             "refusing to import without an explicit data directory; usage: chatarium-importer openai-export <conversations.json> <data-dir>"
                 .to_owned(),
@@ -138,7 +168,7 @@ fn run() -> Result<(), String> {
         ),
         _ => {
             eprintln!(
-                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>\n  chatarium-importer quarantine-preflight <source-sha256> <data-dir>\n  chatarium-importer quarantine-record <source-sha256> <data-dir>"
+                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>\n  chatarium-importer quarantine-preflight <source-sha256> <data-dir>\n  chatarium-importer quarantine-record <source-sha256> <data-dir>\n  chatarium-importer archive-restore <backup-dir> <data-dir>"
             );
             Err("invalid arguments".to_owned())
         }

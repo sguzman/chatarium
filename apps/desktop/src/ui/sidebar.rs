@@ -1684,49 +1684,49 @@ impl ChatariumApp {
 
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new("LOCAL ARCHIVE").size(10.0).strong());
-                            ui.horizontal(|ui| {
-                                if ui.button("CHECK ARCHIVE").clicked() {
-                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
-                                    self.archive_maintenance_status = match check_archive(data_dir) {
-                                        Ok(report) => format!("{} · {} events · {} catalog items", report.status, report.journal_event_count, report.catalog_count),
-                                        Err(error) => format!("archive check failed · {error}"),
-                                    };
-                                }
-                            });
+                            use crate::app::archive_maintenance_async::ArchiveOperation;
+                            let archive_busy = self.archive_maintenance_busy();
+                            if ui.add_enabled(!archive_busy, egui::Button::new("CHECK ARCHIVE")).clicked() {
+                                let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                self.launch_archive_operation(ArchiveOperation::Check { data_dir });
+                            }
                             ui.horizontal(|ui| {
                                 ui.label("backup path");
                                 ui.text_edit_singleline(&mut self.archive_backup_path);
                             });
+                            let backup_path = self.archive_backup_path.trim().to_owned();
+                            let backup_ready = !archive_busy && !backup_path.is_empty();
                             ui.horizontal(|ui| {
-                                if ui.button("CREATE BACKUP").clicked() {
-                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new("."));
-                                    self.archive_maintenance_status = match create_backup(data_dir, self.archive_backup_path.trim()) {
-                                        Ok(_) => "backup created and verified".to_owned(),
-                                        Err(error) => format!("backup failed · {error}"),
-                                    };
+                                if ui.add_enabled(backup_ready, egui::Button::new("CREATE BACKUP")).clicked() {
+                                    let data_dir = self.journal_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                    self.launch_archive_operation(ArchiveOperation::Backup {
+                                        data_dir,
+                                        output: PathBuf::from(&backup_path),
+                                    });
                                 }
-                                if ui.button("VERIFY BACKUP").clicked() {
-                                    self.archive_maintenance_status = match verify_backup(self.archive_backup_path.trim()) {
-                                        Ok(_) => "backup verified".to_owned(),
-                                        Err(error) => format!("backup verification failed · {error}"),
-                                    };
+                                if ui.add_enabled(backup_ready, egui::Button::new("VERIFY BACKUP")).clicked() {
+                                    self.launch_archive_operation(ArchiveOperation::Verify {
+                                        backup: PathBuf::from(&backup_path),
+                                    });
                                 }
                             });
-                            if ui.button("RESTORE BACKUP").clicked() && !self.archive_backup_path.trim().is_empty() {
+                            if ui.add_enabled(backup_ready, egui::Button::new("RESTORE BACKUP")).clicked() {
                                 self.archive_restore_confirmation_pending = true;
                             }
                             if self.archive_restore_confirmation_pending {
-                                ui.colored_label(egui::Color32::YELLOW, "Restore replaces active local archive; a safety copy is retained.");
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    "Restore must run after Chatarium closes: the active journal writer prevents replacing its directory.",
+                                );
+                                ui.label("After closing Chatarium, use the offline importer command with explicit backup and data directories:");
+                                ui.monospace("chatarium-importer archive-restore <backup-dir> <data-dir>");
                                 ui.horizontal(|ui| {
-                                    if ui.button("CONFIRM RESTORE").clicked() {
-                                        let target = self.journal_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-                                        self.archive_maintenance_status = match restore_backup(self.archive_backup_path.trim(), target) {
-                                            Ok(_) => "backup restored after isolated verification".to_owned(),
-                                            Err(error) => format!("restore failed; active archive preserved · {error}"),
-                                        };
-                                        self.archive_restore_confirmation_pending = false;
+                                    if ui.add_enabled(!archive_busy, egui::Button::new("VERIFY RESTORE SOURCE")).clicked() {
+                                        self.launch_archive_operation(ArchiveOperation::Verify {
+                                            backup: PathBuf::from(self.archive_backup_path.trim()),
+                                        });
                                     }
-                                    if ui.button("CANCEL RESTORE").clicked() {
+                                    if ui.button("DISMISS").clicked() {
                                         self.archive_restore_confirmation_pending = false;
                                     }
                                 });
