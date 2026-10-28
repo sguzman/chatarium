@@ -2,6 +2,7 @@
 
 mod openai_export;
 mod read_fixture;
+mod source_audit;
 
 use chatarium_core::EventKind;
 use chatarium_store::{EventStore, JsonlEventStore};
@@ -44,6 +45,24 @@ fn run() -> Result<(), String> {
         [command, export, data_dir] if command == "flight-recorder" => {
             import_file(Path::new(export), Path::new(data_dir))
         }
+        [command, source_hash, data_dir] if command == "source-audit" => {
+            let report = source_audit::audit_source(Path::new(data_dir), source_hash)?;
+            println!("mode: READ ONLY (no quarantine or projection changes)");
+            println!("source sha256: {}", report.source_sha256);
+            println!("journal events: {}", report.journal_events);
+            println!("matching imported events: {}", report.matching_events);
+            println!(
+                "sequence range: {}..={}",
+                report.first_sequence, report.last_sequence
+            );
+            for (source_type, count) in &report.source_types {
+                println!("source type {source_type}: {count}");
+            }
+            for (kind, count) in &report.event_kinds {
+                println!("event kind {kind}: {count}");
+            }
+            Ok(())
+        }
         [command, fixture, read_index, data_dir] if command == "read-fixture" => {
             let selected_index = read_index.parse::<usize>().map_err(|_| {
                 format!("read-fixture index must be a non-negative integer, got {read_index:?}")
@@ -74,7 +93,7 @@ fn run() -> Result<(), String> {
         ),
         _ => {
             eprintln!(
-                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>"
+                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>"
             );
             Err("invalid arguments".to_owned())
         }
