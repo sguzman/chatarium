@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
-use crate::{ChatariumApp, EventEnvelope, LocalConversationId, default_journal_path};
 use crate::local_conversations::LocalConversationCatalog;
+use crate::{ChatariumApp, EventEnvelope, LocalConversationId, default_journal_path};
 
 /// Completed off-thread snapshot; UI receives already reconciled native state.
 pub(crate) struct LoadedJournal {
@@ -163,7 +163,8 @@ mod tests {
             JsonlEventStore::open(&path).unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
-        loaded.store
+        loaded
+            .store
             .append(EventKind::DraftChanged, "second".to_owned())
             .unwrap();
         assert_eq!(loaded.store.events().last().unwrap().sequence, 2);
