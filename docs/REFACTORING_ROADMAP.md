@@ -20,12 +20,12 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **verified complete** |
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **verified complete** |
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **verified complete** |
-| R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
+| R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | **active** |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **verified complete** |
-| R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | **active** |
+| R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | **verified complete** |
 | R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **verified complete** |
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
-| R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **active** |
+| R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **verified complete** |
 | R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | pending |
 | R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | pending |
 | R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 62% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20 + R22 + R23), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 73% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -149,3 +149,10 @@ The large extracted advanced panel was further decomposed into independent modul
 ### R21 isolation branch: coordination workspace decomposition (not verified)
 
 A separate feature branch exercises a structural split into the original coordination types, named `storage`, `topology`, `messages`, `wake`, `identity`, `ui` and `tests` Rust modules. Its same durable save, authority, membership, rate/claim and human consent methods are preserved. No new behavior, packages or remote transport. This branch does not advance the verified percentage or change main until GitHub CI and GUI QA pass and the predecessor R24 is accepted.
+
+## Round 8 — Recover context, accept OpenViking and coordinate branch
+
+- **R24 verified (+6pp):** the OpenViking checkpoint, project-grant, and dedicated-test modules on main at `871a7dd` passed full [CI 40748224190](https://github.com/sguzman/chatarium/actions/runs/40748224190) and [native-reader visual QA 40748224243](https://github.com/sguzman/chatarium/actions/runs/40748224243). No new retrieval or write-once behavior was introduced.
+- **R21 verified (+5pp):** the separate `refactor/coordination-modules-20261028` branch's native model/persistence/topology/messages/wake/identity/UI/test split passed [full CI 40748666850](https://github.com/sguzman/chatarium/actions/runs/40748666850) and [visual QA 40748666809](https://github.com/sguzman/chatarium/actions/runs/40748666809) at `88ebaf2`. Main was **fast-forwarded** from `871a7dd` to `88ebaf2`, with no history rewrite. The branch's passing state is now main.
+- **Verified progress: 62% → 73% (+11pp)**. All-or-nothing weights and 100% stopping boundary unchanged.
+- **R16 active:** root `main.rs` remains ~11,695 lines; next split isolates the remaining persistence and rendering helpers into real Rust modules. Avoid changing data flow, parent module visibility, or the single-writer ordering until verified.
