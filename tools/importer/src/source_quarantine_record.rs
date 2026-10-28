@@ -64,10 +64,11 @@ pub fn record(data_dir: &Path, source_sha256: &str) -> Result<RecordSummary, Str
         ));
     }
     if report.journal_events != store.events().len()
-        || store.events().last().map_or(0, |event| event.sequence)
-            != report.journal_events as u64
+        || store.events().last().map_or(0, |event| event.sequence) != report.journal_events as u64
     {
-        return Err("journal changed or sequence accounting failed during quarantine recording".to_owned());
+        return Err(
+            "journal changed or sequence accounting failed during quarantine recording".to_owned(),
+        );
     }
     let matching_event_count = u64::try_from(report.matching_events)
         .map_err(|_| "matching import event count exceeds u64".to_owned())?;
@@ -133,26 +134,49 @@ mod tests {
         fs::create_dir_all(root.join("imports/flight-recorder")).unwrap();
         let source = json!({"format": SOURCE_FORMAT, "version": 3}).to_string();
         let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
-        fs::write(root.join(format!("imports/flight-recorder/{hash}.json")), source)
-            .unwrap();
+        fs::write(
+            root.join(format!("imports/flight-recorder/{hash}.json")),
+            source,
+        )
+        .unwrap();
         let mut store = JsonlEventStore::open(root.join("journal.jsonl")).unwrap();
         for (kind, scope, key, details) in [
-            (EventKind::ImportStarted, None, "import:start", json!({"archive": format!("imports/flight-recorder/{hash}.json")})),
-            (EventKind::DraftChanged, Some("remote:example".to_owned()), "draft:1", json!({})),
-            (EventKind::ImportCompleted, None, "import:complete", json!({"semantic_event_count": 1})),
+            (
+                EventKind::ImportStarted,
+                None,
+                "import:start",
+                json!({"archive": format!("imports/flight-recorder/{hash}.json")}),
+            ),
+            (
+                EventKind::DraftChanged,
+                Some("remote:example".to_owned()),
+                "draft:1",
+                json!({}),
+            ),
+            (
+                EventKind::ImportCompleted,
+                None,
+                "import:complete",
+                json!({"semantic_event_count": 1}),
+            ),
         ] {
             store
-                .append_scoped(scope, kind, json!({
-                    "schema": "chatarium-imported-observation",
-                    "version": 1,
-                    "source": {
-                        "format": SOURCE_FORMAT,
-                        "version": 3,
-                        "sha256": hash,
-                        "event_key": key
-                    },
-                    "details": details
-                }).to_string())
+                .append_scoped(
+                    scope,
+                    kind,
+                    json!({
+                        "schema": "chatarium-imported-observation",
+                        "version": 1,
+                        "source": {
+                            "format": SOURCE_FORMAT,
+                            "version": 3,
+                            "sha256": hash,
+                            "event_key": key
+                        },
+                        "details": details
+                    })
+                    .to_string(),
+                )
                 .unwrap();
         }
         drop(store);
@@ -174,7 +198,10 @@ mod tests {
         let decisions = replay_import_source_quarantine_audit(&events).unwrap();
         assert_eq!(decisions.len(), 1);
         let payload: Value = serde_json::from_str(&events[3].payload).unwrap();
-        assert_eq!(payload["preflight_journal_sha256"], format!("{:x}", Sha256::digest(before)));
+        assert_eq!(
+            payload["preflight_journal_sha256"],
+            format!("{:x}", Sha256::digest(before))
+        );
 
         let second = record(&dir, &hash).unwrap();
         assert!(second.already_recorded);
@@ -206,11 +233,13 @@ mod tests {
         let (dir, hash) = fixture();
         let journal = dir.join("journal.jsonl");
         let mut writer = JsonlEventStore::open(&journal).unwrap();
-        writer.append_scoped(
-            Some("remote:example".to_owned()),
-            EventKind::DraftChanged,
-            "native text".to_owned(),
-        ).unwrap();
+        writer
+            .append_scoped(
+                Some("remote:example".to_owned()),
+                EventKind::DraftChanged,
+                "native text".to_owned(),
+            )
+            .unwrap();
         drop(writer);
         let bytes = fs::read(&journal).unwrap();
         assert!(record(&dir, &hash).is_err());
