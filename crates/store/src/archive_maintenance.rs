@@ -651,7 +651,9 @@ pub fn restore_backup(
     // append or recovery by the restore path.
     if let Ok(metadata) = fs::symlink_metadata(target) {
         if !metadata.file_type().is_dir() {
-            return Err(err("restore target must be a real directory, not a file or symlink"));
+            return Err(err(
+                "restore target must be a real directory, not a file or symlink",
+            ));
         }
     }
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
@@ -1192,7 +1194,9 @@ mod tests {
         let backup = root.join("backup");
         fs::create_dir_all(&source).unwrap();
         let mut source_store = JsonlEventStore::open(source.join(JOURNAL_FILE)).unwrap();
-        source_store.append(EventKind::DraftChanged, "good".into()).unwrap();
+        source_store
+            .append(EventKind::DraftChanged, "good".into())
+            .unwrap();
         drop(source_store);
         create_backup(&source, &backup).unwrap();
 
