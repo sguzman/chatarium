@@ -26,14 +26,14 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **verified complete** |
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | **verified complete** |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | **verified complete** |
-| R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | **active** |
+| R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | **verified complete** |
 | R31 🧰 | Split parked Edge capture lifecycle/profiles/locks/diagnostics/tests; Windows tests pass | 5 | R30 | pending |
 | R32 🛡️ | Split flight recorder ingestion, sanitizer, validation/tests; fail-closed corpus verified | 5 | R31 | pending |
 | R40 ⚡ | Verify egui reader/search behavior and frame-time discipline with existing QA/perf checks | 4 | R13,R20 | pending |
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 75% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R16 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 80% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R16 + R20 + R21 + R22 + R23 + R24), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -163,3 +163,8 @@ A separate feature branch exercises a structural split into the original coordin
 - **R30 active, no points yet:** Parked browser account bridge split into runtime shell, provider, proof parser, HTTP server and tests on isolated `refactor/chatarium-r30-account-bridge-20261028` branch. Initial CI identified that `chatarium-qa` also loads `account_bridge.rs` with `#[path]`, so submodule resolution needs explicit paths; corrected in [db4540c](https://github.com/sguzman/chatarium/commit/db4540c39cb55cc1f31ef46d6459d41faaac2c85). Do not reactivate browser transport or credit R30 until CI and GUI QA both pass.
 - **R31/R32 mechanical extractions prepared but not merged/verified:** Edge capture and flight recorder have separate candidate modules and tests. Preserve all existing run isolation, profile locks, cleanup and fail-closed sanitization behavior. Accept only after their dependency predecessors and platform CI tests pass.
 - **R40** remains pending the final cross-platform reader/search and frame-thread regression review; R41/R42 remain pending cleanup/integration. **Stop at verified 100%.**
+
+## Round 10 — Parked account-bridge module extraction verified
+
+- **R30 verified: 75% → 80% (+5pp).** The account bridge splits into a root transport/runtime shell, separate provider, response/proof parser, loopback HTTP service, and isolated tests, without resuming previously parked browser experiments. [Commit db4540c](https://github.com/sguzman/chatarium/commit/db4540c39cb55cc1f31ef46d6459d41faaac2c85) passed the exact [Windows and Linux CI run 40757868072](https://github.com/sguzman/chatarium/actions/runs/40757868072) and [production/native-reader QA 40757867987](https://github.com/sguzman/chatarium/actions/runs/40757867987). Explicit Rust submodule paths preserve compilation in both the desktop binary and the separately included QA binary. Integrated as an ancestry-preserving merge with the independent roadmap documentation update on main.
+- **R31/R32 remain uncredited:** Their separate Edge and recorder branches contain moved legacy implementations. Both require their own tests and a verified combined integration before R31/R32 acceptance.
