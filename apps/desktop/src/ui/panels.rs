@@ -2,13 +2,15 @@
 use super::*;
 
 impl ChatariumApp {
-    pub(super) fn render_frame_panels(&mut self,
+    pub(super) fn render_frame_panels(
+        &mut self,
         ctx: &egui::Context,
         sidebar: sidebar::SidebarOutcome,
         local_display_messages: &[DisplayMessage],
         local_conversation_title: &String,
         native_search_index: &Arc<native_conversation_search::NativeConversationSearchIndex>,
-        display_preferences: &display_preferences::DisplayPreferences,) {
+        display_preferences: &display_preferences::DisplayPreferences,
+    ) {
         let historical_mode = sidebar.historical_mode;
         let remote_catalog_selected = sidebar.remote_catalog_selected;
         let selected_live_mirror = sidebar.selected_live_mirror;

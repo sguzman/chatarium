@@ -4,8 +4,8 @@ use super::*;
 
 mod composer;
 mod coordination_window;
-mod header;
 mod frame_lifecycle;
+mod header;
 mod navigation;
 mod panels;
 mod reader;
