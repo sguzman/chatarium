@@ -113,9 +113,16 @@ sidebar_edge="$(python3 tools/qa-native-reader/panel_geometry.py "$OUT/long-end.
 header_height="$(python3 - <<'PY'
 from pathlib import Path
 import re
-source = Path("apps/desktop/src/main.rs").read_text()
-header = source.split('egui::TopBottomPanel::top("conversation_header")', 1)[1]
-match = re.search(r'\.exact_height\((\d+(?:\.\d+)?)\)', header[:1000])
+# UI implementations move between modules; find the unique actual header.
+marker = 'egui::TopBottomPanel::top("conversation_header")'
+headers = [
+    content.split(marker, 1)[1]
+    for path in sorted(Path("apps/desktop/src/ui").rglob("*.rs"))
+    if marker in (content := path.read_text())
+]
+if len(headers) != 1:
+    raise SystemExit(f"expected one conversation header, found {len(headers)}")
+match = re.search(r'\.exact_height\((\d+(?:\.\d+)?)\)', headers[0][:1000])
 if match is None:
     raise SystemExit("cannot derive native header height for X11 control test")
 print(round(float(match.group(1))))

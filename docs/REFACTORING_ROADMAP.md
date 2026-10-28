@@ -51,3 +51,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 - **Implementation prepared, verification pending:** R10 root tests, R11 egui App trait impl, R12 persistence command loop extracted as unchanged code into real modules. Do *not* add their 15 percentage points until the corresponding CI evidence passes.
 - **Known blocker:** existing Linux sandbox ownership test; separate from module extraction.
 - **Next:** Validate the extracted modules through CI and then split `update()` by UI responsibility and `process_notices()` by feature. Preserve paused transport code without exercising it.
+
+### CI observation — relocated header in native QA
+
+Following the first extraction, the long-reader GUI smoke failed with `IndexError`: it searched `main.rs` for the `conversation_header` height, which now resides in `src/ui/`. The QA script was updated to search the UI module tree and require one matching header. The separate synthetic reader smoke reported `Reader QA process ended`, cause still unverified. These failures do **not** justify marking R11/R40 verified before a rerun. Preserve the baseline Linux sandbox ownership failure separately.
