@@ -198,6 +198,15 @@ pub fn check_archive(
         if digest != decision.source_sha256 {
             return Err(err("quarantine source archive SHA-256 mismatch"));
         }
+        let source_bytes = fs::read(&source)?;
+        let parsed: Value = serde_json::from_slice(&source_bytes)
+            .map_err(|_| err("quarantine source archive is not valid JSON"))?;
+        if parsed.get("format").and_then(Value::as_str)
+            != Some("chatarium-flight-recorder-export")
+            || parsed.get("version").and_then(Value::as_u64) != Some(3)
+        {
+            return Err(err("quarantine source archive has unsupported format or version"));
+        }
     }
     replay_supervision_audit(&events).map_err(err)?;
     replay_tool_provider_audit(&events).map_err(err)?;
