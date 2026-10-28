@@ -19,7 +19,9 @@ const SOURCE_FORMAT: &str = "chatarium-flight-recorder-export";
 #[derive(Debug)]
 pub struct EffectiveEventStore<S: EventStore> {
     raw: S,
-    visible: Vec<EventEnvelope>,
+    // None is a zero-copy pass-through for ordinary non-quarantined journals.
+    // Only a journal with a durable source decision materializes filtered rows.
+    visible: Option<Vec<EventEnvelope>>,
     protected_scopes: BTreeSet<String>,
     quarantined_sources: BTreeSet<String>,
 }
@@ -29,6 +31,20 @@ impl<S: EventStore> EffectiveEventStore<S> {
     /// into a desktop or persistence worker. On failure the raw store remains
     /// owned by the caller only through the returned error, and is dropped.
     pub fn new(raw: S) -> Result<Self, String> {
+        // Keep the ordinary desktop startup fast: do not parse or duplicate
+        // every payload when there is no source quarantine decision.
+        if !raw
+            .events()
+            .iter()
+            .any(|event| event.kind == EventKind::ImportSourceQuarantineRecorded)
+        {
+            return Ok(Self {
+                raw,
+                visible: None,
+                protected_scopes: BTreeSet::new(),
+                quarantined_sources: BTreeSet::new(),
+            });
+        }
         let selection = EffectiveJournalView::from_raw(raw.events())?;
         let protected_scopes = raw
             .events()
@@ -48,7 +64,7 @@ impl<S: EventStore> EffectiveEventStore<S> {
             .collect();
         Ok(Self {
             raw,
-            visible,
+            visible: Some(visible),
             protected_scopes,
             quarantined_sources,
         })
@@ -61,7 +77,7 @@ impl<S: EventStore> EffectiveEventStore<S> {
 
     /// Number of events excluded from active replay (not deleted).
     pub fn excluded_count(&self) -> usize {
-        self.raw.events().len().saturating_sub(self.visible.len())
+        self.raw.events().len().saturating_sub(self.events().len())
     }
 
     /// Borrow the original writer only where physical evidence is required.
@@ -113,12 +129,14 @@ impl<S: EventStore> EventStore for EffectiveEventStore<S> {
                 "authoritative store returned a mismatched append sequence",
             ));
         }
-        self.visible.push(appended.clone());
+        if let Some(visible) = &mut self.visible {
+            visible.push(appended.clone());
+        }
         Ok(sequence)
     }
 
     fn events(&self) -> &[EventEnvelope] {
-        &self.visible
+        self.visible.as_deref().unwrap_or_else(|| self.raw.events())
     }
 }
 
