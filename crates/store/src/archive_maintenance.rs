@@ -586,15 +586,14 @@ impl Drop for RestoreStagingCleanup {
     }
 }
 
-fn verify_staged_file(
-    manifest_file: &Value,
-    copied: &Path,
-) -> Result<(), ArchiveMaintenanceError> {
+fn verify_staged_file(manifest_file: &Value, copied: &Path) -> Result<(), ArchiveMaintenanceError> {
     let (size, hash) = sha256(copied)?;
     if manifest_file.get("size_bytes").and_then(Value::as_u64) != Some(size)
         || manifest_file.get("sha256").and_then(Value::as_str) != Some(hash.as_str())
     {
-        return Err(err("restored staged file differs from verified backup manifest"));
+        return Err(err(
+            "restored staged file differs from verified backup manifest",
+        ));
     }
     Ok(())
 }
