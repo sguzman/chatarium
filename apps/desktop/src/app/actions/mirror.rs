@@ -993,7 +993,4 @@ impl ChatariumApp {
         }
     }
 
-    /// A topic change immediately removes both owner and project evidence.
-    /// An in-flight owner read is marked stale, and the project cache similarly
-    /// discards its old completion. No network request runs on the GUI thread.
 }
