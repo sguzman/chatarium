@@ -163,7 +163,7 @@ pub struct RetrievedCheckpoint {
 
 pub(super) const MAX_RETRIEVAL_ITEMS: usize = 3;
 pub(super) const MAX_RETRIEVAL_BYTES: usize = 12 * 1024;
-const MAX_HISTORY_SCAN_ITEMS: usize = 64;
+pub(super) const MAX_HISTORY_SCAN_ITEMS: usize = 64;
 const MAX_QUERY_CHARS: usize = 4096;
 
 /// Bounded local vocabulary, never a permission check or a remote search.
