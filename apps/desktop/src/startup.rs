@@ -28,7 +28,10 @@ impl BootstrapApp {
         let started = launch_journal_loader(journal_path.clone());
         let (load_result, start_failure) = match started {
             Ok(receiver) => (Some(receiver), None),
-            Err(error) => (None, Some(format!("failed to start journal loader: {error}"))),
+            Err(error) => (
+                None,
+                Some(format!("failed to start journal loader: {error}")),
+            ),
         };
         Self {
             journal_path,
@@ -110,7 +113,10 @@ mod tests {
 
     #[test]
     fn journal_io_stays_on_worker_and_preserves_single_writer_handoff() {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!(
             "chatarium-background-bootstrap-{}-{nonce}",
             std::process::id()
@@ -118,7 +124,9 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let path = root.join("journal.jsonl");
         let mut initial = JsonlEventStore::open(&path).unwrap();
-        initial.append(EventKind::DraftChanged, "native event".to_owned()).unwrap();
+        initial
+            .append(EventKind::DraftChanged, "native event".to_owned())
+            .unwrap();
         drop(initial);
 
         let receiver = launch_journal_loader(path.clone()).unwrap();
@@ -134,7 +142,9 @@ mod tests {
             JsonlEventStore::open(&path).unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
-        loaded.append(EventKind::DraftChanged, "second".to_owned()).unwrap();
+        loaded
+            .append(EventKind::DraftChanged, "second".to_owned())
+            .unwrap();
         assert_eq!(loaded.events().last().unwrap().sequence, 2);
         drop(loaded);
         let reopened = JsonlEventStore::open(&path).unwrap();
