@@ -9,11 +9,13 @@ use chatarium_store::JsonlEventStore;
 use chatarium_store::effective_event_store::EffectiveEventStore;
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use crate::local_conversations::LocalConversationCatalog;
-use crate::{ChatariumApp, EventEnvelope, LocalConversationId, default_journal_path};
+use crate::native_conversation_search::NativeConversationSearchIndex;
+use crate::{ChatariumApp, EventEnvelope, LocalConversationId, RemoteHealthController, default_journal_path};
 
 /// Completed off-thread snapshot; UI receives already reconciled native state.
 pub(crate) struct LoadedJournal {
@@ -21,6 +23,8 @@ pub(crate) struct LoadedJournal {
     pub(crate) events: Vec<EventEnvelope>,
     pub(crate) recovery: Result<usize, String>,
     pub(crate) workspace: LoadedWorkspace,
+    pub(crate) native_search_index: Arc<NativeConversationSearchIndex>,
+    pub(crate) remote_health: RemoteHealthController,
 }
 
 pub(crate) struct LoadedWorkspace {
@@ -155,6 +159,15 @@ mod tests {
         assert_eq!(loaded.store.events(), loaded.events);
         assert_eq!(loaded.store.authoritative_events(), loaded.store.events());
         assert_eq!(loaded.recovery, Ok(0));
+        let ctx = egui::Context::default();
+        crate::native_conversation_search::seed_index(
+            &ctx,
+            Arc::clone(&loaded.native_search_index),
+        );
+        // The builder runs off-thread, but the GUI must immediately reuse the
+        // exact same Arc when handed the owned event buffer.
+        let cached = crate::native_conversation_search::cached_index(&ctx, &loaded.events);
+        assert!(Arc::ptr_eq(&cached, &loaded.native_search_index));
         assert!(loaded.workspace.status.starts_with("journal ready"));
         assert!(root.join("local-conversations.json").exists());
         // The background loader's lease is handed to the consumer, without a
