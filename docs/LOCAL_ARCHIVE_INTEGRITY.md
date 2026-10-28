@@ -53,6 +53,14 @@ file type, and SHA-256 byte integrity are verified. Unknown import-directory
 entries, symlinks and unlisted source archives fail backup verification;
 restore only copies manifest-approved paths.
 
+Restore re-hashes every staged file against its verified manifest entry
+before publication, closing the gap between initial backup verification and
+the later filesystem copy. A failed final staging-to-target rename triggers
+an attempted rollback of the original target from its safety snapshot. If
+that rollback itself fails, an explicit error identifies the retained safety
+directory; it is never silently deleted. Failed staging is cleaned up.
+Synthetic tests cover both staged-byte mismatch and publication rollback.
+
 Archive integrity also verifies that every recorded Flight Recorder
 quarantine decision still has its original, SHA-256-matching source archive.
 An absent or tampered source is a hard error, not a recoverable warning.
