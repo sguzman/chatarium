@@ -196,6 +196,6 @@ pub struct ConsumedDisplay {
 mod tests;
 mod ui;
 mod workspace;
-pub use ui::{render, render_chat_inbox, topology_ui};
 #[cfg(test)]
 use ui::message_visible;
+pub use ui::{render, render_chat_inbox, topology_ui};

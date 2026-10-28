@@ -91,7 +91,11 @@ impl Workspace {
     }
     /// An authorized directive edge implies a report-only return route.
     /// Explicit reverse policies, including blocks, take precedence.
-    pub(in crate::coordination_workspace) fn route_for(c: &Container, from: u64, to: u64) -> Option<(Link, bool)> {
+    pub(in crate::coordination_workspace) fn route_for(
+        c: &Container,
+        from: u64,
+        to: u64,
+    ) -> Option<(Link, bool)> {
         if let Some(edge) = c.links.iter().find(|l| l.from == from && l.to == to) {
             return Some((edge.clone(), false));
         }
