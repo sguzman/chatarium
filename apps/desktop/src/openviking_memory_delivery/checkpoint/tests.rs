@@ -195,14 +195,7 @@ fn retrieval_scopes_to_owner_and_confirmed_entries_only() {
                 .transition_durable(&path, owner, turn, seq, State::Ready, State::Dispatched)
                 .unwrap();
             outbox
-                .transition_durable(
-                    &path,
-                    owner,
-                    turn,
-                    seq,
-                    State::Dispatched,
-                    State::Confirmed,
-                )
+                .transition_durable(&path, owner, turn, seq, State::Dispatched, State::Confirmed)
                 .unwrap();
         }
     }

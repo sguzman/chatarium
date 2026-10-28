@@ -9,13 +9,13 @@ const MAX_CHECKPOINT_BYTES: usize = 16384;
 mod checkpoint;
 mod project;
 
+use checkpoint::{MAX_RETRIEVAL_BYTES, MAX_RETRIEVAL_ITEMS, read_confirmed_evidence};
 pub use checkpoint::{
     RetrievedCheckpoint, checkpoint_uri, deliver_create_once, readback_matches,
     retrieve_confirmed_for_conversation, retrieve_confirmed_for_conversation_query,
     verify_uncertain_read_only,
 };
 pub(crate) use checkpoint::{checkpoint_relevance, relevance_terms};
-use checkpoint::{MAX_RETRIEVAL_BYTES, MAX_RETRIEVAL_ITEMS, read_confirmed_evidence};
 pub use project::{
     PROJECT_MEMORY_GRANTS_FILE_NAME, ProjectMemoryGrant, ProjectMemoryGrants,
     retrieve_confirmed_for_project, retrieve_confirmed_for_project_query,

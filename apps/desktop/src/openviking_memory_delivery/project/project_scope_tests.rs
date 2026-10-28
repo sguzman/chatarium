@@ -434,8 +434,7 @@ fn openviking_checkpoint_create_verify_restore_and_authorized_recall() {
         )
         .unwrap();
     let body =
-        std::fs::read_to_string(Outbox::summary_path(&outbox_path, &owner, turn).unwrap())
-            .unwrap();
+        std::fs::read_to_string(Outbox::summary_path(&outbox_path, &owner, turn).unwrap()).unwrap();
     let remote = RefCell::new(BTreeMap::<String, String>::new());
     let mut writes = 0;
     let mut reads = 0;
