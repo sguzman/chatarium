@@ -13,9 +13,34 @@ impl ChatariumApp {
             .unwrap_or_else(|| std::path::Path::new("."))
             .to_path_buf();
         match JsonlEventStore::open(&journal_path) {
-            Ok(mut store) => {
+            Ok(store) => {
+                // Validate the complete raw journal before running recovery or
+                // handing events to any GUI/worker replay. The authoritative
+                // store remains append-only; its effective adapter hides only
+                // source evidence covered by a verified durable decision.
+                let mut store = match chatarium_store::effective_event_store::EffectiveEventStore::new(store) {
+                    Ok(store) => store,
+                    Err(error) => {
+                        return Self::without_persistence(
+                            repaint,
+                            journal_path,
+                            String::new(),
+                            Vec::new(),
+                            format!("journal source quarantine validation failed: {error}"),
+                        );
+                    }
+                };
+                let excluded_count = store.excluded_count();
                 let recovery = recover_interrupted_remote_turns(&mut store);
                 let events = store.events().to_vec();
+                if excluded_count > 0 {
+                    diagnostics::info(
+                        "startup",
+                        format!(
+                            "effective event replay excludes {excluded_count} source records; original journal preserved"
+                        ),
+                    );
+                }
                 diagnostics::info(
                     "startup",
                     format!("journal replay complete: {} events", events.len()),
