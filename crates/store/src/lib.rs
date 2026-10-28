@@ -642,6 +642,35 @@ mod tests {
     }
 
     #[test]
+    fn strict_open_refuses_missing_or_torn_journal_without_repair() {
+        let root = temp_path("strict-no-repair").with_extension("dir");
+        fs::create_dir_all(&root).expect("isolated test directory");
+        let path = root.join("journal.jsonl");
+        let missing = JsonlEventStore::open_strict(&path).expect_err("missing journal");
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert!(!path.exists(), "strict open must not create a journal");
+
+        {
+            let mut writer = JsonlEventStore::open(&path).expect("create");
+            writer
+                .append(EventKind::DraftChanged, "intact".to_owned())
+                .expect("append");
+        }
+        let mut raw = fs::read(&path).expect("read");
+        raw.extend_from_slice(b"torn");
+        fs::write(&path, &raw).expect("synthetic incomplete write");
+        let error = JsonlEventStore::open_strict(&path).expect_err("reject torn tail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&path).expect("read unchanged"), raw);
+
+        let repaired = JsonlEventStore::open(&path).expect("ordinary startup recovery");
+        assert_eq!(repaired.events().len(), 1);
+        assert_eq!(repaired.events()[0].payload, "intact");
+        drop(repaired);
+        fs::remove_dir_all(root).expect("remove isolated test directory");
+    }
+
+    #[test]
     fn malformed_complete_record_is_not_silently_discarded() {
         let path = temp_path("malformed");
         fs::write(&path, b"{\"v\":2,\"broken\":true}\n").expect("write malformed");
