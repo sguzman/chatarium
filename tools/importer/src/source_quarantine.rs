@@ -143,7 +143,8 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
                 blockers.push("invalid_import_start");
             }
             let archive = format!("imports/flight-recorder/{hash}.json");
-            if payload.pointer("/details/archive").and_then(Value::as_str) != Some(archive.as_str()) {
+            if payload.pointer("/details/archive").and_then(Value::as_str) != Some(archive.as_str())
+            {
                 blockers.push("import_archive_reference_mismatch");
             }
         }
