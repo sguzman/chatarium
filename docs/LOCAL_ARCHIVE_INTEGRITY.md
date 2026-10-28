@@ -207,3 +207,26 @@ Raw `events()`, `events_for_scope()`, `events_of_kind()`, and physical
 turn projections remain evidence APIs. They must not be used directly as
 quarantine-aware user-facing views. Desktop/worker and external reader
 integration still need comprehensive acceptance testing.
+
+
+## Nonblocking archive maintenance and offline restore
+
+The desktop's Local Archive check, create-backup and verify-backup actions run
+on a dedicated background worker. The UI only queues an operation and polls a
+completed status message; it never performs a journal scan, manifest hashing
+or filesystem backup in the egui render callback. Only one maintenance task
+runs at a time, and buttons are disabled while that task is pending.
+
+**Restore cannot run inside an active Chatarium session.** The persistence
+worker owns the canonical archive's exclusive journal lease until the app
+exits. The UI deliberately does not attempt to replace the active archive.
+Instead, first close Chatarium completely, then run this explicit offline CLI:
+
+`chatarium-importer archive-restore <verified-backup-dir> <data-dir>`
+
+This command never supplies a default target, rejects overlapping backup and
+destination paths, verifies the backup manifest and full archive integrity,
+takes the stable restore lease, rechecks copied staged bytes and retains the
+original target as a rollback/safety directory. It fails closed if an active
+journal writer or another restore holds the lease. Close older Chatarium
+versions too: an old binary cannot honor the new parent-sibling lock.
