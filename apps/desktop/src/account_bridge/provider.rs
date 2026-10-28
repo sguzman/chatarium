@@ -267,7 +267,9 @@ impl BrowserBridgeProvider {
             .map_err(map_session_lease_error)?
     }
 
-    pub(super) fn fetch_history_first_page(&self) -> Result<ConversationListObservation, BrowserBridgeError> {
+    pub(super) fn fetch_history_first_page(
+        &self,
+    ) -> Result<ConversationListObservation, BrowserBridgeError> {
         let result = self.call(
             "list_conversations",
             |object| {

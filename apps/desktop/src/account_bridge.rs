@@ -27,12 +27,17 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+// Explicit paths are required because the QA binary includes this file via #[path].
+#[path = "account_bridge/parsing.rs"]
 mod parsing;
+#[path = "account_bridge/provider.rs"]
 mod provider;
+#[path = "account_bridge/server.rs"]
 mod server;
 pub(super) use parsing::*;
 pub(super) use server::*;
 #[cfg(test)]
+#[path = "account_bridge/tests.rs"]
 mod tests;
 
 const DEFAULT_PORT: u16 = 43_117;
@@ -315,4 +320,3 @@ pub struct FreshTabHistoryDiscoveryObservation {
 pub struct BrowserBridgeProvider {
     shared: Arc<Shared>,
 }
-

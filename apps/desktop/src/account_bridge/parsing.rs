@@ -116,7 +116,10 @@ pub(super) fn parse_history_surface_candidate(
     })
 }
 
-pub(super) fn required_http_status(result: &Value, operation: &str) -> Result<u16, BrowserBridgeError> {
+pub(super) fn required_http_status(
+    result: &Value,
+    operation: &str,
+) -> Result<u16, BrowserBridgeError> {
     result
         .get("http_status")
         .and_then(Value::as_u64)
@@ -257,7 +260,9 @@ pub(super) fn parse_extension_proof(
     })
 }
 
-pub(super) fn parse_bridge_transport(result: &Value) -> Result<BridgeTransport, BrowserBridgeError> {
+pub(super) fn parse_bridge_transport(
+    result: &Value,
+) -> Result<BridgeTransport, BrowserBridgeError> {
     match result.get("bridge_transport").and_then(Value::as_str) {
         Some("extension") => Ok(BridgeTransport::Extension),
         Some("extension-cdp") => Ok(BridgeTransport::ExtensionCdp),
@@ -273,7 +278,11 @@ pub(super) fn parse_bridge_transport(result: &Value) -> Result<BridgeTransport, 
     }
 }
 
-pub(super) fn validate_result(id: &str, kind: &str, result: Value) -> Result<Value, BrowserBridgeError> {
+pub(super) fn validate_result(
+    id: &str,
+    kind: &str,
+    result: Value,
+) -> Result<Value, BrowserBridgeError> {
     let object = result.as_object().ok_or_else(|| {
         BrowserBridgeError::Protocol("bridge result must be an object".to_owned())
     })?;
@@ -418,7 +427,9 @@ pub(super) fn result_diagnostic_summary(result: &Value) -> String {
     )
 }
 
-pub(super) fn map_session_lease_error(error: SessionLeaseError<BrowserBridgeError>) -> BrowserBridgeError {
+pub(super) fn map_session_lease_error(
+    error: SessionLeaseError<BrowserBridgeError>,
+) -> BrowserBridgeError {
     match error {
         SessionLeaseError::Provider(error) => error,
         SessionLeaseError::Unauthenticated => BrowserBridgeError::Unauthenticated,

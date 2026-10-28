@@ -119,7 +119,11 @@ pub(super) fn handle_next(stream: &mut TcpStream, shared: &Shared) -> io::Result
     }
 }
 
-pub(super) fn handle_result(stream: &mut TcpStream, shared: &Shared, body: &[u8]) -> io::Result<()> {
+pub(super) fn handle_result(
+    stream: &mut TcpStream,
+    shared: &Shared,
+    body: &[u8],
+) -> io::Result<()> {
     let value: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(_) => return write_response(stream, 400, None),
