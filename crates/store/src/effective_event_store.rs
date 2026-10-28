@@ -130,3 +130,147 @@ fn import_source_hash(payload: &str) -> Option<String> {
         .as_str()
         .map(ToOwned::to_owned)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MemoryEventStore;
+    use serde_json::json;
+
+    fn source() -> String {
+        "a".repeat(64)
+    }
+
+    fn imported(key: &str, details: Value) -> String {
+        json!({
+            "schema": IMPORT_SCHEMA,
+            "source": {
+                "format": SOURCE_FORMAT,
+                "sha256": source(),
+                "event_key": key
+            },
+            "details": details
+        })
+        .to_string()
+    }
+
+    fn with_decision() -> MemoryEventStore {
+        let mut raw = MemoryEventStore::default();
+        raw.append(
+            EventKind::ImportStarted,
+            imported(
+                "import:start",
+                json!({"archive": format!("imports/flight-recorder/{}.json", source())}),
+            ),
+        )
+        .unwrap();
+        raw.append_scoped(
+            Some("remote:synthetic".to_owned()),
+            EventKind::DraftChanged,
+            imported("draft:1", json!({})),
+        )
+        .unwrap();
+        raw.append_scoped(
+            Some("local:authored".to_owned()),
+            EventKind::UserMessageCommitted,
+            "native must remain visible".to_owned(),
+        )
+        .unwrap();
+        raw.append(
+            EventKind::ImportCompleted,
+            imported("import:complete", json!({"semantic_event_count": 1})),
+        )
+        .unwrap();
+        raw.append(
+            EventKind::ImportSourceQuarantineRecorded,
+            json!({
+                "schema": "chatarium-source-quarantine-audit",
+                "version": 1,
+                "record": "source_quarantine_recorded",
+                "source_format": SOURCE_FORMAT,
+                "source_sha256": source(),
+                "preflight_journal_sha256": "b".repeat(64),
+                "matching_event_count": 3,
+                "first_sequence": 1,
+                "last_sequence": 4
+            })
+            .to_string(),
+        )
+        .unwrap();
+        raw
+    }
+
+    #[test]
+    fn validated_native_replay_preserves_raw_history_and_sequence_numbers() {
+        let raw = with_decision();
+        let mut effective = EffectiveEventStore::new(raw).unwrap();
+        assert_eq!(effective.authoritative_events().len(), 5);
+        assert_eq!(effective.excluded_count(), 3);
+        assert_eq!(
+            effective.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![3, 5]
+        );
+        assert_eq!(effective.events()[0].payload, "native must remain visible");
+
+        let appended = effective
+            .append_scoped(
+                Some("local:authored".to_owned()),
+                EventKind::DraftChanged,
+                "next native draft".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(appended, 6);
+        assert_eq!(effective.events().last().unwrap().sequence, 6);
+        assert_eq!(effective.authoritative_events().len(), 6);
+        assert_eq!(effective.authoritative_events()[1].sequence, 2);
+        assert_eq!(effective.excluded_count(), 3);
+    }
+
+    #[test]
+    fn rejects_post_quarantine_scope_or_source_reuse_without_writing() {
+        let mut effective = EffectiveEventStore::new(with_decision()).unwrap();
+        let before = effective.authoritative_events().len();
+        let conflict = effective.append_scoped(
+            Some("remote:synthetic".to_owned()),
+            EventKind::DraftChanged,
+            "native same scope".to_owned(),
+        );
+        assert_eq!(conflict.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+
+        let reimport = effective.append(
+            EventKind::DraftChanged,
+            imported("draft:2", json!({})),
+        );
+        assert_eq!(reimport.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(effective.authoritative_events().len(), before);
+    }
+
+    #[test]
+    fn rejects_untrusted_decision_recording_and_invalid_replay() {
+        let mut effective = EffectiveEventStore::new(with_decision()).unwrap();
+        let error = effective.append(
+            EventKind::ImportSourceQuarantineRecorded,
+            "not an importer decision".to_owned(),
+        );
+        assert_eq!(error.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+
+        let mut invalid = with_decision();
+        invalid
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                "{}".to_owned(),
+            )
+            .unwrap();
+        assert!(EffectiveEventStore::new(invalid).is_err());
+    }
+
+    #[test]
+    fn without_decisions_all_raw_events_remain_visible() {
+        let mut raw = MemoryEventStore::default();
+        raw.append(EventKind::DraftChanged, "native".to_owned()).unwrap();
+        let effective = EffectiveEventStore::new(raw).unwrap();
+        assert_eq!(effective.excluded_count(), 0);
+        assert_eq!(effective.events(), effective.authoritative_events());
+    }
+}
