@@ -74,8 +74,8 @@ pub mod worker_audit;
 pub use turn_projection::AuthoredTurnRow;
 
 use chatarium_core::EventKind;
-use sha2::{Digest, Sha256};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -364,7 +364,9 @@ struct JournalWriterLease {
 }
 
 fn acquire_journal_writer_lock(journal: &Path) -> io::Result<JournalWriterLease> {
-    let directory = journal.parent().filter(|parent| !parent.as_os_str().is_empty())
+    let directory = journal
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     // Always acquire in this order, including archive restore, to avoid
     // deadlocks between a data writer and directory publication.
@@ -390,19 +392,27 @@ pub(crate) fn acquire_archive_restore_lease(directory: &Path) -> io::Result<rusq
     let full_directory = if directory.is_dir() {
         fs::canonicalize(directory)?
     } else {
-        let parent = directory.parent().filter(|parent| !parent.as_os_str().is_empty())
+        let parent = directory
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         let basename = directory.file_name().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "archive directory name is missing")
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "archive directory name is missing",
+            )
         })?;
         fs::canonicalize(parent)?.join(basename)
     };
     let lock_parent = full_directory.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "archive directory has no parent")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "archive directory has no parent",
+        )
     })?;
     let digest = Sha256::digest(full_directory.to_string_lossy().as_bytes());
     acquire_exclusive_sqlite_lease(
-        &lock_parent.join(format!(".chatarium-archive-writer-{digest:x}.sqlite3"))
+        &lock_parent.join(format!(".chatarium-archive-writer-{digest:x}.sqlite3")),
     )
 }
 
@@ -420,7 +430,10 @@ fn acquire_exclusive_sqlite_lease(path: &Path) -> io::Result<rusqlite::Connectio
                     if matches!(
                         sqlite_error.code,
                         rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                    ) => io::ErrorKind::WouldBlock,
+                    ) =>
+                {
+                    io::ErrorKind::WouldBlock
+                }
                 _ => io::ErrorKind::Other,
             };
             io::Error::new(
