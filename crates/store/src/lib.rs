@@ -26,6 +26,7 @@ pub mod controller_result_context_audit;
 pub mod controller_result_inbox;
 pub mod historical_conversation_audit;
 pub mod historical_transcript;
+pub mod import_source_quarantine_audit;
 pub mod local_conversation_chat_container_audit;
 pub mod local_conversation_worker_audit;
 pub mod local_memory_audit;

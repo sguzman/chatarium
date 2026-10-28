@@ -19,6 +19,7 @@ use crate::controller_coordination_context_audit::replay_controller_coordination
 use crate::controller_coordination_suggestion_audit::replay_controller_coordination_suggestion_audit;
 use crate::controller_result_context_audit::replay_controller_worker_result_context_audit;
 use crate::controller_result_inbox::replay_controller_worker_results;
+use crate::import_source_quarantine_audit::replay_import_source_quarantine_audit;
 use crate::local_conversation_chat_container_audit::replay_local_conversation_topologies;
 use crate::local_memory_audit::replay_local_memory_audit;
 use crate::local_memory_context_audit::{
@@ -187,6 +188,7 @@ pub fn check_archive(
         .collect::<Vec<_>>();
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
     replay_local_conversation_topologies(&events).map_err(err)?;
+    replay_import_source_quarantine_audit(&events).map_err(err)?;
     replay_supervision_audit(&events).map_err(err)?;
     replay_tool_provider_audit(&events).map_err(err)?;
     replay_tool_call_audit(&events).map_err(err)?;
