@@ -44,6 +44,24 @@ atomically installs the candidate. Existing backups are never deleted automatica
 The desktop Diagnostics panel provides CHECK ARCHIVE, CREATE BACKUP, VERIFY BACKUP, and RESTORE
 BACKUP. Restore always requires an explicit confirmation and preserves the previous active data.
 
+## Single-writer journal ownership
+
+Every `JsonlEventStore::open` now acquires an exclusive SQLite transaction in
+`journal.jsonl.writer-lock.sqlite3`, alongside its journal. It holds that
+lease until the writer is dropped. Desktop and importer writers share this
+entrypoint, so concurrent journal opens refuse with a lock error rather than
+racing append sequence numbers or tail recovery. Journal reads through
+`inspect_jsonl_journal` remain available and never acquire a writer lease.
+
+SQLite releases the lease automatically after process termination; the lock
+database is non-authoritative runtime coordination state, not a projection
+or source archive. **Do not delete the lock database as an unlock mechanism.**
+Doing so could let two processes hold leases on different inodes.
+
+A source-quarantine apply command is *not* implemented yet. It must acquire
+this writer lease before revalidating source evidence and appending a decision;
+a read-only preflight journal SHA by itself cannot prevent concurrent changes.
+
 ## Source quarantine decision audit (non-operative)
 
 The journal event `import_source_quarantine_recorded` is a versioned, unscoped
