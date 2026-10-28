@@ -10,7 +10,7 @@ use chatarium_core::EventKind;
 use chatarium_store::{EventEnvelope, inspect_jsonl_journal};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -143,7 +143,7 @@ pub fn preflight(data_dir: &Path, source_sha256: &str) -> Result<QuarantinePrefl
                 blockers.push("invalid_import_start");
             }
             let archive = format!("imports/flight-recorder/{hash}.json");
-            if payload.pointer("/details/archive").and_then(Value::as_str) != Some(&archive) {
+            if payload.pointer("/details/archive").and_then(Value::as_str) != Some(archive.as_str()) {
                 blockers.push("import_archive_reference_mismatch");
             }
         }
