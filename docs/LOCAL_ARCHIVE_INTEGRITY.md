@@ -83,9 +83,11 @@ events are distinct from the original evidence view. A decision that cannot
 be verified is an error, not permission to hide source data.
 
 SQLite's `SqliteProjection::events()` continues to return the **full raw**
-materialization. Its separate `effective_events()` read method applies the
-same replay-verified exclusion to that complete, sequence-checked data.
-Neither query deletes or mutates SQLite rows. These are **opt-in APIs**, not
+materialization. Its separate `effective_events_verified(authoritative_events)` method
+first requires byte-equivalent logical rows to the supplied raw journal
+snapshot, then applies the same replay-verified exclusion. This prevents a
+stale SQLite cache from silently omitting a newer quarantine decision and
+exposing its source records. Neither query deletes or mutates SQLite rows. These are **opt-in APIs**, not
 an active desktop-wide cleanup: Q30 still requires consistent integration
 through GUI, worker, recovery and other read surfaces. Do not claim imported
 content is hidden until those integrations and regression tests are verified.
