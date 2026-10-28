@@ -992,5 +992,4 @@ impl ChatariumApp {
             }
         }
     }
-
 }

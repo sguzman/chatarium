@@ -1,7 +1,12 @@
 //! Shared egui drawing, layout and reader scrolling utilities.
 use super::*;
 
-pub(crate) fn local_storage_bytes_cached(ctx: &egui::Context, journal_path: &std::path::Path) -> u64 {
+/// Count persisted Chatarium data files, without following directory symlinks.
+/// Cached for a few seconds so UI frames do not traverse storage repeatedly.
+pub(crate) fn local_storage_bytes_cached(
+    ctx: &egui::Context,
+    journal_path: &std::path::Path,
+) -> u64 {
     let id = egui::Id::new("chatarium-local-data-usage");
     if let Some((last, bytes)) = ctx.data_mut(|data| data.get_temp::<(Instant, u64)>(id)) {
         if last.elapsed() < Duration::from_secs(8) {
