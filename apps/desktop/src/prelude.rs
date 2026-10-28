@@ -31,7 +31,9 @@ pub(crate) use chatarium_core::{
 };
 pub(crate) use chatarium_protocol::conversation_list::ConversationListItem;
 pub(crate) use chatarium_protocol::mcp_schema_draft::draft_required_arguments;
-pub(crate) use chatarium_protocol::mcp_wire::{McpResponse, decode_stdio_response, parse_tools_list_page};
+pub(crate) use chatarium_protocol::mcp_wire::{
+    McpResponse, decode_stdio_response, parse_tools_list_page,
+};
 pub(crate) use chatarium_protocol::tool_envelope::parse_legacy_tool_call;
 pub(crate) use chatarium_store::archive_maintenance::{
     check_archive, create_backup, restore_backup, verify_backup,
@@ -61,7 +63,9 @@ pub(crate) use chatarium_store::control_action_audit::{
     replay_worker_control_action_audit,
 };
 pub(crate) use chatarium_store::control_admission_audit::validate_control_freshness_before;
-pub(crate) use chatarium_store::control_audit::{record_worker_control_admitted, replay_control_audit};
+pub(crate) use chatarium_store::control_audit::{
+    record_worker_control_admitted, replay_control_audit,
+};
 pub(crate) use chatarium_store::control_delivery_audit::{
     record_worker_control_delivered, replay_worker_control_delivery_audit,
 };

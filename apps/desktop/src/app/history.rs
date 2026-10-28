@@ -108,7 +108,9 @@ pub(crate) fn browser_proof_label(proof: &account_bridge::BrowserProof) -> Strin
     )
 }
 
-pub(crate) fn history_discovery_proof_label(proof: &account_bridge::HistoryDiscoveryProof) -> String {
+pub(crate) fn history_discovery_proof_label(
+    proof: &account_bridge::HistoryDiscoveryProof,
+) -> String {
     format!(
         "extension={} · roundtrip={} · tab={} · debugger={} · network={} · auto-reload={} · account-context={} · responses={} · backend-200={} · json-candidates={} · body-read-failures={} · body-too-large={} · invalid-json={} · profile={}",
         proof.extension_version,

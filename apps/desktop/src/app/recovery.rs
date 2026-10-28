@@ -39,7 +39,9 @@ pub(crate) fn projected_working_draft(
     }
 }
 
-pub(crate) fn recover_interrupted_remote_turns(store: &mut impl EventStore) -> Result<usize, String> {
+pub(crate) fn recover_interrupted_remote_turns(
+    store: &mut impl EventStore,
+) -> Result<usize, String> {
     let mut authored_turns = HashSet::new();
     for event in store.events() {
         let Some(decoded) = decode_user_message_commit(event)? else {

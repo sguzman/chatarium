@@ -109,7 +109,9 @@ pub(crate) fn next_available_control_id(events: &[EventEnvelope]) -> Result<Cont
     Ok(ControlId::new(next))
 }
 
-pub(crate) fn next_available_tool_provider_id(events: &[EventEnvelope]) -> Result<ToolProviderId, String> {
+pub(crate) fn next_available_tool_provider_id(
+    events: &[EventEnvelope],
+) -> Result<ToolProviderId, String> {
     let next = replay_tool_provider_audit(events)?
         .into_iter()
         .map(|record| record.provider_id.get())
@@ -131,7 +133,9 @@ pub(crate) fn next_available_tool_call_id(events: &[EventEnvelope]) -> Result<To
     Ok(ToolCallId::new(next))
 }
 
-pub(crate) fn next_available_local_memory_id(events: &[EventEnvelope]) -> Result<LocalMemoryId, String> {
+pub(crate) fn next_available_local_memory_id(
+    events: &[EventEnvelope],
+) -> Result<LocalMemoryId, String> {
     let next = replay_local_memory_audit(events)?
         .into_iter()
         .map(|record| record.memory_id.get())
@@ -142,7 +146,9 @@ pub(crate) fn next_available_local_memory_id(events: &[EventEnvelope]) -> Result
     Ok(LocalMemoryId::new(next))
 }
 
-pub(crate) fn next_available_route_payload_id(events: &[EventEnvelope]) -> Result<RoutePayloadId, String> {
+pub(crate) fn next_available_route_payload_id(
+    events: &[EventEnvelope],
+) -> Result<RoutePayloadId, String> {
     let next = replay_local_route_payload_audit(events)?
         .into_iter()
         .map(|payload| payload.payload_id.get())
@@ -164,7 +170,9 @@ pub(crate) fn next_available_route_id(events: &[EventEnvelope]) -> Result<RouteI
     Ok(RouteId::new(next))
 }
 
-pub(crate) fn next_available_route_endpoint_id(events: &[EventEnvelope]) -> Result<RouteEndpointId, String> {
+pub(crate) fn next_available_route_endpoint_id(
+    events: &[EventEnvelope],
+) -> Result<RouteEndpointId, String> {
     let mut highest = 0_u64;
 
     for record in replay_session_audit(events)? {
@@ -208,7 +216,9 @@ pub(crate) fn controller_worker_result_context_decision_label(
     }
 }
 
-pub(crate) fn coordination_suggestion_action_label(action: CoordinationSuggestionAction) -> &'static str {
+pub(crate) fn coordination_suggestion_action_label(
+    action: CoordinationSuggestionAction,
+) -> &'static str {
     match action {
         CoordinationSuggestionAction::StartOrResume => "START/RESUME",
         CoordinationSuggestionAction::Continue => "CONTINUE",
@@ -226,14 +236,18 @@ pub(crate) fn controller_coordination_result_context_decision_label(
     }
 }
 
-pub(crate) fn local_memory_context_decision_label(decision: LocalMemoryContextDecision) -> &'static str {
+pub(crate) fn local_memory_context_decision_label(
+    decision: LocalMemoryContextDecision,
+) -> &'static str {
     match decision {
         LocalMemoryContextDecision::Admit => "admit",
         LocalMemoryContextDecision::Exclude => "exclude",
     }
 }
 
-pub(crate) fn local_route_context_decision_label(decision: LocalRouteContextDecision) -> &'static str {
+pub(crate) fn local_route_context_decision_label(
+    decision: LocalRouteContextDecision,
+) -> &'static str {
     match decision {
         LocalRouteContextDecision::Admit => "admit",
         LocalRouteContextDecision::Exclude => "exclude",
@@ -354,7 +368,9 @@ pub(crate) fn worker_phase_label(phase: WorkerPhase) -> &'static str {
     }
 }
 
-pub(crate) fn context_transcript(messages: &[DisplayMessage]) -> Vec<context_composer::TranscriptMessage> {
+pub(crate) fn context_transcript(
+    messages: &[DisplayMessage],
+) -> Vec<context_composer::TranscriptMessage> {
     messages
         .iter()
         .filter_map(|message| {

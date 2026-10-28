@@ -373,11 +373,14 @@ pub(crate) fn controller_record_failure(
         .map_err(|_| "desktop persistence worker stopped".to_owned())?
 }
 
-pub(crate) fn controller_reply_channel<T>() -> (Sender<Result<T, String>>, Receiver<Result<T, String>>) {
+pub(crate) fn controller_reply_channel<T>()
+-> (Sender<Result<T, String>>, Receiver<Result<T, String>>) {
     mpsc::channel()
 }
 
-pub(crate) fn mirror_failure_class(error: &account_bridge::BrowserBridgeError) -> MirrorFailureClass {
+pub(crate) fn mirror_failure_class(
+    error: &account_bridge::BrowserBridgeError,
+) -> MirrorFailureClass {
     match error {
         account_bridge::BrowserBridgeError::RateLimited(_) => MirrorFailureClass::RateLimited,
         account_bridge::BrowserBridgeError::Protocol(_)
@@ -725,7 +728,11 @@ pub(crate) fn capability_probe_block_reason(
     None
 }
 
-pub(crate) fn model_retry_available(connected: bool, request_pending: bool, models_empty: bool) -> bool {
+pub(crate) fn model_retry_available(
+    connected: bool,
+    request_pending: bool,
+    models_empty: bool,
+) -> bool {
     connected && !request_pending && models_empty
 }
 

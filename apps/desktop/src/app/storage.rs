@@ -220,7 +220,10 @@ pub(crate) fn load_remote_history_cache(path: &Path) -> Result<Vec<ConversationL
     Ok(catalog.into_values().collect())
 }
 
-pub(crate) fn persist_remote_history_cache(path: &Path, items: &[ConversationListItem]) -> Result<(), String> {
+pub(crate) fn persist_remote_history_cache(
+    path: &Path,
+    items: &[ConversationListItem],
+) -> Result<(), String> {
     let body = serde_json::json!({
         "schema": "chatarium-remote-history-cache",
         "version": 1,

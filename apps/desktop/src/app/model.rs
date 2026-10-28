@@ -17,7 +17,7 @@ pub(crate) enum ControllerControlAction {
 }
 
 impl ControllerControlAction {
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::StartOrResume => "start/resume",
             Self::Continue => "continue",
@@ -980,7 +980,8 @@ pub(crate) struct ChatariumApp {
     pub(crate) local_memory_source_filter: Option<LocalConversationId>,
     pub(crate) show_superseded_local_memory: bool,
     pub(crate) local_memory_label_drafts: BTreeMap<LocalMemoryId, String>,
-    pub(crate) local_memory_one_shot_selections: BTreeMap<LocalConversationId, BTreeSet<LocalMemoryId>>,
+    pub(crate) local_memory_one_shot_selections:
+        BTreeMap<LocalConversationId, BTreeSet<LocalMemoryId>>,
     pub(crate) lifecycle_command_pending: bool,
     pub(crate) supervision_command_pending: bool,
     pub(crate) controller_control_command_pending: bool,
