@@ -21,9 +21,9 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **verified complete** |
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | **verified complete** |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
-| R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **active** |
+| R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | **verified complete** |
 | R21 🧩 | Split coordination workspace model/persistence/topology/UI/tests; durable grants and authority preserved | 5 | R15 | pending |
-| R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | pending |
+| R22 📚 | Split context composition sources/plan/gates/assembly/tests; request evidence unchanged | 5 | R14 | **active** |
 | R23 🛠️ | Split MCP manifest capture, provenance, history and rendering; no admission/approval regression | 5 | R12,R14 | pending |
 | R24 🧠 | Split OpenViking write/read-back/project retrieval/tests; at-most-once and confirmation rules unchanged | 6 | R12,R14 | pending |
 | R30 🔐 | Split parked account bridge runtime, HTTP, parser, tests; no new remote work | 5 | R16 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 48% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 52% (R00 + R01 + R10 + R11 + R12 + R13 + R14 + R15 + R20), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -127,3 +127,9 @@ The large extracted advanced panel was further decomposed into independent modul
 - **R13 verified (+12 percentage points, 36% → 48%):** [commit 88fd0db](https://github.com/sguzman/chatarium/commit/88fd0db3a3afdfc557ceee9172fbbe7e7aa546d3) passed [full Windows and Linux CI 40739603354](https://github.com/sguzman/chatarium/actions/runs/40739603354) and [production/native reader visual QA 40739603363](https://github.com/sguzman/chatarium/actions/runs/40739603363). `eframe::App::update` is ~74 lines. The sidebar, advanced panels, reader, composer, coordination, header and frame lifecycle/navigation have named modules; existing behavior and egui IDs are covered by the verified suites.
 - **R20 active, no credit yet:** Extract `native_conversation_search.rs` into dedicated matching, identity/reader navigation, sidebar/reader caches, incremental typed journal index, and tests. The parent becomes a small reexport/types façade. Preserve ownership boundaries, cached Arc identity and index invalidation; run Windows/Linux CI and native reader search/stress/visual QA before accepting the 4 points.
 - **R16 and other roadmap items remain pending:** No bootstrap or unrelated service modifications in this slice; no new Cargo dependencies.
+
+## Round 5 — Native search verified and context composer extraction
+
+- **R20 verified (+4pp, 48% → 52%)** at [commit 0471403](https://github.com/sguzman/chatarium/commit/0471403064b4ba5f9e64cf1b05eaa06e9967bd5b). [Full CI 40741358660](https://github.com/sguzman/chatarium/actions/runs/40741358660) Windows and Linux **success**, [native visual QA 40741358379](https://github.com/sguzman/chatarium/actions/runs/40741358379) **success**, [optimized native search profiling 40741358199](https://github.com/sguzman/chatarium/actions/runs/40741358199) **success**. The index and cache preserve the Arc projection identity and stale selection/provenance checks; no new user features.
+- **R22 active, not verified:** Context composer is now mechanically divided into provenance/source rules, typed transcript constructors, bounded context plan, explicit capability gates, and isolated tests. Request assembly behavior must pass CI before counting its 5 points.
+- Visual QA's workflow paths now watch the entire desktop source tree, so moved feature modules continue to trigger visual verification.

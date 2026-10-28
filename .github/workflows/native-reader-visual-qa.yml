@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "apps/desktop/src/main.rs"
+      - "apps/desktop/src/**"
       - "apps/desktop/src/app/**"
       - "apps/desktop/src/ui/**"
       - "apps/desktop/src/conversation_keybindings.rs"
