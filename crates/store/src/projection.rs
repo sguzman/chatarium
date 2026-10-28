@@ -243,16 +243,25 @@ impl SqliteProjection {
         collect_projected_rows(rows)
     }
 
-    /// Read only effective events after validating source quarantine decisions.
+    /// Read only effective events after verifying the SQLite cache is identical
+    /// to the supplied authoritative raw journal snapshot.
     ///
-    /// Unlike `events()`, which returns the full forensic SQLite projection,
-    /// this view omits source-owned events under a replay-validated quarantine.
-    /// Surviving events keep their original sequence numbers; no journal or
-    /// SQLite physical rows are deleted or renumbered.
-    pub fn effective_events(&self) -> Result<Vec<EventEnvelope>, ProjectionError> {
-        let raw = self.events()?;
-        let selection =
-            EffectiveJournalView::from_raw(&raw).map_err(ProjectionError::InvalidProjection)?;
+    /// This is intentionally NOT a no-argument cache query: a stale SQLite
+    /// projection might not contain a recently appended quarantine decision,
+    /// and returning its unfiltered rows would leak excluded source content.
+    /// No journal/SQLite physical rows are deleted or renumbered.
+    pub fn effective_events_verified(
+        &self,
+        authoritative_events: &[EventEnvelope],
+    ) -> Result<Vec<EventEnvelope>, ProjectionError> {
+        let projected = self.events()?;
+        if projected != authoritative_events {
+            return Err(ProjectionError::InvalidProjection(
+                "SQLite projection is stale or divergent from authoritative journal".to_owned(),
+            ));
+        }
+        let selection = EffectiveJournalView::from_raw(authoritative_events)
+            .map_err(ProjectionError::InvalidProjection)?;
         Ok(selection
             .visible_events()
             .iter()
@@ -1103,7 +1112,7 @@ mod tests {
         let mut projection = SqliteProjection::open(&path).unwrap();
         projection.rebuild(&original).unwrap();
         assert_eq!(projection.events().unwrap(), original);
-        let effective = projection.effective_events().unwrap();
+        let effective = projection.effective_events_verified(&original).unwrap();
         assert_eq!(
             effective
                 .iter()
@@ -1114,6 +1123,11 @@ mod tests {
         assert_eq!(effective[0].payload, "native original");
         assert_eq!(projection.last_sequence().unwrap(), Some(5));
         assert_eq!(projection.event_count().unwrap(), 5);
+        let mut changed = original.clone();
+        changed[1].payload = "changed but same sequence".to_owned();
+        assert!(projection.effective_events_verified(&changed).is_err());
+        let incomplete = &original[..4];
+        assert!(projection.effective_events_verified(incomplete).is_err());
         drop(projection);
         let _ = fs::remove_file(path);
     }
