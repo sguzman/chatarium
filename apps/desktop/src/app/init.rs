@@ -38,9 +38,15 @@ impl ChatariumApp {
                 }
             };
         let draft = projected_working_draft(&events, conversation_id);
+        // Build the full searchable native corpus on the bootstrap worker,
+        // never in the first egui frame.
+        let native_index = std::sync::Arc::new(
+            native_conversation_search::NativeConversationSearchIndex::build(&events),
+        );
         Ok(crate::startup::LoadedJournal {
             store,
             events,
+            native_index,
             recovery,
             workspace: crate::startup::LoadedWorkspace {
                 catalog,
@@ -66,6 +72,7 @@ impl ChatariumApp {
             Ok(crate::startup::LoadedJournal {
                 store,
                 events,
+                native_index,
                 recovery,
                 workspace,
             }) => {
@@ -242,7 +249,8 @@ impl ChatariumApp {
                     });
 
                 match worker {
-                    Ok(worker) => Self {
+                    Ok(worker) => {
+                        let app = Self {
                         draft,
                         attachment_path_draft: String::new(),
                         staged_attachment: None,
@@ -407,7 +415,22 @@ impl ChatariumApp {
                         ),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
-                    },
+                        };
+                        // The index is built against the worker's exact
+                        // effective snapshot. Prime the UI-owned clone before
+                        // its first render to avoid a full first-frame scan.
+                        if let Err(error) = native_conversation_search::prime_prebuilt_index(
+                            repaint,
+                            &app.events,
+                            native_index,
+                        ) {
+                            diagnostics::error(
+                                "startup",
+                                format!("background search index handoff mismatch: {error}"),
+                            );
+                        }
+                        app
+                    }
                     Err(error) => Self::without_persistence(
                         repaint,
                         journal_path,
