@@ -14,11 +14,11 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 |---|---|---:|---|---|
 | R00 🔍 | Inventory actual source hotspots and module responsibilities at pinned SHA | 6 | — | **verified complete** |
 | R01 🧪 | Audit current CI baseline, test commands and known baseline failures | 4 | R00 | **verified complete** |
-| R10 🧩 | Move main's root test module to `src/tests.rs`; desktop tests pass unchanged | 4 | R01 | **active** |
+| R10 🧩 | Move main's root test module to `src/tests.rs`; desktop tests pass unchanged | 4 | R01 | **verified complete** |
 | R11 🖥️ | Move `eframe::App` implementation into `src/ui/`; build and reader tests pass unchanged | 6 | R01 | **active** |
-| R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **active** |
-| R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | pending |
-| R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | pending |
+| R12 💾 | Move single-writer persistence command loop into `src/worker/`; tests prove journal/order/recovery unchanged | 5 | R01 | **verified complete** |
+| R13 🧱 | Break `update()` into sidebar, advanced controls, coordination, header, composer and reader modules; <150 orchestration lines targeted; preserve widget IDs, focus, scroll and latency | 12 | R11 | **active** |
+| R14 📨 | Break `process_notices()` into feature-owned outcome handlers and a small dispatcher (~100 lines target); preserve order | 5 | R10,R12 | **active** |
 | R15 🧭 | Separate app actions for conversations, routing, tools, memory, workers and coordination; no new coupling | 6 | R13,R14 | pending |
 | R16 🚪 | Reduce `main.rs` to bootstrap/wiring (<200 lines target) without new crates or unnecessary public API | 2 | R13–R15 | pending |
 | R20 🔎 | Split native search matching/index/cache/navigation/tests; existing stress and performance checks pass | 4 | R13 | pending |
@@ -33,7 +33,7 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 | R41 🧹 | Tighten visibility/imports and dependency boundaries; format, build, clippy regressions checked | 3 | R16,R20–R32 | pending |
 | R42 ✅ | Final test/integration/documentation review, no refactor-caused bugs, all changes committed/pushed | 3 | all others | pending |
 
-**Total: 100 points. Current verified baseline: 10% (R00 + R01), not 100% of Chatarium's product development.**
+**Total: 100 points. Current verified baseline: 19% (R00 + R01 + R10 + R12), not 100% of Chatarium's product development.**
 
 ## Execution and validation contract
 
@@ -55,3 +55,11 @@ Each task is all-or-nothing; **only verified-complete work earns its weight**. S
 ### CI observation — relocated header in native QA
 
 Following the first extraction, the long-reader GUI smoke failed with `IndexError`: it searched `main.rs` for the `conversation_header` height, which now resides in `src/ui/`. The QA script was updated to search the UI module tree and require one matching header. The separate synthetic reader smoke reported `Reader QA process ended`, cause still unverified. These failures do **not** justify marking R11/R40 verified before a rerun. Preserve the baseline Linux sandbox ownership failure separately.
+
+## Round 2 — 2026-10-28
+
+- **19% verified (+9pp from prior round's 10%):** R10 (root unit tests) and R12 (single-writer persistence-loop extraction) accepted with [run 40713023585](https://github.com/sguzman/chatarium/actions/runs/40713023585): Windows `rust` complete success including format, check, corpus and workspace tests. Linux workspace compilation passed and the same historical isolated sandbox launcher test failed: 486 passed, one failed, two ignored. No new failure has been observed in that test run.
+- **R11 remains active:** [visual run 40713023575](https://github.com/sguzman/chatarium/actions/runs/40713023575) built production GUI and exercised normal conversation switching/draft recovery, but the synthetic reader process ended unexpectedly. Root cause not yet established; keep full reader acceptance open.
+- **R13 active (not yet verified):** extract native conversation header renderer from the 9,414-line frame method into `ui/header.rs`, preserving the same panel ID, height, execution ordering and action callback behavior.
+- **R14 active (not yet verified):** move the ordered journal notice dispatch into `app/notices.rs` without altering match arms. Further functional decomposition into smaller handlers is still outstanding.
+- **Verification plan:** Latest Windows and Linux CI, native GUI smoke, synthetic reader QA; preserve the pre-existing sandbox failure classification; no refactor extraction earns points until accepted.
