@@ -681,6 +681,113 @@ mod tests {
     }
 
     #[test]
+    fn quarantined_source_archives_survive_backup_and_restore_with_verified_bytes() {
+        let root = temp("quarantine-source");
+        let _ = fs::remove_dir_all(&root);
+        let data_dir = root.join("original");
+        let backup = root.join("backup");
+        let restored = root.join("restored");
+        let archive_dir = data_dir.join(FLIGHT_ARCHIVE_DIR);
+        fs::create_dir_all(&archive_dir).unwrap();
+
+        let source = json!({
+            "format": "chatarium-flight-recorder-export",
+            "version": 3,
+            "events": []
+        })
+        .to_string();
+        let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+        let archive_name = format!("{FLIGHT_ARCHIVE_DIR}/{hash}.json");
+        fs::write(data_dir.join(&archive_name), &source).unwrap();
+        let mut store = JsonlEventStore::open(data_dir.join(JOURNAL_FILE)).unwrap();
+        let imported_payload = |key: &str, details: Value| {
+            json!({
+                "schema": "chatarium-imported-observation",
+                "source": {
+                    "format": "chatarium-flight-recorder-export",
+                    "sha256": hash,
+                    "event_key": key,
+                },
+                "details": details,
+            })
+            .to_string()
+        };
+        store.append(
+            EventKind::ImportStarted,
+            imported_payload("import:start", json!({"archive": archive_name})),
+        ).unwrap();
+        store.append_scoped(
+            Some("remote:source".to_owned()),
+            EventKind::DraftChanged,
+            imported_payload("draft:one", json!({})),
+        ).unwrap();
+        store.append(
+            EventKind::ImportCompleted,
+            imported_payload("import:complete", json!({"semantic_event_count": 1})),
+        ).unwrap();
+        store.append(
+            EventKind::ImportSourceQuarantineRecorded,
+            json!({
+                "schema": "chatarium-source-quarantine-audit",
+                "version": 1,
+                "record": "source_quarantine_recorded",
+                "source_format": "chatarium-flight-recorder-export",
+                "source_sha256": hash,
+                "preflight_journal_sha256": "b".repeat(64),
+                "matching_event_count": 3,
+                "first_sequence": 1,
+                "last_sequence": 3,
+            }).to_string(),
+        ).unwrap();
+        drop(store);
+
+        check_archive(&data_dir).unwrap();
+        let created = create_backup(&data_dir, &backup).unwrap();
+        assert_eq!(created.manifest_files, 2);
+        assert_eq!(
+            fs::read(data_dir.join(&archive_name)).unwrap(),
+            fs::read(backup.join(&archive_name)).unwrap()
+        );
+        restore_backup(&backup, &restored).unwrap();
+        assert_eq!(
+            fs::read(data_dir.join(&archive_name)).unwrap(),
+            fs::read(restored.join(&archive_name)).unwrap()
+        );
+        check_archive(&restored).unwrap();
+
+        // Source evidence tampering is a hard error, not a warning.
+        fs::write(restored.join(&archive_name), b"tampered").unwrap();
+        assert!(check_archive(&restored).is_err());
+        fs::write(backup.join(&archive_name), b"tampered").unwrap();
+        assert!(verify_backup(&backup).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backup_manifest_must_list_every_content_addressed_source_archive() {
+        let root = temp("quarantine-manifest");
+        let _ = fs::remove_dir_all(&root);
+        let original = root.join("original");
+        let backup = root.join("backup");
+        let archive_dir = original.join(FLIGHT_ARCHIVE_DIR);
+        fs::create_dir_all(&archive_dir).unwrap();
+        let source = b"{\"version\":3}";
+        let hash = format!("{:x}", Sha256::digest(source));
+        let archive_name = format!("{FLIGHT_ARCHIVE_DIR}/{hash}.json");
+        fs::write(original.join(&archive_name), source).unwrap();
+        fs::write(original.join(JOURNAL_FILE), []).unwrap();
+        assert_eq!(create_backup(&original, &backup).unwrap().manifest_files, 2);
+        let manifest = backup.join(MANIFEST_FILE);
+        let mut data: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        data["files"].as_array_mut().unwrap().retain(|file| {
+            file["path"].as_str() != Some(archive_name.as_str())
+        });
+        fs::write(&manifest, serde_json::to_vec(&data).unwrap()).unwrap();
+        assert!(verify_backup(&backup).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn backup_and_restore_preserve_local_inference_settings() {
         let root = temp("inference-settings");
         let _ = fs::remove_dir_all(&root);
