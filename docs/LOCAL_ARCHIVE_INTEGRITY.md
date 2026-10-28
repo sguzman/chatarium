@@ -69,13 +69,15 @@ filtering state in user-facing projections; Q30 remains a separate boundary.
 
 ## Single-writer journal ownership
 
-Every `JsonlEventStore::open` acquires **two** exclusive SQLite leases:
+Every `JsonlEventStore::open` for the canonical `journal.jsonl` archive acquires **two** exclusive SQLite leases:
 the existing `journal.jsonl.writer-lock.sqlite3` alongside the journal and a
 stable, hashed `.chatarium-archive-writer-*.sqlite3` sibling in the archive
 directory's parent. Both leases are held until the writer is dropped. Desktop,
 importer and archive restore share the parent lease, so a restore cannot move
 an actively written archive, nor can a new writer enter while a restore
-replaces its directory. The older in-directory lease is retained, and restore
+replaces its directory. Standalone JSONL files with other names continue to use only their
+per-file SQLite lease; they are not valid archive-restore targets.
+The older in-directory lease is retained, and restore
 checks it for an already-running old-version writer before publication.
 **Stop older Chatarium versions before restoring:** older binaries do not
 honor the parent lease, so a later-starting old writer cannot be serialized.
