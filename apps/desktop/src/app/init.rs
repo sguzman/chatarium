@@ -43,8 +43,8 @@ impl ChatariumApp {
         let native_index = std::sync::Arc::new(
             native_conversation_search::NativeConversationSearchIndex::build(&events),
         );
-        let remote_health = RemoteHealthController::from_events(&events, unix_now_ms())
-            .unwrap_or_default();
+        let remote_health =
+            RemoteHealthController::from_events(&events, unix_now_ms()).unwrap_or_default();
         Ok(crate::startup::LoadedJournal {
             store,
             events,
