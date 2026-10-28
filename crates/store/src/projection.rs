@@ -251,8 +251,8 @@ impl SqliteProjection {
     /// SQLite physical rows are deleted or renumbered.
     pub fn effective_events(&self) -> Result<Vec<EventEnvelope>, ProjectionError> {
         let raw = self.events()?;
-        let selection = EffectiveJournalView::from_raw(&raw)
-            .map_err(ProjectionError::InvalidProjection)?;
+        let selection =
+            EffectiveJournalView::from_raw(&raw).map_err(ProjectionError::InvalidProjection)?;
         Ok(selection
             .visible_events()
             .iter()
@@ -1047,40 +1047,57 @@ mod tests {
             .to_string()
         };
         let mut store = MemoryEventStore::default();
-        store.append(
-            EventKind::ImportStarted,
-            imported("import:start", serde_json::json!({
-                "archive": format!("imports/flight-recorder/{hash}.json")
-            })),
-        ).unwrap();
-        store.append_scoped(
-            Some("remote:example".to_owned()),
-            EventKind::DraftChanged,
-            imported("draft:1", serde_json::json!({})),
-        ).unwrap();
-        store.append_scoped(
-            Some("local:native".to_owned()),
-            EventKind::DraftChanged,
-            "native original".to_owned(),
-        ).unwrap();
-        store.append(
-            EventKind::ImportCompleted,
-            imported("import:complete", serde_json::json!({"semantic_event_count": 1})),
-        ).unwrap();
-        store.append(
-            EventKind::ImportSourceQuarantineRecorded,
-            serde_json::json!({
-                "schema": "chatarium-source-quarantine-audit",
-                "version": 1,
-                "record": "source_quarantine_recorded",
-                "source_format": "chatarium-flight-recorder-export",
-                "source_sha256": hash,
-                "preflight_journal_sha256": "b".repeat(64),
-                "matching_event_count": 3,
-                "first_sequence": 1,
-                "last_sequence": 4,
-            }).to_string(),
-        ).unwrap();
+        store
+            .append(
+                EventKind::ImportStarted,
+                imported(
+                    "import:start",
+                    serde_json::json!({
+                        "archive": format!("imports/flight-recorder/{hash}.json")
+                    }),
+                ),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some("remote:example".to_owned()),
+                EventKind::DraftChanged,
+                imported("draft:1", serde_json::json!({})),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some("local:native".to_owned()),
+                EventKind::DraftChanged,
+                "native original".to_owned(),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                imported(
+                    "import:complete",
+                    serde_json::json!({"semantic_event_count": 1}),
+                ),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                serde_json::json!({
+                    "schema": "chatarium-source-quarantine-audit",
+                    "version": 1,
+                    "record": "source_quarantine_recorded",
+                    "source_format": "chatarium-flight-recorder-export",
+                    "source_sha256": hash,
+                    "preflight_journal_sha256": "b".repeat(64),
+                    "matching_event_count": 3,
+                    "first_sequence": 1,
+                    "last_sequence": 4,
+                })
+                .to_string(),
+            )
+            .unwrap();
 
         let original = store.events().to_vec();
         let mut projection = SqliteProjection::open(&path).unwrap();
@@ -1088,7 +1105,10 @@ mod tests {
         assert_eq!(projection.events().unwrap(), original);
         let effective = projection.effective_events().unwrap();
         assert_eq!(
-            effective.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            effective
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
             vec![3, 5]
         );
         assert_eq!(effective[0].payload, "native original");
