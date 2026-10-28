@@ -38,10 +38,19 @@ impl ChatariumApp {
                 }
             };
         let draft = projected_working_draft(&events, conversation_id);
+        // Full native search and health projection are O(journal size).
+        // Prepare them before the owned snapshot crosses the GUI boundary.
+        let native_search_index = Arc::new(
+            native_conversation_search::NativeConversationSearchIndex::build(&events),
+        );
+        let remote_health =
+            RemoteHealthController::from_events(&events, unix_now_ms()).unwrap_or_default();
         Ok(crate::startup::LoadedJournal {
             store,
             events,
             recovery,
+            native_search_index,
+            remote_health,
             workspace: crate::startup::LoadedWorkspace {
                 catalog,
                 conversation_id,
@@ -68,6 +77,8 @@ impl ChatariumApp {
                 events,
                 recovery,
                 workspace,
+                native_search_index,
+                remote_health,
             }) => {
                 let excluded_count = store.excluded_count();
                 if excluded_count > 0 {
@@ -242,7 +253,11 @@ impl ChatariumApp {
                     });
 
                 match worker {
-                    Ok(worker) => Self {
+                    Ok(worker) => {
+                        // O(1) cache handoff: the original Vec is moved into
+                        // the app, retaining its background revision identity.
+                        native_conversation_search::seed_index(repaint, native_search_index);
+                        Self {
                         draft,
                         attachment_path_draft: String::new(),
                         staged_attachment: None,
@@ -274,7 +289,7 @@ impl ChatariumApp {
                         show_archived_local_conversations: false,
                         local_conversation_search_query: String::new(),
                         local_conversation_search_selection: None,
-                        events: events.clone(),
+                        events,
                         historical_catalog,
                         selected_historical_conversation: None,
                         loaded_historical_conversation: None,
@@ -367,8 +382,7 @@ impl ChatariumApp {
                         mirror_controller_notice_rx: None,
                         mirror_controller_worker: None,
                         mirror_controller_state: MirrorControllerState::Stopped,
-                        remote_health: RemoteHealthController::from_events(&events, unix_now_ms())
-                            .unwrap_or_default(),
+                        remote_health,
                         mirror_controller_current_item: None,
                         mirror_controller_detail: None,
                         remote: siwc_bridge::BridgeRuntime::start(repaint),
@@ -407,7 +421,8 @@ impl ChatariumApp {
                         ),
                         commit_remote_intents: BTreeMap::new(),
                         delivery: delivery_telemetry::Timeline::default(),
-                    },
+                        }
+                    }
                     Err(error) => Self::without_persistence(
                         repaint,
                         journal_path,
