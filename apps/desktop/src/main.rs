@@ -18,6 +18,7 @@ pub(crate) use ui_helpers::*;
 #[cfg(test)]
 mod tests;
 mod ui;
+mod startup;
 mod worker;
 use worker::persistence_worker;
 mod attachment_intake;
@@ -101,7 +102,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|creation_context| {
             configure_ui(&creation_context.egui_ctx);
-            Ok(Box::new(ChatariumApp::new(&creation_context.egui_ctx)))
+            Ok(Box::new(startup::BootstrapApp::new()))
         }),
     );
     match &result {
