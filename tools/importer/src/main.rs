@@ -84,7 +84,11 @@ fn run() -> Result<(), String> {
             for blocker in &report.blockers {
                 println!("blocker: {blocker}");
             }
-            Ok(())
+            if report.candidate_isolated() {
+                Ok(())
+            } else {
+                Err("quarantine preflight BLOCKED; no changes made".to_owned())
+            }
         }
         [command, fixture, read_index, data_dir] if command == "read-fixture" => {
             let selected_index = read_index.parse::<usize>().map_err(|_| {
