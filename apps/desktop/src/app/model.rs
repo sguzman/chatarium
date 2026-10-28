@@ -996,6 +996,7 @@ pub(crate) struct ChatariumApp {
     pub(crate) conversation_mcp_enabled: bool,
     pub(crate) archive_backup_path: String,
     pub(crate) archive_maintenance_status: String,
+    pub(crate) archive_maintenance_result: Option<Receiver<String>>,
     pub(crate) archive_restore_confirmation_pending: bool,
     pub(crate) selected_remote_catalog_id: Option<String>,
     pub(crate) remote_conversation_total: Option<u64>,
