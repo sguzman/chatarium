@@ -369,6 +369,35 @@ struct NativeSearchCache {
     index: Arc<NativeConversationSearchIndex>,
 }
 
+/// Seed the egui cache with an index already built on the startup worker.
+///
+/// This avoids constructing the full native search corpus on the first GUI
+/// frame. The worker source and UI-owned event clone must have equivalent
+/// journal revision metadata; differing backing-slice pointers are expected.
+pub fn prime_prebuilt_index(
+    ctx: &egui::Context,
+    events: &[EventEnvelope],
+    index: Arc<NativeConversationSearchIndex>,
+) -> Result<(), String> {
+    let observed = JournalRevision::capture(events);
+    let mut prepared = index.revision.clone();
+    prepared.source_buffer_addr = observed.source_buffer_addr;
+    if prepared != observed {
+        return Err("background native search index does not match the active event snapshot".to_owned());
+    }
+    let id = egui::Id::new("chatarium-native-conversation-search-index");
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            id,
+            NativeSearchCache {
+                observed,
+                index,
+            },
+        )
+    });
+    Ok(())
+}
+
 /// Ephemeral egui-frame projection; metadata and journal remain authoritative.
 /// When only unrelated journal events append, advance the cache cursor without
 /// cloning or rebuilding the potentially large message corpus.
@@ -422,4 +451,29 @@ pub fn cached_index(
         )
     });
     index
+}
+
+#[cfg(test)]
+mod bootstrap_cache_tests {
+    use super::*;
+    use chatarium_store::{EventStore, MemoryEventStore};
+
+    #[test]
+    fn prebuilt_background_index_is_used_without_first_frame_rebuild() {
+        let mut journal = MemoryEventStore::default();
+        journal
+            .append(EventKind::DraftChanged, "native".to_owned())
+            .unwrap();
+        let worker_events = journal.events().to_vec();
+        let prepared = Arc::new(NativeConversationSearchIndex::build(&worker_events));
+        let ui_events = worker_events.clone();
+        let ctx = egui::Context::default();
+        prime_prebuilt_index(&ctx, &ui_events, Arc::clone(&prepared)).unwrap();
+        let displayed = cached_index(&ctx, &ui_events);
+        assert!(Arc::ptr_eq(&displayed, &prepared));
+
+        let mut divergent = ui_events.clone();
+        divergent[0].payload = "changed".to_owned();
+        assert!(prime_prebuilt_index(&ctx, &divergent, prepared).is_err());
+    }
 }
