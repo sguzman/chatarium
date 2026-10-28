@@ -99,3 +99,7 @@ The first nine-handler notice split reached Windows `cargo fmt -- --check` and p
 **R15 active (verification pending):** Extract 36 additional existing `ChatariumApp` methods into conversation, draft/composer, coordination wake, and inference/settings action modules. This complements the existing routing, tools, memory and worker action modules. No functional changes, no new dependencies, no paused remote-history track activation. Keep progress at 30% until this slice is verified.
 
 **R13 ongoing:** The root frame update still contains an enormous sidebar surface. An extraction into `ui/sidebar.rs` is prepared separately and must be independently validated after R15; do not count it as done yet.
+
+### CI parse regression — recovered continuation
+
+The first action-extraction CI [run 40719854721](https://github.com/sguzman/chatarium/actions/runs/40719854721) failed Windows `cargo fmt --check` because a method doc comment was orphaned at the end of `app/actions/composer.rs`. A second orphaned comment existed at the end of `app/actions/coordination.rs`. Both comments were restored to the next methods they document (latest coordination wake status and OpenViking query observation). This is a mechanical correction of extraction boundaries; R15 stays active pending CI/build/test confirmation. No additional percentage points awarded.

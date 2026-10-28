@@ -2,6 +2,8 @@
 use super::super::super::*;
 
 impl ChatariumApp {
+    /// A diagnostic of the latest non-authored wake. Completion means model
+    /// output finished, not that a worker sent a separate coordination reply.
     pub(crate) fn latest_coordination_wake_status(&self) -> Option<String> {
         let conversation = self.local_conversation_id.to_string();
         let latest = self
@@ -436,7 +438,4 @@ impl ChatariumApp {
         }
     }
 
-    /// A topic change immediately removes both owner and project evidence.
-    /// An in-flight owner read is marked stale, and the project cache similarly
-    /// discards its old completion. No network request runs on the GUI thread.
 }

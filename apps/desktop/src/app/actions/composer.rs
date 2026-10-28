@@ -260,6 +260,4 @@ impl ChatariumApp {
         true
     }
 
-    /// A diagnostic of the latest non-authored wake. Completion means model
-    /// output finished, not that a worker sent a separate coordination reply.
 }
