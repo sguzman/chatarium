@@ -35,3 +35,12 @@ The read-fixture path is intentionally strict:
 - importing the same fixture/index again is idempotent.
 
 This command does not promote a read flow to a validated semantic baseline. Compatibility remains governed by the named protocol baseline in `chatarium-protocol`.
+
+
+## Source-attribution audit (read-only)
+
+`source-audit <source-sha256> <data-dir>` identifies journal events carrying recognized importer provenance for the exact source-file SHA-256. It requires a pre-existing, explicitly named data directory and an intact newline-terminated journal. It uses the non-mutating journal inspector, not the importer's repair-capable journal open path.
+
+The report gives counts by importer source and event kind, the total journal event count and the first/last matching event sequence. It does **not** show conversation bodies, event payloads or titles. Recognized sources are Flight Recorder exports, account-export historical snapshots and sanitized read fixtures.
+
+**This is not quarantine.** A source match is not yet proof that an event can safely be excluded: later native events or imported history may depend on it. The command never appends, removes, rewrites, repairs, or rebuilds local data. In particular, it refuses a torn final journal record rather than truncating it. Do not manually delete matching JSONL lines; the journal is immutable evidence, while SQLite and other read-side projections are rebuildable. A safe source-exclusion transaction with durable audit provenance remains separate work tracked by issue #3.
