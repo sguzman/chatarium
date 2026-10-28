@@ -77,10 +77,10 @@ pub struct NativeConversationSearchIndex {
     // Arc values allow a newly streamed assistant snapshot to reuse every
     // other conversation's projected message bodies without cloning them.
     pub(super) messages: BTreeMap<LocalConversationId, Arc<Vec<DisplayMessage>>>,
-    owners: Arc<BTreeMap<String, LocalConversationId>>,
+    pub(super) owners: Arc<BTreeMap<String, LocalConversationId>>,
     // An authored scope claimed by different local conversations is never
     // safe to attribute to either one, including after journal appends.
-    conflicted_scopes: Arc<BTreeSet<String>>,
+    pub(super) conflicted_scopes: Arc<BTreeSet<String>>,
     event_positions: BTreeMap<LocalConversationId, Arc<Vec<usize>>>,
 }
 
@@ -187,7 +187,7 @@ impl NativeConversationSearchIndex {
     /// conversations; all unrelated conversation vectors stay shared.
     /// Malformed/legacy authorship, unknown assistant scopes or remapped
     /// existing turn owners fall back to a full rebuild.
-    fn extend_native_appends(
+    pub(super) fn extend_native_appends(
         &self,
         events: &[EventEnvelope],
         first_new_position: usize,
@@ -423,4 +423,3 @@ pub fn cached_index(
     });
     index
 }
-

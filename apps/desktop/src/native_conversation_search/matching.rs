@@ -59,4 +59,3 @@ pub(super) fn find_match_with_position<'a>(
         .contains(&needle)
         .then_some((NativeSearchMatch::Title, None))
 }
-

@@ -1515,8 +1515,7 @@ fn multiple_matching_messages_have_independent_provenance_and_reader_targets() {
     ] {
         let position = selected_message_index(row, ordinal).unwrap();
         let staged = stageable_hit(&index, source, position).unwrap();
-        let (copied, seq) =
-            copyable_hit_markdown(&index, source, &row.title, position).unwrap();
+        let (copied, seq) = copyable_hit_markdown(&index, source, &row.title, position).unwrap();
         assert_eq!(staged.text, expected);
         assert_eq!(staged.source_event_sequence, seq);
         assert_eq!(staged.source_conversation_id, source);

@@ -11,7 +11,7 @@ pub(super) struct NativeRowsCache {
     // journal index can share all but one owner's message Arc; keeping those
     // identities lets sidebar refresh skip unchanged, potentially huge chats.
     pub(super) row_sources: Vec<Option<Arc<Vec<DisplayMessage>>>>,
-    rows: Arc<Vec<NativeSearchRow>>,
+    pub(super) rows: Arc<Vec<NativeSearchRow>>,
 }
 
 /// Cache exact native reader highlight positions across redraws. The
@@ -241,4 +241,3 @@ pub fn cached_rows(
     });
     rows
 }
-

@@ -16,19 +16,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-
 mod cache;
 mod index;
 mod matching;
 mod navigation;
 
-pub use cache::{cached_reader_hits, cached_rows};
-pub use index::{NativeConversationSearchIndex, cached_index};
-pub use matching::{NativeSearchMatch, find_match, find_match_with_preview};
-pub use navigation::*;
-use matching::find_match_with_position;
 #[cfg(test)]
 use cache::{NativeRowsCache, collect_native_search_row};
+pub use cache::{cached_reader_hits, cached_rows};
+pub use index::{NativeConversationSearchIndex, cached_index};
+use matching::find_match_with_position;
+pub use matching::{NativeSearchMatch, find_match, find_match_with_preview};
+pub use navigation::*;
 
 /// Lightweight native sidebar metadata, cached alongside search results.
 /// In particular, the word/byte scan must not run again on every UI frame
@@ -68,7 +67,6 @@ struct CatalogSearchKey {
     title: Option<String>,
     archived: bool,
 }
-
 
 #[cfg(test)]
 mod perf_tests;

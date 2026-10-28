@@ -258,4 +258,3 @@ pub fn matching_message_preview<'a>(
         .into_iter()
         .find_map(|message| crate::local_archive_search::local_snippet(message, &folded))
 }
-
