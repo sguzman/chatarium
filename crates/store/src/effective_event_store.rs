@@ -118,10 +118,15 @@ impl<S: EventStore> EventStore for EffectiveEventStore<S> {
     }
 }
 
-fn import_source_hash(payload: &str) -> Option<&str> {
-    // JSON borrow through serde_json::Value cannot escape this function, so
-    // use a cheap owned source check in the separate branch below instead.
-    // The public adapter needs only a yes/no check, not the entire payload.
-    let _ = payload;
-    None
+fn import_source_hash(payload: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(payload).ok()?;
+    if value.get("schema")?.as_str()? != IMPORT_SCHEMA
+        || value.pointer("/source/format")?.as_str()? != SOURCE_FORMAT
+    {
+        return None;
+    }
+    value
+        .pointer("/source/sha256")?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
