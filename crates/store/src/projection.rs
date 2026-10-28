@@ -4,6 +4,7 @@
 //! queryable. A projection may be deleted and rebuilt without losing authorship or evidence.
 
 use crate::EventEnvelope;
+use crate::effective_journal_view::EffectiveJournalView;
 use crate::turn_projection::{
     AuthoredTurnRow, assistant_evidence_name, derive_authored_turns, local_evidence_name,
     parse_assistant_evidence, parse_local_evidence, parse_remote_evidence, remote_evidence_name,
@@ -240,6 +241,23 @@ impl SqliteProjection {
         })?;
 
         collect_projected_rows(rows)
+    }
+
+    /// Read only effective events after validating source quarantine decisions.
+    ///
+    /// Unlike `events()`, which returns the full forensic SQLite projection,
+    /// this view omits source-owned events under a replay-validated quarantine.
+    /// Surviving events keep their original sequence numbers; no journal or
+    /// SQLite physical rows are deleted or renumbered.
+    pub fn effective_events(&self) -> Result<Vec<EventEnvelope>, ProjectionError> {
+        let raw = self.events()?;
+        let selection = EffectiveJournalView::from_raw(&raw)
+            .map_err(ProjectionError::InvalidProjection)?;
+        Ok(selection
+            .visible_events()
+            .iter()
+            .map(|event| (*event).clone())
+            .collect())
     }
 
     /// Read projected events for one exact scope in durable sequence order.
