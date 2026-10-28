@@ -221,8 +221,20 @@ pub struct JsonlEventStore {
 }
 
 impl JsonlEventStore {
-    /// Open or create a journal and rebuild its in-memory event projection.
+    /// Open or create a journal, repairing only an unterminated final write.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_internal(path, true)
+    }
+
+    /// Open an existing journal without ever truncating or repairing its bytes.
+    ///
+    /// This is the required entrypoint for evidence-sensitive mutation tools,
+    /// including any future source quarantine decision recorder.
+    pub fn open_strict(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_internal(path, false)
+    }
+
+    fn open_internal(path: impl AsRef<Path>, allow_torn_tail_repair: bool) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path
             .parent()
@@ -237,7 +249,7 @@ impl JsonlEventStore {
         let writer_lock = acquire_journal_writer_lock(&path)?;
 
         let mut recovery_file = OpenOptions::new()
-            .create(true)
+            .create(allow_torn_tail_repair)
             .read(true)
             .write(true)
             .open(&path)?;
@@ -249,6 +261,11 @@ impl JsonlEventStore {
             .rposition(|byte| *byte == b'\n')
             .map_or(0, |index| index + 1);
         if complete_len < bytes.len() {
+            if !allow_torn_tail_repair {
+                return Err(invalid_data(
+                    "strict journal open refuses an unterminated final record",
+                ));
+            }
             recovery_file.set_len(u64::try_from(complete_len).map_err(invalid_data)?)?;
             recovery_file.sync_data()?;
             bytes.truncate(complete_len);
@@ -275,7 +292,10 @@ impl JsonlEventStore {
             events.push(event);
         }
 
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = OpenOptions::new()
+            .create(allow_torn_tail_repair)
+            .append(true)
+            .open(&path)?;
         Ok(Self {
             path,
             file,
