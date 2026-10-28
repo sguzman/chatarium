@@ -23,9 +23,7 @@ pub struct SourceAudit {
 }
 
 pub fn audit_source(data_dir: &Path, source_sha256: &str) -> Result<SourceAudit, String> {
-    if source_sha256.len() != 64
-        || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if source_sha256.len() != 64 || !source_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("source SHA-256 must be exactly 64 hexadecimal characters".to_owned());
     }
     if !data_dir.is_dir() {
