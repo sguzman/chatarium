@@ -645,6 +645,19 @@ pub fn restore_backup(
     let backup = backup.as_ref();
     let target = target.as_ref();
     let verification = verify_backup(backup)?;
+    // Never rename the active data directory out from under a running desktop.
+    // Use the same exclusive OS-backed lease as JsonlEventStore, held through
+    // staged verification and publication. No journal bytes are opened for
+    // append or recovery by the restore path.
+    let _restore_writer_guard = match fs::symlink_metadata(target) {
+        Ok(metadata) if metadata.file_type().is_dir() => Some(
+            crate::acquire_journal_writer_lock(&target.join(JOURNAL_FILE))
+                .map_err(|error| err(format!("restore refuses active journal writer: {error}")))?,
+        ),
+        Ok(_) => return Err(err("restore target must be a real directory, not a file or symlink")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let staging = parent.join(format!(".chatarium-restore-{}", std::process::id()));
