@@ -79,7 +79,13 @@ fn live_stdio_dispatch_worker_contract_keeps_journal_responsive() {
     let completion_tx = command_tx.clone();
     let worker_data_dir = path.parent().expect("journal parent").to_path_buf();
     let worker = thread::spawn(move || {
-        persistence_worker(store, worker_data_dir, command_rx, completion_tx, notice_tx)
+        persistence_worker(
+            chatarium_store::effective_event_store::EffectiveEventStore::new(store).unwrap(),
+            worker_data_dir,
+            command_rx,
+            completion_tx,
+            notice_tx,
+        )
     });
     command_tx
         .send(PersistCommand::ExecuteApprovedStdioTool { call_id: call })

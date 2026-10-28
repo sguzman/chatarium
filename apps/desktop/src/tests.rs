@@ -3760,7 +3760,13 @@ fn persistence_worker_orders_commit_before_remote_dispatch() {
     let worker_data_dir = path.parent().expect("journal parent").to_path_buf();
     let completion_tx = command_tx.clone();
     let worker = thread::spawn(move || {
-        persistence_worker(store, worker_data_dir, command_rx, completion_tx, notice_tx)
+        persistence_worker(
+            chatarium_store::effective_event_store::EffectiveEventStore::new(store).unwrap(),
+            worker_data_dir,
+            command_rx,
+            completion_tx,
+            notice_tx,
+        )
     });
 
     let message = AuthoredUserMessage::new(
@@ -3854,7 +3860,13 @@ fn completed_turn_automatically_queues_recoverable_metadata_only_memory_intent()
     let data_dir = root.clone();
     let completion_tx = command_tx.clone();
     let worker = thread::spawn(move || {
-        persistence_worker(store, data_dir, command_rx, completion_tx, notice_tx)
+        persistence_worker(
+            chatarium_store::effective_event_store::EffectiveEventStore::new(store).unwrap(),
+            data_dir,
+            command_rx,
+            completion_tx,
+            notice_tx,
+        )
     });
     let message = AuthoredUserMessage::new(
         LocalConversationId::new(),

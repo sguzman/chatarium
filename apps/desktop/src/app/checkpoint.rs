@@ -45,7 +45,7 @@ pub(crate) fn checkpoint_completion_eligible(event: &EventEnvelope) -> bool {
 /// item must not permanently lose the checkpoint. Never ingest pre-existing
 /// transcript history on first installation or assign an ambiguous owner.
 pub(crate) fn reconcile_checkpoint_outbox(
-    store: &JsonlEventStore,
+    store: &impl EventStore,
     path: &std::path::Path,
 ) -> Result<usize, String> {
     let mut outbox = openviking_checkpoint_outbox::Outbox::load(path)?;
