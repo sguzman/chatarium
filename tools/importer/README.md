@@ -75,3 +75,15 @@ readers still expose the original evidence; use the attested
 entire application is cleaned, finish the remaining Q30 reader audit and Q40
 end-to-end crash/restart testing. Stop the desktop before recording, because
 the importer and desktop share an exclusive journal-writer lease.
+
+
+## Offline archive restore
+
+After completely closing the desktop and any other journal-owning Chatarium
+process, use `chatarium-importer archive-restore <backup-dir> <data-dir>`.
+Both paths are mandatory. The restore refuses nested/identical backup and
+destination paths; the shared store verifies manifest hashes, source archives,
+journal replay, staged bytes and rollback before publication. The original
+destination is retained as a safety copy on success. This command cannot run
+over a currently active desktop writer. Do not delete lock databases or edit
+authoritative JSONL records to bypass that safety boundary.
