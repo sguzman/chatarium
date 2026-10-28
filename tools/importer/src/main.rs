@@ -1047,6 +1047,22 @@ mod tests {
     }
 
     #[test]
+    fn recorded_source_quarantine_refuses_reimport_without_journal_rewrite() {
+        let dir = temp_dir("quarantined-reimport");
+        let bytes = sample_export();
+        let imported = import_bytes(&bytes, &dir).expect("first import");
+        let decision = source_quarantine_record::record(&dir, &imported.sha256)
+            .expect("record non-operative decision");
+        assert!(!decision.already_recorded);
+        let journal = dir.join("journal.jsonl");
+        let before = fs::read(&journal).expect("source journal bytes");
+        let error = import_bytes(&bytes, &dir).expect_err("quarantined source may not be reimported");
+        assert!(error.contains("source is quarantined"));
+        assert_eq!(fs::read(&journal).unwrap(), before);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn import_is_idempotent_and_preserves_scopes() {
         let dir = temp_dir("idempotent");
         let bytes = sample_export();
