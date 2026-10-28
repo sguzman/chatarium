@@ -383,18 +383,12 @@ pub fn prime_prebuilt_index(
     let mut prepared = index.revision.clone();
     prepared.source_buffer_addr = observed.source_buffer_addr;
     if prepared != observed {
-        return Err("background native search index does not match the active event snapshot".to_owned());
+        return Err(
+            "background native search index does not match the active event snapshot".to_owned(),
+        );
     }
     let id = egui::Id::new("chatarium-native-conversation-search-index");
-    ctx.data_mut(|data| {
-        data.insert_temp(
-            id,
-            NativeSearchCache {
-                observed,
-                index,
-            },
-        )
-    });
+    ctx.data_mut(|data| data.insert_temp(id, NativeSearchCache { observed, index }));
     Ok(())
 }
 
