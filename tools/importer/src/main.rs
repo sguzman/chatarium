@@ -191,9 +191,15 @@ fn import_bytes(bytes: &[u8], data_dir: &Path) -> Result<ImportSummary, String> 
     let journal_path = data_dir.join("journal.jsonl");
     let mut store = JsonlEventStore::open(&journal_path)
         .map_err(|error| format!("open {}: {error}", journal_path.display()))?;
-    let quarantined = chatarium_store::import_source_quarantine_audit::replay_import_source_quarantine_audit(store.events())
+    let quarantined =
+        chatarium_store::import_source_quarantine_audit::replay_import_source_quarantine_audit(
+            store.events(),
+        )
         .map_err(|error| format!("replay quarantine source decisions: {error}"))?;
-    if quarantined.iter().any(|record| record.source_sha256 == sha256) {
+    if quarantined
+        .iter()
+        .any(|record| record.source_sha256 == sha256)
+    {
         return Err("source is quarantined: refusing Flight Recorder re-import".to_owned());
     }
     let mut existing = existing_import_keys(store.events(), &sha256);
@@ -1056,7 +1062,8 @@ mod tests {
         assert!(!decision.already_recorded);
         let journal = dir.join("journal.jsonl");
         let before = fs::read(&journal).expect("source journal bytes");
-        let error = import_bytes(&bytes, &dir).expect_err("quarantined source may not be reimported");
+        let error =
+            import_bytes(&bytes, &dir).expect_err("quarantined source may not be reimported");
         assert!(error.contains("source is quarantined"));
         assert_eq!(fs::read(&journal).unwrap(), before);
         let _ = fs::remove_dir_all(dir);
