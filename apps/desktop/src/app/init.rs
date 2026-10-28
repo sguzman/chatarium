@@ -300,7 +300,8 @@ impl ChatariumApp {
                             remote_catalog_view,
                             local_archive_search_index,
                             archive_search_query: String::new(),
-                            archive_search_mode: local_archive_search::ArchiveSearchMode::AllLocalData,
+                            archive_search_mode:
+                                local_archive_search::ArchiveSearchMode::AllLocalData,
                             archive_state_filter: local_archive_search::ArchiveStateFilter::All,
                             archive_search_selection: None,
                             reader_state_path,
@@ -350,7 +351,8 @@ impl ChatariumApp {
                             continuation_allowance_drafts: BTreeMap::new(),
                             worker_control_command_pending: false,
                             conversation_instructions: active_inference_settings.instructions,
-                            conversation_developer_context: active_inference_settings.developer_context,
+                            conversation_developer_context: active_inference_settings
+                                .developer_context,
                             conversation_mcp_enabled: active_inference_settings.mcp_enabled,
                             archive_backup_path: String::new(),
                             archive_maintenance_status: "archive maintenance idle".to_owned(),
@@ -375,8 +377,11 @@ impl ChatariumApp {
                             mirror_controller_notice_rx: None,
                             mirror_controller_worker: None,
                             mirror_controller_state: MirrorControllerState::Stopped,
-                            remote_health: RemoteHealthController::from_events(&events, unix_now_ms())
-                                .unwrap_or_default(),
+                            remote_health: RemoteHealthController::from_events(
+                                &events,
+                                unix_now_ms(),
+                            )
+                            .unwrap_or_default(),
                             mirror_controller_current_item: None,
                             mirror_controller_detail: None,
                             remote: siwc_bridge::BridgeRuntime::start(repaint),
@@ -411,8 +416,8 @@ impl ChatariumApp {
                             openviking_retrieval_stale: HashSet::new(),
                             openviking_query_tracker:
                                 openviking_project_cache::QueryRefreshTracker::default(),
-                            openviking_project_cache: openviking_project_cache::RetrievalCache::default(
-                            ),
+                            openviking_project_cache:
+                                openviking_project_cache::RetrievalCache::default(),
                             commit_remote_intents: BTreeMap::new(),
                             delivery: delivery_telemetry::Timeline::default(),
                         };
