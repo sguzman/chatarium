@@ -54,7 +54,7 @@ It verifies the exact content-addressed source-file SHA-256 against the existing
 
 A report of **CANDIDATE** is **not authorization to quarantine**. It does not prove that cross-scope references, later tool/routing records, or application projections are safe to exclude; no mutation or projection rebuilding is implemented by this command. No authoritative journal data or SQL cache changes are made, and torn/corrupt journals fail closed. Any future apply operation must re-run these checks against the exact unchanged journal and implement a durable, dependency-aware event-sourced exclusion rather than deleting matching JSONL records or merely editing SQLite.
 
-## Explicit durable decision recording (non-operative)
+## Explicit durable decision recording and validated effective replay
 
 `quarantine-record <source-sha256> <data-dir>` appends **only** a validated,
 unscoped quarantine decision event for an already archived Flight Recorder
@@ -65,9 +65,13 @@ scope checks while owning the writer lease; it predicts and validates ledger
 replay **before** appending a single synced decision event. Repeated recording
 is idempotent, and later Flight Recorder re-import of the same source is refused.
 
-**This is not an active quarantine.** The original imported events, source
-archive and event sequences remain fully readable and unchanged. Current
-desktop, worker, SQLite and historical projections are **not filtered** by
-this decision yet. Command output makes that limitation explicit. Until
-those consumers share an authoritative effective-event view, use the
-command only to record the durable decision, not as a cleanup action.
+**Recording does not delete data or immediately refresh an existing process.**
+The original imported events, source archive and event sequences remain
+fully readable and unchanged. On the next desktop/worker startup, a validated
+`EffectiveEventStore` excludes source-owned events from its active replay and
+blocks that source from being reintroduced. Direct physical JSONL and SQLite
+readers still expose the original evidence; use the attested
+`SqliteEffectiveReadView` for effective SQLite queries. Before claiming the
+entire application is cleaned, finish the remaining Q30 reader audit and Q40
+end-to-end crash/restart testing. Stop the desktop before recording, because
+the importer and desktop share an exclusive journal-writer lease.

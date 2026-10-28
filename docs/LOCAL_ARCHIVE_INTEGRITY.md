@@ -78,15 +78,13 @@ same exclusive lease but refuses a missing journal or torn tail **without
 repairing, truncating, or creating the journal**. Evidence-sensitive mutation
 commands must use this mode and revalidate their source while owning the lease.
 
-The importer exposes `quarantine-record` for explicit, durable,
-**non-operative** source quarantine decisions. It opens the journal strictly,
-then re-runs the source preflight and replay admission while holding the
-exclusive lease. Repeated recording is idempotent; source re-import is refused.
-
-An active source-quarantine apply operation is *not* implemented yet.
-No desktop, worker, or SQLite projection currently excludes the recorded
-source's events. A read-only preflight journal SHA by itself cannot prevent
-concurrent changes; use the strict writer lease for any future operation.
+The importer exposes `quarantine-record` for explicit durable decisions.
+It opens the journal strictly and re-runs source preflight and replay admission
+under the exclusive writer lease. Recording is idempotent, and re-import of the
+same source is refused. A read-only preflight SHA alone is never a writer lock.
+After restart, desktop/worker effective views honor the decision, while the
+authoritative journal and physical SQLite cache continue to retain all events.
+A full Q30 reader audit and Q40 recovery acceptance remain outstanding.
 
 ## Replay-verified effective event selection (opt-in)
 
@@ -102,10 +100,9 @@ materialization. Its separate `effective_events_verified(authoritative_events)` 
 first requires byte-equivalent logical rows to the supplied raw journal
 snapshot, then applies the same replay-verified exclusion. This prevents a
 stale SQLite cache from silently omitting a newer quarantine decision and
-exposing its source records. Neither query deletes or mutates SQLite rows. These are **opt-in APIs**, not
-an active desktop-wide cleanup: Q30 still requires consistent integration
-through GUI, worker, recovery and other read surfaces. Do not claim imported
-content is hidden until those integrations and regression tests are verified.
+exposing its source records. Neither query deletes or mutates SQLite rows. These SQLite APIs are **opt-in**; desktop and worker effective replay are
+integrated, but other direct raw readers and final recovery testing still
+require audit. Do not equate a raw SQLite query with an effective view.
 
 ## Active desktop/worker effective replay
 
@@ -131,7 +128,7 @@ remain physical evidence APIs, not effective views.** Q30 remains incomplete
 until all user-facing readers have validated effective access; do not treat
 raw-query APIs as cleaned data.
 
-## Source quarantine decision audit (non-operative)
+## Source quarantine decision audit and effective replay
 
 The journal event `import_source_quarantine_recorded` is a versioned, unscoped
 provenance fact for a specific Flight Recorder source SHA-256 and preflight
@@ -140,11 +137,13 @@ span and import framing. It rejects duplicate decisions, forged counts,
 shared imported/native scopes and subsequent source re-import or scope reuse.
 The source journal events remain in place, with their original sequences.
 
-This **does not yet implement quarantine**. No import command can record
-such a decision, and ordinary GUI/worker/SQLite projections do not yet filter
-on it. The apply path still needs an exclusive writer boundary, fresh source
-verification, and consistent source-exclusion projections. Treating an
-unapplied audit fact as proof that imported content disappeared is prohibited.
+The importer records this decision under a strict exclusive writer lease after
+fresh source verification. Validated desktop/worker event replay excludes the
+source on restart; no original record is deleted or renumbered. Physical journal
+and SQLite evidence APIs remain intentionally unfiltered, and stale SQLite
+effective reads fail closed. Q30 still requires complete read-surface and
+nonblocking-startup review; Q40 requires end-to-end crash/restart verification.
+An audit fact alone is not proof that every external consumer has refreshed.
 
 For disaster recovery, stop the desktop, run `archive-verify` against a local backup, restore it
 to the configured data directory only after verification succeeds, then run `archive-check` and
