@@ -416,6 +416,19 @@ pub(crate) fn acquire_archive_restore_lease(directory: &Path) -> io::Result<rusq
     )
 }
 
+/// Best-effort compatibility check for a writer running an older build
+/// that knows only the in-directory SQLite lease. We must release this probe
+/// before renaming the directory on Windows; callers must stop older builds
+/// before restoring because they cannot honor the new stable parent lock.
+pub(crate) fn reject_active_legacy_journal_writer(directory: &Path) -> io::Result<()> {
+    let legacy = directory.join("journal.jsonl.writer-lock.sqlite3");
+    if legacy.exists() {
+        let probe = acquire_exclusive_sqlite_lease(&legacy)?;
+        drop(probe);
+    }
+    Ok(())
+}
+
 fn acquire_exclusive_sqlite_lease(path: &Path) -> io::Result<rusqlite::Connection> {
     let connection = rusqlite::Connection::open(path)
         .map_err(|error| io::Error::other(format!("open journal writer lock: {error}")))?;
