@@ -38,6 +38,7 @@ pub fn replay_import_source_quarantine_audit(
 ) -> Result<Vec<ImportSourceQuarantineRecord>, String> {
     let mut decisions = Vec::new();
     let mut decided_sources = BTreeSet::new();
+    let mut protected_scopes = BTreeMap::<String, u64>::new();
 
     for (position, event) in events.iter().enumerate() {
         if event.kind != EventKind::ImportSourceQuarantineRecorded {
@@ -133,6 +134,15 @@ pub fn replay_import_source_quarantine_audit(
             return Err("source quarantine archive provenance mismatch".to_owned());
         }
 
+        for scope in scopes {
+            if protected_scopes
+                .insert(scope.to_owned(), event.sequence)
+                .is_some()
+            {
+                return Err("quarantine sources share an event scope".to_owned());
+            }
+        }
+
         decisions.push(ImportSourceQuarantineRecord {
             source_sha256,
             preflight_journal_sha256,
@@ -156,6 +166,13 @@ pub fn replay_import_source_quarantine_audit(
             {
                 return Err("source re-imported after quarantine decision".to_owned());
             }
+        }
+        if event.scope.as_deref().is_some_and(|scope| {
+            protected_scopes
+                .get(scope)
+                .is_some_and(|decision_sequence| event.sequence > *decision_sequence)
+        }) {
+            return Err("quarantined source scope reused after decision".to_owned());
         }
     }
 
