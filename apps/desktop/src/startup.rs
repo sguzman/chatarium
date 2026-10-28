@@ -12,9 +12,25 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
-use crate::{ChatariumApp, default_journal_path};
+use crate::{ChatariumApp, EventEnvelope, LocalConversationId, default_journal_path};
+use crate::local_conversations::LocalConversationCatalog;
 
-type JournalLoad = Result<EffectiveEventStore<JsonlEventStore>, String>;
+/// Completed off-thread snapshot; UI receives already reconciled native state.
+pub(crate) struct LoadedJournal {
+    pub(crate) store: EffectiveEventStore<JsonlEventStore>,
+    pub(crate) events: Vec<EventEnvelope>,
+    pub(crate) recovery: Result<usize, String>,
+    pub(crate) workspace: LoadedWorkspace,
+}
+
+pub(crate) struct LoadedWorkspace {
+    pub(crate) catalog: LocalConversationCatalog,
+    pub(crate) conversation_id: LocalConversationId,
+    pub(crate) status: String,
+    pub(crate) draft: String,
+}
+
+type JournalLoad = Result<LoadedJournal, String>;
 
 pub(crate) struct BootstrapApp {
     journal_path: PathBuf,
@@ -135,18 +151,19 @@ mod tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("loader result")
             .expect("validated journal");
-        assert_eq!(loaded.events()[0].payload, "native event");
-        assert_eq!(loaded.authoritative_events(), loaded.events());
+        assert_eq!(loaded.events[0].payload, "native event");
+        assert_eq!(loaded.store.events(), loaded.events);
+        assert_eq!(loaded.store.authoritative_events(), loaded.store.events());
         // The background loader's lease is handed to the consumer, without a
         // concurrent re-open, so a second writer cannot enter until drop.
         assert_eq!(
             JsonlEventStore::open(&path).unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
-        loaded
+        loaded.store
             .append(EventKind::DraftChanged, "second".to_owned())
             .unwrap();
-        assert_eq!(loaded.events().last().unwrap().sequence, 2);
+        assert_eq!(loaded.store.events().last().unwrap().sequence, 2);
         drop(loaded);
         let reopened = JsonlEventStore::open(&path).unwrap();
         assert_eq!(reopened.events().len(), 2);
