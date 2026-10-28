@@ -18,18 +18,19 @@ impl ChatariumApp {
                 // handing events to any GUI/worker replay. The authoritative
                 // store remains append-only; its effective adapter hides only
                 // source evidence covered by a verified durable decision.
-                let mut store = match chatarium_store::effective_event_store::EffectiveEventStore::new(store) {
-                    Ok(store) => store,
-                    Err(error) => {
-                        return Self::without_persistence(
-                            repaint,
-                            journal_path,
-                            String::new(),
-                            Vec::new(),
-                            format!("journal source quarantine validation failed: {error}"),
-                        );
-                    }
-                };
+                let mut store =
+                    match chatarium_store::effective_event_store::EffectiveEventStore::new(store) {
+                        Ok(store) => store,
+                        Err(error) => {
+                            return Self::without_persistence(
+                                repaint,
+                                journal_path,
+                                String::new(),
+                                Vec::new(),
+                                format!("journal source quarantine validation failed: {error}"),
+                            );
+                        }
+                    };
                 let excluded_count = store.excluded_count();
                 let recovery = recover_interrupted_remote_turns(&mut store);
                 let events = store.events().to_vec();
