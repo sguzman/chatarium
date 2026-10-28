@@ -1,6 +1,6 @@
 //! Desktop application event-handling and user-action modules.
 mod actions;
-mod archive_maintenance_async;
+pub(crate) mod archive_maintenance_async;
 pub(crate) mod bootstrap;
 pub(crate) mod checkpoint;
 pub(crate) mod controller;
