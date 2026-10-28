@@ -262,6 +262,7 @@ impl TurnEvidence {
             | EventKind::ReconciliationObserved
             | EventKind::ImportStarted
             | EventKind::ImportCompleted
+            | EventKind::ImportSourceQuarantineRecorded
             | EventKind::HistoricalConversationSnapshotImported
             | EventKind::RouteProposed
             | EventKind::RoutePayloadAttached
@@ -380,6 +381,8 @@ pub enum EventKind {
     ImportStarted,
     /// Import of an external/local capture completed.
     ImportCompleted,
+    /// A source-specific quarantine decision was durably recorded; original evidence remains intact.
+    ImportSourceQuarantineRecorded,
     /// One historical conversation snapshot from an account export was imported locally.
     HistoricalConversationSnapshotImported,
     /// A supervisory route was durably proposed.
@@ -534,6 +537,7 @@ impl EventKind {
             Self::ReconciliationObserved => "reconciliation_observed",
             Self::ImportStarted => "import_started",
             Self::ImportCompleted => "import_completed",
+            Self::ImportSourceQuarantineRecorded => "import_source_quarantine_recorded",
             Self::HistoricalConversationSnapshotImported => {
                 "historical_conversation_snapshot_imported"
             }
@@ -641,6 +645,7 @@ impl EventKind {
             "reconciliation_observed" => Some(Self::ReconciliationObserved),
             "import_started" => Some(Self::ImportStarted),
             "import_completed" => Some(Self::ImportCompleted),
+            "import_source_quarantine_recorded" => Some(Self::ImportSourceQuarantineRecorded),
             "historical_conversation_snapshot_imported" => {
                 Some(Self::HistoricalConversationSnapshotImported)
             }
@@ -920,6 +925,7 @@ mod tests {
             EventKind::ReconciliationObserved,
             EventKind::ImportStarted,
             EventKind::ImportCompleted,
+            EventKind::ImportSourceQuarantineRecorded,
             EventKind::RemoteMirrorSelectionChanged,
         ];
 
