@@ -86,6 +86,39 @@ pub struct SqliteProjection {
     connection: Connection,
 }
 
+/// An attested, immutable effective read boundary over a SQLite physical cache.
+///
+/// Unlike raw `SqliteProjection` queries, this type exposes only events
+/// selected from a complete, matching authoritative journal snapshot. It owns
+/// the selected rows so a later SQLite mutation cannot change the snapshot.
+#[derive(Debug, Clone)]
+pub struct SqliteEffectiveReadView {
+    events: Vec<EventEnvelope>,
+}
+
+impl SqliteEffectiveReadView {
+    /// Effective events in original journal sequence order.
+    pub fn events(&self) -> &[EventEnvelope] {
+        &self.events
+    }
+
+    /// Effective events for one exact scope; excluded sources never appear.
+    pub fn events_for_scope(&self, scope: &str) -> Vec<&EventEnvelope> {
+        self.events
+            .iter()
+            .filter(|event| event.scope.as_deref() == Some(scope))
+            .collect()
+    }
+
+    /// Effective events of one semantic kind, without querying physical rows.
+    pub fn events_of_kind(&self, kind: EventKind) -> Vec<&EventEnvelope> {
+        self.events
+            .iter()
+            .filter(|event| event.kind == kind)
+            .collect()
+    }
+}
+
 impl SqliteProjection {
     /// Open or create a projection database and migrate it to the current schema.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ProjectionError> {
@@ -269,7 +302,21 @@ impl SqliteProjection {
             .collect())
     }
 
-    /// Read projected events for one exact scope in durable sequence order.
+    /// Create a read surface that cannot accidentally query unfiltered rows.
+    ///
+    /// The underlying physical SQLite cache must first match the *entire*
+    /// authoritative raw journal. This includes durable quarantine decisions.
+    /// Callers must not cache this view past an authoritative journal change.
+    pub fn effective_read_view_verified(
+        &self,
+        authoritative_events: &[EventEnvelope],
+    ) -> Result<SqliteEffectiveReadView, ProjectionError> {
+        Ok(SqliteEffectiveReadView {
+            events: self.effective_events_verified(authoritative_events)?,
+        })
+    }
+
+    /// Read physical (unfiltered) events for one scope. Evidence API only.
     pub fn events_for_scope(&self, scope: &str) -> Result<Vec<EventEnvelope>, ProjectionError> {
         self.query_events(
             "SELECT sequence, at_unix_ms, scope, kind, payload
@@ -1121,11 +1168,23 @@ mod tests {
             vec![3, 5]
         );
         assert_eq!(effective[0].payload, "native original");
+        let view = projection.effective_read_view_verified(&original).unwrap();
+        assert_eq!(
+            view.events().iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![3, 5]
+        );
+        assert_eq!(view.events_for_scope("local:native").len(), 1);
+        assert!(view.events_for_scope("remote:example").is_empty());
+        assert_eq!(view.events_of_kind(EventKind::DraftChanged).len(), 1);
+        assert_eq!(view.events_for_scope("local:native")[0].sequence, 3);
+        // Physical evidence remains inspectable through explicitly raw APIs.
+        assert_eq!(projection.events_for_scope("remote:example").unwrap().len(), 1);
         assert_eq!(projection.last_sequence().unwrap(), Some(5));
         assert_eq!(projection.event_count().unwrap(), 5);
         let mut changed = original.clone();
         changed[1].payload = "changed but same sequence".to_owned();
         assert!(projection.effective_events_verified(&changed).is_err());
+        assert!(projection.effective_read_view_verified(&changed).is_err());
         let incomplete = &original[..4];
         assert!(projection.effective_events_verified(incomplete).is_err());
         drop(projection);
