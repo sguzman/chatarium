@@ -3,6 +3,7 @@
 mod openai_export;
 mod read_fixture;
 mod source_audit;
+mod source_quarantine;
 
 use chatarium_core::EventKind;
 use chatarium_store::{EventStore, JsonlEventStore};
@@ -63,6 +64,32 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
+        [command, source_hash, data_dir] if command == "quarantine-preflight" => {
+            let report = source_quarantine::preflight(Path::new(data_dir), source_hash)?;
+            println!("mode: PREVIEW ONLY (no changes or authorization to apply)");
+            println!("source sha256: {}", report.source_sha256);
+            println!("journal sha256: {}", report.journal_sha256);
+            println!("journal events: {}", report.journal_events);
+            println!("matching source events: {}", report.matching_events);
+            println!("matching scopes: {}", report.matching_scope_count);
+            println!("verified source bytes: {}", report.source_bytes);
+            println!(
+                "source isolation: {}",
+                if report.candidate_isolated() {
+                    "CANDIDATE (downstream semantic review still required)"
+                } else {
+                    "BLOCKED"
+                }
+            );
+            for blocker in &report.blockers {
+                println!("blocker: {blocker}");
+            }
+            if report.candidate_isolated() {
+                Ok(())
+            } else {
+                Err("quarantine preflight BLOCKED; no changes made".to_owned())
+            }
+        }
         [command, fixture, read_index, data_dir] if command == "read-fixture" => {
             let selected_index = read_index.parse::<usize>().map_err(|_| {
                 format!("read-fixture index must be a non-negative integer, got {read_index:?}")
@@ -93,7 +120,7 @@ fn run() -> Result<(), String> {
         ),
         _ => {
             eprintln!(
-                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>"
+                "Usage:\n  chatarium-importer openai-export <conversations.json> <data-dir>\n  chatarium-importer flight-recorder <export.json> <data-dir>\n  chatarium-importer read-fixture <sanitized-fixture.json> <read-index> <data-dir>\n  chatarium-importer source-audit <source-sha256> <data-dir>\n  chatarium-importer quarantine-preflight <source-sha256> <data-dir>"
             );
             Err("invalid arguments".to_owned())
         }
