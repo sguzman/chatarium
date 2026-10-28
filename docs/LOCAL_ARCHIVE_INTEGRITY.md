@@ -92,6 +92,30 @@ an active desktop-wide cleanup: Q30 still requires consistent integration
 through GUI, worker, recovery and other read surfaces. Do not claim imported
 content is hidden until those integrations and regression tests are verified.
 
+## Active desktop/worker effective replay
+
+The desktop now wraps the authoritative JSONL writer with a validated
+`EffectiveEventStore` on startup. It validates the entire raw journal and
+quarantine audit before recovery, catalog replay or background worker startup.
+Its `EventStore::events()` is a borrowed read-side snapshot of the effective
+history, preserving original sequence numbers and keeping native and other
+source records. Appended native events are still written only through the
+underlying authoritative journal. The wrapper refuses changes to any
+quarantined source scope and refuses a quarantined source provenance payload,
+and it reserves quarantine decisions for the importer command.
+
+If validation fails, startup does not hand an unfiltered journal to the
+desktop or persistence worker. All writes still use the same exclusive
+single-writer lease.
+
+The `authoritative_events()` API remains available only for integrity and
+physical projection operations. The SQLite `effective_events_verified`
+method is separate and requires matching the complete authoritative journal.
+**The current raw SQLite query methods and any external direct consumers
+remain physical evidence APIs, not effective views.** Q30 remains incomplete
+until all user-facing readers have validated effective access; do not treat
+raw-query APIs as cleaned data.
+
 ## Source quarantine decision audit (non-operative)
 
 The journal event `import_source_quarantine_recorded` is a versioned, unscoped
