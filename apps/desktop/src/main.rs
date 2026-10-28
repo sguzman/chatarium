@@ -15,6 +15,7 @@ mod journal_ops;
 mod ui_helpers;
 pub(crate) use journal_ops::*;
 pub(crate) use ui_helpers::*;
+mod startup;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -101,7 +102,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|creation_context| {
             configure_ui(&creation_context.egui_ctx);
-            Ok(Box::new(ChatariumApp::new(&creation_context.egui_ctx)))
+            Ok(Box::new(startup::BootstrapApp::new()))
         }),
     );
     match &result {
