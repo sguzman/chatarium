@@ -2,35 +2,38 @@
 use super::super::*;
 
 impl ChatariumApp {
-    pub(crate) fn new(repaint: &egui::Context) -> Self {
-        let journal_path = default_journal_path();
+    /// Background startup phase: acquire journal ownership and validate the
+    /// complete raw archive without blocking the GUI render/event thread.
+    pub(crate) fn load_journal_for_bootstrap(
+        journal_path: &std::path::Path,
+    ) -> Result<chatarium_store::effective_event_store::EffectiveEventStore<JsonlEventStore>, String>
+    {
         diagnostics::info(
             "startup",
             format!("opening durable journal at {}", journal_path.display()),
         );
+        let store = JsonlEventStore::open(journal_path)
+            .map_err(|error| format!("failed to open journal: {error}"))?;
+        chatarium_store::effective_event_store::EffectiveEventStore::new(store)
+            .map_err(|error| format!("journal source quarantine validation failed: {error}"))
+    }
+
+    /// UI-thread phase: consume the loaded, validated journal and construct
+    /// the desktop. Never reopen the journal after the background handoff.
+    pub(crate) fn from_loaded_journal(
+        repaint: &egui::Context,
+        journal_path: PathBuf,
+        loaded: Result<
+            chatarium_store::effective_event_store::EffectiveEventStore<JsonlEventStore>,
+            String,
+        >,
+    ) -> Self {
         let data_dir = journal_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .to_path_buf();
-        match JsonlEventStore::open(&journal_path) {
-            Ok(store) => {
-                // Validate the complete raw journal before running recovery or
-                // handing events to any GUI/worker replay. The authoritative
-                // store remains append-only; its effective adapter hides only
-                // source evidence covered by a verified durable decision.
-                let mut store =
-                    match chatarium_store::effective_event_store::EffectiveEventStore::new(store) {
-                        Ok(store) => store,
-                        Err(error) => {
-                            return Self::without_persistence(
-                                repaint,
-                                journal_path,
-                                String::new(),
-                                Vec::new(),
-                                format!("journal source quarantine validation failed: {error}"),
-                            );
-                        }
-                    };
+        match loaded {
+            Ok(mut store) => {
                 let excluded_count = store.excluded_count();
                 let recovery = recover_interrupted_remote_turns(&mut store);
                 let events = store.events().to_vec();
@@ -406,7 +409,7 @@ impl ChatariumApp {
                 journal_path,
                 String::new(),
                 Vec::new(),
-                format!("failed to open journal: {error}"),
+                format!("journal startup unavailable: {error}"),
             ),
         }
     }
