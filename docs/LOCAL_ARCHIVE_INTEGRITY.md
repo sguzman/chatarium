@@ -44,6 +44,21 @@ atomically installs the candidate. Existing backups are never deleted automatica
 The desktop Diagnostics panel provides CHECK ARCHIVE, CREATE BACKUP, VERIFY BACKUP, and RESTORE
 BACKUP. Restore always requires an explicit confirmation and preserves the previous active data.
 
+## Backup and restore of source-quarantine evidence
+
+Content-addressed archives under `imports/flight-recorder/<sha256>.json`
+are now included in the SHA-256-verified local backup manifest and restored
+alongside the authoritative journal. Source filename, path structure, regular
+file type, and SHA-256 byte integrity are verified. Unknown import-directory
+entries, symlinks and unlisted source archives fail backup verification;
+restore only copies manifest-approved paths.
+
+Archive integrity also verifies that every recorded Flight Recorder
+quarantine decision still has its original, SHA-256-matching source archive.
+An absent or tampered source is a hard error, not a recoverable warning.
+A backup preserves the raw source evidence and journal, **not** an active
+filtering state in user-facing projections; Q30 remains a separate boundary.
+
 ## Single-writer journal ownership
 
 Every `JsonlEventStore::open` now acquires an exclusive SQLite transaction in

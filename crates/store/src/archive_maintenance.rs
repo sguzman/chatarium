@@ -71,6 +71,7 @@ const LOCAL_CONVERSATION_CATALOG_FILE: &str = "local-conversations.json";
 const CAPABILITY_PROBE_REPORT_FILE: &str = "siwc-capability-probes.json";
 const LOCAL_INFERENCE_CONTRACT_FILE: &str = "local-inference-contract.json";
 const JOURNAL_FILE: &str = "journal.jsonl";
+const FLIGHT_ARCHIVE_DIR: &str = "imports/flight-recorder";
 const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_SCHEMA: &str = "chatarium-local-archive-backup";
 const MANIFEST_VERSION: u64 = 1;
@@ -188,7 +189,26 @@ pub fn check_archive(
         .collect::<Vec<_>>();
     let identities = replay_remote_identity_audit(&events).map_err(err)?;
     replay_local_conversation_topologies(&events).map_err(err)?;
-    replay_import_source_quarantine_audit(&events).map_err(err)?;
+    let quarantine = replay_import_source_quarantine_audit(&events).map_err(err)?;
+    for decision in quarantine {
+        let relative = format!("{FLIGHT_ARCHIVE_DIR}/{}.json", decision.source_sha256);
+        let source = data_dir.join(relative);
+        let (_, digest) = sha256(&source)
+            .map_err(|_| err("quarantine source archive is missing or unreadable"))?;
+        if digest != decision.source_sha256 {
+            return Err(err("quarantine source archive SHA-256 mismatch"));
+        }
+        let source_bytes = fs::read(&source)?;
+        let parsed: Value = serde_json::from_slice(&source_bytes)
+            .map_err(|_| err("quarantine source archive is not valid JSON"))?;
+        if parsed.get("format").and_then(Value::as_str) != Some("chatarium-flight-recorder-export")
+            || parsed.get("version").and_then(Value::as_u64) != Some(3)
+        {
+            return Err(err(
+                "quarantine source archive has unsupported format or version",
+            ));
+        }
+    }
     replay_supervision_audit(&events).map_err(err)?;
     replay_tool_provider_audit(&events).map_err(err)?;
     replay_tool_call_audit(&events).map_err(err)?;
@@ -311,6 +331,83 @@ fn safe_relative(name: &str) -> Result<&Path, ArchiveMaintenanceError> {
     Ok(path)
 }
 
+/// Enumerate all content-addressed Flight Recorder archives safely. No
+/// symlinks, nested paths, partial files, or unverifiable names are admitted.
+fn flight_source_archives(data_dir: &Path) -> Result<Vec<String>, ArchiveMaintenanceError> {
+    let dir = data_dir.join(FLIGHT_ARCHIVE_DIR);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    if !fs::symlink_metadata(&dir)?.file_type().is_dir()
+        || !fs::symlink_metadata(data_dir.join("imports"))?
+            .file_type()
+            .is_dir()
+    {
+        return Err(err(
+            "import source archive directory is not a real directory",
+        ));
+    }
+    let mut archives = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            return Err(err("import source archive entry is not a regular file"));
+        }
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| err("import source archive has a non-UTF8 filename"))?;
+        let Some(hash) = name.strip_suffix(".json") else {
+            return Err(err("import source archive has an unexpected filename"));
+        };
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(err(
+                "import source archive filename is not lowercase SHA-256",
+            ));
+        }
+        let (_, digest) = sha256(&entry.path())?;
+        if digest != hash {
+            return Err(err(
+                "import source archive bytes do not match filename SHA-256",
+            ));
+        }
+        archives.push(format!("{FLIGHT_ARCHIVE_DIR}/{name}"));
+    }
+    archives.sort();
+    Ok(archives)
+}
+
+fn allowed_backup_path(name: &str) -> bool {
+    if [
+        JOURNAL_FILE,
+        CACHE_FILE,
+        INFERENCE_SETTINGS_FILE,
+        BEHAVIOR_PROFILES_FILE,
+        MCP_AGENT_DEFAULTS_FILE,
+        LOCAL_CONVERSATION_CATALOG_FILE,
+        CAPABILITY_PROBE_REPORT_FILE,
+        LOCAL_INFERENCE_CONTRACT_FILE,
+    ]
+    .contains(&name)
+    {
+        return true;
+    }
+    let Some(hash_name) = name.strip_prefix("imports/flight-recorder/") else {
+        return false;
+    };
+    let Some(hash) = hash_name.strip_suffix(".json") else {
+        return false;
+    };
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
 /// Create an inspectable directory backup. Existing output is never overwritten.
 pub fn create_backup(
     data_dir: impl AsRef<Path>,
@@ -343,6 +440,16 @@ pub fn create_backup(
             let (size, hash) = copy_consistent(&source, &temporary.join(name))?;
             files.push(json!({"path": name, "size_bytes": size, "sha256": hash}));
         }
+    }
+    for name in flight_source_archives(data_dir)? {
+        let destination = temporary.join(&name);
+        fs::create_dir_all(
+            destination
+                .parent()
+                .ok_or_else(|| err("invalid archive path"))?,
+        )?;
+        let (size, hash) = copy_consistent(&data_dir.join(&name), &destination)?;
+        files.push(json!({"path": name, "size_bytes": size, "sha256": hash}));
     }
     if !temporary.join(JOURNAL_FILE).exists() {
         fs::write(temporary.join(JOURNAL_FILE), [])?;
@@ -413,15 +520,36 @@ pub fn verify_backup(
             .and_then(Value::as_str)
             .ok_or_else(|| err("manifest path missing"))?;
         let relative = safe_relative(name)?;
+        if !allowed_backup_path(name) {
+            return Err(err("backup manifest contains unsupported path"));
+        }
         if !names.insert(name) {
             return Err(err("backup manifest contains duplicate file"));
         }
         let path = backup.join(relative);
+        if !fs::symlink_metadata(&path)?.file_type().is_file() {
+            return Err(err("backup manifest file is not a regular file"));
+        }
+        if name.starts_with("imports/") {
+            for directory in ["imports", FLIGHT_ARCHIVE_DIR] {
+                if !fs::symlink_metadata(backup.join(directory))?
+                    .file_type()
+                    .is_dir()
+                {
+                    return Err(err("backup import directory must not be a symlink"));
+                }
+            }
+        }
         let (size, hash) = sha256(&path)?;
         if file.get("size_bytes").and_then(Value::as_u64) != Some(size)
             || file.get("sha256").and_then(Value::as_str) != Some(hash.as_str())
         {
             return Err(err("backup file hash or size mismatch"));
+        }
+    }
+    for name in flight_source_archives(backup)? {
+        if !names.contains(name.as_str()) {
+            return Err(err("backup manifest omits an archived import source"));
         }
     }
     let archive = check_archive(backup)?;
@@ -464,20 +592,26 @@ pub fn restore_backup(
         return Err(err("restore staging path already exists"));
     }
     fs::create_dir_all(&staging)?;
-    for name in [
-        JOURNAL_FILE,
-        CACHE_FILE,
-        INFERENCE_SETTINGS_FILE,
-        BEHAVIOR_PROFILES_FILE,
-        MCP_AGENT_DEFAULTS_FILE,
-        LOCAL_CONVERSATION_CATALOG_FILE,
-        CAPABILITY_PROBE_REPORT_FILE,
-        LOCAL_INFERENCE_CONTRACT_FILE,
-    ] {
-        let source = backup.join(name);
-        if source.exists() {
-            fs::copy(source, staging.join(name))?;
+    let manifest: Value = serde_json::from_slice(&fs::read(backup.join(MANIFEST_FILE))?)
+        .map_err(|error| err(format!("manifest JSON: {error}")))?;
+    let files = manifest
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| err("verified manifest has no files"))?;
+    for file in files {
+        let name = file
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| err("verified manifest path missing"))?;
+        let relative = safe_relative(name)?;
+        if !allowed_backup_path(name) {
+            return Err(err("verified manifest has unsupported path"));
         }
+        let destination = staging.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(backup.join(relative), destination)?;
     }
     check_archive(&staging)?;
     if target.exists() {
@@ -572,6 +706,123 @@ mod tests {
         let result = create_backup(&root, &backup).unwrap();
         assert!(result.valid);
         assert_eq!(verify_backup(&backup).unwrap().manifest_files, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn quarantined_source_archives_survive_backup_and_restore_with_verified_bytes() {
+        let root = temp("quarantine-source");
+        let _ = fs::remove_dir_all(&root);
+        let data_dir = root.join("original");
+        let backup = root.join("backup");
+        let restored = root.join("restored");
+        let archive_dir = data_dir.join(FLIGHT_ARCHIVE_DIR);
+        fs::create_dir_all(&archive_dir).unwrap();
+
+        let source = json!({
+            "format": "chatarium-flight-recorder-export",
+            "version": 3,
+            "events": []
+        })
+        .to_string();
+        let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+        let archive_name = format!("{FLIGHT_ARCHIVE_DIR}/{hash}.json");
+        fs::write(data_dir.join(&archive_name), &source).unwrap();
+        let mut store = JsonlEventStore::open(data_dir.join(JOURNAL_FILE)).unwrap();
+        let imported_payload = |key: &str, details: Value| {
+            json!({
+                "schema": "chatarium-imported-observation",
+                "source": {
+                    "format": "chatarium-flight-recorder-export",
+                    "sha256": hash,
+                    "event_key": key,
+                },
+                "details": details,
+            })
+            .to_string()
+        };
+        store
+            .append(
+                EventKind::ImportStarted,
+                imported_payload("import:start", json!({"archive": archive_name})),
+            )
+            .unwrap();
+        store
+            .append_scoped(
+                Some("remote:source".to_owned()),
+                EventKind::DraftChanged,
+                imported_payload("draft:one", json!({})),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportCompleted,
+                imported_payload("import:complete", json!({"semantic_event_count": 1})),
+            )
+            .unwrap();
+        store
+            .append(
+                EventKind::ImportSourceQuarantineRecorded,
+                json!({
+                    "schema": "chatarium-source-quarantine-audit",
+                    "version": 1,
+                    "record": "source_quarantine_recorded",
+                    "source_format": "chatarium-flight-recorder-export",
+                    "source_sha256": hash,
+                    "preflight_journal_sha256": "b".repeat(64),
+                    "matching_event_count": 3,
+                    "first_sequence": 1,
+                    "last_sequence": 3,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        drop(store);
+
+        check_archive(&data_dir).unwrap();
+        let created = create_backup(&data_dir, &backup).unwrap();
+        assert_eq!(created.manifest_files, 2);
+        assert_eq!(
+            fs::read(data_dir.join(&archive_name)).unwrap(),
+            fs::read(backup.join(&archive_name)).unwrap()
+        );
+        restore_backup(&backup, &restored).unwrap();
+        assert_eq!(
+            fs::read(data_dir.join(&archive_name)).unwrap(),
+            fs::read(restored.join(&archive_name)).unwrap()
+        );
+        check_archive(&restored).unwrap();
+
+        // Source evidence tampering is a hard error, not a warning.
+        fs::write(restored.join(&archive_name), b"tampered").unwrap();
+        assert!(check_archive(&restored).is_err());
+        fs::write(backup.join(&archive_name), b"tampered").unwrap();
+        assert!(verify_backup(&backup).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backup_manifest_must_list_every_content_addressed_source_archive() {
+        let root = temp("quarantine-manifest");
+        let _ = fs::remove_dir_all(&root);
+        let original = root.join("original");
+        let backup = root.join("backup");
+        let archive_dir = original.join(FLIGHT_ARCHIVE_DIR);
+        fs::create_dir_all(&archive_dir).unwrap();
+        let source = b"{\"version\":3}";
+        let hash = format!("{:x}", Sha256::digest(source));
+        let archive_name = format!("{FLIGHT_ARCHIVE_DIR}/{hash}.json");
+        fs::write(original.join(&archive_name), source).unwrap();
+        fs::write(original.join(JOURNAL_FILE), []).unwrap();
+        assert_eq!(create_backup(&original, &backup).unwrap().manifest_files, 2);
+        let manifest = backup.join(MANIFEST_FILE);
+        let mut data: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        data["files"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|file| file["path"].as_str() != Some(archive_name.as_str()));
+        fs::write(&manifest, serde_json::to_vec(&data).unwrap()).unwrap();
+        assert!(verify_backup(&backup).is_err());
         let _ = fs::remove_dir_all(root);
     }
 
