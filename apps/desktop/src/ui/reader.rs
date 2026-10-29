@@ -77,19 +77,21 @@ impl ChatariumApp {
                 .or_else(|| native_search_index.message_projection(self.local_conversation_id))
         };
         let reader_hit_outcome = if historical_mode {
-            Ok(Some(Arc::new(if self.reader_search_query.trim().is_empty() {
-                Vec::new()
-            } else {
-                display_messages
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(message_index, message)| {
-                        offline_reader::search_hits(&message.text, &self.reader_search_query)
-                            .into_iter()
-                            .map(move |(start, end)| (message_index, start, end))
-                    })
-                    .collect::<Vec<_>>()
-            })))
+            Ok(Some(Arc::new(
+                if self.reader_search_query.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    display_messages
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(message_index, message)| {
+                            offline_reader::search_hits(&message.text, &self.reader_search_query)
+                                .into_iter()
+                                .map(move |(start, end)| (message_index, start, end))
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )))
         } else if let Some(source) = &native_projection {
             native_conversation_search::background_reader_hits(
                 ctx,
