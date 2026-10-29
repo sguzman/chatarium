@@ -242,7 +242,6 @@ pub fn cached_rows(
     rows
 }
 
-
 /// Identity of the visible native sidebar query. Never show a completed result
 /// for an older query, changed catalog, or previous effective journal snapshot.
 #[derive(Clone)]
@@ -370,8 +369,7 @@ pub fn background_cached_rows(
                 );
                 let _ = sender.send(rows);
                 repaint.request_repaint();
-            })
-        {
+            }) {
             Ok(_handle) => {
                 state.in_flight = Some((request, Arc::new(std::sync::Mutex::new(receiver))));
             }
@@ -386,7 +384,6 @@ pub fn background_cached_rows(
     ctx.data_mut(|data| data.insert_temp(id, state));
     Ok(None)
 }
-
 
 #[cfg(test)]
 mod background_tests {
@@ -422,9 +419,11 @@ mod background_tests {
         catalog.rename(owner, Some("Alpha".to_owned()), 2).unwrap();
         let mut entries = catalog.entries();
 
-        assert!(background_cached_rows(&ctx, &index, &entries, false, "alpha")
-            .unwrap()
-            .is_none());
+        assert!(
+            background_cached_rows(&ctx, &index, &entries, false, "alpha")
+                .unwrap()
+                .is_none()
+        );
         let found = wait_for_rows(&ctx, &index, &entries, "alpha");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].title, "Alpha");
@@ -436,17 +435,21 @@ mod background_tests {
         ));
 
         // The old match is never exposed to a new query while it is pending.
-        assert!(background_cached_rows(&ctx, &index, &entries, false, "missing")
-            .unwrap()
-            .is_none());
+        assert!(
+            background_cached_rows(&ctx, &index, &entries, false, "missing")
+                .unwrap()
+                .is_none()
+        );
         assert!(wait_for_rows(&ctx, &index, &entries, "missing").is_empty());
 
         // A metadata edit invalidates the completed result, even with the
         // same index identity and query.
         entries[0].title = Some("Beta".to_owned());
-        assert!(background_cached_rows(&ctx, &index, &entries, false, "beta")
-            .unwrap()
-            .is_none());
+        assert!(
+            background_cached_rows(&ctx, &index, &entries, false, "beta")
+                .unwrap()
+                .is_none()
+        );
         let updated = wait_for_rows(&ctx, &index, &entries, "beta");
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0].title, "Beta");
