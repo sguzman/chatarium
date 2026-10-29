@@ -23,7 +23,7 @@ mod navigation;
 
 #[cfg(test)]
 use cache::{NativeRowsCache, collect_native_search_row};
-pub use cache::{cached_reader_hits, cached_rows};
+pub use cache::{background_cached_rows, cached_reader_hits, cached_rows};
 pub use index::{NativeConversationSearchIndex, cached_index, prime_prebuilt_index};
 use matching::find_match_with_position;
 pub use matching::{NativeSearchMatch, find_match, find_match_with_preview};

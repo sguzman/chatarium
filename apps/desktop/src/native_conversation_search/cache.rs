@@ -241,3 +241,217 @@ pub fn cached_rows(
     });
     rows
 }
+
+/// Identity of the visible native sidebar query. Never show a completed result
+/// for an older query, changed catalog, or previous effective journal snapshot.
+#[derive(Clone)]
+struct BackgroundRowsRequest {
+    index: Arc<NativeConversationSearchIndex>,
+    catalog: Vec<CatalogSearchKey>,
+    show_archived: bool,
+    query: String,
+}
+
+impl BackgroundRowsRequest {
+    fn matches(
+        &self,
+        index: &Arc<NativeConversationSearchIndex>,
+        entries: &[LocalConversationEntry],
+        show_archived: bool,
+        query: &str,
+    ) -> bool {
+        Arc::ptr_eq(&self.index, index)
+            && self.show_archived == show_archived
+            && self.query == query
+            && self.catalog.len() == entries.len()
+            && self.catalog.iter().zip(entries).all(|(old, entry)| {
+                old.id == entry.id && old.title == entry.title && old.archived == entry.archived
+            })
+    }
+}
+
+type BackgroundRowsReceiver = std::sync::mpsc::Receiver<Arc<Vec<NativeSearchRow>>>;
+
+/// One outstanding scan at a time, including while the user edits a query.
+/// The worker never accesses the real egui context or the mutable journal.
+#[derive(Clone, Default)]
+struct BackgroundRowsState {
+    completed: Option<(BackgroundRowsRequest, Arc<Vec<NativeSearchRow>>)>,
+    in_flight: Option<(
+        BackgroundRowsRequest,
+        Arc<std::sync::Mutex<BackgroundRowsReceiver>>,
+    )>,
+    failed: Option<(BackgroundRowsRequest, String)>,
+}
+
+/// UI-safe native conversation search: a full transcript scan runs only on a
+/// worker, not inside an egui frame. None means the latest request is still
+/// pending; callers must not display or navigate stale results in that state.
+///
+/// The synchronous cached_rows function is kept for deterministic tests and
+/// non-render callers. There is only one in-flight scan per GUI context:
+/// rapid query edits coalesce into the latest request after the worker returns.
+pub fn background_cached_rows(
+    ctx: &egui::Context,
+    index: &Arc<NativeConversationSearchIndex>,
+    entries: &[LocalConversationEntry],
+    show_archived: bool,
+    query: &str,
+) -> Result<Option<Arc<Vec<NativeSearchRow>>>, String> {
+    let id = egui::Id::new("chatarium-native-conversation-search-background");
+    let mut state = ctx
+        .data_mut(|data| data.get_temp::<BackgroundRowsState>(id))
+        .unwrap_or_default();
+
+    if let Some((request, receiver)) = state.in_flight.as_ref() {
+        let outcome = receiver.try_lock().ok().map(|lock| lock.try_recv());
+        match outcome {
+            Some(Ok(rows)) => {
+                state.completed = Some((request.clone(), rows));
+                state.in_flight = None;
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                state.failed = Some((
+                    request.clone(),
+                    "native sidebar search worker stopped unexpectedly".to_owned(),
+                ));
+                state.in_flight = None;
+            }
+            _ => {}
+        }
+    }
+
+    if let Some((request, rows)) = &state.completed {
+        if request.matches(index, entries, show_archived, query) {
+            let rows = Arc::clone(rows);
+            ctx.data_mut(|data| data.insert_temp(id, state));
+            return Ok(Some(rows));
+        }
+    }
+    if let Some((request, error)) = &state.failed {
+        if request.matches(index, entries, show_archived, query) {
+            let error = error.clone();
+            ctx.data_mut(|data| data.insert_temp(id, state));
+            return Err(error);
+        }
+    }
+    if state.in_flight.is_none() {
+        let request = BackgroundRowsRequest {
+            index: Arc::clone(index),
+            catalog: entries
+                .iter()
+                .map(|entry| CatalogSearchKey {
+                    id: entry.id,
+                    title: entry.title.clone(),
+                    archived: entry.archived,
+                })
+                .collect(),
+            show_archived,
+            query: query.to_owned(),
+        };
+        let worker_index = Arc::clone(index);
+        let worker_entries = entries.to_vec();
+        let worker_query = query.to_owned();
+        let repaint = ctx.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        match std::thread::Builder::new()
+            .name("chatarium-native-sidebar-search".to_owned())
+            .spawn(move || {
+                // Isolated context makes the existing synchronous search/cache
+                // implementation safe to reuse without touching GUI state.
+                let worker_ctx = egui::Context::default();
+                let rows = cached_rows(
+                    &worker_ctx,
+                    &worker_index,
+                    &worker_entries,
+                    show_archived,
+                    &worker_query,
+                );
+                let _ = sender.send(rows);
+                repaint.request_repaint();
+            }) {
+            Ok(_handle) => {
+                state.in_flight = Some((request, Arc::new(std::sync::Mutex::new(receiver))));
+            }
+            Err(error) => {
+                let error = format!("failed to launch native sidebar search worker: {error}");
+                state.failed = Some((request, error.clone()));
+                ctx.data_mut(|data| data.insert_temp(id, state));
+                return Err(error);
+            }
+        }
+    }
+    ctx.data_mut(|data| data.insert_temp(id, state));
+    Ok(None)
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use crate::local_conversations::LocalConversationCatalog;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_rows(
+        ctx: &egui::Context,
+        index: &Arc<NativeConversationSearchIndex>,
+        entries: &[LocalConversationEntry],
+        query: &str,
+    ) -> Arc<Vec<NativeSearchRow>> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match background_cached_rows(ctx, index, entries, false, query).unwrap() {
+                Some(rows) => return rows,
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                None => panic!("background search did not finish"),
+            }
+        }
+    }
+
+    #[test]
+    fn background_sidebar_search_never_displays_old_query_or_catalog_rows() {
+        let ctx = egui::Context::default();
+        let index = Arc::new(NativeConversationSearchIndex::build(&[]));
+        let mut catalog = LocalConversationCatalog::default();
+        let owner = LocalConversationId::new();
+        catalog.create(owner, 1);
+        catalog.rename(owner, Some("Alpha".to_owned()), 2).unwrap();
+        let mut entries = catalog.entries();
+
+        assert!(
+            background_cached_rows(&ctx, &index, &entries, false, "alpha")
+                .unwrap()
+                .is_none()
+        );
+        let found = wait_for_rows(&ctx, &index, &entries, "alpha");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "Alpha");
+        assert!(Arc::ptr_eq(
+            &found,
+            &background_cached_rows(&ctx, &index, &entries, false, "alpha")
+                .unwrap()
+                .unwrap()
+        ));
+
+        // The old match is never exposed to a new query while it is pending.
+        assert!(
+            background_cached_rows(&ctx, &index, &entries, false, "missing")
+                .unwrap()
+                .is_none()
+        );
+        assert!(wait_for_rows(&ctx, &index, &entries, "missing").is_empty());
+
+        // A metadata edit invalidates the completed result, even with the
+        // same index identity and query.
+        entries[0].title = Some("Beta".to_owned());
+        assert!(
+            background_cached_rows(&ctx, &index, &entries, false, "beta")
+                .unwrap()
+                .is_none()
+        );
+        let updated = wait_for_rows(&ctx, &index, &entries, "beta");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].title, "Beta");
+    }
+}
