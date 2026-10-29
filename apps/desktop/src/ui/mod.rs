@@ -6,6 +6,7 @@ mod composer;
 mod coordination_window;
 mod frame_lifecycle;
 mod header;
+mod inline_mcp_background;
 mod navigation;
 mod panels;
 mod reader;

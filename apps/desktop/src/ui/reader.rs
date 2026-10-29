@@ -204,29 +204,23 @@ impl ChatariumApp {
             }
         }
 
-        // Cache the durable MCP projection by journal length, not by frame.
-        // This status remains visible after reopening a conversation, while
-        // never using a stale in-memory agent flow as execution authority.
-        let inline_mcp = if historical_mode {
-            None
+        // Read the validated effective MCP audit from the persistence worker.
+        // No full-journal replay or payload clone may occur on a render frame;
+        // stale snapshots and another conversation's cards are never shown.
+        let inline_mcp_outcome = if historical_mode {
+            inline_mcp_background::InlineStatus::Ready(None)
         } else {
-            let key = egui::Id::new(("inline-mcp-status", self.local_conversation_id));
-            let cached =
-                ctx.data_mut(|data| data.get_temp::<(usize, Option<InlineMcpStatus>)>(key));
-            if let Some((count, status)) = cached {
-                if count == self.events.len() {
-                    status
-                } else {
-                    let status =
-                        project_inline_mcp_status(&self.events, self.local_conversation_id);
-                    ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
-                    status
-                }
-            } else {
-                let status = project_inline_mcp_status(&self.events, self.local_conversation_id);
-                ctx.data_mut(|data| data.insert_temp(key, (self.events.len(), status.clone())));
-                status
-            }
+            inline_mcp_background::inline_status(
+                ctx,
+                self.persist_tx.as_ref(),
+                self.local_conversation_id,
+                self.events.last().map(|event| event.sequence),
+            )
+        };
+        let (inline_mcp, inline_mcp_pending, inline_mcp_error) = match inline_mcp_outcome {
+            inline_mcp_background::InlineStatus::Ready(status) => (status, false, None),
+            inline_mcp_background::InlineStatus::Pending => (None, true, None),
+            inline_mcp_background::InlineStatus::Unavailable(error) => (None, false, Some(error)),
         };
 
         // Collect MCP commands while drawing. Mutating Chatarium from inside
@@ -259,6 +253,11 @@ impl ChatariumApp {
                     // A bounded, finite offset is enough to clamp to the
                     // actual bottom of realistic native conversations.
                     set_reader_scroll(ctx, reader_scroll_state_id, READER_BOTTOM_SCROLL_OFFSET);
+                }
+                if inline_mcp_pending {
+                    ui.label(egui::RichText::new("Loading durable MCP status…").weak().small());
+                } else if let Some(error) = &inline_mcp_error {
+                    ui.label(egui::RichText::new(error).weak().small());
                 }
                 // A rejected model-authored MCP envelope has no route, no
                 // purple card and no approval prompt. Explain that fact in the

@@ -4271,3 +4271,90 @@ fn only_positive_http_or_typed_api_errors_count_as_observed_failure() {
         }
     ));
 }
+
+#[test]
+fn inline_mcp_projection_reads_current_effective_worker_journal() {
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "chatarium-inline-mcp-worker-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("journal.jsonl");
+    let mut raw = JsonlEventStore::open(&path).unwrap();
+    let conversation = LocalConversationId::new();
+    let unrelated = LocalConversationId::new();
+    let request = mcp_agent_defaults::ModelToolRequest {
+        provider: local_http_mcp::MATHEMATICA.to_owned(),
+        tool: "mathematica_create_session".to_owned(),
+        arguments: serde_json::json!({}),
+    };
+    let (call_id, route_id, _) = append_agent_mcp_call_checked(
+        &mut raw,
+        conversation,
+        &request,
+        mcp_agent_defaults::ToolPolicy::Ask,
+    )
+    .unwrap();
+    let original_high_water = raw.events().last().map(|event| event.sequence);
+    let store = chatarium_store::effective_event_store::EffectiveEventStore::new(raw).unwrap();
+    let (command_tx, command_rx) = mpsc::channel();
+    let (notice_tx, notice_rx) = mpsc::channel();
+    let completion_tx = command_tx.clone();
+    let worker_root = root.clone();
+    let worker = thread::spawn(move || {
+        persistence_worker(store, worker_root, command_rx, completion_tx, notice_tx)
+    });
+
+    let ask = |owner| {
+        let (reply, receiver) = mpsc::channel();
+        command_tx
+            .send(PersistCommand::ProjectInlineMcpStatus {
+                conversation_id: owner,
+                reply,
+            })
+            .unwrap();
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+    };
+    let (sequence, projected) = ask(conversation);
+    assert_eq!(sequence, original_high_water);
+    let projected = projected.unwrap();
+    assert_eq!(projected.call_id, call_id);
+    assert_eq!(projected.route_id, route_id);
+    assert_eq!(
+        projected.stage,
+        mcp_call_review::CallReviewStage::AwaitingDecision
+    );
+    assert!(
+        ask(unrelated).1.is_none(),
+        "unrelated native chat must not inherit MCP card"
+    );
+
+    command_tx
+        .send(PersistCommand::SaveDraft {
+            conversation_id: conversation,
+            revision: 1,
+            text: "synthetic draft".to_owned(),
+        })
+        .unwrap();
+    let appended = loop {
+        match notice_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PersistNotice::DraftSaved { event, .. } => break event.sequence,
+            PersistNotice::Failed { error, .. } => panic!("worker error: {error}"),
+            _ => {}
+        }
+    };
+    let (updated_watermark, updated) = ask(conversation);
+    assert_eq!(updated_watermark, Some(appended));
+    assert_eq!(updated.unwrap().call_id, call_id);
+
+    command_tx.send(PersistCommand::Shutdown).unwrap();
+    worker.join().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}

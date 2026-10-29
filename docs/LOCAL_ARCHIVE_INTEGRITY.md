@@ -177,6 +177,16 @@ query. While a new search is pending, stale hit navigation is disabled.
 Historical imported-reader search remains separately scoped and does not
 enter native search or change the authoritative effective journal.
 
+The inline native MCP card also no longer replays routing/tool audit indexes on
+the UI thread. The egui reader sends a read-only request to the existing
+single-writer persistence worker, which projects from its already validated
+effective event view. Every response carries the worker's actual latest
+sequence: a result for another conversation or an older/newer journal view is
+not displayed or used to authorize a tool. A pending status shows a neutral
+loading message instead. Worker disconnection fails closed without exposing a
+stale card. No raw events or SQLite evidence are rewritten by this request.
+
+
 ## Active desktop/worker effective replay
 
 The desktop now wraps the authoritative JSONL writer with a validated

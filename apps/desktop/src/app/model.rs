@@ -28,6 +28,10 @@ impl ControllerControlAction {
 }
 
 pub(crate) enum PersistCommand {
+    ProjectInlineMcpStatus {
+        conversation_id: LocalConversationId,
+        reply: Sender<(Option<u64>, Option<InlineMcpStatus>)>,
+    },
     RetrieveConfirmedProjectOpenViking {
         conversation_id: LocalConversationId,
         generation: u64,
