@@ -13,19 +13,40 @@ impl ChatariumApp {
         local_display_messages: &[DisplayMessage],
         native_search_index: &Arc<native_conversation_search::NativeConversationSearchIndex>,
     ) {
-        let filtered_messages = if !historical_mode
-            && !display_preferences.show_transport_trace
-            && local_display_messages
-                .iter()
-                .any(|m| m.role == DisplayRole::Activity)
-        {
-            Some(
-                local_display_messages
-                    .iter()
-                    .filter(|m| m.role != DisplayRole::Activity)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )
+        // The activity-filtered view may contain thousands of large message
+        // bodies. Prepare it on a worker, not on the render/UI thread.
+        let filtered_messages = if !historical_mode && !display_preferences.show_transport_trace {
+            match native_conversation_search::background_without_activity(
+                ctx,
+                native_search_index,
+                self.local_conversation_id,
+            ) {
+                Ok(Some(prepared)) => {
+                    // No activity messages: the worker returned the original
+                    // Arc and the virtualized native reader stays available.
+                    if native_search_index
+                        .message_projection(self.local_conversation_id)
+                        .is_some_and(|original| Arc::ptr_eq(&prepared, &original))
+                    {
+                        None
+                    } else {
+                        Some(prepared)
+                    }
+                }
+                Ok(None) => {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.spinner();
+                        ui.label("Preparing local transcript…");
+                    });
+                    return;
+                }
+                Err(error) => {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.label(format!("Local transcript unavailable: {error}"));
+                    });
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -33,7 +54,8 @@ impl ChatariumApp {
             &self.historical_messages
         } else {
             filtered_messages
-                .as_deref()
+                .as_ref()
+                .map(|projection| projection.as_slice())
                 .unwrap_or(local_display_messages)
         };
 
@@ -44,8 +66,20 @@ impl ChatariumApp {
         } else {
             None
         };
-        let reader_hit_targets = if historical_mode || filtered_messages.is_some() {
-            std::sync::Arc::new(
+
+        // Historical import browsing remains isolated from native search.
+        // Native reader search never scans large projections on a UI frame.
+        let native_projection = if historical_mode {
+            None
+        } else {
+            filtered_messages
+                .clone()
+                .or_else(|| native_search_index.message_projection(self.local_conversation_id))
+        };
+        let reader_hit_outcome = if historical_mode {
+            Ok(Some(Arc::new(if self.reader_search_query.trim().is_empty() {
+                Vec::new()
+            } else {
                 display_messages
                     .iter()
                     .enumerate()
@@ -54,16 +88,27 @@ impl ChatariumApp {
                             .into_iter()
                             .map(move |(start, end)| (message_index, start, end))
                     })
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            native_conversation_search::cached_reader_hits(
+                    .collect::<Vec<_>>()
+            })))
+        } else if let Some(source) = &native_projection {
+            native_conversation_search::background_reader_hits(
                 ctx,
-                native_search_index,
-                self.local_conversation_id,
+                source,
                 &self.reader_search_query,
             )
+        } else {
+            Ok(Some(Arc::new(Vec::new())))
         };
+        let reader_hits_pending = matches!(&reader_hit_outcome, Ok(None));
+        let reader_hits_error = reader_hit_outcome.as_ref().err().cloned();
+        let reader_hit_targets = reader_hit_outcome
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Arc::new(Vec::new()));
+        if reader_hits_pending || reader_hits_error.is_some() {
+            // Never navigate an earlier query's hit index during async replay.
+            self.reader_search_hit = None;
+        }
         if self
             .reader_search_hit
             .is_some_and(|hit| hit >= reader_hit_targets.len())
@@ -475,6 +520,13 @@ impl ChatariumApp {
                     reader_scroll = reader_scroll.vertical_scroll_offset(resolved_offset);
                 }
                 let reader_output = reader_scroll.show_viewport(ui, |ui, viewport| {
+                        if reader_hits_pending {
+                            ui.label("Searching transcript…");
+                            ui.add_space(8.0);
+                        } else if let Some(error) = &reader_hits_error {
+                            ui.label(format!("Transcript search unavailable: {error}"));
+                            ui.add_space(8.0);
+                        }
                         if !self.reader_search_query.trim().is_empty()
                             && !reader_hit_targets.is_empty()
                         {
