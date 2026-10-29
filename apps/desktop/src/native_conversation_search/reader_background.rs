@@ -2,20 +2,28 @@
 //! render thread. Source identity is the immutable search-index Arc; stale
 //! results from another conversation or query are not exposed.
 use super::*;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 type AsyncResult<T> = Arc<Mutex<Receiver<T>>>;
 
 #[derive(Clone, Default)]
 struct ReaderProjectionState {
-    ready: Option<(Arc<NativeConversationSearchIndex>, LocalConversationId, Arc<Vec<DisplayMessage>>)>,
+    ready: Option<(
+        Arc<NativeConversationSearchIndex>,
+        LocalConversationId,
+        Arc<Vec<DisplayMessage>>,
+    )>,
     active: Option<(
         Arc<NativeConversationSearchIndex>,
         LocalConversationId,
         AsyncResult<Arc<Vec<DisplayMessage>>>,
     )>,
-    failed: Option<(Arc<NativeConversationSearchIndex>, LocalConversationId, String)>,
+    failed: Option<(
+        Arc<NativeConversationSearchIndex>,
+        LocalConversationId,
+        String,
+    )>,
 }
 
 /// Return an activity-filtered native reader projection only once it is ready.
@@ -73,9 +81,13 @@ pub fn background_without_activity(
             .name("chatarium-reader-filter".to_owned())
             .spawn(move || {
                 // Retain the exact Arc when no activity card needs removing.
-                let filtered = if messages.iter().any(|message| message.role == DisplayRole::Activity) {
+                let filtered = if messages
+                    .iter()
+                    .any(|message| message.role == DisplayRole::Activity)
+                {
                     Arc::new(
-                        messages.iter()
+                        messages
+                            .iter()
                             .filter(|message| message.role != DisplayRole::Activity)
                             .cloned()
                             .collect(),
@@ -85,13 +97,14 @@ pub fn background_without_activity(
                 };
                 let _ = sender.send(filtered);
                 repaint.request_repaint();
-            })
-        {
-            Ok(_handle) => state.active = Some((
-                Arc::clone(index),
-                conversation,
-                Arc::new(Mutex::new(receiver)),
-            )),
+            }) {
+            Ok(_handle) => {
+                state.active = Some((
+                    Arc::clone(index),
+                    conversation,
+                    Arc::new(Mutex::new(receiver)),
+                ))
+            }
             Err(error) => {
                 let error = format!("failed to start native reader filter: {error}");
                 state.failed = Some((source, conversation, error.clone()));
@@ -106,8 +119,16 @@ pub fn background_without_activity(
 
 #[derive(Clone, Default)]
 struct ReaderHitsState {
-    ready: Option<(Arc<Vec<DisplayMessage>>, String, Arc<Vec<(usize, usize, usize)>>)>,
-    active: Option<(Arc<Vec<DisplayMessage>>, String, AsyncResult<Arc<Vec<(usize, usize, usize)>>>)>,
+    ready: Option<(
+        Arc<Vec<DisplayMessage>>,
+        String,
+        Arc<Vec<(usize, usize, usize)>>,
+    )>,
+    active: Option<(
+        Arc<Vec<DisplayMessage>>,
+        String,
+        AsyncResult<Arc<Vec<(usize, usize, usize)>>>,
+    )>,
     failed: Option<(Arc<Vec<DisplayMessage>>, String, String)>,
 }
 
@@ -178,13 +199,8 @@ pub fn background_reader_hits(
                     .collect::<Vec<_>>();
                 let _ = sender.send(Arc::new(hits));
                 repaint.request_repaint();
-            })
-        {
-            Ok(_handle) => state.active = Some((
-                source,
-                term,
-                Arc::new(Mutex::new(receiver)),
-            )),
+            }) {
+            Ok(_handle) => state.active = Some((source, term, Arc::new(Mutex::new(receiver)))),
             Err(error) => {
                 let error = format!("failed to start native reader search: {error}");
                 state.failed = Some((source, term, error.clone()));
@@ -234,15 +250,30 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(Arc::ptr_eq(
             &result,
-            &background_reader_hits(&ctx, &first, "alpha").unwrap().unwrap()
+            &background_reader_hits(&ctx, &first, "alpha")
+                .unwrap()
+                .unwrap()
         ));
-        assert!(background_reader_hits(&ctx, &first, "beta").unwrap().is_none());
+        assert!(
+            background_reader_hits(&ctx, &first, "beta")
+                .unwrap()
+                .is_none()
+        );
         let other = Arc::new(vec![message("foreign alpha", DisplayRole::User, 3)]);
-        assert!(background_reader_hits(&ctx, &other, "alpha").unwrap().is_none());
+        assert!(
+            background_reader_hits(&ctx, &other, "alpha")
+                .unwrap()
+                .is_none()
+        );
         let new = wait_for(|| background_reader_hits(&ctx, &other, "alpha"));
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].0, 0);
-        assert!(background_reader_hits(&ctx, &first, "").unwrap().unwrap().is_empty());
+        assert!(
+            background_reader_hits(&ctx, &first, "")
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -251,14 +282,24 @@ mod tests {
         let index = Arc::new(NativeConversationSearchIndex::build(&[]));
         let first = LocalConversationId::new();
         let other = LocalConversationId::new();
-        assert!(background_without_activity(&ctx, &index, first).unwrap().is_none());
+        assert!(
+            background_without_activity(&ctx, &index, first)
+                .unwrap()
+                .is_none()
+        );
         let empty = wait_for(|| background_without_activity(&ctx, &index, first));
         assert!(empty.is_empty());
         assert!(Arc::ptr_eq(
             &empty,
-            &background_without_activity(&ctx, &index, first).unwrap().unwrap(),
+            &background_without_activity(&ctx, &index, first)
+                .unwrap()
+                .unwrap(),
         ));
-        assert!(background_without_activity(&ctx, &index, other).unwrap().is_none());
+        assert!(
+            background_without_activity(&ctx, &index, other)
+                .unwrap()
+                .is_none()
+        );
         let different = wait_for(|| background_without_activity(&ctx, &index, other));
         assert!(different.is_empty());
     }
