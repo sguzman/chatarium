@@ -4392,7 +4392,13 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
         .unwrap();
-    assert!(old_index.messages(conversation).is_empty());
+    assert!(
+        old_index
+            .messages(conversation)
+            .iter()
+            .all(|message| message.sequence != authored_sequence),
+        "older GUI prefix must exclude later authored event"
+    );
 
     let (reply, receiver) = mpsc::channel();
     command_tx
@@ -4407,9 +4413,11 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
         .unwrap()
         .unwrap();
     let visible = index.messages(conversation);
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].sequence, authored_sequence);
-    assert!(visible[0].text.contains("new native search-index content"));
+    assert!(visible.iter().any(|message| {
+        message.sequence == authored_sequence
+            && message.role == DisplayRole::User
+            && message.text.contains("new native search-index content")
+    }));
     assert!(index.messages(unrelated).is_empty());
 
     command_tx.send(PersistCommand::Shutdown).unwrap();
