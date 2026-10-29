@@ -36,7 +36,26 @@ impl eframe::App for ChatariumApp {
         // Search and the active chat reader share the same cached native
         // message corpus. Avoid an extra full-journal scan and a clone of
         // every visible transcript message on each egui redraw.
-        let native_search_index = native_conversation_search::cached_index(ctx, &self.events);
+        let native_search_index = match native_conversation_search::background_index(
+            ctx,
+            &self.events,
+            self.persist_tx.as_ref(),
+        ) {
+            Ok(Some(index)) => index,
+            Ok(None) => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.spinner();
+                    ui.label("Updating validated local transcript index…");
+                });
+                return;
+            }
+            Err(error) => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label(format!("Local transcript index unavailable: {error}"));
+                });
+                return;
+            }
+        };
         let local_display_messages = native_search_index.messages(self.local_conversation_id);
         let local_conversation_title = self
             .local_conversation_catalog
