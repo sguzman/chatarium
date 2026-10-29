@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 #[derive(Clone, Default)]
 struct PendingIndex {
-    receiver: Option<Arc<Mutex<Receiver<Arc<NativeConversationSearchIndex>>>>>,
+    receiver: Option<Arc<Mutex<Receiver<Result<Arc<NativeConversationSearchIndex>, String>>>>>,
 }
 
 /// Return the currently attested native projection. The initial index is
@@ -33,7 +33,7 @@ pub fn background_index(
         .unwrap_or_default();
     if let Some(receiver) = &pending.receiver {
         match receiver.try_lock().ok().map(|locked| locked.try_recv()) {
-            Some(Ok(index)) => {
+            Some(Ok(Ok(index))) => {
                 pending.receiver = None;
                 if index::prime_prebuilt_index(ctx, events, Arc::clone(&index)).is_ok() {
                     ctx.data_mut(|data| data.insert_temp(id, pending));
@@ -41,6 +41,11 @@ pub fn background_index(
                 }
                 // Newer (not yet notified) or older worker revision. Drop
                 // instead of rendering/staging text against the wrong owner.
+            }
+            Some(Ok(Err(error))) => {
+                pending.receiver = None;
+                ctx.data_mut(|data| data.insert_temp(id, pending));
+                return Err(error);
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 pending.receiver = None;
@@ -60,7 +65,11 @@ pub fn background_index(
         };
         let (reply, receiver) = mpsc::channel();
         if commands
-            .send(PersistCommand::ProjectNativeSearchIndex { reply })
+            .send(PersistCommand::ProjectNativeSearchIndex {
+                prefix_len: events.len(),
+                last_sequence: events.last().map(|event| event.sequence),
+                reply,
+            })
             .is_err()
         {
             ctx.data_mut(|data| data.insert_temp(id, pending));
@@ -85,8 +94,14 @@ mod tests {
     ) {
         let command = commands.try_recv().expect("background request");
         match command {
-            PersistCommand::ProjectNativeSearchIndex { reply } => {
-                reply.send(Arc::new(NativeConversationSearchIndex::build(events)))
+            PersistCommand::ProjectNativeSearchIndex {
+                prefix_len,
+                last_sequence,
+                reply,
+            } => {
+                assert_eq!(prefix_len, events.len());
+                assert_eq!(last_sequence, events.last().map(|event| event.sequence));
+                reply.send(Ok(Arc::new(NativeConversationSearchIndex::build(events))))
                     .unwrap();
             }
             _ => panic!("unexpected persistence command"),
