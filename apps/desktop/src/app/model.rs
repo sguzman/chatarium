@@ -31,7 +31,8 @@ pub(crate) enum PersistCommand {
     ProjectNativeSearchIndex {
         prefix_len: usize,
         last_sequence: Option<u64>,
-        reply: Sender<Result<Arc<native_conversation_search::NativeConversationSearchIndex>, String>>,
+        reply:
+            Sender<Result<Arc<native_conversation_search::NativeConversationSearchIndex>, String>>,
     },
     ProjectInlineMcpStatus {
         conversation_id: LocalConversationId,
