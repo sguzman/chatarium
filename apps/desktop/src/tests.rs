@@ -4354,6 +4354,41 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
     assert_eq!(updated_watermark, Some(appended));
     assert_eq!(updated.unwrap().call_id, call_id);
 
+    // A newly committed authored message must enter the worker-built native
+    // corpus without any GUI-side full-journal replay or foreign owner leak.
+    let authored = AuthoredUserMessage::new(
+        conversation,
+        LocalTurnId::new(),
+        LocalMessageId::new(),
+        "new native search-index content",
+    );
+    command_tx
+        .send(PersistCommand::CommitMessage {
+            request_id: 42,
+            message: authored,
+            attachment: None,
+            one_shot_memory_ids: Vec::new(),
+            one_shot_memory_snapshot_after_sequence: None,
+        })
+        .unwrap();
+    let authored_sequence = loop {
+        match notice_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PersistNotice::MessageCommitted { event, .. } => break event.sequence,
+            PersistNotice::Failed { error, .. } => panic!("worker error: {error}"),
+            _ => {}
+        }
+    };
+    let (reply, receiver) = mpsc::channel();
+    command_tx
+        .send(PersistCommand::ProjectNativeSearchIndex { reply })
+        .unwrap();
+    let index = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let visible = index.messages(conversation);
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].sequence, authored_sequence);
+    assert!(visible[0].text.contains("new native search-index content"));
+    assert!(index.messages(unrelated).is_empty());
+
     command_tx.send(PersistCommand::Shutdown).unwrap();
     worker.join().unwrap();
     fs::remove_dir_all(root).unwrap();
