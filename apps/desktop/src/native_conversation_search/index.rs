@@ -392,6 +392,33 @@ pub fn prime_prebuilt_index(
     Ok(())
 }
 
+/// Return an existing immutable native corpus without ever building or
+/// extending message projections in the calling (GUI) frame. The only append
+/// scan permitted here checks event kinds in the new suffix; any native or
+/// audited-tool change must be prepared by the persistence worker.
+pub(super) fn ready_index_without_build(
+    ctx: &egui::Context,
+    events: &[EventEnvelope],
+) -> Option<Arc<NativeConversationSearchIndex>> {
+    let id = egui::Id::new("chatarium-native-conversation-search-index");
+    let now = JournalRevision::capture(events);
+    let mut cache = ctx.data_mut(|data| data.get_temp::<NativeSearchCache>(id))?;
+    if cache.observed == now {
+        return Some(cache.index);
+    }
+    if cache.observed.is_append_only_prefix_of(events)
+        && events[cache.observed.event_count..]
+            .iter()
+            .all(|event| !changes_native_messages(event.kind))
+    {
+        cache.observed = now;
+        let reused = Arc::clone(&cache.index);
+        ctx.data_mut(|data| data.insert_temp(id, cache));
+        return Some(reused);
+    }
+    None
+}
+
 /// Ephemeral egui-frame projection; metadata and journal remain authoritative.
 /// When only unrelated journal events append, advance the cache cursor without
 /// cloning or rebuilding the potentially large message corpus.
