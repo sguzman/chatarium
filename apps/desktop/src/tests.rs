@@ -4380,7 +4380,11 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
     };
     let (reply, receiver) = mpsc::channel();
     command_tx
-        .send(PersistCommand::ProjectNativeSearchIndex { reply })
+        .send(PersistCommand::ProjectNativeSearchIndex {
+            prefix_len: authored_sequence as usize,
+            last_sequence: Some(authored_sequence),
+            reply,
+        })
         .unwrap();
     let index = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
     let visible = index.messages(conversation);
