@@ -96,6 +96,32 @@ pub(super) fn persistence_worker(
     }
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::ProjectNativeSearchIndex {
+                prefix_len,
+                last_sequence,
+                reply,
+            } => {
+                // Requests identify the GUI's exact visible journal prefix.
+                // The worker can be ahead of its notice receiver; never send
+                // an index covering unprocessed later appends. The effective
+                // writer is authoritative and already quarantine-validated.
+                let response = store
+                    .events()
+                    .get(..prefix_len)
+                    .filter(|events| events.last().map(|event| event.sequence) == last_sequence)
+                    .map(|events| {
+                        Arc::new(
+                            native_conversation_search::NativeConversationSearchIndex::build(
+                                events,
+                            ),
+                        )
+                    })
+                    .ok_or_else(|| {
+                        "native index request does not match the worker's effective journal prefix"
+                            .to_owned()
+                    });
+                let _ = reply.send(response);
+            }
             PersistCommand::ProjectInlineMcpStatus {
                 conversation_id,
                 reply,

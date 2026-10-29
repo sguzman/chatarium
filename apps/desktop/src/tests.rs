@@ -4354,6 +4354,90 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
     assert_eq!(updated_watermark, Some(appended));
     assert_eq!(updated.unwrap().call_id, call_id);
 
+    // A newly committed authored message must enter the worker-built native
+    // corpus without any GUI-side full-journal replay or foreign owner leak.
+    let authored = AuthoredUserMessage::new(
+        conversation,
+        LocalTurnId::new(),
+        LocalMessageId::new(),
+        "new native search-index content",
+    );
+    command_tx
+        .send(PersistCommand::CommitMessage {
+            request_id: 42,
+            message: authored,
+            attachment: None,
+            one_shot_memory_ids: Vec::new(),
+            one_shot_memory_snapshot_after_sequence: None,
+        })
+        .unwrap();
+    let authored_sequence = loop {
+        match notice_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PersistNotice::MessageCommitted { event, .. } => break event.sequence,
+            PersistNotice::Failed { error, .. } => panic!("worker error: {error}"),
+            _ => {}
+        }
+    };
+    // Even when the writer has appended newer durable events, a request
+    // from a GUI lagging behind must see only its attested older prefix.
+    let (older_reply, older_receiver) = mpsc::channel();
+    command_tx
+        .send(PersistCommand::ProjectNativeSearchIndex {
+            prefix_len: appended as usize,
+            last_sequence: Some(appended),
+            reply: older_reply,
+        })
+        .unwrap();
+    let old_index = older_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        old_index
+            .messages(conversation)
+            .iter()
+            .all(|message| message.sequence != authored_sequence),
+        "older GUI prefix must exclude later authored event"
+    );
+
+    // A forged or mismatched GUI watermark cannot select a different
+    // journal prefix, even if the requested event count is in bounds.
+    let (invalid_reply, invalid_receiver) = mpsc::channel();
+    command_tx
+        .send(PersistCommand::ProjectNativeSearchIndex {
+            prefix_len: appended as usize,
+            last_sequence: Some(u64::MAX),
+            reply: invalid_reply,
+        })
+        .unwrap();
+    assert!(
+        invalid_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err(),
+        "mismatched prefix must fail closed"
+    );
+
+    let (reply, receiver) = mpsc::channel();
+    command_tx
+        .send(PersistCommand::ProjectNativeSearchIndex {
+            prefix_len: authored_sequence as usize,
+            last_sequence: Some(authored_sequence),
+            reply,
+        })
+        .unwrap();
+    let index = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let visible = index.messages(conversation);
+    assert!(visible.iter().any(|message| {
+        message.sequence == authored_sequence
+            && message.role == DisplayRole::User
+            && message.text.contains("new native search-index content")
+    }));
+    assert!(index.messages(unrelated).is_empty());
+
     command_tx.send(PersistCommand::Shutdown).unwrap();
     worker.join().unwrap();
     fs::remove_dir_all(root).unwrap();
