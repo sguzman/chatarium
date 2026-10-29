@@ -177,6 +177,18 @@ query. While a new search is pending, stale hit navigation is disabled.
 Historical imported-reader search remains separately scoped and does not
 enter native search or change the authoritative effective journal.
 
+Native search-index refreshes after an authored/assistant or verified activity
+append are also worker-owned. The GUI reuses the bootstrap-prepared index for
+unchanged snapshots and for appends of unrelated event kinds; on any potentially
+visible change it requests a new index without replaying or cloning the archive
+on the render thread. Each request specifies the GUI's effective event count
+and last original sequence. The single-writer worker validates that exact
+prefix, builds only from it, and returns an immutable index. The GUI further
+attests the returned revision before using it for reader, sidebar, copy or
+memory-staging navigation. Pending/mismatched results never become a fallback
+raw search projection. This preserves source exclusions and native ownership
+even when the persistence worker is ahead of the GUI's notice stream.
+
 The inline native MCP card also no longer replays routing/tool audit indexes on
 the UI thread. The egui reader sends a read-only request to the existing
 single-writer persistence worker, which projects from its already validated
