@@ -167,6 +167,16 @@ all visible messages during a frame; at most one search runs concurrently.
 Results are accepted only for the exact journal-index identity, query and
 catalog metadata, preventing stale hits from becoming clickable.
 
+Native transcript reader preparation has a separate worker. When activity cards
+are hidden, its filtered projection is cached per immutable native index and
+conversation owner; the GUI shows a loading state until the current projection
+is ready. If filtering has no effect, the original Arc is reused, preserving
+virtualized reader behavior. Native reader hit offsets are likewise computed
+asynchronously and accepted only for the exact message-projection Arc and
+query. While a new search is pending, stale hit navigation is disabled.
+Historical imported-reader search remains separately scoped and does not
+enter native search or change the authoritative effective journal.
+
 ## Active desktop/worker effective replay
 
 The desktop now wraps the authoritative JSONL writer with a validated

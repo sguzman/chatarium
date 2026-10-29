@@ -20,6 +20,7 @@ mod cache;
 mod index;
 mod matching;
 mod navigation;
+mod reader_background;
 
 #[cfg(test)]
 use cache::{NativeRowsCache, collect_native_search_row};
@@ -28,6 +29,7 @@ pub use index::{NativeConversationSearchIndex, cached_index, prime_prebuilt_inde
 use matching::find_match_with_position;
 pub use matching::{NativeSearchMatch, find_match, find_match_with_preview};
 pub use navigation::*;
+pub use reader_background::{background_reader_hits, background_without_activity};
 
 /// Lightweight native sidebar metadata, cached alongside search results.
 /// In particular, the word/byte scan must not run again on every UI frame
