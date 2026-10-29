@@ -386,3 +386,69 @@ pub fn background_cached_rows(
     ctx.data_mut(|data| data.insert_temp(id, state));
     Ok(None)
 }
+
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use crate::local_conversations::LocalConversationCatalog;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_rows(
+        ctx: &egui::Context,
+        index: &Arc<NativeConversationSearchIndex>,
+        entries: &[LocalConversationEntry],
+        query: &str,
+    ) -> Arc<Vec<NativeSearchRow>> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match background_cached_rows(ctx, index, entries, false, query).unwrap() {
+                Some(rows) => return rows,
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                None => panic!("background search did not finish"),
+            }
+        }
+    }
+
+    #[test]
+    fn background_sidebar_search_never_displays_old_query_or_catalog_rows() {
+        let ctx = egui::Context::default();
+        let index = Arc::new(NativeConversationSearchIndex::build(&[]));
+        let mut catalog = LocalConversationCatalog::default();
+        let owner = LocalConversationId::new();
+        catalog.create(owner, 1);
+        catalog.rename(owner, Some("Alpha".to_owned()), 2).unwrap();
+        let mut entries = catalog.entries();
+
+        assert!(background_cached_rows(&ctx, &index, &entries, false, "alpha")
+            .unwrap()
+            .is_none());
+        let found = wait_for_rows(&ctx, &index, &entries, "alpha");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "Alpha");
+        assert!(Arc::ptr_eq(
+            &found,
+            &background_cached_rows(&ctx, &index, &entries, false, "alpha")
+                .unwrap()
+                .unwrap()
+        ));
+
+        // The old match is never exposed to a new query while it is pending.
+        assert!(background_cached_rows(&ctx, &index, &entries, false, "missing")
+            .unwrap()
+            .is_none());
+        assert!(wait_for_rows(&ctx, &index, &entries, "missing").is_empty());
+
+        // A metadata edit invalidates the completed result, even with the
+        // same index identity and query.
+        entries[0].title = Some("Beta".to_owned());
+        assert!(background_cached_rows(&ctx, &index, &entries, false, "beta")
+            .unwrap()
+            .is_none());
+        let updated = wait_for_rows(&ctx, &index, &entries, "beta");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].title, "Beta");
+    }
+}
