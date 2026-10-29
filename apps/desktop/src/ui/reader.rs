@@ -217,14 +217,11 @@ impl ChatariumApp {
                 self.events.last().map(|event| event.sequence),
             )
         };
-        let (inline_mcp, inline_mcp_pending, inline_mcp_error) =
-            match inline_mcp_outcome {
-                inline_mcp_background::InlineStatus::Ready(status) => (status, false, None),
-                inline_mcp_background::InlineStatus::Pending => (None, true, None),
-                inline_mcp_background::InlineStatus::Unavailable(error) => {
-                    (None, false, Some(error))
-                }
-            };
+        let (inline_mcp, inline_mcp_pending, inline_mcp_error) = match inline_mcp_outcome {
+            inline_mcp_background::InlineStatus::Ready(status) => (status, false, None),
+            inline_mcp_background::InlineStatus::Pending => (None, true, None),
+            inline_mcp_background::InlineStatus::Unavailable(error) => (None, false, Some(error)),
+        };
 
         // Collect MCP commands while drawing. Mutating Chatarium from inside
         // the reader closure conflicts with its borrowed transcript messages.
