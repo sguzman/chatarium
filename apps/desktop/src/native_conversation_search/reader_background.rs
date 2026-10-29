@@ -254,7 +254,10 @@ mod tests {
         let filtered = without_activity_cards(Arc::clone(&original));
         assert!(!Arc::ptr_eq(&original, &filtered));
         assert_eq!(
-            filtered.iter().map(|message| message.sequence).collect::<Vec<_>>(),
+            filtered
+                .iter()
+                .map(|message| message.sequence)
+                .collect::<Vec<_>>(),
             vec![1, 3]
         );
         assert_eq!(filtered[0].text, "question");
