@@ -4400,6 +4400,24 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
         "older GUI prefix must exclude later authored event"
     );
 
+    // A forged or mismatched GUI watermark cannot select a different
+    // journal prefix, even if the requested event count is in bounds.
+    let (invalid_reply, invalid_receiver) = mpsc::channel();
+    command_tx
+        .send(PersistCommand::ProjectNativeSearchIndex {
+            prefix_len: appended as usize,
+            last_sequence: Some(u64::MAX),
+            reply: invalid_reply,
+        })
+        .unwrap();
+    assert!(
+        invalid_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err(),
+        "mismatched prefix must fail closed"
+    );
+
     let (reply, receiver) = mpsc::channel();
     command_tx
         .send(PersistCommand::ProjectNativeSearchIndex {
