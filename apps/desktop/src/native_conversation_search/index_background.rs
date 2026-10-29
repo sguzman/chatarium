@@ -129,6 +129,17 @@ mod tests {
                 .unwrap()
                 .unwrap()
         ));
+        // An unrelated journal append reuses the verified immutable index
+        // without scheduling even a worker read.
+        store
+            .append(EventKind::DraftChanged, "another draft".to_owned())
+            .unwrap();
+        let reused = background_index(&ctx, store.events(), Some(&tx))
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&initial, &reused));
+        assert!(queue.try_recv().is_err(), "unrelated append must not request a rebuild");
+
         let owner = LocalConversationId::new();
         let authored = AuthoredUserMessage::new(
             owner,
