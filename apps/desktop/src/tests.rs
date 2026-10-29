@@ -4388,7 +4388,10 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
             reply: older_reply,
         })
         .unwrap();
-    let old_index = older_receiver.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    let old_index = older_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
     assert!(old_index.messages(conversation).is_empty());
 
     let (reply, receiver) = mpsc::channel();
@@ -4399,7 +4402,10 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
             reply,
         })
         .unwrap();
-    let index = receiver.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    let index = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
     let visible = index.messages(conversation);
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].sequence, authored_sequence);
