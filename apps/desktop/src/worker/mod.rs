@@ -108,13 +108,13 @@ pub(super) fn persistence_worker(
                 let response = store
                     .events()
                     .get(..prefix_len)
-                    .filter(|events| {
-                        events.last().map(|event| event.sequence) == last_sequence
-                    })
+                    .filter(|events| events.last().map(|event| event.sequence) == last_sequence)
                     .map(|events| {
-                        Arc::new(native_conversation_search::NativeConversationSearchIndex::build(
-                            events,
-                        ))
+                        Arc::new(
+                            native_conversation_search::NativeConversationSearchIndex::build(
+                                events,
+                            ),
+                        )
                     })
                     .ok_or_else(|| {
                         "native index request does not match the worker's effective journal prefix"
