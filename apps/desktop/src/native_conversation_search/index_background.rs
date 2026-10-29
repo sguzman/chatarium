@@ -51,8 +51,7 @@ pub fn background_index(
                 pending.receiver = None;
                 ctx.data_mut(|data| data.insert_temp(id, pending));
                 return Err(
-                    "native index worker disconnected before returning a validated view"
-                        .to_owned(),
+                    "native index worker disconnected before returning a validated view".to_owned(),
                 );
             }
             _ => {}
@@ -88,10 +87,7 @@ mod tests {
     use chatarium_core::{AuthoredUserMessage, LocalMessageId, LocalTurnId};
     use chatarium_store::{EventStore, MemoryEventStore};
 
-    fn complete(
-        commands: &Receiver<PersistCommand>,
-        events: &[EventEnvelope],
-    ) {
+    fn complete(commands: &Receiver<PersistCommand>, events: &[EventEnvelope]) {
         let command = commands.try_recv().expect("background request");
         match command {
             PersistCommand::ProjectNativeSearchIndex {
@@ -101,7 +97,8 @@ mod tests {
             } => {
                 assert_eq!(prefix_len, events.len());
                 assert_eq!(last_sequence, events.last().map(|event| event.sequence));
-                reply.send(Ok(Arc::new(NativeConversationSearchIndex::build(events))))
+                reply
+                    .send(Ok(Arc::new(NativeConversationSearchIndex::build(events))))
                     .unwrap();
             }
             _ => panic!("unexpected persistence command"),
@@ -116,9 +113,11 @@ mod tests {
         store
             .append(EventKind::DraftChanged, "first".to_owned())
             .unwrap();
-        assert!(background_index(&ctx, store.events(), Some(&tx))
-            .unwrap()
-            .is_none());
+        assert!(
+            background_index(&ctx, store.events(), Some(&tx))
+                .unwrap()
+                .is_none()
+        );
         complete(&queue, store.events());
         let initial = background_index(&ctx, store.events(), Some(&tx))
             .unwrap()
@@ -138,9 +137,11 @@ mod tests {
             "fresh visible native user message",
         );
         chatarium_store::authored::commit_user_message(&mut store, &authored).unwrap();
-        assert!(background_index(&ctx, store.events(), Some(&tx))
-            .unwrap()
-            .is_none());
+        assert!(
+            background_index(&ctx, store.events(), Some(&tx))
+                .unwrap()
+                .is_none()
+        );
         complete(&queue, store.events());
         let updated = background_index(&ctx, store.events(), Some(&tx))
             .unwrap()
@@ -159,27 +160,32 @@ mod tests {
             payload: "future".to_owned(),
         });
         let new_ctx = egui::Context::default();
-        assert!(background_index(&new_ctx, store.events(), Some(&tx))
-            .unwrap()
-            .is_none());
+        assert!(
+            background_index(&new_ctx, store.events(), Some(&tx))
+                .unwrap()
+                .is_none()
+        );
         // Simulate a faulty/stale worker returning a future projection
         // instead of the requested prefix. The UI must reject it, then
         // request a correctly scoped replacement.
         match queue.try_recv().unwrap() {
             PersistCommand::ProjectNativeSearchIndex { reply, .. } => {
-                reply.send(Ok(Arc::new(NativeConversationSearchIndex::build(
-                    &future,
-                ))))
-                .unwrap();
+                reply
+                    .send(Ok(Arc::new(NativeConversationSearchIndex::build(&future))))
+                    .unwrap();
             }
             _ => panic!("unexpected command"),
         }
-        assert!(background_index(&new_ctx, store.events(), Some(&tx))
-            .unwrap()
-            .is_none());
+        assert!(
+            background_index(&new_ctx, store.events(), Some(&tx))
+                .unwrap()
+                .is_none()
+        );
         complete(&queue, store.events());
-        assert!(background_index(&new_ctx, store.events(), Some(&tx))
-            .unwrap()
-            .is_some());
+        assert!(
+            background_index(&new_ctx, store.events(), Some(&tx))
+                .unwrap()
+                .is_some()
+        );
     }
 }
