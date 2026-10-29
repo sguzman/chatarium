@@ -96,6 +96,18 @@ pub(super) fn persistence_worker(
     }
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::ProjectInlineMcpStatus {
+                conversation_id,
+                reply,
+            } => {
+                // The effective writer is already validated. Full journal
+                // audit replays stay on this worker, never in an egui frame.
+                // Send the actual high-water mark so the GUI cannot display
+                // a result for a stale or not-yet-applied notice snapshot.
+                let watermark = store.events().last().map(|event| event.sequence);
+                let status = project_inline_mcp_status(store.events(), conversation_id);
+                let _ = reply.send((watermark, status));
+            }
             PersistCommand::RecordOpenVikingUncertainReadback {
                 conversation_id,
                 turn_id,
