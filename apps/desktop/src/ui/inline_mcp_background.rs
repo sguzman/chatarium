@@ -119,10 +119,7 @@ mod tests {
         mpsc::channel()
     }
 
-    fn respond(
-        queue: &Receiver<PersistCommand>,
-        watermark: Option<u64>,
-    ) -> LocalConversationId {
+    fn respond(queue: &Receiver<PersistCommand>, watermark: Option<u64>) -> LocalConversationId {
         match queue.try_recv().expect("projection command sent") {
             PersistCommand::ProjectInlineMcpStatus {
                 conversation_id,
