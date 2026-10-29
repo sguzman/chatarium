@@ -162,7 +162,18 @@ mod tests {
         assert!(background_index(&new_ctx, store.events(), Some(&tx))
             .unwrap()
             .is_none());
-        complete(&queue, &future);
+        // Simulate a faulty/stale worker returning a future projection
+        // instead of the requested prefix. The UI must reject it, then
+        // request a correctly scoped replacement.
+        match queue.try_recv().unwrap() {
+            PersistCommand::ProjectNativeSearchIndex { reply, .. } => {
+                reply.send(Ok(Arc::new(NativeConversationSearchIndex::build(
+                    &future,
+                ))))
+                .unwrap();
+            }
+            _ => panic!("unexpected command"),
+        }
         assert!(background_index(&new_ctx, store.events(), Some(&tx))
             .unwrap()
             .is_none());
