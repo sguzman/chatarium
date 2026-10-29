@@ -43,10 +43,13 @@ impl ChatariumApp {
         let native_index = std::sync::Arc::new(
             native_conversation_search::NativeConversationSearchIndex::build(&events),
         );
+        let remote_health =
+            RemoteHealthController::from_events(&events, unix_now_ms()).unwrap_or_default();
         Ok(crate::startup::LoadedJournal {
             store,
             events,
             native_index,
+            remote_health,
             recovery,
             workspace: crate::startup::LoadedWorkspace {
                 catalog,
@@ -73,6 +76,7 @@ impl ChatariumApp {
                 store,
                 events,
                 native_index,
+                remote_health,
                 recovery,
                 workspace,
             }) => {
@@ -282,7 +286,7 @@ impl ChatariumApp {
                             show_archived_local_conversations: false,
                             local_conversation_search_query: String::new(),
                             local_conversation_search_selection: None,
-                            events: events.clone(),
+                            events,
                             historical_catalog,
                             selected_historical_conversation: None,
                             loaded_historical_conversation: None,
@@ -378,11 +382,7 @@ impl ChatariumApp {
                             mirror_controller_notice_rx: None,
                             mirror_controller_worker: None,
                             mirror_controller_state: MirrorControllerState::Stopped,
-                            remote_health: RemoteHealthController::from_events(
-                                &events,
-                                unix_now_ms(),
-                            )
-                            .unwrap_or_default(),
+                            remote_health,
                             mirror_controller_current_item: None,
                             mirror_controller_detail: None,
                             remote: siwc_bridge::BridgeRuntime::start(repaint),

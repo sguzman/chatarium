@@ -15,13 +15,16 @@ use std::time::Duration;
 
 use crate::local_conversations::LocalConversationCatalog;
 use crate::native_conversation_search::NativeConversationSearchIndex;
-use crate::{ChatariumApp, EventEnvelope, LocalConversationId, default_journal_path};
+use crate::{
+    ChatariumApp, EventEnvelope, LocalConversationId, RemoteHealthController, default_journal_path,
+};
 
 /// Completed off-thread snapshot; UI receives already reconciled native state.
 pub(crate) struct LoadedJournal {
     pub(crate) store: EffectiveEventStore<JsonlEventStore>,
     pub(crate) events: Vec<EventEnvelope>,
     pub(crate) native_index: Arc<NativeConversationSearchIndex>,
+    pub(crate) remote_health: RemoteHealthController,
     pub(crate) recovery: Result<usize, String>,
     pub(crate) workspace: LoadedWorkspace,
 }
