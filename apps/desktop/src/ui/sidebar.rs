@@ -568,31 +568,46 @@ impl ChatariumApp {
                         ui.add_space(4.0);
 
                         let native_entries = self.local_conversation_catalog.entries();
-                        let native_rows = native_conversation_search::cached_rows(
+                        let native_rows_outcome = native_conversation_search::background_cached_rows(
                             ctx,
                             &native_search_index,
                             &native_entries,
                             self.show_archived_local_conversations,
                             &self.local_conversation_search_query,
                         );
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} chat{}{}",
-                                native_rows.len(),
-                                if native_rows.len() == 1 { "" } else { "s" },
-                                if self.local_conversation_search_query.trim().is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" found · {} total", native_entries.len())
-                                },
-                            ))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(139, 143, 153)),
-                        );
-                        if native_rows.is_empty() {
+                        let native_rows_pending = matches!(&native_rows_outcome, Ok(None));
+                        let native_rows_error = native_rows_outcome.as_ref().err().cloned();
+                        let native_rows = native_rows_outcome
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| Arc::new(Vec::new()));
+                        if native_rows_pending {
+                            ui.label("Searching local chats…");
+                        } else if let Some(error) = native_rows_error {
                             ui.label(
-                                "No local chats match. Clear the search or enable Show archived.",
+                                egui::RichText::new(format!("Local search unavailable: {error}"))
+                                    .color(egui::Color32::from_rgb(220, 150, 140)),
                             );
+                        } else {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} chat{}{}",
+                                    native_rows.len(),
+                                    if native_rows.len() == 1 { "" } else { "s" },
+                                    if self.local_conversation_search_query.trim().is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" found · {} total", native_entries.len())
+                                    },
+                                ))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(139, 143, 153)),
+                            );
+                            if native_rows.is_empty() {
+                                ui.label(
+                                    "No local chats match. Clear the search or enable Show archived.",
+                                );
+                            }
                         }
                         // Scroll the conversation catalog separately from status/settings.
                         egui::ScrollArea::vertical()
@@ -1815,13 +1830,16 @@ impl ChatariumApp {
             });
             if move_message_hit != 0 {
                 let native_entries = self.local_conversation_catalog.entries();
-                let rows = native_conversation_search::cached_rows(
+                let rows = native_conversation_search::background_cached_rows(
                     ctx,
                     &native_search_index,
                     &native_entries,
                     self.show_archived_local_conversations,
                     &self.local_conversation_search_query,
-                );
+                )
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| Arc::new(Vec::new()));
                 let row_index = native_conversation_search::selected_identity_row(
                     &native_search_matches,
                     self.local_conversation_search_selection,
