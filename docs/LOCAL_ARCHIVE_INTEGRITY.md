@@ -41,8 +41,10 @@ the package. Restore validates the package in isolation, stages and audits a can
 retains any existing active directory as a timestamped pre-restore safety copy, and only then
 atomically installs the candidate. Existing backups are never deleted automatically.
 
-The desktop Diagnostics panel provides CHECK ARCHIVE, CREATE BACKUP, VERIFY BACKUP, and RESTORE
-BACKUP. Restore always requires an explicit confirmation and preserves the previous active data.
+The desktop Diagnostics panel provides CHECK ARCHIVE, CREATE BACKUP and VERIFY BACKUP.
+Restore is intentionally offline: shut down Chatarium and use `chatarium-importer
+archive-restore <backup-dir> <data-dir>`. The operation verifies the archive,
+refuses active writers and retains the previous data as a safety snapshot.
 
 ## Backup and restore of source-quarantine evidence
 
@@ -64,8 +66,9 @@ Synthetic tests cover both staged-byte mismatch and publication rollback.
 Archive integrity also verifies that every recorded Flight Recorder
 quarantine decision still has its original, SHA-256-matching source archive.
 An absent or tampered source is a hard error, not a recoverable warning.
-A backup preserves the raw source evidence and journal, **not** an active
-filtering state in user-facing projections; Q30 remains a separate boundary.
+A backup preserves the raw source evidence, journal and durable quarantine
+decisions. On restart the validated effective view applies recorded source
+exclusions without rewriting that evidence.
 
 ## Single-writer journal ownership
 
@@ -104,7 +107,9 @@ under the exclusive writer lease. Recording is idempotent, and re-import of the
 same source is refused. A read-only preflight SHA alone is never a writer lock.
 After restart, desktop/worker effective views honor the decision, while the
 authoritative journal and physical SQLite cache continue to retain all events.
-A full Q30 reader audit and Q40 recovery acceptance remain outstanding.
+Q40 recovery acceptance was verified by synthetic restart, rollback and
+writer-exclusion tests; the final Q30 user-facing reader/performance audit
+remains outstanding.
 
 ## Replay-verified effective event selection (opt-in)
 
@@ -156,9 +161,11 @@ loading is tested with an exclusive-writer handoff and monotonic append
 sequence. The full native conversation-search index is also built against
 the effective event snapshot on the bootstrap worker and validated/seeded into
 the egui cache before the first render; the UI never needs an initial
-full-archive index rebuild. Sidebar result summaries and per-query searching
-may still scan visible messages when their cache keys change, so those
-incremental UI costs remain under performance review.
+full-archive index rebuild. Sidebar result summaries and per-query searching are also prepared on a
+background worker. A changed query shows a pending state rather than scanning
+all visible messages during a frame; at most one search runs concurrently.
+Results are accepted only for the exact journal-index identity, query and
+catalog metadata, preventing stale hits from becoming clickable.
 
 ## Active desktop/worker effective replay
 
@@ -197,8 +204,8 @@ The importer records this decision under a strict exclusive writer lease after
 fresh source verification. Validated desktop/worker event replay excludes the
 source on restart; no original record is deleted or renumbered. Physical journal
 and SQLite evidence APIs remain intentionally unfiltered, and stale SQLite
-effective reads fail closed. Q30 still requires complete read-surface and
-nonblocking-startup review; Q40 requires end-to-end crash/restart verification.
+effective reads fail closed. Q30 still requires final user-facing read-surface acceptance. Q40's
+crash/restart and rollback tests have passed on Windows and Linux CI.
 An audit fact alone is not proof that every external consumer has refreshed.
 
 For disaster recovery, stop the desktop, run `archive-verify` against a local backup, restore it
