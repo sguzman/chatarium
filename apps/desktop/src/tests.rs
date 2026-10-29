@@ -4272,7 +4272,6 @@ fn only_positive_http_or_typed_api_errors_count_as_observed_failure() {
     ));
 }
 
-
 #[test]
 fn inline_mcp_projection_reads_current_effective_worker_journal() {
     use std::fs;
@@ -4332,7 +4331,10 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
         projected.stage,
         mcp_call_review::CallReviewStage::AwaitingDecision
     );
-    assert!(ask(unrelated).1.is_none(), "unrelated native chat must not inherit MCP card");
+    assert!(
+        ask(unrelated).1.is_none(),
+        "unrelated native chat must not inherit MCP card"
+    );
 
     command_tx
         .send(PersistCommand::SaveDraft {
