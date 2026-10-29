@@ -28,6 +28,9 @@ impl ControllerControlAction {
 }
 
 pub(crate) enum PersistCommand {
+    ProjectNativeSearchIndex {
+        reply: Sender<Arc<native_conversation_search::NativeConversationSearchIndex>>,
+    },
     ProjectInlineMcpStatus {
         conversation_id: LocalConversationId,
         reply: Sender<(Option<u64>, Option<InlineMcpStatus>)>,
