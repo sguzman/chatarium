@@ -96,6 +96,15 @@ pub(super) fn persistence_worker(
     }
     while let Ok(command) = commands.recv() {
         match command {
+            PersistCommand::ProjectNativeSearchIndex { reply } => {
+                // Project against the validated effective journal owned by
+                // this worker. Never transfer or clone archive payloads into
+                // the GUI just to build a sidebar/reader search index.
+                let index = Arc::new(
+                    native_conversation_search::NativeConversationSearchIndex::build(store.events()),
+                );
+                let _ = reply.send(index);
+            }
             PersistCommand::ProjectInlineMcpStatus {
                 conversation_id,
                 reply,
