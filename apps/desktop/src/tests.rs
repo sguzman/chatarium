@@ -4378,6 +4378,19 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
             _ => {}
         }
     };
+    // Even when the writer has appended newer durable events, a request
+    // from a GUI lagging behind must see only its attested older prefix.
+    let (older_reply, older_receiver) = mpsc::channel();
+    command_tx
+        .send(PersistCommand::ProjectNativeSearchIndex {
+            prefix_len: appended as usize,
+            last_sequence: Some(appended),
+            reply: older_reply,
+        })
+        .unwrap();
+    let old_index = older_receiver.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert!(old_index.messages(conversation).is_empty());
+
     let (reply, receiver) = mpsc::channel();
     command_tx
         .send(PersistCommand::ProjectNativeSearchIndex {
@@ -4386,7 +4399,7 @@ fn inline_mcp_projection_reads_current_effective_worker_journal() {
             reply,
         })
         .unwrap();
-    let index = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let index = receiver.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
     let visible = index.messages(conversation);
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].sequence, authored_sequence);
