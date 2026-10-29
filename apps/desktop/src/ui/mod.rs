@@ -36,11 +36,19 @@ impl eframe::App for ChatariumApp {
         // Search and the active chat reader share the same cached native
         // message corpus. Avoid an extra full-journal scan and a clone of
         // every visible transcript message on each egui redraw.
-        let native_search_index = match native_conversation_search::background_index(
-            ctx,
-            &self.events,
-            self.persist_tx.as_ref(),
-        ) {
+        // If journal validation failed before a writer was created, retain
+        // the diagnostics-only empty workspace. Its zero-event index is safe
+        // to construct synchronously; never replay a nonempty archive here.
+        let native_index_outcome = if self.persist_tx.is_none() && self.events.is_empty() {
+            Ok(Some(native_conversation_search::cached_index(ctx, &[])))
+        } else {
+            native_conversation_search::background_index(
+                ctx,
+                &self.events,
+                self.persist_tx.as_ref(),
+            )
+        };
+        let native_search_index = match native_index_outcome {
             Ok(Some(index)) => index,
             Ok(None) => {
                 egui::CentralPanel::default().show(ctx, |ui| {
