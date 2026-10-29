@@ -138,7 +138,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(Arc::ptr_eq(&initial, &reused));
-        assert!(queue.try_recv().is_err(), "unrelated append must not request a rebuild");
+        assert!(
+            queue.try_recv().is_err(),
+            "unrelated append must not request a rebuild"
+        );
 
         let owner = LocalConversationId::new();
         let authored = AuthoredUserMessage::new(
