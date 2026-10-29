@@ -7,6 +7,25 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 type AsyncResult<T> = Arc<Mutex<Receiver<T>>>;
 
+/// Keep source ownership when no activity cards exist, and preserve exact
+/// authored order and sequence values when filtering is required.
+fn without_activity_cards(messages: Arc<Vec<DisplayMessage>>) -> Arc<Vec<DisplayMessage>> {
+    if messages
+        .iter()
+        .any(|message| message.role == DisplayRole::Activity)
+    {
+        Arc::new(
+            messages
+                .iter()
+                .filter(|message| message.role != DisplayRole::Activity)
+                .cloned()
+                .collect(),
+        )
+    } else {
+        messages
+    }
+}
+
 #[derive(Clone, Default)]
 struct ReaderProjectionState {
     ready: Option<(
@@ -80,21 +99,7 @@ pub fn background_without_activity(
         match std::thread::Builder::new()
             .name("chatarium-reader-filter".to_owned())
             .spawn(move || {
-                // Retain the exact Arc when no activity card needs removing.
-                let filtered = if messages
-                    .iter()
-                    .any(|message| message.role == DisplayRole::Activity)
-                {
-                    Arc::new(
-                        messages
-                            .iter()
-                            .filter(|message| message.role != DisplayRole::Activity)
-                            .cloned()
-                            .collect(),
-                    )
-                } else {
-                    messages
-                };
+                let filtered = without_activity_cards(messages);
                 let _ = sender.send(filtered);
                 repaint.request_repaint();
             }) {
@@ -237,6 +242,28 @@ mod tests {
             timestamp: None,
             provenance_label: None,
         }
+    }
+
+    #[test]
+    fn activity_filter_preserves_authored_order_and_reuses_unchanged_source() {
+        let original = Arc::new(vec![
+            message("question", DisplayRole::User, 1),
+            message("agent activity", DisplayRole::Activity, 2),
+            message("answer", DisplayRole::Assistant, 3),
+        ]);
+        let filtered = without_activity_cards(Arc::clone(&original));
+        assert!(!Arc::ptr_eq(&original, &filtered));
+        assert_eq!(
+            filtered.iter().map(|message| message.sequence).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(filtered[0].text, "question");
+        assert_eq!(filtered[1].text, "answer");
+        assert_eq!(original.len(), 3, "filter must not change source evidence");
+
+        let unfiltered = Arc::new(vec![message("ordinary", DisplayRole::User, 4)]);
+        let reused = without_activity_cards(Arc::clone(&unfiltered));
+        assert!(Arc::ptr_eq(&reused, &unfiltered));
     }
 
     #[test]
