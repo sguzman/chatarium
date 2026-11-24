@@ -1,0 +1,79 @@
+name: nix-foundation
+
+on:
+  push:
+    branches:
+      - work/nix-foundation-20261123
+    paths:
+      - flake.nix
+      - flake.lock
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - 'apps/**'
+      - 'crates/**'
+      - 'tools/**'
+      - 'nix/**'
+      - 'protocol/**'
+      - '.github/workflows/nix-foundation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Generate and inspect lock
+        run: |
+          nix flake lock
+          nix flake metadata --json | jq -e '.locks.nodes | length > 1' >/dev/null
+      - name: Retain actual lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-flake-lock
+          path: flake.lock
+          if-no-files-found: error
+      - name: Verify pinned toolchain
+        run: |
+          nix develop --no-write-lock-file --command rustc --version
+          nix develop --no-write-lock-file --command cargo --version
+          nix develop --no-write-lock-file --command rustfmt --version
+      - name: Build crate2nix desktop compilation target
+        run: |
+          nix build .#desktop-unwrapped --no-write-lock-file --print-build-logs
+          test -x result/bin/chatarium-desktop
+      - name: Preserve existing Cargo lock
+        run: git diff --exit-code -- Cargo.lock
+
+  sidecar-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Resolve pinned inputs
+        run: nix flake lock
+      - name: Build immutable authentication sidecar
+        run: |
+          nix build .#siwc-sidecar --no-write-lock-file --print-build-logs
+          test -f result/tools/siwc-bridge/bridge.mjs
+          test ! -e result/tools/siwc-bridge/bootstrap.mjs
+          test ! -e result/vendor/openai-sign-in-with-chatgpt-devkit/node_modules/typescript
+      - name: Smoke packaged bridge with a disposable home
+        run: |
+          sidecar="$(readlink -f result)"
+          isolated="$(mktemp -d)"
+          trap 'rm -rf "$isolated"' EXIT
+          mkdir -p "$isolated/home" "$isolated/config" "$isolated/state" "$isolated/cache"
+          nix develop --no-write-lock-file --command env -u OPENAI_API_KEY -u OPENAI_ORG_ID -u OPENAI_PROJECT_ID HOME="$isolated/home" XDG_CONFIG_HOME="$isolated/config" XDG_STATE_HOME="$isolated/state" XDG_CACHE_HOME="$isolated/cache" node "$sidecar/tools/siwc-bridge/smoke.mjs"
