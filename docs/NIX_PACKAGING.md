@@ -20,4 +20,6 @@ The next slice must package the existing, exact DevKit submodule revision (not u
 
 The Nix CI candidate generates a real flake.lock, verifies the toolchain, and builds desktop-unwrapped. It uses the public repository and synthetic build data only, never a private user archive or account.
 
-Pending: first build result, native runtime wrapper, immutable authentication sidecar, offline packaged smoke/GUI acceptance. Phase A earns no roadmap points until all its acceptance criteria pass.
+The first desktop compilation failed in `chatarium-protocol`: crate2nix isolates each crate, but `stability.rs` embeds the canonical workspace-level schema. The candidate override preserves the relative workspace layout only for that crate, without copying or modifying the canonical schema. [Failure evidence](https://github.com/sguzman/chatarium/actions/runs/45289303459). Rebuild acceptance is pending.
+
+Pending: successful desktop build, native runtime wrapper, immutable authentication sidecar, offline packaged smoke/GUI acceptance. Phase A earns no roadmap points until all its acceptance criteria pass.

@@ -49,7 +49,28 @@
         src = self.outPath;
         cargo = toolchain;
       };
+      # The protocol crate embeds a canonical workspace-level schema using
+      # include_str!. Preserve that relative layout for this crate alone;
+      # keep unrelated workspace changes out of its source derivation.
+      protocolSource = builtins.path {
+        name = "chatarium-protocol-workspace";
+        path = ./.;
+        filter = path: type:
+          let
+            root = toString ./.;
+            rel = pkgs.lib.removePrefix (root + "/") (toString path);
+          in toString path == root
+            || builtins.elem rel [ "crates" "crates/protocol" "protocol" "protocol/schemas" ]
+            || pkgs.lib.hasPrefix "crates/protocol/" rel
+            || pkgs.lib.hasPrefix "protocol/schemas/" rel;
+      };
       cargoNix = pkgs.callPackage generated {
+        defaultCrateOverrides = pkgs.defaultCrateOverrides // {
+          chatarium-protocol = attrs: {
+            src = protocolSource;
+            sourceRoot = "chatarium-protocol-workspace/crates/protocol";
+          };
+        };
         buildRustCrateForPkgs = p: p.buildRustCrate.override {
           rustc = toolchain;
           cargo = toolchain;
